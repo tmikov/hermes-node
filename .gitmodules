@@ -1,0 +1,4 @@
+[submodule "hermes"]
+	path = hermes
+	url = https://github.com/tmikov/hermes.git
+	branch = n-api
