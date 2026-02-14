@@ -42,7 +42,7 @@ be omitted):
 
 | Step | Description | Depends On | Status | Brief Note (optional) |
 |------|-------------|------------|--------|-----------------------|
-| Step 1 | Create repo and CMake scaffolding | — | | |
+| Step 1 | Create repo and CMake scaffolding | — | done | |
 | Step 2 | Vendor libuv | 1 | | |
 | Step 3 | Implement libuv-backed event loop adapter | 2 | | |
 | Step 4 | Implement primordials thin shim | — | | |
@@ -78,4 +78,12 @@ be omitted):
 
 ## Context Notes
 
+### Step 1: Create repo and CMake scaffolding
+- **Files**: created `CMakeLists.txt`, `lib/placeholder/CMakeLists.txt`, `lib/placeholder/placeholder.cpp`, `tools/hermes-node/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `unittests/CMakeLists.txt`, `libjs-node/README.md`. Vendored 347 JS files from Node.js into `libjs-node/`.
+- **Decisions**:
+  - Use Hermes cmake macros (`add_hermes_library`, `add_hermes_tool`, `add_unittest`) for consistency with Hermes build conventions.
+  - `check-hermes-node` custom target depends on `NodeCompatUnitTests` (unit test suite target).
+  - `add_node_compat_unittest()` helper function in `unittests/CMakeLists.txt` mirrors Hermes's `add_hermes_unittest()`.
+- **What was done**: Created full directory structure (external/, include/hermes/node-compat/, lib/placeholder/, libjs/, libjs-node/, tools/hermes-node/, unittests/, test/). Top-level CMakeLists.txt adds hermes submodule, includes Hermes cmake modules, builds placeholder lib and hermes-node tool. Vendored Node.js v24.13.0 lib/ tree (commit def0bdf8) into libjs-node/ with provenance README. Built and verified: `hermes-node` binary prints usage with no args and exits 0; `check-hermes-node` target succeeds.
+- **Notes for next step**: The `hermesNodePlaceholder` library is temporary; replace with real libraries as they are implemented. Hermes key targets: `hermesNapi` (NAPI lib), `hermesvm_a` (static VM), `gtest_main` (testing). LLVH_SOURCE_DIR must be set for gtest includes.
 
