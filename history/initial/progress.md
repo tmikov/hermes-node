@@ -56,7 +56,7 @@ be omitted):
 | Step 12 | Port string_decoder binding | 5 | done | |
 | Step 13 | Port errors binding | 5 | done | |
 | Step 14 | Port config binding | 5 | done | |
-| Step 15 | Port symbols binding | 5 | | |
+| Step 15 | Port symbols binding | 5 | done | |
 | Step 16 | Implement internal/options shim | 6 | | |
 | Step 17 | Verify bootstrap modules load | 8, 9–16 | | |
 | Step 18 | Port buffer binding | 5 | | |
@@ -243,3 +243,11 @@ be omitted):
   - `bits` is `8 * sizeof(intptr_t)` (32 or 64).
   - `getDefaultLocale()` reads `LC_ALL`/`LC_MESSAGES`/`LANG` env vars, strips encoding suffix, converts underscore to hyphen for BCP 47 format. Falls back to "en-US".
 - **What was done**: Implemented `initConfigBinding` with 10 boolean properties, `bits` integer, and `getDefaultLocale` function. Registered in bootstrap. JS test verifies all property types and values. All tests pass under ASAN.
+
+### Step 15: Port symbols binding
+- **Files**: created `include/hermes/node-compat/bindings/node_symbols.h`, `lib/bindings/node_symbols.cpp`, `test/test-symbols.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `CMakeLists.txt` (top-level).
+- **Decisions**:
+  - All 21 symbols from Node's `PER_ISOLATE_SYMBOL_PROPERTIES` (src/env_properties.h) created via `napi_create_symbol` with descriptive string names.
+  - Used X-macro `SYMBOL_PROPERTIES(V)` for maintainability — adding/removing symbols requires changing only the macro.
+  - Symbol descriptions match Node's exact strings (e.g., `handle_onclose_symbol` has description "handle_onclose").
+- **What was done**: Implemented `initSymbolsBinding` creating 21 unique symbols. Registered in bootstrap. JS test verifies all symbols exist, are typeof 'symbol', are unique, have descriptive toString, and are usable as property keys. All tests pass under ASAN.

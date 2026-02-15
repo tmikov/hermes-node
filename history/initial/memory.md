@@ -121,6 +121,10 @@
 - All crypto/inspector/intl/tracing flags false; `hasNodeOptions` true
 - Used by: `internal/navigator.js` (getDefaultLocale), `buffer.js` (hasIntl), `internal/bootstrap/node.js`, `internal/process/pre_execution.js` (hasInspector, noBrowserGlobals), `internal/main/print_help.js` (hasIntl, hasSmallICU, hasNodeOptions)
 
+## Symbols Binding
+- `initSymbolsBinding` — 21 unique symbols from Node's `PER_ISOLATE_SYMBOL_PROPERTIES`
+- Used by: `internal/async_hooks.js` (owner_symbol, resource_symbol, async_id_symbol, trigger_async_id_symbol), `internal/modules/cjs/loader.js` (imported_cjs_symbol), `internal/worker/js_transferable.js` (messaging_*_symbol), `vm.js` (vm_* symbols)
+
 ## Hermes NAPI Bugs/Workarounds
 - **`napi_get_all_property_names` with mixed string+symbol**: When both `plusIncludeSymbols().plusKeepSymbols()` and `plusIncludeNonSymbols()` are set (via `napi_key_all_properties` without skip flags), string property names are returned as Hermes internal SymbolIDs (exposed as JS Symbols). Workaround: make two separate calls — one with `napi_key_skip_symbols` for strings, one with `napi_key_skip_strings` for symbols.
 - **`napi_create_string_utf8` rejects invalid UTF-8**: Unlike V8 (which produces replacement chars), Hermes raises a RangeError and returns `napi_generic_failure`. Workaround: catch failure, clear exception, sanitize bytes by replacing invalid sequences with U+FFFD, retry.

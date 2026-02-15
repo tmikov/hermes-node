@@ -8,6 +8,7 @@ add_hermes_library(hermesNodeBindings STATIC
   node_constants.cpp
   node_errors.cpp
   node_string_decoder.cpp
+  node_symbols.cpp
   node_types.cpp
   node_util.cpp
 )
