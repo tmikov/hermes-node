@@ -34,8 +34,9 @@ Build directories follow the convention:
 
 Always use Clang, never GCC.
 
-All build configurations must succeed and all tests must pass before any commit:
+Before any commit, format C++ code and run tests:
 ```bash
+./utils/format.sh -f
 cmake --build cmake-build-asan --target check-hermes-node
 ```
 
