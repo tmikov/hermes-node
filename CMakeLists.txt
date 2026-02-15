@@ -17,6 +17,16 @@ include(Lit)
 # LLVH source dir for gtest includes (used by add_unittest in Lit.cmake)
 set(LLVH_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/hermes/external/llvh)
 
+# Match Hermes sanitizer flags for our own targets.
+# Hermes sets these inside its subdirectory scope, so they don't propagate.
+if (HERMES_ENABLE_ADDRESS_SANITIZER)
+  add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address)
+endif()
+
+# Vendored external dependencies
+add_subdirectory(external/libuv)
+
 # Our C++ libraries
 add_subdirectory(lib/placeholder)
 

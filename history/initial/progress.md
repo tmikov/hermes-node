@@ -43,7 +43,7 @@ be omitted):
 | Step | Description | Depends On | Status | Brief Note (optional) |
 |------|-------------|------------|--------|-----------------------|
 | Step 1 | Create repo and CMake scaffolding | — | done | |
-| Step 2 | Vendor libuv | 1 | | |
+| Step 2 | Vendor libuv | 1 | done | |
 | Step 3 | Implement libuv-backed event loop adapter | 2 | | |
 | Step 4 | Implement primordials thin shim | — | | |
 | Step 5 | Implement internalBinding registry | 1 | | |
@@ -86,4 +86,14 @@ be omitted):
   - `add_node_compat_unittest()` helper function in `unittests/CMakeLists.txt` mirrors Hermes's `add_hermes_unittest()`.
 - **What was done**: Created full directory structure (external/, include/hermes/node-compat/, lib/placeholder/, libjs/, libjs-node/, tools/hermes-node/, unittests/, test/). Top-level CMakeLists.txt adds hermes submodule, includes Hermes cmake modules, builds placeholder lib and hermes-node tool. Vendored Node.js v24.13.0 lib/ tree (commit def0bdf8) into libjs-node/ with provenance README. Built and verified: `hermes-node` binary prints usage with no args and exits 0; `check-hermes-node` target succeeds.
 - **Notes for next step**: The `hermesNodePlaceholder` library is temporary; replace with real libraries as they are implemented. Hermes key targets: `hermesNapi` (NAPI lib), `hermesvm_a` (static VM), `gtest_main` (testing). LLVH_SOURCE_DIR must be set for gtest includes.
+
+### Step 2: Vendor libuv
+- **Files**: created `external/libuv/README.md`, `external/libuv/CMakeLists.txt`, `external/libuv/libuv/` (vendored source). Created `unittests/UvIntegrationTest.cpp`. Modified `CMakeLists.txt` (top-level), `unittests/CMakeLists.txt`.
+- **Decisions**:
+  - Vendored libuv 1.51.0 from Node.js v24.13.0 `deps/uv/` (same version our target Node uses).
+  - Wrapper CMakeLists.txt disables shared lib build and tests (`LIBUV_BUILD_SHARED OFF`, `BUILD_TESTING OFF`).
+  - Added ASAN/sanitizer flag propagation in top-level CMakeLists.txt because Hermes sets `CMAKE_CXX_FLAGS` only within its subdirectory scope; our targets outside hermes/ need them explicitly.
+  - Added LLVH include directories to `add_node_compat_unittest()` helper since gtest headers reference `llvh/Support/raw_ostream.h`.
+- **What was done**: Vendored libuv source tree from Node.js checkout. Created wrapper CMake that builds only the static `uv_a` target. Added `external/libuv` to top-level build. Wrote 3 GTest tests (version check, version string, loop init/close). Fixed two build issues: ASAN flag propagation and LLVH include paths for gtest. All tests pass under ASAN.
+- **Notes for next step**: Link against `uv_a` for libuv. The `uv_a` target exports its include directories. libuv warning in `linux.c:1853` (const qualifier) is harmless upstream issue.
 
