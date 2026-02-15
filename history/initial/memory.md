@@ -172,6 +172,13 @@
 - Users: `internal/encoding.js` (TextEncoder/TextDecoder), `url.js` (toASCII for IDNA domains)
 - **Gotcha**: `napi_get_value_string_utf8` writes null terminator — cannot write directly into an ArrayBuffer of exact string length; use temp buffer + memcpy
 
+## Async Wrap Binding (stub)
+- `initAsyncWrapBinding` — all functions are no-ops; shared arrays are zero-initialized typed arrays
+- `async_hook_fields`: Uint32Array(9), `async_id_fields`: Float64Array(4), `execution_async_resources`: empty JS array, `async_ids_stack`: empty Float64Array(0)
+- `constants`: 13 values from `AsyncHooks::Fields` (kInit=0..kUsesExecutionAsyncResource=8) + `UidFields` (kExecutionAsyncId=0..kDefaultTriggerAsyncId=3)
+- `Providers`: 48 non-crypto provider types (NONE=0 through ZLIB); crypto providers omitted (no OpenSSL)
+- Used by: `internal/async_hooks.js` (primary consumer), `internal/promise_hooks.js` (setPromiseHooks), `internal/bootstrap/node.js` (setupHooks call)
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`

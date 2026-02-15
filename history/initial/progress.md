@@ -61,7 +61,7 @@ be omitted):
 | Step 17 | Verify bootstrap modules load | 8, 9–16 | done | |
 | Step 18 | Port buffer binding | 5 | done | |
 | Step 19 | Port encoding_binding | 5 | done | |
-| Step 20 | Port async_wrap binding (stub) | 5 | | |
+| Step 20 | Port async_wrap binding (stub) | 5 | done | |
 | Step 21 | Implement process.nextTick | 3, 7 | | |
 | Step 22 | Implement timers binding | 3, 5 | | |
 | Step 23 | Implement process.stdout/stderr (minimal) | 7, 21 | | |
@@ -297,3 +297,12 @@ be omitted):
 - **What was done**: Implemented `initEncodingBinding` with 6 functions and 1 property: `encodeUtf8String` (string to Uint8Array), `encodeInto` (encode into pre-allocated buffer), `decodeUTF8` (UTF-8 bytes to string), `decodeLatin1` (Latin-1 bytes to string), `toASCII` (stub), `toUnicode` (stub), `encodeIntoResults` (Uint32Array). Registered in bootstrap. JS test covers all functions with 50+ assertions including multi-byte encoding, BOM handling, truncation, fatal mode, invalid UTF-8 handling.
 - **Issues**: `napi_get_value_string_utf8` writes a null terminator, so writing directly into an ArrayBuffer of exact string length causes heap-buffer-overflow. Fixed by using a temporary buffer and memcpy.
 - **Notes for next step**: The `internal/encoding.js` module also depends on `buffer`, `internal/errors`, `internal/validators`. When ICU is unavailable, TextDecoder only supports UTF-8 and Latin-1/windows-1252 fast paths (which we provide); other encodings fall through to a JS-based ICU converter that will fail without ICU.
+
+### Step 20: Port async_wrap binding (stub)
+- **Files**: created `include/hermes/node-compat/bindings/node_async_wrap.h`, `lib/bindings/node_async_wrap.cpp`, `test/test-async-wrap.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `CMakeLists.txt` (top-level).
+- **Decisions**:
+  - All 10 functions are no-op stubs: `setupHooks`, `setCallbackTrampoline`, `pushAsyncContext`, `popAsyncContext`, `executionAsyncResource`, `clearAsyncIdStack`, `queueDestroyAsyncId`, `setPromiseHooks`, `getPromiseHooks`, `registerDestroyHook`.
+  - Shared arrays match Node's layout: `async_hook_fields` (Uint32Array, 9 elements), `async_id_fields` (Float64Array, 4 elements), `execution_async_resources` (empty JS array), `async_ids_stack` (empty Float64Array).
+  - `constants` object has all 13 fields/uid constants from Node's `AsyncHooks::Fields` and `AsyncHooks::UidFields` enums.
+  - `Providers` object has all 48 provider types from `NODE_ASYNC_PROVIDER_TYPES` (non-crypto only, since we have no OpenSSL).
+- **What was done**: Implemented `initAsyncWrapBinding` with stub functions, shared typed arrays, constants, and Providers enum. Registered in bootstrap. JS test verifies all function types, no-op invocations, shared array types/sizes/writability, all constant values, and Providers entries. All tests pass under ASAN.
