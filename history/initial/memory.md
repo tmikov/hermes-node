@@ -236,6 +236,14 @@
 - EventEmitter fully functional (on/emit/once/removeListener/listenerCount)
 - No `process.emitWarning` issues encountered in basic usage (timers.js warns for overflow/NaN but not in normal operation)
 
+## Streams Verification (Step 26)
+- `stream` module (Readable, Writable, Transform, Duplex, PassThrough, pipeline, finished) fully functional
+- **Async generator workarounds**: Hermes doesn't support `async function*`. Patched `readable.js` (manual async iterator) and `pipeline.js` (direct delegation). Stubbed `operators.js` (empty exports).
+- **Shims created**: `internal/streams/operators.js` (empty stream/promise operators), `internal/abort_controller.js` (minimal AbortController/AbortSignal using EventEmitter + DOMException polyfill)
+- **Dependency chain**: `abort_controller` -> `event_target` -> `internalBinding('performance')` — bypassed by shim
+- **Still broken**: `Duplex.from()` (lazy-loads `duplexify.js` which has `async function*`), stream operators (`.map`/`.filter`/`.drop`/`.take`/`.flatMap`), `for await` on streams (works via manual iterator but `yield*` pattern unavailable)
+- **Vendored file modifications**: `readable.js`, `pipeline.js` — documented in `libjs-node/README.md`
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`

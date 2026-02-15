@@ -67,7 +67,7 @@ be omitted):
 | Step 23 | Implement process.stdout/stderr (minimal) | 7, 21 | done | |
 | Step 24 | Verify core modules load and work | 17–23 | done | |
 | Step 25 | Port stream_wrap binding (minimal) | 5, 3 | done | |
-| Step 26 | Verify streams work | 24, 25 | | |
+| Step 26 | Verify streams work | 24, 25 | done | |
 | Step 27 | Port fs binding — sync operations | 2, 5, 9 | | |
 | Step 28 | Port fs binding — async operations | 3, 27 | | |
 | Step 29 | Port fs_dir binding | 27 | | |
@@ -358,3 +358,15 @@ be omitted):
   - `streamBaseState` is `Int32Array(4)` matching Node's `AliasedInt32Array` with fields: kReadBytesOrError=0, kArrayBufferOffset=1, kBytesWritten=2, kLastWriteWasAsync=3.
 - **What was done**: Implemented `initStreamWrapBinding` with stub constructors, constants, and shared state array. Registered in bootstrap. JS test verifies all exports, constructor functionality, property setting, instance independence, and array writability. All 19 tests pass under ASAN.
 - **Notes for next step**: The core stream module (`stream.js`, `internal/streams/*.js`) does NOT reference `stream_wrap` at all -- it is pure JavaScript. The `stream_wrap` binding is consumed by `net.js`, `internal/stream_base_commons.js`, `internal/child_process.js`, and `internal/http2/core.js`. The `internal/stream_base_commons.js` also needs `internalBinding('uv')` (UV_EOF) which is not yet implemented.
+
+### Step 26: Verify streams work
+- **Files**: created `test/test-streams.js`, `libjs/shims/internal/streams/operators.js`, `libjs/shims/internal/abort_controller.js`. Modified `libjs-node/internal/streams/readable.js`, `libjs-node/internal/streams/pipeline.js`, `libjs-node/README.md`, `CMakeLists.txt`.
+- **Decisions**:
+  - Patched `readable.js`: replaced `async function* createAsyncIterator` with a manual async iterator (object with `next()`/`return()` methods). Hermes doesn't support async generators.
+  - Patched `pipeline.js`: replaced `async function* fromReadable` with a regular function that returns the stream's async iterator directly (no generator wrapper needed).
+  - Created `operators.js` shim: exports empty `streamReturningOperators`/`promiseReturningOperators` objects. The original uses `async function*` for `map`/`flatMap`/`drop`/`take`; these advanced stream operators are unavailable in Hermes.
+  - Created `abort_controller.js` shim: minimal standalone `AbortController`/`AbortSignal` implementation using EventEmitter. The original depends on `internal/event_target` -> `internalBinding('performance')`, `FinalizationRegistry` (unavailable in Hermes), and `internal/webidl`.
+  - Includes a minimal `DOMException` polyfill (name+message+code) for abort error creation.
+- **What was done**: All stream types (Readable, Writable, Transform, Duplex, PassThrough) load and work correctly. 7 test cases: module exports check, Writable stream, Transform stream (uppercase), Readable stream (push-based), pipeline (Readable.from + Writable), PassThrough, stream.finished. All 20 tests pass under ASAN.
+- **Issues**: Hermes does not support `async function*` (async generators). Four files in `internal/streams/` contained them: `readable.js`, `pipeline.js`, `operators.js`, `duplexify.js`. The first two were patched; `operators.js` got a stub shim; `duplexify.js` is lazily loaded (only via `Duplex.from()`) so doesn't need fixing yet.
+- **Notes for next step**: The `abort_controller` shim is minimal — it supports basic abort signaling for pipeline use but doesn't implement the full Node.js EventTarget-based API (no `addEventListener` options, no `dispatchEvent` with real Event objects). Stream async iteration (`for await...of`) works via the manual iterator. Stream operators (`.map()`, `.filter()`, etc.) are unavailable — they require Hermes to support async generators.
