@@ -72,7 +72,7 @@ be omitted):
 | Step 28 | Port fs binding — async operations | 3, 27 | done | |
 | Step 29 | Port fs_dir binding | 27 | done | |
 | Step 30 | Port fs_event_wrap binding | 3, 5 | done | |
-| Step 31 | Verify fs sync operations | 27, 9 | | |
+| Step 31 | Verify fs sync operations | 27, 9 | done | |
 | Step 32 | Verify fs async operations | 28, 29 | | |
 | Step 33 | Run Node.js fs test subset | 28, 29, 30 | | |
 
@@ -430,3 +430,8 @@ be omitted):
   - `napi_property_descriptor` getter field requires `napi_callback` (function pointer), not `napi_value`.
 - **What was done**: Three new binding registrations (fs_event_wrap, uv) plus fs binding extensions (StatWatcher, kFsStatsFieldsNumber). 13 test cases: uv error constants, errname, getErrorMessage, getErrorMap (Map), kFsStatsFieldsNumber, StatWatcher constructor, FSEvent constructor, FSEvent start/close lifecycle, FSEvent watch directory (async), FSEvent watch file change (async), FSEvent ref/unref, FSEvent non-persistent, StatWatcher poll lifecycle (async). All 23 tests pass under ASAN.
 - **Notes for next step**: `watchers.js` can now load since it needs `internalBinding('fs_event_wrap')` for FSEvent, `internalBinding('fs')` for StatWatcher/kFsStatsFieldsNumber, and `internalBinding('uv')` for UV_ENOSPC. The `uv` binding is also used by `internal/errors.js` (lazy), `internal/stream_base_commons.js` (UV_EOF), and `net.js`.
+
+### Step 31: Verify fs sync operations
+- **Files**: created `test/test-fs-sync-verify.js`. Modified `CMakeLists.txt` (added test).
+- **What was done**: Created comprehensive edge case tests for fs sync operations beyond what Step 27's test covered. 17 test cases: accessSync with combined R_OK|W_OK flags, symlink+readlink path verification, lstatSync isSymbolicLink on symlinks, statSync follows symlinks to isFile, rmSync recursive cleanup, accessSync ENOENT error, mkdirSync recursive returns first created path, mkdirSync recursive on existing returns undefined, lchownSync, readdirSync recursive option, writeFileSync/readFileSync with binary Buffer, statSync with bigint option, readdirSync withFileTypes on symlinks (isSymbolicLink dirent), fdatasyncSync, lutimesSync on symlinks. All 24 tests pass under ASAN.
+- **Notes for next step**: All fs sync operations verified working correctly including edge cases around symlinks, bigint stats, recursive readdir, and lutimes.

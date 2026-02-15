@@ -287,6 +287,11 @@
 - `onchange(status, statsArr)`: fills shared stats buffer at offsets 0 (current) and kFsStatsFieldsNumber (previous)
 - `kFsStatsFieldsNumber` (18) exported from fs binding for JS side
 
+## FS Sync Verification (Step 31)
+- All sync fs edge cases work: combined access flags, lstatSync isSymbolicLink, statSync follows symlinks, bigint stat, recursive readdir, lutimesSync on symlinks, fdatasyncSync, mkdirSync recursive return value, lchownSync
+- `fs.readdirSync(dir, { recursive: true })` works and returns nested paths (e.g. `sub/nested.txt`)
+- `fs.statSync(path, { bigint: true })` returns BigInt values for size, ino, mtimeNs, etc.
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`
