@@ -51,7 +51,7 @@ be omitted):
 | Step 7 | Implement process object (basic properties) | 5 | done | |
 | Step 8 | Implement bootstrap sequence | 3, 4, 6, 7 | done | |
 | Step 9 | Port constants binding | 5 | done | |
-| Step 10 | Port types binding | 5 | | |
+| Step 10 | Port types binding | 5 | done | |
 | Step 11 | Port util binding | 5 | | |
 | Step 12 | Port string_decoder binding | 5 | | |
 | Step 13 | Port errors binding | 5 | | |
@@ -183,3 +183,14 @@ be omitted):
   - Created generic `run-hermes-node-test.sh` test runner (takes test script as argument, checks for PASS output) for reuse by future binding tests.
 - **What was done**: Implemented `initConstantsBinding` covering all POSIX errno codes, signal numbers, libuv priority/dirent/fs constants, file open flags, permission bits, access flags, copy file flags, and dlopen constants. Registered in bootstrap via `registry.registerBinding("constants", initConstantsBinding)`. JS test verifies signal values (SIGINT=2, SIGTERM=15), errno codes, fs constants (O_RDONLY=0), access flags, dirent types, and stub objects.
 - **Notes for next step**: Add new binding source files to `lib/bindings/CMakeLists.txt` and register in `hermes-node.cpp`. The `hermesNodeBindings` library links `uv_a` publicly for libuv constants. Use `run-hermes-node-test.sh` for future binding JS tests.
+
+### Step 10: Port types binding
+- **Files**: created `include/hermes/node-compat/bindings/node_types.h`, `lib/bindings/node_types.cpp`, `test/test-types.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `CMakeLists.txt` (top-level).
+- **Decisions**:
+  - Direct NAPI calls for: `isArrayBuffer`, `isDataView`, `isDate`, `isPromise`, `isTypedArray` (via `napi_is_*`), `isExternal` (via `napi_typeof`), `isNativeError` (via `napi_is_error`).
+  - `instanceof` for: `isMap`, `isSet`, `isWeakMap`, `isWeakSet`, `isRegExp`, `isSharedArrayBuffer` (via `napi_instanceof` with global constructor).
+  - `Object.prototype.toString` tag checking for: boxed primitives (`isNumberObject`, `isStringObject`, `isBooleanObject`, `isBigIntObject`, `isSymbolObject`, `isBoxedPrimitive`), function subtypes (`isAsyncFunction`, `isGeneratorFunction`), iterator types (`isMapIterator`, `isSetIterator`), `isGeneratorObject`, `isArgumentsObject`.
+  - Stubs returning false for: `isProxy` (no NAPI way to detect proxies), `isModuleNamespaceObject` (V8-specific).
+  - Also exported: `isAnyArrayBuffer` (ArrayBuffer || SharedArrayBuffer), `isArrayBufferView` (TypedArray || DataView), `isUint8Array` (via `napi_get_typedarray_info`).
+- **What was done**: Implemented `initTypesBinding` with 30 type-checking functions covering all types from Node's `node_types.cc` plus extras needed by `internal/util/types.js`. JS test covers all functions with positive and negative cases. Registered in bootstrap. All tests pass under ASAN.
+- **Notes for next step**: The `instanceof`-based checks (Map, Set, etc.) can be fooled by `Symbol.hasInstance` overrides, but this matches the pragmatic non-tamper-resistant approach. `isProxy` always returns false -- this only affects `util.inspect` display of Proxy objects.

@@ -96,6 +96,13 @@
 - Init function signature: `napi_value init(napi_env env, napi_value exports)` (same as `napi_addon_register_func`)
 - Public headers: `include/hermes/node-compat/bindings/`
 - Constants binding: `initConstantsBinding` — os.errno, os.signals, os.priority, os.dlopen, fs, crypto/zlib/trace (stubs)
+- Types binding: `initTypesBinding` — 30 type-check functions (`isMap`, `isDate`, `isPromise`, etc.)
+
+## Type Checking Patterns (types binding)
+- Direct NAPI: `napi_is_arraybuffer`, `napi_is_dataview`, `napi_is_date`, `napi_is_promise`, `napi_is_typedarray`, `napi_is_error`
+- `napi_instanceof` with global ctor: Map, Set, WeakMap, WeakSet, RegExp, SharedArrayBuffer
+- `Object.prototype.toString` tag: boxed primitives, function subtypes (AsyncFunction, GeneratorFunction), iterators (Map/Set Iterator), GeneratorObject, Arguments
+- Stubs: `isProxy` (no NAPI detection), `isModuleNamespaceObject` (V8-specific)
 
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
