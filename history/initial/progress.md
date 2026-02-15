@@ -52,7 +52,7 @@ be omitted):
 | Step 8 | Implement bootstrap sequence | 3, 4, 6, 7 | done | |
 | Step 9 | Port constants binding | 5 | done | |
 | Step 10 | Port types binding | 5 | done | |
-| Step 11 | Port util binding | 5 | | |
+| Step 11 | Port util binding | 5 | done | |
 | Step 12 | Port string_decoder binding | 5 | | |
 | Step 13 | Port errors binding | 5 | | |
 | Step 14 | Port config binding | 5 | | |
@@ -194,3 +194,21 @@ be omitted):
   - Also exported: `isAnyArrayBuffer` (ArrayBuffer || SharedArrayBuffer), `isArrayBufferView` (TypedArray || DataView), `isUint8Array` (via `napi_get_typedarray_info`).
 - **What was done**: Implemented `initTypesBinding` with 30 type-checking functions covering all types from Node's `node_types.cc` plus extras needed by `internal/util/types.js`. JS test covers all functions with positive and negative cases. Registered in bootstrap. All tests pass under ASAN.
 - **Notes for next step**: The `instanceof`-based checks (Map, Set, etc.) can be fooled by `Symbol.hasInstance` overrides, but this matches the pragmatic non-tamper-resistant approach. `isProxy` always returns false -- this only affects `util.inspect` display of Proxy objects.
+
+### Step 11: Port util binding
+- **Files**: created `include/hermes/node-compat/bindings/node_util.h`, `lib/bindings/node_util.cpp`, `test/test-util.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `CMakeLists.txt` (top-level).
+- **Decisions**:
+  - V8-specific introspection functions stubbed: `getPromiseDetails` (returns undefined), `getProxyDetails` (returns undefined), `previewEntries` (returns undefined), `getCallerLocation` (returns undefined), `getCallSites` (returns empty array). These only affect `util.inspect` display.
+  - `getOwnNonIndexProperties` implemented via two separate `napi_get_all_property_names` calls (one for strings, one for symbols) to work around Hermes NAPI bug where `plusKeepSymbols()` flag causes string property names to be returned as SymbolIDs.
+  - `privateSymbols` object created with regular JS Symbols (not V8 private symbols) using descriptive names matching Node's `PER_ISOLATE_PRIVATE_SYMBOL_PROPERTIES`. All 20 private symbols included.
+  - `constants` sub-object includes: Promise states (kPending/kFulfilled/kRejected), ExitInfo fields (kExiting/kExitCode/kHasExitCode), PropertyFilter flags (ALL_PROPERTIES through SKIP_SYMBOLS), TransferMode flags (kDisallowCloneAndTransfer/kTransferable/kCloneable).
+  - `shouldAbortOnUncaughtToggle` is a Uint32Array(1) initialized to 0.
+  - `guessHandleType` returns integer index (0-5) matching Node's JS-side `handleTypes` array.
+  - `isInsideNodeModules` returns the default value (2nd arg) since we lack V8 stack introspection.
+  - `defineLazyProperties` uses NAPI getter descriptors with `napi_add_finalizer` for cleanup.
+  - `constructSharedArrayBuffer` delegates to JS `new SharedArrayBuffer(length)`.
+  - `parseEnv` stubbed (returns empty object).
+  - `arrayBufferViewHasBuffer` always returns true (Hermes always has backing buffer).
+- **What was done**: Implemented `initUtilBinding` with 15 functions and 3 sub-objects covering all exports from Node's `node_util.cc` that `lib/*.js` files use. Registered in bootstrap. JS test covers sleep, guessHandleType, getOwnNonIndexProperties (including ONLY_ENUMERABLE filter), privateSymbols (type checks + property key usage), all constants values, shouldAbortOnUncaughtToggle, stubs, getConstructorName, arrayBufferViewHasBuffer, isInsideNodeModules, getCallSites, parseEnv. All tests pass under ASAN.
+- **Issues**: Hermes NAPI `napi_get_all_property_names` with both `plusIncludeSymbols().plusKeepSymbols()` and `plusIncludeNonSymbols()` causes string property names to be returned as Hermes internal SymbolIDs (exposed as JS Symbols). Worked around by making two separate calls -- one for strings (skip_symbols), one for symbols (skip_strings).
+- **Notes for next step**: The `defineLazyProperties` implementation creates getter descriptors that call `require(id)[key]` on access. It uses `napi_add_finalizer` for cleanup. The `privateSymbols` are regular JS Symbols, not truly private -- this is acceptable in our controlled environment.

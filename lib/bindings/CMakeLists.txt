@@ -6,6 +6,7 @@
 add_hermes_library(hermesNodeBindings STATIC
   node_constants.cpp
   node_types.cpp
+  node_util.cpp
 )
 
 target_include_directories(hermesNodeBindings
