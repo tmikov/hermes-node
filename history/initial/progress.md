@@ -59,7 +59,7 @@ be omitted):
 | Step 15 | Port symbols binding | 5 | done | |
 | Step 16 | Implement internal/options shim | 6 | done | |
 | Step 17 | Verify bootstrap modules load | 8, 9–16 | done | |
-| Step 18 | Port buffer binding | 5 | | |
+| Step 18 | Port buffer binding | 5 | done | |
 | Step 19 | Port encoding_binding | 5 | | |
 | Step 20 | Port async_wrap binding (stub) | 5 | | |
 | Step 21 | Implement process.nextTick | 3, 7 | | |
@@ -273,3 +273,14 @@ be omitted):
 - **What was done**: All four bootstrap modules load successfully: `internal/assert`, `internal/errors`, `internal/util`, `internal/validators`. Plus `internal/util/types`. Functional tests verify ERR_INVALID_ARG_TYPE error creation, validateString validation, normalizeEncoding. 9 test assertions in `test-bootstrap.js`, 161 primordials assertions (was 156).
 - **Issues**: `napi_default` (attribute=0) makes properties non-enumerable. The spread operator only copies enumerable own properties. Any binding whose exports are spread in JS code needs `napi_enumerable` attribute. Currently only the types binding is spread.
 - **Notes for next step**: The `internalBinding('uv')` binding is referenced lazily by `internal/util.js` and `internal/errors.js` (via `lazyUv()`) -- it will be needed when error formatting code paths are exercised. Node v24 renamed `validateCallback` to `validateFunction` in validators.
+
+### Step 18: Port buffer binding
+- **Files**: created `include/hermes/node-compat/bindings/node_buffer.h`, `lib/bindings/node_buffer.cpp`, `test/test-buffer.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `CMakeLists.txt` (top-level).
+- **Decisions**:
+  - No simdutf dependency: implemented UTF-8/ASCII validation, base64 encode/decode, hex encode/decode, and string search entirely in C++ without external libraries. Simpler but slower than Node's simdutf-accelerated versions.
+  - `setBufferPrototype` is a no-op since we don't create buffers from native code.
+  - `createUnsafeArrayBuffer` creates zero-initialized ArrayBuffer (NAPI doesn't expose uninitialized allocation). Safe but slightly slower than Node's uninitialized path.
+  - String write "static" variants (asciiWriteStatic, latin1WriteStatic, utf8WriteStatic) take `(buf, string, offset, length)` as positional args. Non-static variants (base64Write, hexWrite, ucs2Write, base64urlWrite) use `this` as the buffer.
+  - UTF-8 write truncation: backs off to valid UTF-8 boundary when maxLength cuts a multi-byte sequence.
+- **What was done**: Implemented `initBufferBinding` with 34 functions and 2 constants covering all exports from Node's `node_buffer.cc` that `lib/buffer.js` and `lib/internal/buffer.js` use. Functions: byteLengthUtf8, compare, compareOffset, copy, fill, indexOfBuffer/Number/String, swap16/32/64, isUtf8, isAscii, atob, btoa, setBufferPrototype, copyArrayBuffer, createUnsafeArrayBuffer, 7 slice methods (ascii/base64/base64url/latin1/hex/ucs2/utf8), 7 write methods (3 static + 4 method-style). Constants: kMaxLength, kStringMaxLength. Registered in bootstrap. JS test covers all functions with positive and negative cases.
+- **Notes for next step**: The buffer JS module (`libjs-node/buffer.js`) also requires `internal/util` (for encodingsMap, normalizeEncoding), `internal/util/types`, and `internal/errors`. The `internal/buffer.js` module adds 60+ read/write prototype methods in pure JS. `internal/blob.js` and `internal/webstreams/util.js` also use kMaxLength and copyArrayBuffer from this binding.

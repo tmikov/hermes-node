@@ -153,6 +153,15 @@
 - **`napi_get_all_property_names` with mixed string+symbol**: When both `plusIncludeSymbols().plusKeepSymbols()` and `plusIncludeNonSymbols()` are set (via `napi_key_all_properties` without skip flags), string property names are returned as Hermes internal SymbolIDs (exposed as JS Symbols). Workaround: make two separate calls — one with `napi_key_skip_symbols` for strings, one with `napi_key_skip_strings` for symbols.
 - **`napi_create_string_utf8` rejects invalid UTF-8**: Unlike V8 (which produces replacement chars), Hermes raises a RangeError and returns `napi_generic_failure`. Workaround: catch failure, clear exception, sanitize bytes by replacing invalid sequences with U+FFFD, retry.
 
+## Buffer Binding
+- `initBufferBinding` — 34 functions + 2 constants (kMaxLength, kStringMaxLength)
+- Core ops: byteLengthUtf8, compare/compareOffset, copy, fill, indexOf{Buffer,Number,String}, swap{16,32,64}, isUtf8, isAscii, atob, btoa
+- Slice methods (7): called as methods on Buffer via `this` — asciiSlice, latin1Slice, utf8Slice, hexSlice, base64Slice, base64urlSlice, ucs2Slice
+- Write methods: "static" variants (asciiWriteStatic, latin1WriteStatic, utf8WriteStatic) take `(buf, string, offset, length)`; method-style (base64Write, hexWrite, ucs2Write, base64urlWrite) use `this`
+- `setBufferPrototype`: no-op; `createUnsafeArrayBuffer`: zero-initialized (NAPI limitation)
+- `copyArrayBuffer`: raw memcpy between ArrayBuffers
+- Users: `buffer.js`, `internal/buffer.js`, `internal/blob.js`, `internal/webstreams/util.js`, `internal/util/comparisons.js`
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`
