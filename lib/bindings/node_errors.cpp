@@ -21,8 +21,9 @@ namespace node_compat {
 // triggerUncaughtException(error, fromPromise)
 // ---------------------------------------------------------------------------
 
-static napi_value
-triggerUncaughtException(napi_env env, napi_callback_info info) {
+static napi_value triggerUncaughtException(
+    napi_env env,
+    napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2];
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
@@ -85,8 +86,7 @@ static napi_value noSideEffectsToString(napi_env env, napi_callback_info info) {
   napi_status st = napi_coerce_to_string(env, argv[0], &result);
   if (st != napi_ok) {
     // If coercion fails, return "[object Object]" as a fallback.
-    napi_create_string_utf8(
-        env, "[object Object]", NAPI_AUTO_LENGTH, &result);
+    napi_create_string_utf8(env, "[object Object]", NAPI_AUTO_LENGTH, &result);
   }
   return result;
 }
@@ -106,7 +106,8 @@ static napi_value noopStub(napi_env env, napi_callback_info /*info*/) {
 // ---------------------------------------------------------------------------
 
 /// Set an integer property on an object.
-static void setExitCode(napi_env env, napi_value obj, const char *name, int value) {
+static void
+setExitCode(napi_env env, napi_value obj, const char *name, int value) {
   napi_value val;
   napi_create_int32(env, value, &val);
   napi_set_named_property(env, obj, name, val);

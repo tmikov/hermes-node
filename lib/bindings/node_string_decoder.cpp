@@ -110,10 +110,7 @@ static napi_status makeString(
     case UCS2:
       // UCS2/UTF16LE: data is little-endian 16-bit code units.
       return napi_create_string_utf16(
-          env,
-          reinterpret_cast<const char16_t *>(data),
-          length / 2,
-          result);
+          env, reinterpret_cast<const char16_t *>(data), length / 2, result);
 
     case HEX:
       return makeHexString(env, data, length, result);
@@ -173,9 +170,7 @@ static napi_status decodeData(
     if (missingBytes(state) > 0) {
       if (enc == UTF8) {
         // For UTF-8: check continuation bytes.
-        for (size_t i = 0;
-             i < nread && i < missingBytes(state);
-             ++i) {
+        for (size_t i = 0; i < nread && i < missingBytes(state); ++i) {
           if ((data[i] & 0xC0) != 0x80) {
             // Not a continuation byte — stop here.
             state[kMissingBytes] = 0;
@@ -189,7 +184,8 @@ static napi_status decodeData(
         }
       }
 
-      size_t found_bytes = std::min(nread, static_cast<size_t>(missingBytes(state)));
+      size_t found_bytes =
+          std::min(nread, static_cast<size_t>(missingBytes(state)));
       std::memcpy(
           incompleteCharBuf(state) + bufferedBytes(state), data, found_bytes);
       data += found_bytes;
@@ -201,11 +197,7 @@ static napi_status decodeData(
       if (missingBytes(state) == 0) {
         // Complete character — create prepend string.
         napi_status st = makeString(
-            env,
-            incompleteCharBuf(state),
-            bufferedBytes(state),
-            enc,
-            &prepend);
+            env, incompleteCharBuf(state), bufferedBytes(state), enc, &prepend);
         if (st != napi_ok)
           return st;
 
@@ -282,10 +274,7 @@ static napi_status decodeData(
       // Copy incomplete bytes from end of input.
       nread -= bufferedBytes(state);
       *nread_ptr -= bufferedBytes(state);
-      std::memcpy(
-          incompleteCharBuf(state),
-          data + nread,
-          bufferedBytes(state));
+      std::memcpy(incompleteCharBuf(state), data + nread, bufferedBytes(state));
     }
 
     if (nread > 0) {
@@ -329,10 +318,7 @@ static napi_status decodeData(
 }
 
 /// Flush any buffered incomplete character data.
-static napi_status flushData(
-    napi_env env,
-    uint8_t *state,
-    napi_value *result) {
+static napi_status flushData(napi_env env, uint8_t *state, napi_value *result) {
   Encoding enc = decoderEncoding(state);
 
   if (enc == UCS2 && (bufferedBytes(state) % 2) == 1) {
@@ -372,16 +358,21 @@ static napi_value decodeCallback(napi_env env, napi_callback_info info) {
   // Get decoder state from first arg (Buffer/Uint8Array).
   uint8_t *decoderData = nullptr;
   size_t decoderLen = 0;
-  napi_status st =
-      napi_get_buffer_info(env, argv[0], reinterpret_cast<void **>(&decoderData), &decoderLen);
+  napi_status st = napi_get_buffer_info(
+      env, argv[0], reinterpret_cast<void **>(&decoderData), &decoderLen);
   if (st != napi_ok || decoderLen < kDecoderSize) {
     // Try as TypedArray.
     napi_typedarray_type type;
     size_t byteOffset;
     napi_value arrBuf;
     st = napi_get_typedarray_info(
-        env, argv[0], &type, &decoderLen, reinterpret_cast<void **>(&decoderData),
-        &arrBuf, &byteOffset);
+        env,
+        argv[0],
+        &type,
+        &decoderLen,
+        reinterpret_cast<void **>(&decoderData),
+        &arrBuf,
+        &byteOffset);
     if (st != napi_ok || decoderLen < kDecoderSize) {
       napi_throw_error(env, nullptr, "Invalid decoder buffer");
       return nullptr;
@@ -450,15 +441,20 @@ static napi_value flushCallback(napi_env env, napi_callback_info info) {
   // Get decoder state.
   uint8_t *decoderData = nullptr;
   size_t decoderLen = 0;
-  napi_status st =
-      napi_get_buffer_info(env, argv[0], reinterpret_cast<void **>(&decoderData), &decoderLen);
+  napi_status st = napi_get_buffer_info(
+      env, argv[0], reinterpret_cast<void **>(&decoderData), &decoderLen);
   if (st != napi_ok || decoderLen < kDecoderSize) {
     napi_typedarray_type type;
     size_t byteOffset;
     napi_value arrBuf;
     st = napi_get_typedarray_info(
-        env, argv[0], &type, &decoderLen, reinterpret_cast<void **>(&decoderData),
-        &arrBuf, &byteOffset);
+        env,
+        argv[0],
+        &type,
+        &decoderLen,
+        reinterpret_cast<void **>(&decoderData),
+        &arrBuf,
+        &byteOffset);
     if (st != napi_ok || decoderLen < kDecoderSize) {
       napi_throw_error(env, nullptr, "Invalid decoder buffer");
       return nullptr;
@@ -481,10 +477,10 @@ napi_value initStringDecoderBinding(napi_env env, napi_value exports) {
   napi_value val;
 
   // Export constants.
-#define SET_INT32(name, v)                                     \
-  do {                                                         \
-    napi_create_int32(env, static_cast<int32_t>(v), &val);     \
-    napi_set_named_property(env, exports, name, val);          \
+#define SET_INT32(name, v)                                 \
+  do {                                                     \
+    napi_create_int32(env, static_cast<int32_t>(v), &val); \
+    napi_set_named_property(env, exports, name, val);      \
   } while (0)
 
   SET_INT32("kIncompleteCharactersStart", kIncompleteCharactersStart);
@@ -500,11 +496,11 @@ napi_value initStringDecoderBinding(napi_env env, napi_value exports) {
   napi_value encodings;
   napi_create_array_with_length(env, 8, &encodings);
 
-#define SET_ENCODING(idx, name)                                   \
-  do {                                                            \
-    napi_value s;                                                 \
-    napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &s);     \
-    napi_set_element(env, encodings, idx, s);                     \
+#define SET_ENCODING(idx, name)                               \
+  do {                                                        \
+    napi_value s;                                             \
+    napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &s); \
+    napi_set_element(env, encodings, idx, s);                 \
   } while (0)
 
   // Indices match Node's enum encoding values.

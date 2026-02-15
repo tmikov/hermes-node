@@ -14,13 +14,13 @@
 namespace hermes {
 namespace node_compat {
 
-#define NAPI_CALL(call)                                              \
-  do {                                                               \
-    napi_status status_ = (call);                                    \
-    if (status_ != napi_ok) {                                        \
-      napi_throw_error(env, nullptr, "NAPI call failed in " #call);  \
-      return nullptr;                                                \
-    }                                                                \
+#define NAPI_CALL(call)                                             \
+  do {                                                              \
+    napi_status status_ = (call);                                   \
+    if (status_ != napi_ok) {                                       \
+      napi_throw_error(env, nullptr, "NAPI call failed in " #call); \
+      return nullptr;                                               \
+    }                                                               \
   } while (0)
 
 // StreamBaseStateFields from Node's stream_base.h
@@ -35,9 +35,7 @@ enum StreamBaseStateFields {
 // Stub constructor for WriteWrap — creates a plain JS object.
 // In Node, WriteWrap inherits from AsyncWrap and wraps a uv_write_t.
 // For the stub, it's just a callable constructor.
-static napi_value writeWrapConstructor(
-    napi_env env,
-    napi_callback_info info) {
+static napi_value writeWrapConstructor(napi_env env, napi_callback_info info) {
   napi_value thisArg;
   napi_get_cb_info(env, info, nullptr, nullptr, &thisArg, nullptr);
   // nothing to do — the JS side sets .handle, .oncomplete, etc.
@@ -58,7 +56,11 @@ napi_value initStreamWrapBinding(napi_env env, napi_value exports) {
   {
     napi_value ctor;
     NAPI_CALL(napi_create_function(
-        env, "WriteWrap", NAPI_AUTO_LENGTH, writeWrapConstructor, nullptr,
+        env,
+        "WriteWrap",
+        NAPI_AUTO_LENGTH,
+        writeWrapConstructor,
+        nullptr,
         &ctor));
     NAPI_CALL(napi_set_named_property(env, exports, "WriteWrap", ctor));
   }
@@ -67,17 +69,21 @@ napi_value initStreamWrapBinding(napi_env env, napi_value exports) {
   {
     napi_value ctor;
     NAPI_CALL(napi_create_function(
-        env, "ShutdownWrap", NAPI_AUTO_LENGTH, shutdownWrapConstructor, nullptr,
+        env,
+        "ShutdownWrap",
+        NAPI_AUTO_LENGTH,
+        shutdownWrapConstructor,
+        nullptr,
         &ctor));
     NAPI_CALL(napi_set_named_property(env, exports, "ShutdownWrap", ctor));
   }
 
   // --- Constants ---
-#define SET_CONSTANT(name, val)                                        \
-  do {                                                                 \
-    napi_value v;                                                      \
-    NAPI_CALL(napi_create_int32(env, static_cast<int32_t>(val), &v));  \
-    NAPI_CALL(napi_set_named_property(env, exports, #name, v));        \
+#define SET_CONSTANT(name, val)                                       \
+  do {                                                                \
+    napi_value v;                                                     \
+    NAPI_CALL(napi_create_int32(env, static_cast<int32_t>(val), &v)); \
+    NAPI_CALL(napi_set_named_property(env, exports, #name, v));       \
   } while (0)
 
   SET_CONSTANT(kReadBytesOrError, kReadBytesOrError);

@@ -173,7 +173,8 @@ static int hexVal(char c) {
 }
 
 /// Decode hex string into output buffer. Returns number of bytes written.
-static size_t hexDecode(const char *src, size_t srcLen, uint8_t *dst, size_t dstLen) {
+static size_t
+hexDecode(const char *src, size_t srcLen, uint8_t *dst, size_t dstLen) {
   size_t written = 0;
   // Process pairs of hex digits
   for (size_t i = 0; i + 1 < srcLen && written < dstLen; i += 2) {
@@ -211,10 +212,8 @@ static const uint8_t *memchrForward(
 }
 
 /// Reverse search for a single byte.
-static const uint8_t *memchrReverse(
-    const uint8_t *haystack,
-    uint8_t needle,
-    size_t endOffset) {
+static const uint8_t *
+memchrReverse(const uint8_t *haystack, uint8_t needle, size_t endOffset) {
   // Search from endOffset down to 0.
   for (size_t i = endOffset + 1; i > 0; i--) {
     if (haystack[i - 1] == needle)
@@ -383,9 +382,7 @@ static napi_value compareCb(napi_env env, napi_callback_info info) {
 
   size_t cmpLen = std::min(a.length, b.length);
   int val = normalizeCompareVal(
-      cmpLen > 0 ? std::memcmp(a.data, b.data, cmpLen) : 0,
-      a.length,
-      b.length);
+      cmpLen > 0 ? std::memcmp(a.data, b.data, cmpLen) : 0, a.length, b.length);
 
   napi_value result;
   napi_create_int32(env, val, &result);
@@ -402,7 +399,8 @@ static napi_value compareOffsetCb(napi_env env, napi_callback_info info) {
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   BufInfo source, target;
-  if (!getBufInfo(env, argv[0], &source) || !getBufInfo(env, argv[1], &target)) {
+  if (!getBufInfo(env, argv[0], &source) ||
+      !getBufInfo(env, argv[1], &target)) {
     napi_throw_error(env, nullptr, "argument must be a Buffer");
     return nullptr;
   }
@@ -437,8 +435,8 @@ static napi_value compareOffsetCb(napi_env env, napi_callback_info info) {
 
   size_t sourceLen = sourceEnd > sourceStart ? sourceEnd - sourceStart : 0;
   size_t targetLen = targetEnd > targetStart ? targetEnd - targetStart : 0;
-  size_t toCmp = std::min(std::min(sourceLen, targetLen),
-                          source.length - sourceStart);
+  size_t toCmp =
+      std::min(std::min(sourceLen, targetLen), source.length - sourceStart);
 
   int val = normalizeCompareVal(
       toCmp > 0
@@ -463,7 +461,8 @@ static napi_value copyCb(napi_env env, napi_callback_info info) {
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   BufInfo source, target;
-  if (!getBufInfo(env, argv[0], &source) || !getBufInfo(env, argv[1], &target)) {
+  if (!getBufInfo(env, argv[0], &source) ||
+      !getBufInfo(env, argv[1], &target)) {
     napi_throw_error(env, nullptr, "argument must be a Buffer");
     return nullptr;
   }
@@ -518,8 +517,7 @@ static napi_value fillCb(napi_env env, napi_callback_info info) {
         napi_create_int32(env, -1, &result);
         return result;
       }
-      std::memcpy(
-          buf.data + start, fillBuf.data, std::min(strLen, fillLen));
+      std::memcpy(buf.data + start, fillBuf.data, std::min(strLen, fillLen));
       // Repeat pattern
       if (strLen < fillLen) {
         size_t inThere = strLen;
@@ -593,7 +591,8 @@ static napi_value fillCb(napi_env env, napi_callback_info info) {
   } else if (enc == BASE64 || enc == BASE64URL) {
     std::string str = getStringLatin1(env, argv[1]);
     std::vector<uint8_t> decoded;
-    auto b64opts = enc == BASE64URL ? simdutf::base64_url : simdutf::base64_default;
+    auto b64opts =
+        enc == BASE64URL ? simdutf::base64_url : simdutf::base64_default;
     int err = base64Decode(str.data(), str.size(), decoded, b64opts);
     if (err < 0 || decoded.empty()) {
       napi_value result;
@@ -749,8 +748,7 @@ static napi_value indexOfNumberCb(napi_env env, napi_callback_info info) {
   bool isForward = true;
   napi_get_value_bool(env, argv[3], &isForward);
 
-  int64_t optOffset =
-      indexOfOffset(buf.length, offsetI, 1, isForward);
+  int64_t optOffset = indexOfOffset(buf.length, offsetI, 1, isForward);
 
   if (optOffset <= -1 || buf.length == 0) {
     napi_value result;
@@ -835,7 +833,8 @@ static napi_value indexOfStringCb(napi_env env, napi_callback_info info) {
   } else if (enc == BASE64 || enc == BASE64URL) {
     std::string b64Str = getStringLatin1(env, argv[1]);
     std::vector<uint8_t> decoded;
-    auto b64opts = enc == BASE64URL ? simdutf::base64_url : simdutf::base64_default;
+    auto b64opts =
+        enc == BASE64URL ? simdutf::base64_url : simdutf::base64_default;
     base64Decode(b64Str.data(), b64Str.size(), decoded, b64opts);
     needleBytes.assign(decoded.begin(), decoded.end());
     needlePtr = reinterpret_cast<const uint8_t *>(needleBytes.data());
@@ -850,8 +849,8 @@ static napi_value indexOfStringCb(napi_env env, napi_callback_info info) {
   if (enc == UCS2)
     haystackLen &= ~static_cast<size_t>(1); // round down to even
 
-  int64_t optOffset =
-      indexOfOffset(haystackLen, offsetI, static_cast<int64_t>(needleLen), isForward);
+  int64_t optOffset = indexOfOffset(
+      haystackLen, offsetI, static_cast<int64_t>(needleLen), isForward);
 
   if (needleLen == 0) {
     napi_value result;
@@ -899,7 +898,8 @@ static napi_value swap16Cb(napi_env env, napi_callback_info info) {
     return nullptr;
   }
   if (buf.length % 2 != 0) {
-    napi_throw_range_error(env, nullptr, "Buffer size must be a multiple of 16-bits");
+    napi_throw_range_error(
+        env, nullptr, "Buffer size must be a multiple of 16-bits");
     return nullptr;
   }
 
@@ -923,7 +923,8 @@ static napi_value swap32Cb(napi_env env, napi_callback_info info) {
     return nullptr;
   }
   if (buf.length % 4 != 0) {
-    napi_throw_range_error(env, nullptr, "Buffer size must be a multiple of 32-bits");
+    napi_throw_range_error(
+        env, nullptr, "Buffer size must be a multiple of 32-bits");
     return nullptr;
   }
 
@@ -950,7 +951,8 @@ static napi_value swap64Cb(napi_env env, napi_callback_info info) {
     return nullptr;
   }
   if (buf.length % 8 != 0) {
-    napi_throw_range_error(env, nullptr, "Buffer size must be a multiple of 64-bits");
+    napi_throw_range_error(
+        env, nullptr, "Buffer size must be a multiple of 64-bits");
     return nullptr;
   }
 
@@ -1150,10 +1152,8 @@ struct SliceArgs {
   size_t end;
 };
 
-static bool getSliceArgs(
-    napi_env env,
-    napi_callback_info info,
-    SliceArgs *out) {
+static bool
+getSliceArgs(napi_env env, napi_callback_info info, SliceArgs *out) {
   size_t argc = 2;
   napi_value argv[2];
   napi_value thisVal;
@@ -1508,8 +1508,8 @@ static napi_value hexWriteCb(napi_env env, napi_callback_info info) {
   }
 
   std::string str = getStringLatin1(env, args.str);
-  size_t written =
-      hexDecode(str.data(), str.size(), args.buf.data + args.offset, args.maxLength);
+  size_t written = hexDecode(
+      str.data(), str.size(), args.buf.data + args.offset, args.maxLength);
 
   napi_value result;
   napi_create_uint32(env, static_cast<uint32_t>(written), &result);
@@ -1594,10 +1594,10 @@ napi_value initBufferBinding(napi_env env, napi_value exports) {
   napi_value fn;
 
 // Helper macros.
-#define SET_FN(name, cb)                                                   \
-  do {                                                                     \
-    napi_create_function(env, name, NAPI_AUTO_LENGTH, cb, nullptr, &fn);   \
-    napi_set_named_property(env, exports, name, fn);                       \
+#define SET_FN(name, cb)                                                 \
+  do {                                                                   \
+    napi_create_function(env, name, NAPI_AUTO_LENGTH, cb, nullptr, &fn); \
+    napi_set_named_property(env, exports, name, fn);                     \
   } while (0)
 
   // Core operations.

@@ -15,8 +15,8 @@ namespace node_compat {
 
 /// Initialize the stdio binding. Provides:
 ///   writeString(fd, string) — synchronous write of a string to a file
-///   descriptor writeBuffer(fd, buffer) — synchronous write of a Uint8Array to a
-///   file descriptor getHandleType(fd) — returns handle type string ("TTY",
+///   descriptor writeBuffer(fd, buffer) — synchronous write of a Uint8Array to
+///   a file descriptor getHandleType(fd) — returns handle type string ("TTY",
 ///   "FILE", "PIPE", etc.)
 napi_value initStdioBinding(napi_env env, napi_value exports);
 

@@ -156,8 +156,7 @@ class ModuleLoaderTest : public ::testing::Test {
   /// Helper: get a string from a napi_value.
   std::string toString(napi_value val) {
     size_t len;
-    EXPECT_EQ(
-        napi_get_value_string_utf8(env_, val, nullptr, 0, &len), napi_ok);
+    EXPECT_EQ(napi_get_value_string_utf8(env_, val, nullptr, 0, &len), napi_ok);
     std::string result(len, '\0');
     EXPECT_EQ(
         napi_get_value_string_utf8(env_, val, &result[0], len + 1, &len),

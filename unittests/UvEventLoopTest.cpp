@@ -118,8 +118,7 @@ TEST(UvEventLoop, PostWorkMultiple) {
   for (int i = 0; i < kCount; ++i) {
     EXPECT_TRUE(td[i].executed.load()) << "work " << i << " not executed";
     EXPECT_TRUE(td[i].completed.load()) << "work " << i << " not completed";
-    EXPECT_EQ(td[i].completionStatus, napi_ok)
-        << "work " << i << " bad status";
+    EXPECT_EQ(td[i].completionStatus, napi_ok) << "work " << i << " bad status";
   }
 
   ASSERT_EQ(loop.close(), 0);
@@ -199,8 +198,10 @@ TEST(UvEventLoop, PostTaskFromAnotherThread) {
   uv_timer_t timer;
   uv_timer_init(loop.getLoop(), &timer);
   uv_timer_start(
-      &timer, [](uv_timer_t *t) { uv_close((uv_handle_t *)t, nullptr); },
-      200, 0);
+      &timer,
+      [](uv_timer_t *t) { uv_close((uv_handle_t *)t, nullptr); },
+      200,
+      0);
 
   // Post the task from another thread.
   std::thread t([&]() {

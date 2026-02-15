@@ -64,10 +64,8 @@ class ModuleLoader {
   /// \param primordials The primordials object (from primordials.js).
   /// \param internalBindingFn The internalBinding JS function.
   /// \return napi_ok on success.
-  napi_status init(
-      napi_env env,
-      napi_value primordials,
-      napi_value internalBindingFn);
+  napi_status
+  init(napi_env env, napi_value primordials, napi_value internalBindingFn);
 
   /// Require a module by name. Returns the module's exports object.
   /// The name follows Node's internal convention:

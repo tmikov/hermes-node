@@ -8,11 +8,11 @@
 #include <hermes/node-compat/bindings/node_constants.h>
 #include <node_api.h>
 
-#include <cerrno>
-#include <csignal>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <cerrno>
+#include <csignal>
 
 #if !defined(_WIN32)
 #include <dlfcn.h>
@@ -34,13 +34,11 @@ setIntProp(napi_env env, napi_value obj, const char *name, int32_t val) {
   return napi_set_named_property(env, obj, name, v);
 }
 
-
 // Macro to define a constant from a C #define, guarded by #ifdef.
-#define SET_CONST(obj, name)              \
-  do {                                    \
-    setIntProp(env, obj, #name, (name));  \
+#define SET_CONST(obj, name)             \
+  do {                                   \
+    setIntProp(env, obj, #name, (name)); \
   } while (0)
-
 
 static void defineErrnoConstants(napi_env env, napi_value target) {
 #ifdef E2BIG

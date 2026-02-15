@@ -76,9 +76,8 @@ static napi_value writeBuffer(napi_env env, napi_callback_info info) {
   napi_typedarray_type type;
   size_t byteOffset = 0;
   napi_value arrayBuf;
-  napi_status st =
-      napi_get_typedarray_info(env, argv[1], &type, &byteLength, &data,
-                               &arrayBuf, &byteOffset);
+  napi_status st = napi_get_typedarray_info(
+      env, argv[1], &type, &byteLength, &data, &arrayBuf, &byteOffset);
   if (st != napi_ok) {
     // Try as ArrayBuffer.
     st = napi_get_arraybuffer_info(env, argv[1], &data, &byteLength);

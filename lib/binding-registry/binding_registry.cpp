@@ -116,8 +116,8 @@ static napi_value internalBindingCallback(
   // Get the binding name as a UTF-8 string.
   char nameBuf[256];
   size_t nameLen = 0;
-  status =
-      napi_get_value_string_utf8(env, argv[0], nameBuf, sizeof(nameBuf), &nameLen);
+  status = napi_get_value_string_utf8(
+      env, argv[0], nameBuf, sizeof(nameBuf), &nameLen);
   if (status != napi_ok) {
     napi_throw_type_error(
         env,

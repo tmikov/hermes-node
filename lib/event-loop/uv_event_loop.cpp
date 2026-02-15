@@ -110,8 +110,7 @@ struct UvEventLoop::Impl {
 
   static void onWorkDone(uv_work_t *req, int status) {
     auto *wr = static_cast<WorkRequest *>(req->data);
-    napi_status nstatus =
-        (status == UV_ECANCELED) ? napi_cancelled : napi_ok;
+    napi_status nstatus = (status == UV_ECANCELED) ? napi_cancelled : napi_ok;
     wr->complete(wr->work_data, nstatus);
     delete wr;
   }
@@ -234,8 +233,7 @@ int UvEventLoop::close() {
   assert(impl_ && "UvEventLoop::close() called before init()");
 
   // Close the async handle. The actual cleanup happens in the close callback.
-  uv_close(
-      reinterpret_cast<uv_handle_t *>(&impl_->async), Impl::onAsyncClose);
+  uv_close(reinterpret_cast<uv_handle_t *>(&impl_->async), Impl::onAsyncClose);
   // Run the loop to process the close callback.
   uv_run(&impl_->loop, UV_RUN_DEFAULT);
 

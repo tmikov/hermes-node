@@ -53,8 +53,7 @@ class BindingRegistryTest : public ::testing::Test {
   napi_value eval(const char *script) {
     napi_value scriptStr;
     EXPECT_EQ(
-        napi_create_string_utf8(
-            env_, script, NAPI_AUTO_LENGTH, &scriptStr),
+        napi_create_string_utf8(env_, script, NAPI_AUTO_LENGTH, &scriptStr),
         napi_ok);
     napi_value result;
     EXPECT_EQ(napi_run_script(env_, scriptStr, &result), napi_ok);
@@ -78,8 +77,7 @@ class BindingRegistryTest : public ::testing::Test {
   /// Helper: get a string from a napi_value.
   std::string toString(napi_value val) {
     size_t len;
-    EXPECT_EQ(
-        napi_get_value_string_utf8(env_, val, nullptr, 0, &len), napi_ok);
+    EXPECT_EQ(napi_get_value_string_utf8(env_, val, nullptr, 0, &len), napi_ok);
     std::string result(len, '\0');
     EXPECT_EQ(
         napi_get_value_string_utf8(env_, val, &result[0], len + 1, &len),

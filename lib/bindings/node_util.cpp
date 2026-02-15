@@ -64,8 +64,9 @@ static bool isArrayIndex(const char *buf, size_t len) {
   return true;
 }
 
-static napi_value
-getOwnNonIndexProperties(napi_env env, napi_callback_info info) {
+static napi_value getOwnNonIndexProperties(
+    napi_env env,
+    napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2];
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
@@ -90,14 +91,11 @@ getOwnNonIndexProperties(napi_env env, napi_callback_info info) {
   if (filter & ONLY_ENUMERABLE)
     keyFilter = static_cast<napi_key_filter>(keyFilter | napi_key_enumerable);
   if (filter & ONLY_CONFIGURABLE)
-    keyFilter =
-        static_cast<napi_key_filter>(keyFilter | napi_key_configurable);
+    keyFilter = static_cast<napi_key_filter>(keyFilter | napi_key_configurable);
   if (filter & SKIP_STRINGS)
-    keyFilter =
-        static_cast<napi_key_filter>(keyFilter | napi_key_skip_strings);
+    keyFilter = static_cast<napi_key_filter>(keyFilter | napi_key_skip_strings);
   if (filter & SKIP_SYMBOLS)
-    keyFilter =
-        static_cast<napi_key_filter>(keyFilter | napi_key_skip_symbols);
+    keyFilter = static_cast<napi_key_filter>(keyFilter | napi_key_skip_symbols);
 
   napi_value names;
   napi_status st = napi_get_all_property_names(
@@ -362,8 +360,9 @@ static napi_value getExternalValue(napi_env env, napi_callback_info info) {
 // arrayBufferViewHasBuffer(view) -> boolean
 // ---------------------------------------------------------------------------
 
-static napi_value
-arrayBufferViewHasBuffer(napi_env env, napi_callback_info info) {
+static napi_value arrayBufferViewHasBuffer(
+    napi_env env,
+    napi_callback_info info) {
   // In Hermes, typed arrays always have a backing buffer.
   napi_value result;
   napi_get_boolean(env, true, &result);
@@ -398,8 +397,8 @@ static napi_value isInsideNodeModules(napi_env env, napi_callback_info info) {
 /// Data stored for each lazy property getter.
 struct LazyPropData {
   napi_ref requireRef; // Reference to the global require function
-  char *moduleId;      // The module ID string (owned)
-  char *propKey;       // The property key string (owned)
+  char *moduleId; // The module ID string (owned)
+  char *propKey; // The property key string (owned)
 
   ~LazyPropData() {
     delete[] moduleId;
@@ -439,12 +438,11 @@ static napi_value lazyPropGetter(napi_env env, napi_callback_info info) {
 
   // Call require(moduleId).
   napi_value moduleIdStr;
-  napi_create_string_utf8(
-      env, lpd->moduleId, NAPI_AUTO_LENGTH, &moduleIdStr);
+  napi_create_string_utf8(env, lpd->moduleId, NAPI_AUTO_LENGTH, &moduleIdStr);
 
   napi_value modExports;
-  napi_status st = napi_call_function(
-      env, global, requireFn, 1, &moduleIdStr, &modExports);
+  napi_status st =
+      napi_call_function(env, global, requireFn, 1, &moduleIdStr, &modExports);
   if (st != napi_ok)
     return nullptr;
 
@@ -530,8 +528,7 @@ static napi_value defineLazyProperties(napi_env env, napi_callback_info info) {
     // Attach lpd cleanup to the target object (not a separate getter function).
     // The target outlives any accessor getters defined on it, so the data
     // won't be freed while the getter is still reachable.
-    napi_add_finalizer(
-        env, target, lpd, lazyPropDataCleanup, nullptr, nullptr);
+    napi_add_finalizer(env, target, lpd, lazyPropDataCleanup, nullptr, nullptr);
 
     // Define the lazy property as a configurable getter.
     napi_property_descriptor desc = {};
@@ -540,8 +537,8 @@ static napi_value defineLazyProperties(napi_env env, napi_callback_info info) {
     desc.data = lpd;
     desc.attributes = napi_configurable;
     if (enumerable)
-      desc.attributes =
-          static_cast<napi_property_attributes>(desc.attributes | napi_enumerable);
+      desc.attributes = static_cast<napi_property_attributes>(
+          desc.attributes | napi_enumerable);
 
     napi_define_properties(env, target, 1, &desc);
   }
@@ -560,8 +557,9 @@ static napi_value defineLazyProperties(napi_env env, napi_callback_info info) {
 // Stub: throws since Hermes may not support SABs.
 // ---------------------------------------------------------------------------
 
-static napi_value
-constructSharedArrayBuffer(napi_env env, napi_callback_info info) {
+static napi_value constructSharedArrayBuffer(
+    napi_env env,
+    napi_callback_info info) {
   // Try to construct via JS.
   size_t argc = 1;
   napi_value argv;
@@ -582,8 +580,8 @@ constructSharedArrayBuffer(napi_env env, napi_callback_info info) {
   }
 
   napi_value result;
-  napi_status st = napi_new_instance(env, sabCtor, argc > 0 ? 1 : 0,
-                                     argc > 0 ? &argv : nullptr, &result);
+  napi_status st = napi_new_instance(
+      env, sabCtor, argc > 0 ? 1 : 0, argc > 0 ? &argv : nullptr, &result);
   if (st != napi_ok)
     return nullptr;
 
@@ -607,8 +605,7 @@ static napi_value parseEnv(napi_env env, napi_callback_info info) {
 
 /// Create the privateSymbols object with all private symbols used by Node
 /// internals.
-static napi_status
-createPrivateSymbols(napi_env env, napi_value *result) {
+static napi_status createPrivateSymbols(napi_env env, napi_value *result) {
   napi_status st = napi_create_object(env, result);
   if (st != napi_ok)
     return st;
@@ -644,14 +641,12 @@ createPrivateSymbols(napi_env env, napi_value *result) {
       {"untransferable_object_private_symbol", "node:untransferableObject"},
       {"exit_info_private_symbol", "node:exit_info_private_symbol"},
       {"promise_trace_id", "node:promise_trace_id"},
-      {"source_map_data_private_symbol",
-       "node:source_map_data_private_symbol"},
+      {"source_map_data_private_symbol", "node:source_map_data_private_symbol"},
   };
 
   for (const auto &sym : symbols) {
     napi_value desc;
-    st = napi_create_string_utf8(
-        env, sym.description, NAPI_AUTO_LENGTH, &desc);
+    st = napi_create_string_utf8(env, sym.description, NAPI_AUTO_LENGTH, &desc);
     if (st != napi_ok)
       return st;
 
@@ -709,13 +704,13 @@ static napi_status createConstants(napi_env env, napi_value *result) {
 // A Uint32Array(1) that JS reads to decide abort-on-uncaught behavior.
 // ---------------------------------------------------------------------------
 
-static napi_status
-createShouldAbortOnUncaughtToggle(napi_env env, napi_value *result) {
+static napi_status createShouldAbortOnUncaughtToggle(
+    napi_env env,
+    napi_value *result) {
   // Create a Uint32Array of length 1, initialized to 0 (don't abort).
   napi_value ab;
   void *data;
-  napi_status st =
-      napi_create_arraybuffer(env, sizeof(uint32_t), &data, &ab);
+  napi_status st = napi_create_arraybuffer(env, sizeof(uint32_t), &data, &ab);
   if (st != napi_ok)
     return st;
 
@@ -854,8 +849,7 @@ napi_value initUtilBinding(napi_env env, napi_value exports) {
        nullptr},
   };
 
-  napi_define_properties(
-      env, exports, sizeof(props) / sizeof(props[0]), props);
+  napi_define_properties(env, exports, sizeof(props) / sizeof(props[0]), props);
 
   // privateSymbols sub-object.
   napi_value privateSymbols;
@@ -870,8 +864,7 @@ napi_value initUtilBinding(napi_env env, napi_value exports) {
   // shouldAbortOnUncaughtToggle typed array.
   napi_value toggle;
   createShouldAbortOnUncaughtToggle(env, &toggle);
-  napi_set_named_property(
-      env, exports, "shouldAbortOnUncaughtToggle", toggle);
+  napi_set_named_property(env, exports, "shouldAbortOnUncaughtToggle", toggle);
 
   return exports;
 }

@@ -12,12 +12,12 @@
 
 #include <uv.h>
 
+#include <sys/types.h>
+#include <unistd.h>
 #include <cassert>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
-#include <sys/types.h>
-#include <unistd.h>
 
 // Helper macros for NAPI error checking.
 #define NAPI_RETURN_IF_NOT_OK(expr) \
@@ -197,8 +197,7 @@ static napi_value envProxyOwnKeys(napi_env env, napi_callback_info info) {
   if (err == 0 && envItems) {
     for (int i = 0; i < envCount; i++) {
       napi_value name;
-      napi_create_string_utf8(
-          env, envItems[i].name, NAPI_AUTO_LENGTH, &name);
+      napi_create_string_utf8(env, envItems[i].name, NAPI_AUTO_LENGTH, &name);
       napi_set_element(env, result, i, name);
     }
     uv_os_free_environ(envItems, envCount);
@@ -272,8 +271,8 @@ static napi_status createEnvProxy(napi_env env, napi_value *result) {
   NAPI_RETURN_IF_NOT_OK(setTrap("deleteProperty", envProxyDeleteProperty));
   NAPI_RETURN_IF_NOT_OK(setTrap("has", envProxyHas));
   NAPI_RETURN_IF_NOT_OK(setTrap("ownKeys", envProxyOwnKeys));
-  NAPI_RETURN_IF_NOT_OK(setTrap(
-      "getOwnPropertyDescriptor", envProxyGetOwnPropertyDescriptor));
+  NAPI_RETURN_IF_NOT_OK(
+      setTrap("getOwnPropertyDescriptor", envProxyGetOwnPropertyDescriptor));
 
   // Get the global Proxy constructor and create new Proxy({}, handler).
   napi_value global;
@@ -660,20 +659,14 @@ void NodeProcess::setExecPath(std::string execPath) {
 }
 
 // Helper: set a named property on an object.
-static napi_status setProp(
-    napi_env env,
-    napi_value obj,
-    const char *name,
-    napi_value val) {
+static napi_status
+setProp(napi_env env, napi_value obj, const char *name, napi_value val) {
   return napi_set_named_property(env, obj, name, val);
 }
 
 // Helper: set a string property.
-static napi_status setStringProp(
-    napi_env env,
-    napi_value obj,
-    const char *name,
-    const char *val) {
+static napi_status
+setStringProp(napi_env env, napi_value obj, const char *name, const char *val) {
   napi_value v;
   NAPI_RETURN_IF_NOT_OK(
       napi_create_string_utf8(env, val, NAPI_AUTO_LENGTH, &v));
@@ -681,11 +674,8 @@ static napi_status setStringProp(
 }
 
 // Helper: set an int32 property.
-static napi_status setInt32Prop(
-    napi_env env,
-    napi_value obj,
-    const char *name,
-    int32_t val) {
+static napi_status
+setInt32Prop(napi_env env, napi_value obj, const char *name, int32_t val) {
   napi_value v;
   NAPI_RETURN_IF_NOT_OK(napi_create_int32(env, val, &v));
   return setProp(env, obj, name, v);
@@ -750,12 +740,10 @@ napi_status NodeProcess::create(napi_env env, napi_value *result) {
   {
     napi_value versions;
     NAPI_RETURN_IF_NOT_OK(napi_create_object(env, &versions));
-    NAPI_RETURN_IF_NOT_OK(
-        setStringProp(env, versions, "hermes", "0.1.0"));
+    NAPI_RETURN_IF_NOT_OK(setStringProp(env, versions, "hermes", "0.1.0"));
     NAPI_RETURN_IF_NOT_OK(
         setStringProp(env, versions, "uv", uv_version_string()));
-    NAPI_RETURN_IF_NOT_OK(
-        setStringProp(env, versions, "node", "24.13.0"));
+    NAPI_RETURN_IF_NOT_OK(setStringProp(env, versions, "node", "24.13.0"));
     NAPI_RETURN_IF_NOT_OK(setProp(env, process, "versions", versions));
   }
 
@@ -766,8 +754,8 @@ napi_status NodeProcess::create(napi_env env, napi_value *result) {
         napi_create_array_with_length(env, argv_.size(), &argvArray));
     for (size_t i = 0; i < argv_.size(); i++) {
       napi_value v;
-      NAPI_RETURN_IF_NOT_OK(napi_create_string_utf8(
-          env, argv_[i].c_str(), argv_[i].size(), &v));
+      NAPI_RETURN_IF_NOT_OK(
+          napi_create_string_utf8(env, argv_[i].c_str(), argv_[i].size(), &v));
       NAPI_RETURN_IF_NOT_OK(napi_set_element(env, argvArray, i, v));
     }
     NAPI_RETURN_IF_NOT_OK(setProp(env, process, "argv", argvArray));
@@ -790,17 +778,16 @@ napi_status NodeProcess::create(napi_env env, napi_value *result) {
   // process.title (getter/setter via defineProperty)
   {
     napi_property_descriptor titleProp = {
-        "title",              // utf8name
-        nullptr,              // name
-        nullptr,              // method
-        processTitleGetter,   // getter
-        processTitleSetter,   // setter
-        nullptr,              // value
-        napi_enumerable,      // attributes
-        nullptr               // data
+        "title", // utf8name
+        nullptr, // name
+        nullptr, // method
+        processTitleGetter, // getter
+        processTitleSetter, // setter
+        nullptr, // value
+        napi_enumerable, // attributes
+        nullptr // data
     };
-    NAPI_RETURN_IF_NOT_OK(
-        napi_define_properties(env, process, 1, &titleProp));
+    NAPI_RETURN_IF_NOT_OK(napi_define_properties(env, process, 1, &titleProp));
   }
 
   // process.env
@@ -824,19 +811,21 @@ napi_status NodeProcess::create(napi_env env, napi_value *result) {
 
     napi_value bigintFn;
     NAPI_RETURN_IF_NOT_OK(napi_create_function(
-        env, "bigint", NAPI_AUTO_LENGTH, processHrtimeBigint, nullptr,
+        env,
+        "bigint",
+        NAPI_AUTO_LENGTH,
+        processHrtimeBigint,
+        nullptr,
         &bigintFn));
 
     NAPI_RETURN_IF_NOT_OK(setProp(env, hrtimeFn, "bigint", bigintFn));
     NAPI_RETURN_IF_NOT_OK(setProp(env, process, "hrtime", hrtimeFn));
   }
 
-  NAPI_RETURN_IF_NOT_OK(
-      setMethod(env, process, "cpuUsage", processCpuUsage));
+  NAPI_RETURN_IF_NOT_OK(setMethod(env, process, "cpuUsage", processCpuUsage));
   NAPI_RETURN_IF_NOT_OK(
       setMethod(env, process, "memoryUsage", processMemoryUsage));
-  NAPI_RETURN_IF_NOT_OK(
-      setMethod(env, process, "uptime", processUptime, this));
+  NAPI_RETURN_IF_NOT_OK(setMethod(env, process, "uptime", processUptime, this));
   NAPI_RETURN_IF_NOT_OK(setMethod(env, process, "exit", processExit));
   NAPI_RETURN_IF_NOT_OK(setMethod(env, process, "abort", processAbort));
   NAPI_RETURN_IF_NOT_OK(setMethod(env, process, "umask", processUmask));

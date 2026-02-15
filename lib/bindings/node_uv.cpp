@@ -146,13 +146,21 @@ napi_value initUvBinding(napi_env env, napi_value exports) {
   // Export functions.
   napi_value fn;
 
-  napi_create_function(env, "errname", NAPI_AUTO_LENGTH, uvErrName, nullptr, &fn);
+  napi_create_function(
+      env, "errname", NAPI_AUTO_LENGTH, uvErrName, nullptr, &fn);
   napi_set_named_property(env, exports, "errname", fn);
 
-  napi_create_function(env, "getErrorMap", NAPI_AUTO_LENGTH, uvGetErrorMap, nullptr, &fn);
+  napi_create_function(
+      env, "getErrorMap", NAPI_AUTO_LENGTH, uvGetErrorMap, nullptr, &fn);
   napi_set_named_property(env, exports, "getErrorMap", fn);
 
-  napi_create_function(env, "getErrorMessage", NAPI_AUTO_LENGTH, uvGetErrorMessage, nullptr, &fn);
+  napi_create_function(
+      env,
+      "getErrorMessage",
+      NAPI_AUTO_LENGTH,
+      uvGetErrorMessage,
+      nullptr,
+      &fn);
   napi_set_named_property(env, exports, "getErrorMessage", fn);
 
   return exports;

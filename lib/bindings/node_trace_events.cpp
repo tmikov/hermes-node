@@ -53,8 +53,8 @@ napi_value initTraceEventsBinding(napi_env env, napi_value exports) {
 
   setFn("getCategoryEnabledBuffer", getCategoryEnabledBuffer);
   setFn("trace", trace);
-  setFn("setTraceCategoryStateUpdateHandler",
-        setTraceCategoryStateUpdateHandler);
+  setFn(
+      "setTraceCategoryStateUpdateHandler", setTraceCategoryStateUpdateHandler);
 
   return exports;
 }

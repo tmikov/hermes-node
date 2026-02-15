@@ -136,10 +136,8 @@ static void dirHandleGCdestructor(napi_env env, void *data, void * /*hint*/) {
 
 /// Build the read-result array from dirents: [name1, type1, name2, type2, ...]
 /// Returns null if numEntries == 0.
-static napi_value buildReadResult(
-    napi_env env,
-    uv_dirent_t *dirents,
-    int numEntries) {
+static napi_value
+buildReadResult(napi_env env, uv_dirent_t *dirents, int numEntries) {
   if (numEntries == 0) {
     napi_value nullVal;
     napi_get_null(env, &nullVal);
@@ -147,13 +145,11 @@ static napi_value buildReadResult(
   }
 
   napi_value arr;
-  napi_create_array_with_length(
-      env, static_cast<size_t>(numEntries) * 2, &arr);
+  napi_create_array_with_length(env, static_cast<size_t>(numEntries) * 2, &arr);
 
   for (int i = 0; i < numEntries; i++) {
     napi_value name;
-    napi_create_string_utf8(
-        env, dirents[i].name, NAPI_AUTO_LENGTH, &name);
+    napi_create_string_utf8(env, dirents[i].name, NAPI_AUTO_LENGTH, &name);
     napi_set_element(env, arr, static_cast<uint32_t>(i * 2), name);
 
     napi_value type;
@@ -172,9 +168,9 @@ static napi_value buildReadResult(
 struct DirReqWrap {
   uv_fs_t req{};
   napi_env env = nullptr;
-  napi_ref callbackRef = nullptr;   // Ref to FSReqCallback object
-  napi_ref dirHandleRef = nullptr;  // Keep dir handle object alive
-  DirHandle *dirHandle = nullptr;   // Pointer to native DirHandle
+  napi_ref callbackRef = nullptr; // Ref to FSReqCallback object
+  napi_ref dirHandleRef = nullptr; // Keep dir handle object alive
+  DirHandle *dirHandle = nullptr; // Pointer to native DirHandle
   enum class Op { Read, Close } op = Op::Read;
 };
 
@@ -284,8 +280,8 @@ static napi_value dirHandleRead(napi_env env, napi_callback_info info) {
     napi_create_reference(env, asyncReq, 1, &wrap->callbackRef);
     napi_create_reference(env, thisArg, 1, &wrap->dirHandleRef);
 
-    int err = uv_fs_readdir(
-        s_fsDirLoop, &wrap->req, dirHandle->dir, dirAfterAsync);
+    int err =
+        uv_fs_readdir(s_fsDirLoop, &wrap->req, dirHandle->dir, dirAfterAsync);
     if (err < 0) {
       napi_delete_reference(env, wrap->callbackRef);
       napi_delete_reference(env, wrap->dirHandleRef);
@@ -352,8 +348,8 @@ static napi_value dirHandleClose(napi_env env, napi_callback_info info) {
     napi_create_reference(env, asyncReq, 1, &wrap->callbackRef);
     napi_create_reference(env, thisArg, 1, &wrap->dirHandleRef);
 
-    int err = uv_fs_closedir(
-        s_fsDirLoop, &wrap->req, dirHandle->dir, dirAfterAsync);
+    int err =
+        uv_fs_closedir(s_fsDirLoop, &wrap->req, dirHandle->dir, dirAfterAsync);
     if (err < 0) {
       napi_delete_reference(env, wrap->callbackRef);
       napi_delete_reference(env, wrap->dirHandleRef);
@@ -492,8 +488,8 @@ static napi_value fsOpendir(napi_env env, napi_callback_info info) {
 
     napi_create_reference(env, asyncReq, 1, &wrap->callbackRef);
 
-    int err = uv_fs_opendir(
-        s_fsDirLoop, &wrap->req, path.c_str(), opendirAfterAsync);
+    int err =
+        uv_fs_opendir(s_fsDirLoop, &wrap->req, path.c_str(), opendirAfterAsync);
     if (err < 0) {
       napi_delete_reference(env, wrap->callbackRef);
       delete wrap;

@@ -153,8 +153,7 @@ static void onTimerFired(uv_timer_t *handle) {
   if (expiryMs != 0) {
     uv_update_time(s_loop);
     int64_t duration =
-        static_cast<int64_t>(
-            (expiryMs < 0 ? -expiryMs : expiryMs)) -
+        static_cast<int64_t>((expiryMs < 0 ? -expiryMs : expiryMs)) -
         static_cast<int64_t>(uv_now(s_loop) - state->timerBase);
 
     uv_timer_start(
@@ -366,20 +365,17 @@ void closeTimersHandles() {
 
   if (state->timerHandleInited) {
     uv_timer_stop(&state->timerHandle);
-    uv_close(
-        reinterpret_cast<uv_handle_t *>(&state->timerHandle), nullptr);
+    uv_close(reinterpret_cast<uv_handle_t *>(&state->timerHandle), nullptr);
   }
   if (state->checkHandleInited) {
     uv_check_stop(&state->immediateCheckHandle);
     uv_close(
-        reinterpret_cast<uv_handle_t *>(&state->immediateCheckHandle),
-        nullptr);
+        reinterpret_cast<uv_handle_t *>(&state->immediateCheckHandle), nullptr);
   }
   if (state->idleHandleInited) {
     uv_idle_stop(&state->immediateIdleHandle);
     uv_close(
-        reinterpret_cast<uv_handle_t *>(&state->immediateIdleHandle),
-        nullptr);
+        reinterpret_cast<uv_handle_t *>(&state->immediateIdleHandle), nullptr);
   }
 }
 
@@ -430,8 +426,7 @@ napi_value initTimersBinding(napi_env env, napi_value exports) {
   uv_check_init(s_loop, &state->immediateCheckHandle);
   state->immediateCheckHandle.data = state;
   uv_check_start(&state->immediateCheckHandle, onCheckImmediate);
-  uv_unref(
-      reinterpret_cast<uv_handle_t *>(&state->immediateCheckHandle));
+  uv_unref(reinterpret_cast<uv_handle_t *>(&state->immediateCheckHandle));
   state->checkHandleInited = true;
 
   // Initialize the idle handle (prevents event loop from blocking in poll

@@ -15,28 +15,23 @@
 namespace hermes {
 namespace node_compat {
 
-#define NAPI_CALL(call)                                       \
-  do {                                                        \
-    napi_status status_ = (call);                             \
-    if (status_ != napi_ok) {                                 \
+#define NAPI_CALL(call)                                             \
+  do {                                                              \
+    napi_status status_ = (call);                                   \
+    if (status_ != napi_ok) {                                       \
       napi_throw_error(env, nullptr, "NAPI call failed in " #call); \
-      return nullptr;                                         \
-    }                                                         \
+      return nullptr;                                               \
+    }                                                               \
   } while (0)
 
-static void setBoolProp(
-    napi_env env,
-    napi_value obj,
-    const char *name,
-    bool value) {
+static void
+setBoolProp(napi_env env, napi_value obj, const char *name, bool value) {
   napi_value val;
   napi_get_boolean(env, value, &val);
   napi_set_named_property(env, obj, name, val);
 }
 
-static napi_value getDefaultLocale(
-    napi_env env,
-    napi_callback_info /*info*/) {
+static napi_value getDefaultLocale(napi_env env, napi_callback_info /*info*/) {
   // Return a reasonable default locale. Check LC_ALL, LC_MESSAGES, LANG.
   const char *locale = nullptr;
   locale = getenv("LC_ALL");
@@ -83,15 +78,18 @@ napi_value initConfigBinding(napi_env env, napi_value exports) {
   // Pointer size in bits.
   napi_value bitsVal;
   NAPI_CALL(napi_create_int32(
-      env,
-      static_cast<int32_t>(8 * sizeof(intptr_t)),
-      &bitsVal));
+      env, static_cast<int32_t>(8 * sizeof(intptr_t)), &bitsVal));
   NAPI_CALL(napi_set_named_property(env, exports, "bits", bitsVal));
 
   // getDefaultLocale() function.
   napi_value fn;
   NAPI_CALL(napi_create_function(
-      env, "getDefaultLocale", NAPI_AUTO_LENGTH, getDefaultLocale, nullptr, &fn));
+      env,
+      "getDefaultLocale",
+      NAPI_AUTO_LENGTH,
+      getDefaultLocale,
+      nullptr,
+      &fn));
   NAPI_CALL(napi_set_named_property(env, exports, "getDefaultLocale", fn));
 
   return exports;

@@ -26,9 +26,9 @@ void setTaskQueueDrainMicrotasks(DrainMicrotasksFn fn, void *data);
 ///
 /// Exports:
 ///   tickInfo         — Uint32Array(2) shared state for tick scheduling
-///   runMicrotasks    — drains the microtask queue (via setTaskQueueDrainMicrotasks)
-///   setTickCallback  — registers the JS tick drain function
-///   enqueueMicrotask — enqueues a function as a microtask
+///   runMicrotasks    — drains the microtask queue (via
+///   setTaskQueueDrainMicrotasks) setTickCallback  — registers the JS tick
+///   drain function enqueueMicrotask — enqueues a function as a microtask
 ///   setPromiseRejectCallback — registers the promise rejection handler
 ///   promiseRejectEvents — object with kPromiseReject* constants
 napi_value initTaskQueueBinding(napi_env env, napi_value exports);

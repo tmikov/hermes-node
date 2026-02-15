@@ -5,10 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <ada.h>
 #include <hermes/node-compat/bindings/node_encoding.h>
 #include <node_api.h>
 #include <simdutf.h>
-#include <ada.h>
 
 #include <cstring>
 #include <string>
@@ -46,23 +46,23 @@ static bool getBufferData(napi_env env, napi_value val, BufInfo *out) {
       // The byte length of the view
       size_t elemSize = 1;
       switch (type) {
-      case napi_uint16_array:
-      case napi_int16_array:
-        elemSize = 2;
-        break;
-      case napi_uint32_array:
-      case napi_int32_array:
-      case napi_float32_array:
-        elemSize = 4;
-        break;
-      case napi_float64_array:
-      case napi_bigint64_array:
-      case napi_biguint64_array:
-        elemSize = 8;
-        break;
-      default:
-        elemSize = 1;
-        break;
+        case napi_uint16_array:
+        case napi_int16_array:
+          elemSize = 2;
+          break;
+        case napi_uint32_array:
+        case napi_int32_array:
+        case napi_float32_array:
+          elemSize = 4;
+          break;
+        case napi_float64_array:
+        case napi_bigint64_array:
+        case napi_biguint64_array:
+          elemSize = 8;
+          break;
+        default:
+          elemSize = 1;
+          break;
       }
       out->length = length * elemSize;
       return true;
@@ -424,10 +424,8 @@ napi_value initEncodingBinding(napi_env env, napi_value exports) {
 
         // Update encodeIntoResults
         napi_value readVal, writtenVal;
-        napi_create_uint32(
-            env, static_cast<uint32_t>(charsRead), &readVal);
-        napi_create_uint32(
-            env, static_cast<uint32_t>(written), &writtenVal);
+        napi_create_uint32(env, static_cast<uint32_t>(charsRead), &readVal);
+        napi_create_uint32(env, static_cast<uint32_t>(written), &writtenVal);
         napi_set_element(env, resultsArr, 0, readVal);
         napi_set_element(env, resultsArr, 1, writtenVal);
 
@@ -457,8 +455,7 @@ napi_value initEncodingBinding(napi_env env, napi_value exports) {
       env, "decodeLatin1", NAPI_AUTO_LENGTH, decodeLatin1, nullptr, &fn);
   napi_set_named_property(env, exports, "decodeLatin1", fn);
 
-  napi_create_function(
-      env, "toASCII", NAPI_AUTO_LENGTH, toASCII, nullptr, &fn);
+  napi_create_function(env, "toASCII", NAPI_AUTO_LENGTH, toASCII, nullptr, &fn);
   napi_set_named_property(env, exports, "toASCII", fn);
 
   napi_create_function(

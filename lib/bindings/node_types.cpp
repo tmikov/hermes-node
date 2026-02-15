@@ -28,8 +28,11 @@ getGlobalCtor(napi_env env, const char *name, napi_value *result) {
 }
 
 /// Check if `value` is an instance of the named global constructor.
-static napi_status
-isInstanceOfGlobal(napi_env env, napi_value value, const char *name, bool *out) {
+static napi_status isInstanceOfGlobal(
+    napi_env env,
+    napi_value value,
+    const char *name,
+    bool *out) {
   *out = false;
 
   // Non-objects can't be instances of anything.
@@ -273,10 +276,8 @@ static napi_value isBoxedPrimitive(napi_env env, napi_callback_info info) {
 
 /// Check if a function's constructor name matches the expected name.
 /// Used for isAsyncFunction, isGeneratorFunction.
-static bool isFunctionWithCtorName(
-    napi_env env,
-    napi_value value,
-    const char *ctorName) {
+static bool
+isFunctionWithCtorName(napi_env env, napi_value value, const char *ctorName) {
   napi_valuetype vtype;
   napi_typeof(env, value, &vtype);
   if (vtype != napi_function)
@@ -319,8 +320,7 @@ static napi_value isGeneratorFunction(napi_env env, napi_callback_info info) {
 
 static napi_value isGeneratorObject(napi_env env, napi_callback_info info) {
   napi_value arg = getArg0(env, info);
-  return returnBool(
-      env, isObjectWithTag(env, arg, "[object Generator]"));
+  return returnBool(env, isObjectWithTag(env, arg, "[object Generator]"));
 }
 
 // ---------------------------------------------------------------------------
@@ -329,14 +329,12 @@ static napi_value isGeneratorObject(napi_env env, napi_callback_info info) {
 
 static napi_value isMapIterator(napi_env env, napi_callback_info info) {
   napi_value arg = getArg0(env, info);
-  return returnBool(
-      env, isObjectWithTag(env, arg, "[object Map Iterator]"));
+  return returnBool(env, isObjectWithTag(env, arg, "[object Map Iterator]"));
 }
 
 static napi_value isSetIterator(napi_env env, napi_callback_info info) {
   napi_value arg = getArg0(env, info);
-  return returnBool(
-      env, isObjectWithTag(env, arg, "[object Set Iterator]"));
+  return returnBool(env, isObjectWithTag(env, arg, "[object Set Iterator]"));
 }
 
 // ---------------------------------------------------------------------------
@@ -359,8 +357,7 @@ static napi_value isModuleNamespaceObject(
 
 static napi_value isArgumentsObject(napi_env env, napi_callback_info info) {
   napi_value arg = getArg0(env, info);
-  return returnBool(
-      env, isObjectWithTag(env, arg, "[object Arguments]"));
+  return returnBool(env, isObjectWithTag(env, arg, "[object Arguments]"));
 }
 
 // ---------------------------------------------------------------------------
@@ -423,8 +420,7 @@ napi_value initTypesBinding(napi_env env, napi_value exports) {
   };
   // clang-format on
 
-  napi_define_properties(
-      env, exports, sizeof(props) / sizeof(props[0]), props);
+  napi_define_properties(env, exports, sizeof(props) / sizeof(props[0]), props);
   return exports;
 }
 

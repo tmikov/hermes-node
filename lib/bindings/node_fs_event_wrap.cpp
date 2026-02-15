@@ -32,17 +32,19 @@ void setFsEventWrapEventLoop(uv_loop_t *loop) {
 struct FSEventWrap {
   uv_fs_event_t handle;
   napi_env env;
-  napi_ref selfRef;      // prevent GC while handle is active
-  bool initialized;      // whether start() was called successfully
-  bool closing;          // whether close() was called
+  napi_ref selfRef; // prevent GC while handle is active
+  bool initialized; // whether start() was called successfully
+  bool closing; // whether close() was called
 
-  FSEventWrap() : env(nullptr), selfRef(nullptr), initialized(false), closing(false) {
+  FSEventWrap()
+      : env(nullptr), selfRef(nullptr), initialized(false), closing(false) {
     memset(&handle, 0, sizeof(handle));
   }
 };
 
 // Forward declaration.
-static void onFsEvent(uv_fs_event_t *handle, const char *filename, int events, int status);
+static void
+onFsEvent(uv_fs_event_t *handle, const char *filename, int events, int status);
 
 // ---------------------------------------------------------------------------
 // FSEvent constructor: new FSEvent()
@@ -55,19 +57,27 @@ static napi_value fsEventNew(napi_env env, napi_callback_info info) {
   auto *wrap = new FSEventWrap();
   wrap->env = env;
 
-  napi_wrap(env, thisObj, wrap, [](napi_env, void *data, void *) {
-    auto *w = static_cast<FSEventWrap *>(data);
-    if (w->initialized && !w->closing) {
-      // Handle wasn't closed properly; stop watching.
-      uv_fs_event_stop(&w->handle);
-      if (!uv_is_closing(reinterpret_cast<uv_handle_t *>(&w->handle))) {
-        uv_close(reinterpret_cast<uv_handle_t *>(&w->handle), [](uv_handle_t *h) {
-          // wrap already freed by NAPI
-        });
-      }
-    }
-    delete w;
-  }, nullptr, nullptr);
+  napi_wrap(
+      env,
+      thisObj,
+      wrap,
+      [](napi_env, void *data, void *) {
+        auto *w = static_cast<FSEventWrap *>(data);
+        if (w->initialized && !w->closing) {
+          // Handle wasn't closed properly; stop watching.
+          uv_fs_event_stop(&w->handle);
+          if (!uv_is_closing(reinterpret_cast<uv_handle_t *>(&w->handle))) {
+            uv_close(
+                reinterpret_cast<uv_handle_t *>(&w->handle),
+                [](uv_handle_t *h) {
+                  // wrap already freed by NAPI
+                });
+          }
+        }
+        delete w;
+      },
+      nullptr,
+      nullptr);
 
   return thisObj;
 }
@@ -268,7 +278,8 @@ static napi_value fsEventGetAsyncId(napi_env env, napi_callback_info) {
 // libuv callback: fires FSEvent.onchange(status, eventType, filename)
 // ---------------------------------------------------------------------------
 
-static void onFsEvent(uv_fs_event_t *handle, const char *filename, int events, int status) {
+static void
+onFsEvent(uv_fs_event_t *handle, const char *filename, int events, int status) {
   auto *wrap = static_cast<FSEventWrap *>(handle->data);
   if (!wrap || !wrap->env)
     return;
@@ -349,7 +360,8 @@ void closeFsEventWrapHandles() {
 napi_value initFsEventWrapBinding(napi_env env, napi_value exports) {
   // Create the FSEvent constructor function.
   napi_value ctorFn;
-  napi_create_function(env, "FSEvent", NAPI_AUTO_LENGTH, fsEventNew, nullptr, &ctorFn);
+  napi_create_function(
+      env, "FSEvent", NAPI_AUTO_LENGTH, fsEventNew, nullptr, &ctorFn);
 
   // Get the prototype object from the constructor.
   napi_value prototype;
@@ -358,29 +370,39 @@ napi_value initFsEventWrapBinding(napi_env env, napi_value exports) {
   // Set methods on prototype.
   napi_value fn;
 
-  napi_create_function(env, "start", NAPI_AUTO_LENGTH, fsEventStart, nullptr, &fn);
+  napi_create_function(
+      env, "start", NAPI_AUTO_LENGTH, fsEventStart, nullptr, &fn);
   napi_set_named_property(env, prototype, "start", fn);
 
-  napi_create_function(env, "close", NAPI_AUTO_LENGTH, fsEventClose, nullptr, &fn);
+  napi_create_function(
+      env, "close", NAPI_AUTO_LENGTH, fsEventClose, nullptr, &fn);
   napi_set_named_property(env, prototype, "close", fn);
 
   napi_create_function(env, "ref", NAPI_AUTO_LENGTH, fsEventRef, nullptr, &fn);
   napi_set_named_property(env, prototype, "ref", fn);
 
-  napi_create_function(env, "unref", NAPI_AUTO_LENGTH, fsEventUnref, nullptr, &fn);
+  napi_create_function(
+      env, "unref", NAPI_AUTO_LENGTH, fsEventUnref, nullptr, &fn);
   napi_set_named_property(env, prototype, "unref", fn);
 
-  napi_create_function(env, "hasRef", NAPI_AUTO_LENGTH, fsEventHasRef, nullptr, &fn);
+  napi_create_function(
+      env, "hasRef", NAPI_AUTO_LENGTH, fsEventHasRef, nullptr, &fn);
   napi_set_named_property(env, prototype, "hasRef", fn);
 
-  napi_create_function(env, "getAsyncId", NAPI_AUTO_LENGTH, fsEventGetAsyncId, nullptr, &fn);
+  napi_create_function(
+      env, "getAsyncId", NAPI_AUTO_LENGTH, fsEventGetAsyncId, nullptr, &fn);
   napi_set_named_property(env, prototype, "getAsyncId", fn);
 
   // Set "initialized" as a getter on the prototype.
   napi_property_descriptor initProp = {
-    "initialized", nullptr, nullptr, fsEventGetInitialized, nullptr, nullptr,
-    napi_enumerable, nullptr
-  };
+      "initialized",
+      nullptr,
+      nullptr,
+      fsEventGetInitialized,
+      nullptr,
+      nullptr,
+      napi_enumerable,
+      nullptr};
   napi_define_properties(env, prototype, 1, &initProp);
 
   // Export the constructor.

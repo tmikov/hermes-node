@@ -26,11 +26,11 @@
 #include <hermes/node-compat/bindings/node_stdio.h>
 #include <hermes/node-compat/bindings/node_stream_wrap.h>
 #include <hermes/node-compat/bindings/node_string_decoder.h>
+#include <hermes/node-compat/bindings/node_symbols.h>
 #include <hermes/node-compat/bindings/node_task_queue.h>
 #include <hermes/node-compat/bindings/node_timers.h>
 #include <hermes/node-compat/bindings/node_trace_events.h>
 #include <hermes/node-compat/bindings/node_types.h>
-#include <hermes/node-compat/bindings/node_symbols.h>
 #include <hermes/node-compat/bindings/node_util.h>
 #include <hermes/node-compat/bindings/node_uv.h>
 #include <hermes/node-compat/event-loop/uv_event_loop.h>
@@ -277,10 +277,7 @@ static napi_value stdioListenerCount(
 }
 
 /// Create a minimal writable stdio stream object for the given fd.
-static napi_status createStdioStream(
-    napi_env env,
-    int fd,
-    napi_value *result) {
+static napi_status createStdioStream(napi_env env, int fd, napi_value *result) {
   napi_value stream;
   napi_status st = napi_create_object(env, &stream);
   if (st != napi_ok)
@@ -342,7 +339,11 @@ static napi_status createStdioStream(
 
   napi_value listenerCountFn;
   st = napi_create_function(
-      env, "listenerCount", NAPI_AUTO_LENGTH, stdioListenerCount, nullptr,
+      env,
+      "listenerCount",
+      NAPI_AUTO_LENGTH,
+      stdioListenerCount,
+      nullptr,
       &listenerCountFn);
   if (st != napi_ok)
     return st;
@@ -447,9 +448,7 @@ static int runBootstrap(
   // 5. Register native bindings.
   // Set host callbacks before binding init.
   setTaskQueueDrainMicrotasks(
-      [](void *data) {
-        static_cast<hermes::vm::Runtime *>(data)->drainJobs();
-      },
+      [](void *data) { static_cast<hermes::vm::Runtime *>(data)->drainJobs(); },
       runtime.get());
   setTimersEventLoop(eventLoop.getLoop());
   setFsEventLoop(eventLoop.getLoop());
@@ -635,11 +634,11 @@ static int runBootstrap(
   napi_ref tickCallbackRef = nullptr;
   if (exitCode == 0) {
     napi_value taskQueuesModule;
-    if (loader.require(env, "internal/process/task_queues", &taskQueuesModule) !=
+    if (loader.require(
+            env, "internal/process/task_queues", &taskQueuesModule) !=
         napi_ok) {
       std::fprintf(
-          stderr,
-          "Error: failed to load internal/process/task_queues\n");
+          stderr, "Error: failed to load internal/process/task_queues\n");
       printAndClearException(env);
       exitCode = 1;
     } else {
@@ -649,9 +648,8 @@ static int runBootstrap(
           env, taskQueuesModule, "setupTaskQueue", &setupFn);
 
       napi_value setupResult;
-      napi_status st =
-          napi_call_function(env, taskQueuesModule, setupFn, 0, nullptr,
-                             &setupResult);
+      napi_status st = napi_call_function(
+          env, taskQueuesModule, setupFn, 0, nullptr, &setupResult);
       if (st != napi_ok) {
         std::fprintf(stderr, "Error: failed to call setupTaskQueue()\n");
         printAndClearException(env);
@@ -696,16 +694,18 @@ static int runBootstrap(
       // processTimers.
       napi_value getTimerCallbacksFn;
       napi_get_named_property(
-          env, internalTimersModule, "getTimerCallbacks",
-          &getTimerCallbacksFn);
+          env, internalTimersModule, "getTimerCallbacks", &getTimerCallbacksFn);
 
       napi_value timerCallbacks;
       napi_status st = napi_call_function(
-          env, internalTimersModule, getTimerCallbacksFn, 1, &runNextTicksFn,
+          env,
+          internalTimersModule,
+          getTimerCallbacksFn,
+          1,
+          &runNextTicksFn,
           &timerCallbacks);
       if (st != napi_ok) {
-        std::fprintf(
-            stderr, "Error: failed to call getTimerCallbacks()\n");
+        std::fprintf(stderr, "Error: failed to call getTimerCallbacks()\n");
         printAndClearException(env);
         exitCode = 1;
       } else {
@@ -817,15 +817,14 @@ static int runBootstrap(
 
   // 12. Load and execute the user script.
   // Use the module loader's __loadUserScript() so the script gets a
-  // path-aware require() that supports relative imports (e.g. require('../foo')).
+  // path-aware require() that supports relative imports (e.g.
+  // require('../foo')).
   if (exitCode == 0) {
     napi_value loadUserScriptFn;
-    napi_get_named_property(
-        env, global, "__loadUserScript", &loadUserScriptFn);
+    napi_get_named_property(env, global, "__loadUserScript", &loadUserScriptFn);
 
     napi_value scriptPathStr;
-    napi_create_string_utf8(
-        env, scriptPath, NAPI_AUTO_LENGTH, &scriptPathStr);
+    napi_create_string_utf8(env, scriptPath, NAPI_AUTO_LENGTH, &scriptPathStr);
 
     napi_value result;
     if (napi_call_function(
@@ -871,8 +870,7 @@ static int runBootstrap(
       napi_create_int32(env, exitCode, &exitCodeVal);
       napi_value emitArgs[2] = {exitStr, exitCodeVal};
       napi_value emitResult;
-      napi_call_function(
-          env, processObj, emitFn, 2, emitArgs, &emitResult);
+      napi_call_function(env, processObj, emitFn, 2, emitArgs, &emitResult);
       bool pending = false;
       napi_is_exception_pending(env, &pending);
       if (pending)

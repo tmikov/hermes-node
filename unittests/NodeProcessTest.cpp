@@ -53,8 +53,7 @@ class NodeProcessTest : public ::testing::Test {
     napi_value global;
     ASSERT_EQ(napi_get_global(env_, &global), napi_ok);
     ASSERT_EQ(
-        napi_set_named_property(env_, global, "process", processObj_),
-        napi_ok);
+        napi_set_named_property(env_, global, "process", processObj_), napi_ok);
   }
 
   void TearDown() override {
@@ -74,8 +73,7 @@ class NodeProcessTest : public ::testing::Test {
   napi_value eval(const char *script) {
     napi_value scriptStr;
     EXPECT_EQ(
-        napi_create_string_utf8(
-            env_, script, NAPI_AUTO_LENGTH, &scriptStr),
+        napi_create_string_utf8(env_, script, NAPI_AUTO_LENGTH, &scriptStr),
         napi_ok);
     napi_value result;
     napi_status status = napi_run_script(env_, scriptStr, &result);
@@ -229,29 +227,28 @@ TEST_F(NodeProcessTest, ChdirWorks) {
 TEST_F(NodeProcessTest, HrtimeReturnsArray) {
   EXPECT_TRUE(evalBool("Array.isArray(process.hrtime())"));
   EXPECT_EQ(evalInt32("process.hrtime().length"), 2);
-  EXPECT_TRUE(
-      evalBool("process.hrtime()[0] >= 0 && process.hrtime()[1] >= 0"));
+  EXPECT_TRUE(evalBool("process.hrtime()[0] >= 0 && process.hrtime()[1] >= 0"));
 }
 
 TEST_F(NodeProcessTest, HrtimeDelta) {
   // The delta between two hrtime calls should be non-negative.
-  EXPECT_TRUE(evalBool(
-      "(function() {"
-      "  var t1 = process.hrtime();"
-      "  var t2 = process.hrtime(t1);"
-      "  return t2[0] >= 0 && (t2[0] > 0 || t2[1] >= 0);"
-      "})()"));
+  EXPECT_TRUE(
+      evalBool("(function() {"
+               "  var t1 = process.hrtime();"
+               "  var t2 = process.hrtime(t1);"
+               "  return t2[0] >= 0 && (t2[0] > 0 || t2[1] >= 0);"
+               "})()"));
 }
 
 TEST_F(NodeProcessTest, HrtimeBigint) {
   EXPECT_TRUE(evalBool("typeof process.hrtime.bigint() === 'bigint'"));
   // Two successive calls should be increasing.
-  EXPECT_TRUE(evalBool(
-      "(function() {"
-      "  var t1 = process.hrtime.bigint();"
-      "  var t2 = process.hrtime.bigint();"
-      "  return t2 >= t1;"
-      "})()"));
+  EXPECT_TRUE(
+      evalBool("(function() {"
+               "  var t1 = process.hrtime.bigint();"
+               "  var t2 = process.hrtime.bigint();"
+               "  return t2 >= t1;"
+               "})()"));
 }
 
 TEST_F(NodeProcessTest, CpuUsageReturnsObject) {
@@ -263,19 +260,18 @@ TEST_F(NodeProcessTest, CpuUsageReturnsObject) {
 }
 
 TEST_F(NodeProcessTest, CpuUsageDelta) {
-  EXPECT_TRUE(evalBool(
-      "(function() {"
-      "  var prev = process.cpuUsage();"
-      "  var delta = process.cpuUsage(prev);"
-      "  return delta.user >= 0 && delta.system >= 0;"
-      "})()"));
+  EXPECT_TRUE(
+      evalBool("(function() {"
+               "  var prev = process.cpuUsage();"
+               "  var delta = process.cpuUsage(prev);"
+               "  return delta.user >= 0 && delta.system >= 0;"
+               "})()"));
 }
 
 TEST_F(NodeProcessTest, MemoryUsageReturnsObject) {
   EXPECT_TRUE(evalBool("typeof process.memoryUsage() === 'object'"));
   EXPECT_TRUE(evalBool("process.memoryUsage().rss > 0"));
-  EXPECT_TRUE(
-      evalBool("typeof process.memoryUsage().heapTotal === 'number'"));
+  EXPECT_TRUE(evalBool("typeof process.memoryUsage().heapTotal === 'number'"));
 }
 
 TEST_F(NodeProcessTest, UptimeReturnsNumber) {
@@ -289,12 +285,12 @@ TEST_F(NodeProcessTest, UmaskQueryAndSet) {
   EXPECT_TRUE(evalBool("typeof process.umask() === 'number'"));
 
   // Set and restore.
-  EXPECT_TRUE(evalBool(
-      "(function() {"
-      "  var old = process.umask(0o077);"
-      "  var cur = process.umask(old);"
-      "  return cur === 0o077;"
-      "})()"));
+  EXPECT_TRUE(
+      evalBool("(function() {"
+               "  var old = process.umask(0o077);"
+               "  var cur = process.umask(old);"
+               "  return cur === 0o077;"
+               "})()"));
 }
 
 TEST_F(NodeProcessTest, EnvGetSetDelete) {
@@ -322,13 +318,13 @@ TEST_F(NodeProcessTest, EnvHas) {
 
 TEST_F(NodeProcessTest, EnvOwnKeys) {
   setenv("HERMES_TEST_KEYS", "val", 1);
-  EXPECT_TRUE(evalBool(
-      "(function() {"
-      "  var keys = Object.keys(process.env);"
-      "  return Array.isArray(keys) && keys.length > 0;"
-      "})()"));
-  EXPECT_TRUE(evalBool(
-      "Object.keys(process.env).indexOf('HERMES_TEST_KEYS') >= 0"));
+  EXPECT_TRUE(
+      evalBool("(function() {"
+               "  var keys = Object.keys(process.env);"
+               "  return Array.isArray(keys) && keys.length > 0;"
+               "})()"));
+  EXPECT_TRUE(
+      evalBool("Object.keys(process.env).indexOf('HERMES_TEST_KEYS') >= 0"));
   unsetenv("HERMES_TEST_KEYS");
 }
 
@@ -353,9 +349,9 @@ TEST_F(NodeProcessTest, TitleGetterSetter) {
 
 TEST_F(NodeProcessTest, KillSendSignalZero) {
   // signal 0 checks if process exists without sending a signal.
-  EXPECT_TRUE(evalBool(
-      "(function() {"
-      "  try { process.kill(process.pid, 0); return true; }"
-      "  catch(e) { return false; }"
-      "})()"));
+  EXPECT_TRUE(
+      evalBool("(function() {"
+               "  try { process.kill(process.pid, 0); return true; }"
+               "  catch(e) { return false; }"
+               "})()"));
 }

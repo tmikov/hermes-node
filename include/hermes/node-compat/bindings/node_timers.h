@@ -27,8 +27,9 @@ void setTimersEventLoop(uv_loop_s *loop);
 ///   scheduleTimer(duration) -- start/restart the uv_timer_t
 ///   toggleTimerRef(ref)     -- ref/unref the timer handle
 ///   toggleImmediateRef(ref) -- start/stop the immediate idle handle
-///   immediateInfo           -- Uint32Array(3): [kCount, kRefCount, kHasOutstanding]
-///   timeoutInfo             -- Int32Array(1): [refed timeout count]
+///   immediateInfo           -- Uint32Array(3): [kCount, kRefCount,
+///   kHasOutstanding] timeoutInfo             -- Int32Array(1): [refed timeout
+///   count]
 napi_value initTimersBinding(napi_env env, napi_value exports);
 
 /// Close the timer libuv handles. Must be called before the event loop is

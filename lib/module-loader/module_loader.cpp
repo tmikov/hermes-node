@@ -68,24 +68,25 @@ static bool readFile(const std::string &path, std::string &out) {
 
 /// Native callback for readFileSync(path) -> string.
 /// Used by the JS loader to read module source files from disk.
-static napi_value readFileSyncCallback(
-    napi_env env,
-    napi_callback_info info) {
+static napi_value readFileSyncCallback(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1];
-  napi_status status = napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  napi_status status =
+      napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
   if (status != napi_ok)
     return nullptr;
 
   if (argc < 1) {
-    napi_throw_type_error(env, nullptr, "readFileSync requires a path argument");
+    napi_throw_type_error(
+        env, nullptr, "readFileSync requires a path argument");
     return nullptr;
   }
 
   // Get the path string.
   char pathBuf[4096];
   size_t pathLen = 0;
-  status = napi_get_value_string_utf8(env, argv[0], pathBuf, sizeof(pathBuf), &pathLen);
+  status = napi_get_value_string_utf8(
+      env, argv[0], pathBuf, sizeof(pathBuf), &pathLen);
   if (status != napi_ok) {
     napi_throw_type_error(env, nullptr, "readFileSync: path must be a string");
     return nullptr;
@@ -103,7 +104,8 @@ static napi_value readFileSyncCallback(
   }
 
   napi_value result;
-  status = napi_create_string_utf8(env, content.c_str(), content.size(), &result);
+  status =
+      napi_create_string_utf8(env, content.c_str(), content.size(), &result);
   if (status != napi_ok)
     return nullptr;
 
@@ -161,8 +163,12 @@ napi_status ModuleLoader::init(
   // Create the readFileSync native function.
   napi_value readFileSyncFn;
   status = napi_create_function(
-      env, "readFileSync", NAPI_AUTO_LENGTH,
-      readFileSyncCallback, nullptr, &readFileSyncFn);
+      env,
+      "readFileSync",
+      NAPI_AUTO_LENGTH,
+      readFileSyncCallback,
+      nullptr,
+      &readFileSyncFn);
   if (status != napi_ok)
     return status;
 
@@ -204,10 +210,8 @@ napi_status ModuleLoader::init(
   return status;
 }
 
-napi_status ModuleLoader::require(
-    napi_env env,
-    const char *name,
-    napi_value *result) {
+napi_status
+ModuleLoader::require(napi_env env, const char *name, napi_value *result) {
   assert(requireFnRef_ && "init() must be called before require()");
   assert(name && "name must not be null");
   assert(result && "result must not be null");

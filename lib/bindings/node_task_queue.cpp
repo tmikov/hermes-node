@@ -128,8 +128,9 @@ static napi_value setTickCallback(napi_env env, napi_callback_info info) {
 // setPromiseRejectCallback(fn) — register the promise rejection handler
 // ---------------------------------------------------------------------------
 
-static napi_value
-setPromiseRejectCallback(napi_env env, napi_callback_info info) {
+static napi_value setPromiseRejectCallback(
+    napi_env env,
+    napi_callback_info info) {
   auto *state = getState(env, info);
 
   size_t argc = 1;
@@ -195,12 +196,7 @@ napi_value initTaskQueueBinding(napi_env env, napi_value exports) {
   {
     napi_value fn;
     napi_create_function(
-        env,
-        "setTickCallback",
-        NAPI_AUTO_LENGTH,
-        setTickCallback,
-        state,
-        &fn);
+        env, "setTickCallback", NAPI_AUTO_LENGTH, setTickCallback, state, &fn);
     napi_set_named_property(env, exports, "setTickCallback", fn);
   }
 
@@ -227,8 +223,7 @@ napi_value initTaskQueueBinding(napi_env env, napi_value exports) {
         setPromiseRejectCallback,
         state,
         &fn);
-    napi_set_named_property(
-        env, exports, "setPromiseRejectCallback", fn);
+    napi_set_named_property(env, exports, "setPromiseRejectCallback", fn);
   }
 
   // promiseRejectEvents — constants matching V8's PromiseRejectEvent
