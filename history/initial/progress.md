@@ -63,7 +63,7 @@ be omitted):
 | Step 19 | Port encoding_binding | 5 | done | |
 | Step 20 | Port async_wrap binding (stub) | 5 | done | |
 | Step 21 | Implement process.nextTick | 3, 7 | done | |
-| Step 22 | Implement timers binding | 3, 5 | | |
+| Step 22 | Implement timers binding | 3, 5 | done | |
 | Step 23 | Implement process.stdout/stderr (minimal) | 7, 21 | | |
 | Step 24 | Verify core modules load and work | 17–23 | | |
 | Step 25 | Port stream_wrap binding (minimal) | 5, 3 | | |
@@ -317,3 +317,17 @@ be omitted):
   - Event loop integration via `uv_check_t` handle (runs after I/O polling): drains microtasks then calls tick callback. Handle is unref'd so it doesn't keep the loop alive. Properly closed with `uv_close` + `UV_RUN_NOWAIT` before loop teardown.
   - Post-script-execution: explicitly drains microtasks and calls tick callback before entering the event loop, so nextTick callbacks queued during script execution run immediately.
 - **What was done**: Implemented `initTaskQueueBinding` (tickInfo Uint32Array, runMicrotasks, setTickCallback, enqueueMicrotask, setPromiseRejectCallback, promiseRejectEvents constants) and `initAsyncContextFrameBinding` (stub). Wired bootstrap to load task_queues module, set up process.nextTick, and integrate with event loop. JS test verifies binding exports, nextTick ordering, nested nextTick, argument passing, enqueueMicrotask, and strict mode this binding. All tests pass under ASAN.
+
+### Step 22: Implement timers binding
+- **Files**: created `include/hermes/node-compat/bindings/node_timers.h`, `lib/bindings/node_timers.cpp`, `include/hermes/node-compat/bindings/node_trace_events.h`, `lib/bindings/node_trace_events.cpp`, `libjs/shims/internal/bootstrap/realm.js`, `test/test-timers.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `CMakeLists.txt` (top-level).
+- **Decisions**:
+  - Timer binding uses `setTimersEventLoop(uv_loop_t*)` host callback (like `setTaskQueueDrainMicrotasks`) to avoid heavyweight Hermes includes in bindings lib.
+  - Three libuv handles: `uv_timer_t` (for setTimeout/setInterval scheduling), `uv_check_t` (for draining immediates after I/O), `uv_idle_t` (prevents poll blocking when refed immediates exist). All unref'd initially.
+  - `timerBase` records `uv_now()` at binding init; `getLibuvNow()` returns time relative to this base (matching Node's `GetNowUint64`).
+  - `processTimers(now)` return value protocol: 0=no timers, >0=next expiry (refed), <0=next expiry (no refed). Native side auto-reschedules timer based on this.
+  - `closeTimersHandles()` API for orderly shutdown before event loop close.
+  - Bootstrap loads `internal/timers`, calls `getTimerCallbacks(runNextTicks)`, calls `setupTimers(processImmediate, processTimers)`, then loads `timers` module and sets 6 globals.
+  - `initializeDebugEnv(process.env.NODE_DEBUG)` must be called before any `debuglog()` call (required by `internal/timers.js` -> `internal/util/debuglog.js`).
+- **What was done**: Implemented `initTimersBinding` with 5 functions + 2 shared typed arrays. Also added `initTraceEventsBinding` (stub: getCategoryEnabledBuffer, trace, setTraceCategoryStateUpdateHandler) and `internal/bootstrap/realm.js` shim (minimal BuiltinModule class) as newly discovered dependencies. Bootstrap wires up timer globals (setTimeout, clearTimeout, setInterval, clearInterval, setImmediate, clearImmediate). JS test covers binding exports, timer globals, setTimeout, setInterval+clearInterval, setImmediate+clearImmediate, clearTimeout, setTimeout with args, process.nextTick ordering, nested setTimeout, and timer.unref(). All tests pass under ASAN.
+- **Issues**: Loading `internal/timers.js` triggered a dependency chain: `internal/util/debuglog.js` needs `trace_events` binding and `initializeDebugEnv()` call; `internal/util/inspect.js` needs `internal/bootstrap/realm.js`. Both resolved with new stubs/shims.
+- **Notes for next step**: `process.emitWarning` is called by timers.js for overflow/negative/NaN durations but is not yet implemented (will be a no-op until events module is loaded). The `trace_events` binding is a stub (tracing not supported). `internal/bootstrap/realm.js` shim provides only `BuiltinModule.exists()` returning false.

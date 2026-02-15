@@ -22,6 +22,8 @@
 #include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_string_decoder.h>
 #include <hermes/node-compat/bindings/node_task_queue.h>
+#include <hermes/node-compat/bindings/node_timers.h>
+#include <hermes/node-compat/bindings/node_trace_events.h>
 #include <hermes/node-compat/bindings/node_types.h>
 #include <hermes/node-compat/bindings/node_symbols.h>
 #include <hermes/node-compat/bindings/node_util.h>
@@ -260,12 +262,13 @@ static int runBootstrap(
   }
 
   // 5. Register native bindings.
-  // Set the drain microtasks callback before task_queue binding init.
+  // Set host callbacks before binding init.
   setTaskQueueDrainMicrotasks(
       [](void *data) {
         static_cast<hermes::vm::Runtime *>(data)->drainJobs();
       },
       runtime.get());
+  setTimersEventLoop(eventLoop.getLoop());
 
   BindingRegistry registry;
   registry.registerBinding("async_context_frame", initAsyncContextFrameBinding);
@@ -278,6 +281,8 @@ static int runBootstrap(
   registry.registerBinding("string_decoder", initStringDecoderBinding);
   registry.registerBinding("symbols", initSymbolsBinding);
   registry.registerBinding("task_queue", initTaskQueueBinding);
+  registry.registerBinding("timers", initTimersBinding);
+  registry.registerBinding("trace_events", initTraceEventsBinding);
   registry.registerBinding("types", initTypesBinding);
   registry.registerBinding("util", initUtilBinding);
   registry.attach(env);
@@ -405,7 +410,120 @@ static int runBootstrap(
     }
   }
 
-  // 11. Set up the event loop check handle for tick draining.
+  // 11. Set up timers (setTimeout, setInterval, setImmediate).
+  if (exitCode == 0 && tickCallbackRef) {
+    // Load internal/timers module.
+    napi_value internalTimersModule;
+    if (loader.require(env, "internal/timers", &internalTimersModule) !=
+        napi_ok) {
+      std::fprintf(stderr, "Error: failed to load internal/timers\n");
+      printAndClearException(env);
+      exitCode = 1;
+    } else {
+      // Get runNextTicks function from the stored ref.
+      napi_value runNextTicksFn;
+      napi_get_reference_value(env, tickCallbackRef, &runNextTicksFn);
+
+      // Call getTimerCallbacks(runNextTicks) to get processImmediate and
+      // processTimers.
+      napi_value getTimerCallbacksFn;
+      napi_get_named_property(
+          env, internalTimersModule, "getTimerCallbacks",
+          &getTimerCallbacksFn);
+
+      napi_value timerCallbacks;
+      napi_status st = napi_call_function(
+          env, internalTimersModule, getTimerCallbacksFn, 1, &runNextTicksFn,
+          &timerCallbacks);
+      if (st != napi_ok) {
+        std::fprintf(
+            stderr, "Error: failed to call getTimerCallbacks()\n");
+        printAndClearException(env);
+        exitCode = 1;
+      } else {
+        napi_value processImmediateFn;
+        napi_get_named_property(
+            env, timerCallbacks, "processImmediate", &processImmediateFn);
+        napi_value processTimersFn;
+        napi_get_named_property(
+            env, timerCallbacks, "processTimers", &processTimersFn);
+
+        // Call setupTimers(processImmediate, processTimers) from the timers
+        // binding.
+        napi_value timersBinding;
+        registry.getBinding(env, "timers", &timersBinding);
+
+        napi_value setupTimersFn;
+        napi_get_named_property(
+            env, timersBinding, "setupTimers", &setupTimersFn);
+
+        napi_value setupArgs[2] = {processImmediateFn, processTimersFn};
+        napi_value setupResult;
+        st = napi_call_function(
+            env, timersBinding, setupTimersFn, 2, setupArgs, &setupResult);
+        if (st != napi_ok) {
+          std::fprintf(stderr, "Error: failed to call setupTimers()\n");
+          printAndClearException(env);
+          exitCode = 1;
+        }
+      }
+    }
+
+    // Load public timers module and set globals.
+    if (exitCode == 0) {
+      napi_value timersModule;
+      if (loader.require(env, "timers", &timersModule) != napi_ok) {
+        std::fprintf(stderr, "Error: failed to load timers module\n");
+        printAndClearException(env);
+        exitCode = 1;
+      } else {
+        // Set timer globals: setTimeout, clearTimeout, setInterval,
+        // clearInterval, setImmediate, clearImmediate.
+        const char *timerGlobals[] = {
+            "setTimeout",
+            "clearTimeout",
+            "setInterval",
+            "clearInterval",
+            "setImmediate",
+            "clearImmediate",
+        };
+        for (const char *name : timerGlobals) {
+          napi_value fn;
+          napi_get_named_property(env, timersModule, name, &fn);
+          napi_set_named_property(env, global, name, fn);
+        }
+      }
+    }
+  }
+
+  // 11b. Initialize debuglog (must happen before any debug() call).
+  if (exitCode == 0) {
+    napi_value debuglogModule;
+    if (loader.require(env, "internal/util/debuglog", &debuglogModule) ==
+        napi_ok) {
+      napi_value initDebugEnvFn;
+      napi_get_named_property(
+          env, debuglogModule, "initializeDebugEnv", &initDebugEnvFn);
+
+      // Get process.env.NODE_DEBUG value.
+      napi_value processObj;
+      napi_get_named_property(env, global, "process", &processObj);
+      napi_value envObj;
+      napi_get_named_property(env, processObj, "env", &envObj);
+      napi_value nodeDebugVal;
+      napi_get_named_property(env, envObj, "NODE_DEBUG", &nodeDebugVal);
+
+      napi_value initResult;
+      napi_call_function(
+          env, debuglogModule, initDebugEnvFn, 1, &nodeDebugVal, &initResult);
+      bool pending = false;
+      napi_is_exception_pending(env, &pending);
+      if (pending)
+        printAndClearException(env);
+    }
+  }
+
+  // 12. Set up the event loop check handle for tick draining.
   uv_check_t checkHandle;
   TickDrainData tickDrainData{env, runtime.get(), tickCallbackRef};
   bool checkHandleActive = false;
@@ -462,12 +580,16 @@ static int runBootstrap(
   }
 
   // 14. Cleanup (reverse order of creation).
+  // Close timer libuv handles first.
+  closeTimersHandles();
+
   if (checkHandleActive) {
     uv_check_stop(&checkHandle);
     uv_close(reinterpret_cast<uv_handle_t *>(&checkHandle), nullptr);
-    // Run the loop once more to process the close callback.
-    uv_run(eventLoop.getLoop(), UV_RUN_NOWAIT);
   }
+
+  // Run the loop once more to process close callbacks.
+  uv_run(eventLoop.getLoop(), UV_RUN_NOWAIT);
 
   if (tickCallbackRef) {
     napi_delete_reference(env, tickCallbackRef);

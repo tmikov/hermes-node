@@ -196,6 +196,24 @@
 - Post-script-execution: explicitly drain microtasks and call tick callback before entering event loop
 - Bootstrap: load `internal/process/task_queues` -> `setupTaskQueue()` -> set `process.nextTick` and `process._tickCallback`
 
+## Timers Binding
+- `initTimersBinding` — setupTimers, getLibuvNow, scheduleTimer, toggleTimerRef, toggleImmediateRef, immediateInfo Uint32Array(3), timeoutInfo Int32Array(1)
+- `setTimersEventLoop(uv_loop_t*)`: host sets loop before binding init (same pattern as task_queue)
+- Three libuv handles: `uv_timer_t` (timer scheduling), `uv_check_t` (immediate drain after I/O), `uv_idle_t` (prevent poll blocking for refed immediates)
+- `timerBase` = `uv_now()` at init; `getLibuvNow()` returns relative time
+- `processTimers(now)` return: 0=no timers, >0=next expiry refed, <0=next expiry unrefed
+- `closeTimersHandles()`: must call before event loop close
+- Bootstrap: load `internal/timers` -> `getTimerCallbacks(runNextTicks)` -> `setupTimers(processImmediate, processTimers)` -> load `timers` -> set 6 globals
+- `initializeDebugEnv(process.env.NODE_DEBUG)` must be called before timers load (debuglog dependency)
+
+## Trace Events Binding (stub)
+- `initTraceEventsBinding` — getCategoryEnabledBuffer (returns zero Uint8Array), trace (no-op), setTraceCategoryStateUpdateHandler (no-op)
+- Required by: `internal/util/debuglog.js`
+
+## Bootstrap Realm Shim
+- `libjs/shims/internal/bootstrap/realm.js`: minimal `BuiltinModule` class (exists/canBeRequiredByUsers/isBuiltin all return false)
+- Required by: `internal/util/inspect.js` (stack trace formatting)
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`
