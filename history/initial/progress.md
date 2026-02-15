@@ -65,7 +65,7 @@ be omitted):
 | Step 21 | Implement process.nextTick | 3, 7 | done | |
 | Step 22 | Implement timers binding | 3, 5 | done | |
 | Step 23 | Implement process.stdout/stderr (minimal) | 7, 21 | done | |
-| Step 24 | Verify core modules load and work | 17–23 | | |
+| Step 24 | Verify core modules load and work | 17–23 | done | |
 | Step 25 | Port stream_wrap binding (minimal) | 5, 3 | | |
 | Step 26 | Verify streams work | 24, 25 | | |
 | Step 27 | Port fs binding — sync operations | 2, 5, 9 | | |
@@ -344,3 +344,8 @@ be omitted):
   - `process.stdin` deferred (requires readable stream + event loop integration).
 - **What was done**: Implemented `initStdioBinding` with 3 functions (writeString, writeBuffer, getHandleType). Created `process.stdout` and `process.stderr` as minimal writable stream-like objects in the bootstrap. JS test verifies all properties, methods, write functionality, callback invocation, and binding exports. Separate shell test verifies stdout/stderr separation. All tests pass under ASAN.
 - **Notes for next step**: When the `stream` module is loaded (Step 25-26), process.stdout/stderr could be upgraded to proper Writable stream instances. Node's `console` module (`internal/console/constructor.js`) requires `.write()`, `.listenerCount()`, `.once()`, and `.removeListener()` — all provided by our minimal stubs.
+
+### Step 24: Verify core modules load and work
+- **Files**: created `test/test-core-modules.js`. Modified `CMakeLists.txt` (added test to `check-hermes-node-js`).
+- **What was done**: All four core modules (`events`, `path`, `buffer`, `util`) load and work correctly on the first attempt with no fixes needed. Test covers: EventEmitter (on/emit/once/removeListener/listenerCount), path operations (join/dirname/extname/basename/isAbsolute/normalize/resolve/parse/sep/delimiter), Buffer operations (from string/array, alloc, toString, hex/base64 encoding, concat, compare, slice, isBuffer), util functions (format with %s/%d/%j, inspect, inherits, types.isDate/isRegExp/isMap, promisify), and integration test (process.nextTick + setTimeout ordering). All 17 existing tests plus the new test pass under ASAN.
+- **Notes for next step**: The entire dependency chain (internal/errors, internal/util, internal/validators, internal/util/types, internal/util/inspect, internal/event_target, async_hooks, etc.) loads without issues. No new shims or bindings were needed — all prerequisites from Steps 9-23 were sufficient.

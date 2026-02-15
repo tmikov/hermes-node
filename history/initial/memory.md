@@ -223,6 +223,12 @@
 - Node's `console` requires: `.write()`, `.listenerCount()`, `.once()`, `.removeListener()`
 - Upgrade to proper Writable streams when stream module is available (Step 25-26)
 
+## Core Module Verification (Step 24)
+- `events`, `path`, `buffer`, `util` all load and work with no additional shims or fixes
+- Full dependency chain resolves cleanly: internal/errors, internal/util, internal/validators, internal/util/types, internal/util/inspect, internal/event_target, async_hooks, etc.
+- EventEmitter fully functional (on/emit/once/removeListener/listenerCount)
+- No `process.emitWarning` issues encountered in basic usage (timers.js warns for overflow/NaN but not in normal operation)
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`
