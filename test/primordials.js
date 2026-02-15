@@ -279,6 +279,16 @@ assert(typeof p.ArrayPrototypeEvery === 'function', 'ArrayPrototypeEvery');
 assert(typeof p.ArrayPrototypeSome === 'function', 'ArrayPrototypeSome');
 assert(typeof p.ArrayPrototypeReduce === 'function', 'ArrayPrototypeReduce');
 
+// V8-specific Error API polyfills
+assert(typeof p.ErrorCaptureStackTrace === 'function', 'ErrorCaptureStackTrace');
+assert(typeof p.ErrorStackTraceLimit === 'number', 'ErrorStackTraceLimit');
+var captureTarget = {};
+p.ErrorCaptureStackTrace(captureTarget);
+assert(typeof captureTarget.stack === 'string', 'captureStackTrace sets .stack');
+// Verify Error.captureStackTrace exists on the global Error
+assert(typeof Error.captureStackTrace === 'function', 'Error.captureStackTrace exists');
+assert('stackTraceLimit' in Error, 'Error.stackTraceLimit exists');
+
 // Result
 print('');
 print('Passed: ' + passed);

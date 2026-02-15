@@ -58,7 +58,7 @@ be omitted):
 | Step 14 | Port config binding | 5 | done | |
 | Step 15 | Port symbols binding | 5 | done | |
 | Step 16 | Implement internal/options shim | 6 | done | |
-| Step 17 | Verify bootstrap modules load | 8, 9–16 | | |
+| Step 17 | Verify bootstrap modules load | 8, 9–16 | done | |
 | Step 18 | Port buffer binding | 5 | | |
 | Step 19 | Port encoding_binding | 5 | | |
 | Step 20 | Port async_wrap binding (stub) | 5 | | |
@@ -262,3 +262,14 @@ be omitted):
   - `getCLIOptionsInfo()`, `getOptionsAsFlagsFromBinding()`, `getAllowUnauthorized()`, `refreshOptions()`, `generateConfigJsonSchema()` all stubbed with minimal implementations.
   - Added `globalThis.require = requireModule` in `loader.js` so user scripts (and tests) can call `require()`.
 - **What was done**: Implemented full options shim covering all exports from Node's `internal/options.js`. Added JS test verifying all exported functions, option value types (boolean/string/number/array), defaults, and unknown option behavior. All tests pass under ASAN.
+
+### Step 17: Verify bootstrap modules load
+- **Files**: modified `libjs/primordials.js` (ErrorCaptureStackTrace polyfill, Error.stackTraceLimit), `lib/bindings/node_types.cpp` (enumerable properties), `CMakeLists.txt`. Created `test/test-bootstrap.js`, `libjs/shims/internal/v8/startup_snapshot.js`. Modified `test/primordials.js` (5 new assertions).
+- **Decisions**:
+  - Added `Error.captureStackTrace` polyfill to primordials: creates an Error to capture stack, sets lazy `.stack` getter on target object. Placed before intrinsics loop so `copyPropsRenamed` picks it up as `ErrorCaptureStackTrace`.
+  - Added `Error.stackTraceLimit` property (defaults to 10) since Hermes doesn't have this V8 property.
+  - Fixed types binding (`node_types.cpp`): changed `napi_default` to `napi_enumerable` so `...internalBinding('types')` spread works in `internal/util/types.js`.
+  - Created `internal/v8/startup_snapshot` shim: `isBuildingSnapshot()` returns false, all snapshot functions are stubs/no-ops. Required by `internal/errors.js` lazily via `isErrorStackTraceLimitWritable()`.
+- **What was done**: All four bootstrap modules load successfully: `internal/assert`, `internal/errors`, `internal/util`, `internal/validators`. Plus `internal/util/types`. Functional tests verify ERR_INVALID_ARG_TYPE error creation, validateString validation, normalizeEncoding. 9 test assertions in `test-bootstrap.js`, 161 primordials assertions (was 156).
+- **Issues**: `napi_default` (attribute=0) makes properties non-enumerable. The spread operator only copies enumerable own properties. Any binding whose exports are spread in JS code needs `napi_enumerable` attribute. Currently only the types binding is spread.
+- **Notes for next step**: The `internalBinding('uv')` binding is referenced lazily by `internal/util.js` and `internal/errors.js` (via `lazyUv()`) -- it will be needed when error formatting code paths are exercised. Node v24 renamed `validateCallback` to `validateFunction` in validators.

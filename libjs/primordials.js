@@ -172,6 +172,43 @@ namespaceNames.forEach(function(name) {
 });
 
 // ---------------------------------------------------------------------------
+// V8-specific Error APIs polyfill
+// ---------------------------------------------------------------------------
+// Error.captureStackTrace is a V8-specific API that Hermes doesn't have.
+// Node's lib/*.js files use it extensively via primordials.ErrorCaptureStackTrace.
+// Our polyfill creates a stack trace by instantiating an Error and copying
+// its .stack property to the target object.
+if (typeof Error.captureStackTrace !== 'function') {
+  Error.captureStackTrace = function captureStackTrace(targetObject, constructorOpt) {
+    var stackContainer = new Error();
+    Object.defineProperty(targetObject, 'stack', {
+      configurable: true,
+      get: function() {
+        var stack = stackContainer.stack;
+        Object.defineProperty(targetObject, 'stack', {
+          value: stack,
+          configurable: true,
+          writable: true,
+        });
+        return stack;
+      },
+      set: function(value) {
+        Object.defineProperty(targetObject, 'stack', {
+          value: value,
+          configurable: true,
+          writable: true,
+        });
+      },
+    });
+  };
+}
+// Error.stackTraceLimit: Hermes doesn't have this V8 property.
+// Some Node modules check/set it. Define it if missing.
+if (!('stackTraceLimit' in Error)) {
+  Error.stackTraceLimit = 10;
+}
+
+// ---------------------------------------------------------------------------
 // FinalizationRegistry polyfill (no-op)
 // ---------------------------------------------------------------------------
 // Hermes does not yet have FinalizationRegistry. Provide a no-op polyfill so

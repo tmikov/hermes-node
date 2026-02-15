@@ -131,6 +131,24 @@
 - Exports: `getOptionValue`, `refreshOptions` (no-op), `getEmbedderOptions`, `getCLIOptionsInfo`, `getOptionsAsFlagsFromBinding`, `getAllowUnauthorized`, `generateConfigJsonSchema`
 - `globalThis.require` exposed by `loader.js` so user scripts can call `require()`
 
+## V8 API Polyfills
+- `Error.captureStackTrace`: polyfilled in `primordials.js` before intrinsics loop. Creates Error for stack, sets lazy getter on target.
+- `Error.stackTraceLimit`: defined as writable property (default 10) if missing.
+- Both picked up by `copyPropsRenamed(Error, ...)` as `ErrorCaptureStackTrace`/`ErrorStackTraceLimit`.
+- `internal/v8/startup_snapshot` shim in `libjs/shims/internal/v8/startup_snapshot.js`: `isBuildingSnapshot()` returns false.
+
+## NAPI Property Attributes
+- `napi_default` (=0) makes properties non-enumerable, non-writable, non-configurable.
+- `napi_set_named_property` creates enumerable+writable+configurable properties.
+- Bindings whose exports are spread (`...internalBinding('x')`) must use `napi_enumerable` attribute.
+- Currently only the types binding is spread (in `internal/util/types.js`).
+
+## Bootstrap Module Dependencies
+- `internal/errors` -> `internal/assert` (eager), `internal/v8/startup_snapshot` (lazy), `internalBinding('util')` (eager for privateSymbols), `internalBinding('uv')` (lazy)
+- `internal/util` -> `internal/errors`, `internal/options`, `internal/assert` (eager); `internalBinding('util')`, `internalBinding('types')`, `internalBinding('string_decoder')` (eager); `internalBinding('uv')` (lazy)
+- `internal/validators` -> `internal/errors`, `internal/util`, `internal/util/types` (eager); `internalBinding('constants').os` (eager)
+- `internal/util/types` -> `internalBinding('types')` (spread, needs enumerable)
+
 ## Hermes NAPI Bugs/Workarounds
 - **`napi_get_all_property_names` with mixed string+symbol**: When both `plusIncludeSymbols().plusKeepSymbols()` and `plusIncludeNonSymbols()` are set (via `napi_key_all_properties` without skip flags), string property names are returned as Hermes internal SymbolIDs (exposed as JS Symbols). Workaround: make two separate calls — one with `napi_key_skip_symbols` for strings, one with `napi_key_skip_strings` for symbols.
 - **`napi_create_string_utf8` rejects invalid UTF-8**: Unlike V8 (which produces replacement chars), Hermes raises a RangeError and returns `napi_generic_failure`. Workaround: catch failure, clear exception, sanitize bytes by replacing invalid sequences with U+FFFD, retry.
