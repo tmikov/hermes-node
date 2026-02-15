@@ -68,7 +68,7 @@ be omitted):
 | Step 24 | Verify core modules load and work | 17–23 | done | |
 | Step 25 | Port stream_wrap binding (minimal) | 5, 3 | done | |
 | Step 26 | Verify streams work | 24, 25 | done | |
-| Step 27 | Port fs binding — sync operations | 2, 5, 9 | | |
+| Step 27 | Port fs binding — sync operations | 2, 5, 9 | done | |
 | Step 28 | Port fs binding — async operations | 3, 27 | | |
 | Step 29 | Port fs_dir binding | 27 | | |
 | Step 30 | Port fs_event_wrap binding | 3, 5 | | |
@@ -370,3 +370,16 @@ be omitted):
 - **What was done**: All stream types (Readable, Writable, Transform, Duplex, PassThrough) load and work correctly. 7 test cases: module exports check, Writable stream, Transform stream (uppercase), Readable stream (push-based), pipeline (Readable.from + Writable), PassThrough, stream.finished. All 20 tests pass under ASAN.
 - **Issues**: Hermes does not support `async function*` (async generators). Four files in `internal/streams/` contained them: `readable.js`, `pipeline.js`, `operators.js`, `duplexify.js`. The first two were patched; `operators.js` got a stub shim; `duplexify.js` is lazily loaded (only via `Duplex.from()`) so doesn't need fixing yet.
 - **Notes for next step**: The `abort_controller` shim is minimal — it supports basic abort signaling for pipeline use but doesn't implement the full Node.js EventTarget-based API (no `addEventListener` options, no `dispatchEvent` with real Event objects). Stream async iteration (`for await...of`) works via the manual iterator. Stream operators (`.map()`, `.filter()`, etc.) are unavailable — they require Hermes to support async generators.
+
+### Step 27: Port fs binding — sync operations
+- **Files**: created `include/hermes/node-compat/bindings/node_file.h`, `lib/bindings/node_file.cpp`, `test/test-fs-sync.js`, `libjs/shims/internal/blob.js`, `libjs/shims/internal/url.js`, `libjs/shims/internal/process/permission.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `CMakeLists.txt`.
+- **Decisions**:
+  - Stats population via shared Float64Array(36) / BigInt64Array(36) matching Node's `FsStatsOffset` layout (18 fields). Two stat entries supported (offset 0 and 18). Separate Float64Array(14) / BigInt64Array(14) for statfs.
+  - UVException thrown directly from C++ for most sync ops (matching Node's behavior). `writeBuffer`/`writeString` use ctx-based error reporting (set errno/syscall/message on ctx object, JS side throws via `handleErrorFromBinding`).
+  - Recursive `mkdir` implemented in C++ (walk path components, create each, return first created path).
+  - Recursive `rmSync` implemented with DFS (collect all entries, remove in reverse depth-first order).
+  - `readFileUtf8` / `writeFileUtf8` fast paths implemented as compound operations (open + read/write loop + close) in C++.
+  - `internalModuleStat` returns 0=file, 1=directory, negative=error (no throw).
+- **What was done**: Implemented `initFsBinding` with 38 functions + 4 shared typed arrays + FSReqCallback stub constructor. Functions: access, open, close, read, writeBuffer, writeString, stat, lstat, fstat, statfs, rename, unlink, mkdir, rmdir, readdir, chmod, fchmod, chown, fchown, lchown, link, symlink, readlink, realpath, ftruncate, utimes, futimes, lutimes, mkdtemp, copyFile, existsSync, fsync, fdatasync, readFileUtf8, writeFileUtf8, internalModuleStat, readBuffers, writeBuffers, rmSync. JS test covers 28 test cases: mkdtemp, writeFile+readFile (utf8 and buffer), stat, lstat, fstat, open+read+close, open+writeSync+close, writeSync string, rename, mkdir, mkdir recursive, readdir, readdir withFileTypes, chmod, copyFile, link, symlink+readlink, realpath, existsSync, accessSync, ftruncate, utimes, fsync, ENOENT error, write error, rmSync recursive. All 21 tests pass under ASAN.
+- **Issues**: Loading `fs.js` revealed three additional dependencies needing shims: `internal/blob` (needs `blob` binding for Blob support), `internal/url` (needs `url_pattern` binding), `internal/process/permission` (needs `permission` binding). All three shimmed as stubs.
+- **Notes for next step**: The `FSReqCallback` constructor is a stub — it will need full implementation for async operations (Step 28). The `fs.js` module is now loadable and all sync operations work. The `writeFileUtf8`/`readFileUtf8` fast paths bypass the JS open/read/write/close sequence. The `internal/url` shim only supports basic `toPathIfFileURL` — full URL support would need the `url` native binding.

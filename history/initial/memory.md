@@ -244,6 +244,23 @@
 - **Still broken**: `Duplex.from()` (lazy-loads `duplexify.js` which has `async function*`), stream operators (`.map`/`.filter`/`.drop`/`.take`/`.flatMap`), `for await` on streams (works via manual iterator but `yield*` pattern unavailable)
 - **Vendored file modifications**: `readable.js`, `pipeline.js` — documented in `libjs-node/README.md`
 
+## FS Binding (sync operations)
+- `initFsBinding` — 38 functions + 4 shared typed arrays + FSReqCallback stub
+- Stats layout: Float64Array(36) / BigInt64Array(36), 18 fields per stat entry (dev, mode, nlink, uid, gid, rdev, blksize, ino, size, blocks, atime sec/nsec, mtime sec/nsec, ctime sec/nsec, birthtime sec/nsec)
+- StatFs layout: Float64Array(14) / BigInt64Array(14), 7 fields (type, bsize, blocks, bfree, bavail, files, ffree)
+- `FsBindingData` struct holds napi_ref to shared typed arrays; passed as callback data to stat/fstat/lstat/statfs functions
+- UVException pattern: create Error, set errno/code/syscall/path/dest properties, throw
+- `writeBuffer`/`writeString` use ctx-based error reporting (set ctx.errno/syscall/message, JS throws via handleErrorFromBinding)
+- `readFileUtf8`/`writeFileUtf8`: compound operations (open + read/write loop + close) in C++
+- `internalModuleStat(path)`: returns 0=file, 1=directory, negative=error (no throw)
+- `rmSync`: DFS implementation (collect entries, remove in reverse order)
+- `mkdir` recursive: walk path components, create each, return first created path
+
+## FS Module Shims
+- `internal/blob.js`: stub (Blob not supported), exports createBlobFromFilePath (throws), isBlob (false)
+- `internal/url.js`: minimal toPathIfFileURL, pathToFileURL, fileURLToPath, isURL
+- `internal/process/permission.js`: stub, isEnabled() returns false, has() returns true
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`
