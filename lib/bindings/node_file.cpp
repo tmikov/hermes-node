@@ -2468,6 +2468,220 @@ static napi_value fsReqCallbackCtor(napi_env env, napi_callback_info info) {
 }
 
 // ---------------------------------------------------------------------------
+// StatWatcher — wraps uv_fs_poll_t for fs.watchFile()
+// ---------------------------------------------------------------------------
+
+struct StatWatcherWrap {
+  uv_fs_poll_t handle;
+  napi_env env;
+  napi_ref selfRef;       // prevent GC while active
+  FsBindingData *fsData;  // access to shared stat buffers
+  bool useBigint;
+  bool initialized;
+  bool closing;
+
+  StatWatcherWrap()
+      : env(nullptr), selfRef(nullptr), fsData(nullptr),
+        useBigint(false), initialized(false), closing(false) {
+    memset(&handle, 0, sizeof(handle));
+  }
+};
+
+static void onStatPoll(
+    uv_fs_poll_t *handle,
+    int status,
+    const uv_stat_t *prev,
+    const uv_stat_t *curr) {
+  auto *wrap = static_cast<StatWatcherWrap *>(handle->data);
+  if (!wrap || !wrap->env)
+    return;
+
+  napi_env env = wrap->env;
+  napi_handle_scope scope;
+  napi_open_handle_scope(env, &scope);
+
+  napi_value thisObj;
+  if (wrap->selfRef)
+    napi_get_reference_value(env, wrap->selfRef, &thisObj);
+  else
+    napi_get_undefined(env, &thisObj);
+
+  // Get the onchange callback.
+  napi_value onchange;
+  napi_get_named_property(env, thisObj, "onchange", &onchange);
+  napi_valuetype onchangeType;
+  napi_typeof(env, onchange, &onchangeType);
+  if (onchangeType != napi_function) {
+    napi_close_handle_scope(env, scope);
+    return;
+  }
+
+  // Fill current stats at offset 0, previous stats at offset kFsStatsFieldsNumber.
+  napi_value statsArr = fillAndReturnStats(
+      env, wrap->fsData, curr, wrap->useBigint, 0);
+  fillAndReturnStats(
+      env, wrap->fsData, prev, wrap->useBigint, kFsStatsFieldsNumber);
+
+  // Call onchange(status, statsArr).
+  napi_value args[2];
+  napi_create_int32(env, status, &args[0]);
+  args[1] = statsArr;
+
+  napi_value retval;
+  napi_call_function(env, thisObj, onchange, 2, args, &retval);
+
+  bool hasPending = false;
+  napi_is_exception_pending(env, &hasPending);
+  if (hasPending) {
+    napi_value exc;
+    napi_get_and_clear_last_exception(env, &exc);
+  }
+
+  napi_close_handle_scope(env, scope);
+}
+
+/// StatWatcher constructor: new StatWatcher(useBigint)
+/// The fsData pointer is passed via the constructor's callback data.
+static napi_value statWatcherNew(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1], thisObj;
+  void *data = nullptr;
+  napi_get_cb_info(env, info, &argc, argv, &thisObj, &data);
+
+  auto *fsData = static_cast<FsBindingData *>(data);
+
+  bool useBigint = false;
+  if (argc > 0)
+    napi_get_value_bool(env, argv[0], &useBigint);
+
+  auto *wrap = new StatWatcherWrap();
+  wrap->env = env;
+  wrap->fsData = fsData;
+  wrap->useBigint = useBigint;
+
+  int err = uv_fs_poll_init(s_fsLoop, &wrap->handle);
+  if (err != 0) {
+    delete wrap;
+    napi_throw_error(env, nullptr, "uv_fs_poll_init failed");
+    return thisObj;
+  }
+  wrap->handle.data = wrap;
+  wrap->initialized = true;
+
+  napi_wrap(env, thisObj, wrap, [](napi_env, void *d, void *) {
+    auto *w = static_cast<StatWatcherWrap *>(d);
+    if (w->initialized && !w->closing) {
+      uv_fs_poll_stop(&w->handle);
+      if (!uv_is_closing(reinterpret_cast<uv_handle_t *>(&w->handle))) {
+        uv_close(reinterpret_cast<uv_handle_t *>(&w->handle), nullptr);
+      }
+    }
+    delete w;
+  }, nullptr, nullptr);
+
+  return thisObj;
+}
+
+/// StatWatcher.prototype.start(path, interval)
+static napi_value statWatcherStart(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2], thisObj;
+  napi_get_cb_info(env, info, &argc, argv, &thisObj, nullptr);
+
+  StatWatcherWrap *wrap;
+  napi_unwrap(env, thisObj, reinterpret_cast<void **>(&wrap));
+  if (!wrap)
+    return nullptr;
+
+  size_t pathLen = 0;
+  napi_get_value_string_utf8(env, argv[0], nullptr, 0, &pathLen);
+  std::string path(pathLen, '\0');
+  napi_get_value_string_utf8(env, argv[0], &path[0], pathLen + 1, &pathLen);
+
+  uint32_t interval = 5007;
+  napi_get_value_uint32(env, argv[1], &interval);
+
+  // Create a ref to prevent GC while polling.
+  napi_create_reference(env, thisObj, 1, &wrap->selfRef);
+
+  int err = uv_fs_poll_start(&wrap->handle, onStatPoll, path.c_str(), interval);
+  if (err != 0) {
+    napi_delete_reference(env, wrap->selfRef);
+    wrap->selfRef = nullptr;
+    napi_value result;
+    napi_create_int32(env, err, &result);
+    return result;
+  }
+
+  return nullptr; // success: undefined (no error code)
+}
+
+static void onStatWatcherClose(uv_handle_t *handle) {
+  auto *wrap = static_cast<StatWatcherWrap *>(handle->data);
+  if (!wrap)
+    return;
+  if (wrap->selfRef) {
+    napi_delete_reference(wrap->env, wrap->selfRef);
+    wrap->selfRef = nullptr;
+  }
+}
+
+/// StatWatcher.prototype.close()
+static napi_value statWatcherClose(napi_env env, napi_callback_info info) {
+  napi_value thisObj;
+  napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
+
+  StatWatcherWrap *wrap;
+  napi_unwrap(env, thisObj, reinterpret_cast<void **>(&wrap));
+  if (!wrap || wrap->closing)
+    return nullptr;
+
+  wrap->closing = true;
+
+  if (wrap->initialized &&
+      !uv_is_closing(reinterpret_cast<uv_handle_t *>(&wrap->handle))) {
+    uv_fs_poll_stop(&wrap->handle);
+    uv_close(reinterpret_cast<uv_handle_t *>(&wrap->handle), onStatWatcherClose);
+  } else if (wrap->selfRef) {
+    napi_delete_reference(env, wrap->selfRef);
+    wrap->selfRef = nullptr;
+  }
+
+  return nullptr;
+}
+
+/// StatWatcher.prototype.ref()
+static napi_value statWatcherRef(napi_env env, napi_callback_info info) {
+  napi_value thisObj;
+  napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
+
+  StatWatcherWrap *wrap;
+  napi_unwrap(env, thisObj, reinterpret_cast<void **>(&wrap));
+  if (wrap && wrap->initialized && !wrap->closing)
+    uv_ref(reinterpret_cast<uv_handle_t *>(&wrap->handle));
+  return thisObj;
+}
+
+/// StatWatcher.prototype.unref()
+static napi_value statWatcherUnref(napi_env env, napi_callback_info info) {
+  napi_value thisObj;
+  napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
+
+  StatWatcherWrap *wrap;
+  napi_unwrap(env, thisObj, reinterpret_cast<void **>(&wrap));
+  if (wrap && wrap->initialized && !wrap->closing)
+    uv_unref(reinterpret_cast<uv_handle_t *>(&wrap->handle));
+  return thisObj;
+}
+
+/// StatWatcher.prototype.getAsyncId() — stub
+static napi_value statWatcherGetAsyncId(napi_env env, napi_callback_info) {
+  napi_value result;
+  napi_create_double(env, 0.0, &result);
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Binding init
 // ---------------------------------------------------------------------------
 
@@ -2526,6 +2740,41 @@ napi_value initFsBinding(napi_env env, napi_value exports) {
     napi_value ctor;
     napi_create_function(env, "FSReqCallback", NAPI_AUTO_LENGTH, fsReqCallbackCtor, nullptr, &ctor);
     napi_set_named_property(env, exports, "FSReqCallback", ctor);
+  }
+
+  // StatWatcher constructor — gets fsData as callback data for stat buffer access.
+  {
+    napi_value ctorFn;
+    napi_create_function(env, "StatWatcher", NAPI_AUTO_LENGTH, statWatcherNew, fsData, &ctorFn);
+
+    napi_value prototype;
+    napi_get_named_property(env, ctorFn, "prototype", &prototype);
+
+    napi_value fn;
+
+    napi_create_function(env, "start", NAPI_AUTO_LENGTH, statWatcherStart, nullptr, &fn);
+    napi_set_named_property(env, prototype, "start", fn);
+
+    napi_create_function(env, "close", NAPI_AUTO_LENGTH, statWatcherClose, nullptr, &fn);
+    napi_set_named_property(env, prototype, "close", fn);
+
+    napi_create_function(env, "ref", NAPI_AUTO_LENGTH, statWatcherRef, nullptr, &fn);
+    napi_set_named_property(env, prototype, "ref", fn);
+
+    napi_create_function(env, "unref", NAPI_AUTO_LENGTH, statWatcherUnref, nullptr, &fn);
+    napi_set_named_property(env, prototype, "unref", fn);
+
+    napi_create_function(env, "getAsyncId", NAPI_AUTO_LENGTH, statWatcherGetAsyncId, nullptr, &fn);
+    napi_set_named_property(env, prototype, "getAsyncId", fn);
+
+    napi_set_named_property(env, exports, "StatWatcher", ctorFn);
+  }
+
+  // Export kFsStatsFieldsNumber constant.
+  {
+    napi_value val;
+    napi_create_int32(env, kFsStatsFieldsNumber, &val);
+    napi_set_named_property(env, exports, "kFsStatsFieldsNumber", val);
   }
 
   // Register all fs functions. All get fsData as callback data.

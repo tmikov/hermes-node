@@ -71,7 +71,7 @@ be omitted):
 | Step 27 | Port fs binding — sync operations | 2, 5, 9 | done | |
 | Step 28 | Port fs binding — async operations | 3, 27 | done | |
 | Step 29 | Port fs_dir binding | 27 | done | |
-| Step 30 | Port fs_event_wrap binding | 3, 5 | | |
+| Step 30 | Port fs_event_wrap binding | 3, 5 | done | |
 | Step 31 | Verify fs sync operations | 27, 9 | | |
 | Step 32 | Verify fs async operations | 28, 29 | | |
 | Step 33 | Run Node.js fs test subset | 28, 29, 30 | | |
@@ -417,3 +417,16 @@ be omitted):
   - `uv_fs_readdir` fills `uv_dirent_t.name` with pointers to `uv_fs_t` request-owned memory. Must call `buildReadResult` BEFORE `uv_fs_req_cleanup` to avoid use-after-free.
   - `internal/fs/dir.js` line 294 has `async* entries()` — async generator unsupported by Hermes. Replaced with manual async iterator.
 - **Notes for next step**: The `Dir.entries()` async iterator works but `for await...of` requires Hermes async iteration support. `readSyncRecursive` in `dir.js` calls `dirBinding.opendir(path, encoding)` in sync mode (no req arg) — this works because our `opendir` function handles both sync and async.
+
+### Step 30: Port fs_event_wrap binding
+- **Files**: created `include/hermes/node-compat/bindings/node_fs_event_wrap.h`, `lib/bindings/node_fs_event_wrap.cpp`, `include/hermes/node-compat/bindings/node_uv.h`, `lib/bindings/node_uv.cpp`, `test/test-fs-event-wrap.js`. Modified `lib/bindings/node_file.cpp` (added StatWatcher + kFsStatsFieldsNumber), `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `CMakeLists.txt`.
+- **Decisions**:
+  - Implemented three related components: `fs_event_wrap` binding (FSEvent), `uv` binding (UV error constants), and StatWatcher + kFsStatsFieldsNumber additions to `fs` binding. All three are needed by `internal/fs/watchers.js`.
+  - FSEvent wraps `uv_fs_event_t` with start/close/ref/unref/hasRef/initialized lifecycle. `onchange(status, eventType, filename)` callback fires from libuv.
+  - StatWatcher wraps `uv_fs_poll_t` for fs.watchFile(). Gets FsBindingData via constructor callback data to fill shared stat buffers. `onchange(status, statsArr)` callback fills both current (offset 0) and previous (offset kFsStatsFieldsNumber) stats.
+  - `uv` binding exports all UV_* error constants via `UV_ERRNO_MAP` macro, plus `errname()`, `getErrorMap()` (returns real JS Map), `getErrorMessage()`.
+  - Both FSEvent and StatWatcher use `napi_wrap` with GC destructor for cleanup, plus `napi_ref` prevent-GC while handles are active.
+  - `setFsEventWrapEventLoop(uv_loop_t*)`: host sets loop before binding init (same pattern as timers/fs/fs_dir).
+  - `napi_property_descriptor` getter field requires `napi_callback` (function pointer), not `napi_value`.
+- **What was done**: Three new binding registrations (fs_event_wrap, uv) plus fs binding extensions (StatWatcher, kFsStatsFieldsNumber). 13 test cases: uv error constants, errname, getErrorMessage, getErrorMap (Map), kFsStatsFieldsNumber, StatWatcher constructor, FSEvent constructor, FSEvent start/close lifecycle, FSEvent watch directory (async), FSEvent watch file change (async), FSEvent ref/unref, FSEvent non-persistent, StatWatcher poll lifecycle (async). All 23 tests pass under ASAN.
+- **Notes for next step**: `watchers.js` can now load since it needs `internalBinding('fs_event_wrap')` for FSEvent, `internalBinding('fs')` for StatWatcher/kFsStatsFieldsNumber, and `internalBinding('uv')` for UV_ENOSPC. The `uv` binding is also used by `internal/errors.js` (lazy), `internal/stream_base_commons.js` (UV_EOF), and `net.js`.

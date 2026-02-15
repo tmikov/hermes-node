@@ -22,6 +22,7 @@
 #include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_file.h>
 #include <hermes/node-compat/bindings/node_file_dir.h>
+#include <hermes/node-compat/bindings/node_fs_event_wrap.h>
 #include <hermes/node-compat/bindings/node_stdio.h>
 #include <hermes/node-compat/bindings/node_stream_wrap.h>
 #include <hermes/node-compat/bindings/node_string_decoder.h>
@@ -31,6 +32,7 @@
 #include <hermes/node-compat/bindings/node_types.h>
 #include <hermes/node-compat/bindings/node_symbols.h>
 #include <hermes/node-compat/bindings/node_util.h>
+#include <hermes/node-compat/bindings/node_uv.h>
 #include <hermes/node-compat/event-loop/uv_event_loop.h>
 #include <hermes/node-compat/module-loader/module_loader.h>
 #include <hermes/node-compat/process/node_process.h>
@@ -452,6 +454,7 @@ static int runBootstrap(
   setTimersEventLoop(eventLoop.getLoop());
   setFsEventLoop(eventLoop.getLoop());
   setFsDirEventLoop(eventLoop.getLoop());
+  setFsEventWrapEventLoop(eventLoop.getLoop());
 
   BindingRegistry registry;
   registry.registerBinding("async_context_frame", initAsyncContextFrameBinding);
@@ -463,6 +466,7 @@ static int runBootstrap(
   registry.registerBinding("errors", initErrorsBinding);
   registry.registerBinding("fs", initFsBinding);
   registry.registerBinding("fs_dir", initFsDirBinding);
+  registry.registerBinding("fs_event_wrap", initFsEventWrapBinding);
   registry.registerBinding("stdio", initStdioBinding);
   registry.registerBinding("stream_wrap", initStreamWrapBinding);
   registry.registerBinding("string_decoder", initStringDecoderBinding);
@@ -472,6 +476,7 @@ static int runBootstrap(
   registry.registerBinding("trace_events", initTraceEventsBinding);
   registry.registerBinding("types", initTypesBinding);
   registry.registerBinding("util", initUtilBinding);
+  registry.registerBinding("uv", initUvBinding);
   registry.attach(env);
 
   // 6. Load and execute primordials.js.
@@ -776,8 +781,9 @@ static int runBootstrap(
   }
 
   // 14. Cleanup (reverse order of creation).
-  // Close timer libuv handles first.
+  // Close timer and fs_event libuv handles first.
   closeTimersHandles();
+  closeFsEventWrapHandles();
 
   if (checkHandleActive) {
     uv_check_stop(&checkHandle);

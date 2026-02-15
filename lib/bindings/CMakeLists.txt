@@ -13,6 +13,7 @@ add_hermes_library(hermesNodeBindings STATIC
   node_errors.cpp
   node_file.cpp
   node_file_dir.cpp
+  node_fs_event_wrap.cpp
   node_stdio.cpp
   node_stream_wrap.cpp
   node_string_decoder.cpp
@@ -22,6 +23,7 @@ add_hermes_library(hermesNodeBindings STATIC
   node_trace_events.cpp
   node_types.cpp
   node_util.cpp
+  node_uv.cpp
 )
 
 target_include_directories(hermesNodeBindings

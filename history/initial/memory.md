@@ -269,6 +269,24 @@
 - `internal/url.js`: minimal toPathIfFileURL, pathToFileURL, fileURLToPath, isURL
 - `internal/process/permission.js`: stub, isEnabled() returns false, has() returns true
 
+## UV Binding
+- `initUvBinding` — UV_* error constants (via `UV_ERRNO_MAP` macro), errname(err), getErrorMap(), getErrorMessage(err)
+- `getErrorMap()` returns real JS Map created via `new Map(entries)` through NAPI
+- Used by: `internal/errors.js` (lazy), `internal/fs/watchers.js` (UV_ENOSPC), `internal/stream_base_commons.js` (UV_EOF), `net.js`, `internal/dgram.js`
+
+## FS Event Wrap Binding
+- `initFsEventWrapBinding` — FSEvent constructor with start/close/ref/unref/hasRef/getAsyncId + initialized getter
+- `setFsEventWrapEventLoop(uv_loop_t*)`: host sets loop before binding init
+- FSEventWrap struct: `uv_fs_event_t` + napi_env + selfRef (prevent-GC) + initialized/closing flags
+- `onchange(status, eventType, filename)`: status<0 is error; eventType is "rename"/"change"
+- `napi_property_descriptor` getter: use `napi_callback` function pointer, NOT `napi_value`
+
+## StatWatcher (in fs binding)
+- Constructor(`useBigint`) wraps `uv_fs_poll_t`, gets FsBindingData via constructor callback data
+- `.start(path, interval)`, `.close()`, `.ref()`, `.unref()`, `.getAsyncId()` (stub: 0)
+- `onchange(status, statsArr)`: fills shared stats buffer at offsets 0 (current) and kFsStatsFieldsNumber (previous)
+- `kFsStatsFieldsNumber` (18) exported from fs binding for JS side
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`
