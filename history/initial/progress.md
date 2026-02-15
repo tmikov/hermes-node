@@ -69,7 +69,7 @@ be omitted):
 | Step 25 | Port stream_wrap binding (minimal) | 5, 3 | done | |
 | Step 26 | Verify streams work | 24, 25 | done | |
 | Step 27 | Port fs binding — sync operations | 2, 5, 9 | done | |
-| Step 28 | Port fs binding — async operations | 3, 27 | | |
+| Step 28 | Port fs binding — async operations | 3, 27 | done | |
 | Step 29 | Port fs_dir binding | 27 | | |
 | Step 30 | Port fs_event_wrap binding | 3, 5 | | |
 | Step 31 | Verify fs sync operations | 27, 9 | | |
@@ -383,3 +383,21 @@ be omitted):
 - **What was done**: Implemented `initFsBinding` with 38 functions + 4 shared typed arrays + FSReqCallback stub constructor. Functions: access, open, close, read, writeBuffer, writeString, stat, lstat, fstat, statfs, rename, unlink, mkdir, rmdir, readdir, chmod, fchmod, chown, fchown, lchown, link, symlink, readlink, realpath, ftruncate, utimes, futimes, lutimes, mkdtemp, copyFile, existsSync, fsync, fdatasync, readFileUtf8, writeFileUtf8, internalModuleStat, readBuffers, writeBuffers, rmSync. JS test covers 28 test cases: mkdtemp, writeFile+readFile (utf8 and buffer), stat, lstat, fstat, open+read+close, open+writeSync+close, writeSync string, rename, mkdir, mkdir recursive, readdir, readdir withFileTypes, chmod, copyFile, link, symlink+readlink, realpath, existsSync, accessSync, ftruncate, utimes, fsync, ENOENT error, write error, rmSync recursive. All 21 tests pass under ASAN.
 - **Issues**: Loading `fs.js` revealed three additional dependencies needing shims: `internal/blob` (needs `blob` binding for Blob support), `internal/url` (needs `url_pattern` binding), `internal/process/permission` (needs `permission` binding). All three shimmed as stubs.
 - **Notes for next step**: The `FSReqCallback` constructor is a stub — it will need full implementation for async operations (Step 28). The `fs.js` module is now loadable and all sync operations work. The `writeFileUtf8`/`readFileUtf8` fast paths bypass the JS open/read/write/close sequence. The `internal/url` shim only supports basic `toPathIfFileURL` — full URL support would need the `url` native binding.
+
+### Step 28: Port fs binding — async operations
+- **Files**: modified `lib/bindings/node_file.cpp` (major: async infrastructure), `include/hermes/node-compat/bindings/node_file.h` (added `setFsEventLoop`), `tools/hermes-node/hermes-node.cpp` (wired setFsEventLoop, fixed cleanup order). Created `test/test-fs-async.js`. Modified `CMakeLists.txt` (added test).
+- **Decisions**:
+  - `FSReqWrap` struct holds all async state: `uv_fs_t req`, `napi_env`, callback ref or deferred (promise), buffer ref (prevents GC), `FSReqResultType` enum, path/dest strings. Heap-allocated with `new`, freed in `fsAfterAsync` completion callback.
+  - `kUsePromises` sentinel object exported from binding. When passed as last arg, binding returns a Promise via `napi_create_promise`/`napi_deferred`. Separate `napi_deferred` field (not cast to `napi_ref`).
+  - `fsAfterAsync` common completion callback: determines syscall name from `uv_fs_get_type()`, creates UVException for errors, dispatches results based on `FSReqResultType` enum (Void, Integer, Stat, StatFs, StringPath, StringPtr, Readdir, MkdirResult). Calls `oncomplete` with FSReqCallback as `this` (critical Node convention).
+  - `setFsEventLoop(uv_loop_t*)` host callback avoids heavyweight Hermes includes in bindings lib (same pattern as timers).
+  - Refactored `throwUVException` into `createUVException` (non-throwing) + `throwUVException` (throwing wrapper) for reuse in async error path.
+  - For `uv_fs_read`/`uv_fs_write` async: pass local `uv_buf_t` (or vector's `.data()`) directly — libuv copies bufs internally. Do NOT pre-allocate `wrap->req.bufs` (libuv overwrites the pointer during async dispatch).
+  - Event loop cleanup order: `eventLoop.close()` BEFORE `hermes_napi_destroy_env` to prevent use-after-free from async callbacks firing on destroyed env.
+- **What was done**: Every sync fs function now checks for FSReqCallback/kUsePromises as last arg and dispatches async via libuv when present. 9 callback-based async tests: writeFile+readFile, stat, mkdir+readdir, open+write+read+close (low-level), ENOENT error, rename, unlink, mkdtemp, copyFile. All 21 tests pass under ASAN with no leaks.
+- **Issues**:
+  - Promise deferred stored as `reinterpret_cast<napi_ref>` caused crash — fixed with separate `napi_deferred` field.
+  - `oncomplete` called with `global` as `this` caused TypeError — Node expects FSReqCallback object as `this`.
+  - `malloc(sizeof(uv_buf_t))` for `req->bufs` leaked — libuv overwrites the pointer during async dispatch (copies to internal `bufsml`). Fixed by passing local/stack bufs.
+  - `eventLoop.close()` after `hermes_napi_destroy_env` caused use-after-free — reordered cleanup.
+- **Notes for next step**: `fs.promises` API NOT tested (requires async generators, unsupported by Hermes). `kUsePromises` code path exists but untestable via the JS fs module. Steps 29 (fs_dir), 31-33 (verify/test) can proceed.

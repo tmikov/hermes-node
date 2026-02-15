@@ -22,7 +22,17 @@ namespace hermes {
 namespace node_compat {
 
 // ---------------------------------------------------------------------------
-// Stat field layout — must match Node's FsStatsOffset enum
+// Module-level state set by the host before binding init.
+// ---------------------------------------------------------------------------
+
+static uv_loop_t *s_fsLoop = nullptr;
+
+void setFsEventLoop(uv_loop_t *loop) {
+  s_fsLoop = loop;
+}
+
+// ---------------------------------------------------------------------------
+// Stat field layout -- must match Node's FsStatsOffset enum
 // ---------------------------------------------------------------------------
 
 enum FsStatsOffset {
@@ -118,9 +128,8 @@ static bool getBool(napi_env env, napi_value val, bool dflt = false) {
 // UVException: throw a libuv error as a JS Error with the right properties
 // ---------------------------------------------------------------------------
 
-/// Throw a UVException. Sets errno, code, syscall, path, message on the Error.
-/// Returns nullptr (for use as return value from napi_callback).
-static napi_value throwUVException(
+/// Create a UVException Error object (does NOT throw it).
+static napi_value createUVException(
     napi_env env,
     int errorno,
     const char *syscall,
@@ -168,6 +177,17 @@ static napi_value throwUVException(
     napi_set_named_property(env, errObj, "dest", val);
   }
 
+  return errObj;
+}
+
+/// Throw a UVException. Returns nullptr (for use as return value).
+static napi_value throwUVException(
+    napi_env env,
+    int errorno,
+    const char *syscall,
+    const char *path = nullptr,
+    const char *dest = nullptr) {
+  napi_value errObj = createUVException(env, errorno, syscall, path, dest);
   napi_throw(env, errObj);
   return nullptr;
 }
@@ -252,6 +272,7 @@ struct FsBindingData {
   napi_ref bigintStatValuesRef; // BigInt64Array(36)
   napi_ref statFsValuesRef;     // Float64Array(14)
   napi_ref bigintStatFsValuesRef; // BigInt64Array(14)
+  napi_ref kUsePromisesRef;     // Sentinel object for promise mode
 };
 
 static FsBindingData *getFsData(napi_env env, napi_callback_info info) {
@@ -290,17 +311,509 @@ static napi_value fillAndReturnStats(
 }
 
 // ---------------------------------------------------------------------------
-// Sync FS operations
+// Async infrastructure: FSReqWrap
 // ---------------------------------------------------------------------------
 
-// binding.access(path, mode)
+/// Result type determines how the completion callback processes the result.
+enum class FSReqResultType {
+  Void,        // No result (unlink, rename, mkdir non-recursive, chmod, etc.)
+  Integer,     // Result is req.result (open -> fd, read -> bytes, write -> bytes)
+  FileHandle,  // Result is { fd: N, getAsyncId() } object (openFileHandle)
+  Stat,        // Result is stat buffer (stat, lstat, fstat)
+  StatFs,      // Result is statfs buffer
+  StringPath,  // Result is req.path (mkdtemp)
+  StringPtr,   // Result is req.ptr as string (readlink, realpath)
+  Readdir,     // Result is readdir entries
+  MkdirResult, // Result is first created path string or undefined
+};
+
+/// Request wrapper for async fs operations.
+struct FSReqWrap {
+  uv_fs_t req{};
+  napi_env env = nullptr;
+  napi_ref callbackRef = nullptr;    // Ref to FSReqCallback object (callback mode only)
+  napi_deferred deferred = nullptr;  // Promise deferred (promise mode only)
+  napi_ref bufferRef = nullptr;      // Ref to buffer to prevent GC during async op
+  FsBindingData *fsData = nullptr;
+  FSReqResultType resultType = FSReqResultType::Void;
+  bool useBigint = false;
+  bool isPromise = false;        // true if using kUsePromises (deferred promise)
+  bool withFileTypes = false;    // For readdir
+  std::string path;      // For error messages
+  std::string dest;      // For error messages (rename dest)
+  std::string writeData; // String data for async writeString
+  std::string firstCreated; // For recursive mkdir
+};
+
+/// Check if the given argument is the kUsePromises sentinel.
+static bool isUsePromises(
+    napi_env env,
+    napi_value val,
+    FsBindingData *fsData) {
+  if (!fsData || !fsData->kUsePromisesRef)
+    return false;
+  napi_value sentinel;
+  napi_get_reference_value(env, fsData->kUsePromisesRef, &sentinel);
+  bool result = false;
+  napi_strict_equals(env, val, sentinel, &result);
+  return result;
+}
+
+/// Check if the given argument is an FSReqCallback object (has oncomplete).
+static bool isFSReqCallback(napi_env env, napi_value val) {
+  napi_valuetype type;
+  napi_typeof(env, val, &type);
+  if (type != napi_object)
+    return false;
+  // Check that it has an oncomplete property.
+  bool hasOncomplete = false;
+  napi_has_named_property(env, val, "oncomplete", &hasOncomplete);
+  return hasOncomplete;
+}
+
+/// Create a fresh (non-shared) stats typed array for promise mode.
+/// Promise mode must not use the shared stats buffer because JS code
+/// may not read the result before another stat operation overwrites it.
+static napi_value createFreshStats(
+    napi_env env,
+    const uv_stat_t *s,
+    bool useBigint) {
+  const size_t count = kFsStatsFieldsNumber;
+  napi_value arrBuf;
+  void *data;
+  napi_value typedArr;
+  if (useBigint) {
+    napi_create_arraybuffer(env, count * sizeof(int64_t), &data, &arrBuf);
+    napi_create_typedarray(
+        env, napi_bigint64_array, count, arrBuf, 0, &typedArr);
+    fillBigIntStatValues(static_cast<int64_t *>(data), s);
+  } else {
+    napi_create_arraybuffer(env, count * sizeof(double), &data, &arrBuf);
+    napi_create_typedarray(
+        env, napi_float64_array, count, arrBuf, 0, &typedArr);
+    fillStatValues(static_cast<double *>(data), s);
+  }
+  return typedArr;
+}
+
+// Forward declaration (used by fileHandleClose before definition).
+static void fsAfterAsync(uv_fs_t *req);
+
+/// Stub getAsyncId for FileHandle objects (async hooks not implemented).
+static napi_value fileHandleGetAsyncId(
+    napi_env env,
+    napi_callback_info /*info*/) {
+  napi_value result;
+  napi_create_int32(env, 0, &result);
+  return result;
+}
+
+/// Close method for FileHandle objects. Returns a promise that resolves
+/// after uv_fs_close completes.
+static napi_value fileHandleClose(napi_env env, napi_callback_info info) {
+  napi_value thisObj;
+  napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
+
+  napi_value fdVal;
+  napi_get_named_property(env, thisObj, "fd", &fdVal);
+  int fd;
+  napi_get_value_int32(env, fdVal, &fd);
+
+  if (fd < 0) {
+    // Already closed -- return resolved promise.
+    napi_deferred deferred;
+    napi_value promise;
+    napi_create_promise(env, &deferred, &promise);
+    napi_value undef;
+    napi_get_undefined(env, &undef);
+    napi_resolve_deferred(env, deferred, undef);
+    return promise;
+  }
+
+  // Mark as closed.
+  napi_value minusOne;
+  napi_create_int32(env, -1, &minusOne);
+  napi_set_named_property(env, thisObj, "fd", minusOne);
+
+  auto *wrap = new FSReqWrap();
+  wrap->env = env;
+  wrap->req.data = wrap;
+  wrap->resultType = FSReqResultType::Void;
+  wrap->isPromise = true;
+  napi_value promise;
+  napi_create_promise(env, &wrap->deferred, &promise);
+
+  uv_fs_close(s_fsLoop, &wrap->req, fd, fsAfterAsync);
+  return promise;
+}
+
+/// Create a FileHandle-like object { fd, getAsyncId(), close() }
+/// for promises API.
+static napi_value createFileHandleObject(napi_env env, int fd) {
+  napi_value obj;
+  napi_create_object(env, &obj);
+
+  napi_value fdVal;
+  napi_create_int32(env, fd, &fdVal);
+  napi_set_named_property(env, obj, "fd", fdVal);
+
+  napi_value fn;
+  napi_create_function(
+      env, "getAsyncId", NAPI_AUTO_LENGTH, fileHandleGetAsyncId, nullptr, &fn);
+  napi_set_named_property(env, obj, "getAsyncId", fn);
+
+  napi_create_function(
+      env, "close", NAPI_AUTO_LENGTH, fileHandleClose, nullptr, &fn);
+  napi_set_named_property(env, obj, "close", fn);
+
+  return obj;
+}
+
+/// Common libuv fs completion callback. Runs on the main thread after I/O.
+static void fsAfterAsync(uv_fs_t *req) {
+  auto *wrap = static_cast<FSReqWrap *>(req->data);
+  napi_env env = wrap->env;
+
+  napi_handle_scope scope;
+  napi_open_handle_scope(env, &scope);
+
+  napi_value global;
+  napi_get_global(env, &global);
+
+  int result = static_cast<int>(req->result);
+
+  if (result < 0) {
+    // Error case: call oncomplete(error) or reject promise.
+    napi_value errObj = createUVException(
+        env,
+        result,
+        uv_fs_get_type(req) == UV_FS_STAT    ? "stat"
+        : uv_fs_get_type(req) == UV_FS_LSTAT  ? "lstat"
+        : uv_fs_get_type(req) == UV_FS_FSTAT  ? "fstat"
+        : uv_fs_get_type(req) == UV_FS_OPEN   ? "open"
+        : uv_fs_get_type(req) == UV_FS_CLOSE  ? "close"
+        : uv_fs_get_type(req) == UV_FS_READ   ? "read"
+        : uv_fs_get_type(req) == UV_FS_WRITE  ? "write"
+        : uv_fs_get_type(req) == UV_FS_RENAME ? "rename"
+        : uv_fs_get_type(req) == UV_FS_UNLINK ? "unlink"
+        : uv_fs_get_type(req) == UV_FS_MKDIR  ? "mkdir"
+        : uv_fs_get_type(req) == UV_FS_RMDIR  ? "rmdir"
+        : uv_fs_get_type(req) == UV_FS_SCANDIR ? "scandir"
+        : uv_fs_get_type(req) == UV_FS_CHMOD  ? "chmod"
+        : uv_fs_get_type(req) == UV_FS_FCHMOD ? "fchmod"
+        : uv_fs_get_type(req) == UV_FS_CHOWN  ? "chown"
+        : uv_fs_get_type(req) == UV_FS_FCHOWN ? "fchown"
+        : uv_fs_get_type(req) == UV_FS_LCHOWN ? "lchown"
+        : uv_fs_get_type(req) == UV_FS_LINK   ? "link"
+        : uv_fs_get_type(req) == UV_FS_SYMLINK ? "symlink"
+        : uv_fs_get_type(req) == UV_FS_READLINK ? "readlink"
+        : uv_fs_get_type(req) == UV_FS_REALPATH ? "realpath"
+        : uv_fs_get_type(req) == UV_FS_FTRUNCATE ? "ftruncate"
+        : uv_fs_get_type(req) == UV_FS_UTIME  ? "utime"
+        : uv_fs_get_type(req) == UV_FS_FUTIME ? "futime"
+        : uv_fs_get_type(req) == UV_FS_LUTIME ? "lutime"
+        : uv_fs_get_type(req) == UV_FS_MKDTEMP ? "mkdtemp"
+        : uv_fs_get_type(req) == UV_FS_COPYFILE ? "copyfile"
+        : uv_fs_get_type(req) == UV_FS_ACCESS ? "access"
+        : uv_fs_get_type(req) == UV_FS_FSYNC  ? "fsync"
+        : uv_fs_get_type(req) == UV_FS_FDATASYNC ? "fdatasync"
+        : uv_fs_get_type(req) == UV_FS_STATFS ? "statfs"
+        : "unknown",
+        wrap->path.empty() ? nullptr : wrap->path.c_str(),
+        wrap->dest.empty() ? nullptr : wrap->dest.c_str());
+
+    if (wrap->isPromise) {
+      // Reject the deferred promise.
+      napi_reject_deferred(env, wrap->deferred, errObj);
+    } else {
+      napi_value reqObj;
+      napi_get_reference_value(env, wrap->callbackRef, &reqObj);
+      // Get oncomplete from the req object.
+      napi_value oncomplete;
+      napi_get_named_property(env, reqObj, "oncomplete", &oncomplete);
+      // Call with FSReqCallback as 'this' (Node convention).
+      napi_value cbResult;
+      napi_call_function(env, reqObj, oncomplete, 1, &errObj, &cbResult);
+    }
+  } else {
+    // Success case: construct result and call oncomplete(null, result) or
+    // resolve promise.
+    napi_value jsResult;
+
+    switch (wrap->resultType) {
+      case FSReqResultType::Void:
+        napi_get_undefined(env, &jsResult);
+        break;
+
+      case FSReqResultType::Integer:
+        napi_create_int32(env, result, &jsResult);
+        break;
+
+      case FSReqResultType::FileHandle:
+        jsResult = createFileHandleObject(env, result);
+        break;
+
+      case FSReqResultType::Stat:
+      case FSReqResultType::StatFs:
+        if (wrap->resultType == FSReqResultType::Stat) {
+          if (wrap->isPromise) {
+            // Promise mode: create a fresh array so concurrent stats
+            // don't clobber each other's results.
+            jsResult = createFreshStats(
+                env, &req->statbuf, wrap->useBigint);
+          } else {
+            jsResult = fillAndReturnStats(
+                env, wrap->fsData, &req->statbuf, wrap->useBigint);
+          }
+        } else {
+          // StatFs
+          auto *sf = static_cast<uv_statfs_t *>(req->ptr);
+          auto fillStatFs = [sf](auto *buf) {
+            buf[kType] = decltype(buf[0])(sf->f_type);
+            buf[kBSize] = decltype(buf[0])(sf->f_bsize);
+            buf[kStatFsBlocks] = decltype(buf[0])(sf->f_blocks);
+            buf[kBFree] = decltype(buf[0])(sf->f_bfree);
+            buf[kBAvail] = decltype(buf[0])(sf->f_bavail);
+            buf[kFiles] = decltype(buf[0])(sf->f_files);
+            buf[kFFree] = decltype(buf[0])(sf->f_ffree);
+          };
+          if (wrap->isPromise) {
+            // Promise mode: fresh array.
+            napi_value arrBuf;
+            void *data;
+            if (wrap->useBigint) {
+              napi_create_arraybuffer(
+                  env, kStatFsBufferLength * sizeof(int64_t), &data, &arrBuf);
+              napi_create_typedarray(
+                  env, napi_bigint64_array, kStatFsBufferLength, arrBuf, 0,
+                  &jsResult);
+              fillStatFs(static_cast<int64_t *>(data));
+            } else {
+              napi_create_arraybuffer(
+                  env, kStatFsBufferLength * sizeof(double), &data, &arrBuf);
+              napi_create_typedarray(
+                  env, napi_float64_array, kStatFsBufferLength, arrBuf, 0,
+                  &jsResult);
+              fillStatFs(static_cast<double *>(data));
+            }
+          } else if (wrap->useBigint) {
+            napi_get_reference_value(
+                env, wrap->fsData->bigintStatFsValuesRef, &jsResult);
+            napi_typedarray_type arrType;
+            size_t length;
+            void *data;
+            napi_get_typedarray_info(
+                env, jsResult, &arrType, &length, &data, nullptr, nullptr);
+            fillStatFs(static_cast<int64_t *>(data));
+          } else {
+            napi_get_reference_value(
+                env, wrap->fsData->statFsValuesRef, &jsResult);
+            napi_typedarray_type arrType;
+            size_t length;
+            void *data;
+            napi_get_typedarray_info(
+                env, jsResult, &arrType, &length, &data, nullptr, nullptr);
+            fillStatFs(static_cast<double *>(data));
+          }
+        }
+        break;
+
+      case FSReqResultType::StringPath:
+        napi_create_string_utf8(
+            env, req->path, NAPI_AUTO_LENGTH, &jsResult);
+        break;
+
+      case FSReqResultType::StringPtr: {
+        auto *ptr = static_cast<const char *>(req->ptr);
+        napi_create_string_utf8(env, ptr, NAPI_AUTO_LENGTH, &jsResult);
+        break;
+      }
+
+      case FSReqResultType::Readdir: {
+        // Collect entries from scandir.
+        std::vector<std::string> names;
+        std::vector<int> types;
+        uv_dirent_t ent;
+        while (uv_fs_scandir_next(req, &ent) == 0) {
+          names.push_back(ent.name);
+          if (wrap->withFileTypes)
+            types.push_back(static_cast<int>(ent.type));
+        }
+
+        if (wrap->withFileTypes) {
+          napi_value namesArr;
+          napi_create_array_with_length(env, names.size(), &namesArr);
+          for (size_t i = 0; i < names.size(); i++) {
+            napi_value str;
+            napi_create_string_utf8(
+                env, names[i].c_str(), names[i].size(), &str);
+            napi_set_element(env, namesArr, static_cast<uint32_t>(i), str);
+          }
+          napi_value typesArr;
+          napi_create_array_with_length(env, types.size(), &typesArr);
+          for (size_t i = 0; i < types.size(); i++) {
+            napi_value num;
+            napi_create_int32(env, types[i], &num);
+            napi_set_element(env, typesArr, static_cast<uint32_t>(i), num);
+          }
+          napi_value resultArr;
+          napi_create_array_with_length(env, 2, &resultArr);
+          napi_set_element(env, resultArr, 0, namesArr);
+          napi_set_element(env, resultArr, 1, typesArr);
+          jsResult = resultArr;
+        } else {
+          napi_value namesArr;
+          napi_create_array_with_length(env, names.size(), &namesArr);
+          for (size_t i = 0; i < names.size(); i++) {
+            napi_value str;
+            napi_create_string_utf8(
+                env, names[i].c_str(), names[i].size(), &str);
+            napi_set_element(env, namesArr, static_cast<uint32_t>(i), str);
+          }
+          jsResult = namesArr;
+        }
+        break;
+      }
+
+      case FSReqResultType::MkdirResult:
+        if (!wrap->firstCreated.empty()) {
+          napi_create_string_utf8(
+              env,
+              wrap->firstCreated.c_str(),
+              wrap->firstCreated.size(),
+              &jsResult);
+        } else {
+          napi_get_undefined(env, &jsResult);
+        }
+        break;
+    }
+
+    if (wrap->isPromise) {
+      napi_resolve_deferred(env, wrap->deferred, jsResult);
+    } else {
+      napi_value reqObj;
+      napi_get_reference_value(env, wrap->callbackRef, &reqObj);
+      napi_value oncomplete;
+      napi_get_named_property(env, reqObj, "oncomplete", &oncomplete);
+      napi_value nullVal;
+      napi_get_null(env, &nullVal);
+      napi_value args[2] = {nullVal, jsResult};
+      int argCount =
+          (wrap->resultType == FSReqResultType::Void) ? 1 : 2;
+      // Call with FSReqCallback as 'this' (Node convention).
+      napi_value cbResult;
+      napi_call_function(
+          env, reqObj, oncomplete, argCount, args, &cbResult);
+    }
+  }
+
+  // Clear any pending exception (shouldn't propagate from callbacks).
+  bool pending = false;
+  napi_is_exception_pending(env, &pending);
+  if (pending) {
+    napi_value exc;
+    napi_get_and_clear_last_exception(env, &exc);
+    // Print to stderr for debugging.
+    napi_value stack;
+    napi_status st = napi_get_named_property(env, exc, "stack", &stack);
+    napi_valuetype stackType = napi_undefined;
+    if (st == napi_ok)
+      napi_typeof(env, stack, &stackType);
+    napi_value msg;
+    if (stackType == napi_string)
+      msg = stack;
+    else
+      napi_coerce_to_string(env, exc, &msg);
+    char buf[4096];
+    size_t len = 0;
+    napi_get_value_string_utf8(env, msg, buf, sizeof(buf), &len);
+    std::fprintf(stderr, "%.*s\n", static_cast<int>(len), buf);
+  }
+
+  napi_close_handle_scope(env, scope);
+
+  // Cleanup.
+  if (!wrap->isPromise && wrap->callbackRef)
+    napi_delete_reference(env, wrap->callbackRef);
+  if (wrap->bufferRef)
+    napi_delete_reference(env, wrap->bufferRef);
+  // uv_fs_req_cleanup frees req->bufs (if != bufsml), path, ptr, etc.
+  uv_fs_req_cleanup(req);
+  delete wrap;
+}
+
+/// Start an async fs operation. Returns the promise (for kUsePromises) or
+/// undefined (for FSReqCallback). The wrap takes ownership and will be freed
+/// in fsAfterAsync.
+static napi_value startAsyncFsOp(
+    napi_env env,
+    FSReqWrap *wrap,
+    napi_value reqOrSentinel,
+    FsBindingData *fsData) {
+  wrap->env = env;
+  wrap->fsData = fsData;
+  wrap->req.data = wrap;
+
+  if (isUsePromises(env, reqOrSentinel, fsData)) {
+    // Promise mode: create a deferred.
+    wrap->isPromise = true;
+    napi_value promise;
+    napi_create_promise(env, &wrap->deferred, &promise);
+    return promise;
+  } else {
+    // FSReqCallback mode: store reference to the request object.
+    wrap->isPromise = false;
+    napi_create_reference(env, reqOrSentinel, 1, &wrap->callbackRef);
+
+    napi_value undef;
+    napi_get_undefined(env, &undef);
+    return undef;
+  }
+}
+
+/// Detect if the argument at position `pos` is an async request.
+/// Returns the arg value if it's a req/kUsePromises, or nullptr if sync.
+static napi_value getAsyncReq(
+    napi_env env,
+    size_t argc,
+    napi_value *argv,
+    size_t pos,
+    FsBindingData *fsData) {
+  if (pos >= argc)
+    return nullptr;
+  napi_value val = argv[pos];
+  if (isNullOrUndefined(env, val))
+    return nullptr;
+  if (isUsePromises(env, val, fsData))
+    return val;
+  if (isFSReqCallback(env, val))
+    return val;
+  return nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// Sync FS operations (with async dispatch when req is provided)
+// ---------------------------------------------------------------------------
+
+// binding.access(path, mode, req?)
 static napi_value fsAccess(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
+  size_t argc = 3;
+  napi_value argv[3];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string path = getStringArg(env, argv[0]);
   int mode = getInt32(env, argv[1], 0);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 2, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    wrap->path = path;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_access(s_fsLoop, &wrap->req, path.c_str(), mode, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_access(nullptr, &req, path.c_str(), mode, nullptr);
@@ -311,16 +824,26 @@ static napi_value fsAccess(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.open(path, flags, mode)
+// binding.open(path, flags, mode, req?)
 static napi_value fsOpen(napi_env env, napi_callback_info info) {
   size_t argc = 4;
   napi_value argv[4];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
-  // If argc > 3 and argv[3] is an FSReqCallback, this is async. For now sync only.
   std::string path = getStringArg(env, argv[0]);
   int flags = getInt32(env, argv[1], 0);
   int mode = getInt32(env, argv[2], 0666);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 3, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Integer;
+    wrap->path = path;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_open(s_fsLoop, &wrap->req, path.c_str(), flags, mode, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_open(nullptr, &req, path.c_str(), flags, mode, nullptr);
@@ -334,13 +857,56 @@ static napi_value fsOpen(napi_env env, napi_callback_info info) {
   return jsResult;
 }
 
-// binding.close(fd)
+// binding.openFileHandle(path, flags, mode, req?)
+// Like open() but resolves to a FileHandle object { fd, getAsyncId() }
+// instead of a raw fd. Used by fs.promises.
+static napi_value fsOpenFileHandle(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value argv[4];
+  FsBindingData *fsData = getFsData(env, info);
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  std::string path = getStringArg(env, argv[0]);
+  int flags = getInt32(env, argv[1], 0);
+  int mode = getInt32(env, argv[2], 0666);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 3, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::FileHandle;
+    wrap->path = path;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_open(s_fsLoop, &wrap->req, path.c_str(), flags, mode, fsAfterAsync);
+    return result;
+  }
+
+  uv_fs_t req;
+  int result = uv_fs_open(nullptr, &req, path.c_str(), flags, mode, nullptr);
+  uv_fs_req_cleanup(&req);
+  if (result < 0) {
+    return throwUVException(env, result, "open", path.c_str());
+  }
+
+  return createFileHandleObject(env, result);
+}
+
+// binding.close(fd, req?)
 static napi_value fsClose(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   int fd = getInt32(env, argv[0]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 1, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_close(s_fsLoop, &wrap->req, fd, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_close(nullptr, &req, fd, nullptr);
@@ -351,10 +917,11 @@ static napi_value fsClose(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.read(fd, buffer, offset, length, position)
+// binding.read(fd, buffer, offset, length, position, req?)
 static napi_value fsRead(napi_env env, napi_callback_info info) {
   size_t argc = 6;
   napi_value argv[6];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   int fd = getInt32(env, argv[0]);
@@ -369,6 +936,21 @@ static napi_value fsRead(napi_env env, napi_callback_info info) {
   int32_t offset = getInt32(env, argv[2], 0);
   int32_t length = getInt32(env, argv[3], 0);
   int64_t position = getInt64(env, argv[4], -1);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 5, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Integer;
+    // Keep buffer alive during async op.
+    napi_create_reference(env, argv[1], 1, &wrap->bufferRef);
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_buf_t buf = uv_buf_init(
+        reinterpret_cast<char *>(bufData + offset),
+        static_cast<unsigned int>(length));
+    // libuv copies bufs internally for async ops, so local var is fine.
+    uv_fs_read(s_fsLoop, &wrap->req, fd, &buf, 1, position, fsAfterAsync);
+    return result;
+  }
 
   uv_buf_t buf = uv_buf_init(
       reinterpret_cast<char *>(bufData + offset),
@@ -386,10 +968,11 @@ static napi_value fsRead(napi_env env, napi_callback_info info) {
   return jsResult;
 }
 
-// binding.writeBuffer(fd, buffer, offset, length, position, undefined, ctx)
+// binding.writeBuffer(fd, buffer, offset, length, position, req?, ctx?)
 static napi_value fsWriteBuffer(napi_env env, napi_callback_info info) {
   size_t argc = 7;
   napi_value argv[7];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   int fd = getInt32(env, argv[0]);
@@ -408,6 +991,19 @@ static napi_value fsWriteBuffer(napi_env env, napi_callback_info info) {
   int64_t position = -1;
   if (argc > 4 && !isNullOrUndefined(env, argv[4])) {
     position = getInt64(env, argv[4], -1);
+  }
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 5, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Integer;
+    napi_create_reference(env, argv[1], 1, &wrap->bufferRef);
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_buf_t buf = uv_buf_init(
+        reinterpret_cast<char *>(bufData + offset),
+        static_cast<unsigned int>(length));
+    uv_fs_write(s_fsLoop, &wrap->req, fd, &buf, 1, position, fsAfterAsync);
+    return result;
   }
 
   uv_buf_t buf = uv_buf_init(
@@ -434,10 +1030,11 @@ static napi_value fsWriteBuffer(napi_env env, napi_callback_info info) {
   return jsResult;
 }
 
-// binding.writeString(fd, string, position, encoding, undefined, ctx)
+// binding.writeString(fd, string, position, encoding, req?, ctx?)
 static napi_value fsWriteString(napi_env env, napi_callback_info info) {
   size_t argc = 6;
   napi_value argv[6];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   int fd = getInt32(env, argv[0]);
@@ -450,7 +1047,20 @@ static napi_value fsWriteString(napi_env env, napi_callback_info info) {
   }
 
   // encoding is argv[3] but we always write as UTF-8.
-  // TODO: handle other encodings if needed.
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 4, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Integer;
+    // Copy string data into the wrap so it outlives the JS call.
+    wrap->writeData = str;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_buf_t buf = uv_buf_init(
+        const_cast<char *>(wrap->writeData.data()),
+        static_cast<unsigned int>(wrap->writeData.size()));
+    uv_fs_write(s_fsLoop, &wrap->req, fd, &buf, 1, position, fsAfterAsync);
+    return result;
+  }
 
   uv_buf_t buf = uv_buf_init(
       const_cast<char *>(str.data()),
@@ -476,8 +1086,7 @@ static napi_value fsWriteString(napi_env env, napi_callback_info info) {
   return jsResult;
 }
 
-// binding.stat(path, useBigint, req, throwIfNoEntry)
-// Sync when req is undefined.
+// binding.stat(path, useBigint, req?, throwIfNoEntry?)
 static napi_value fsStat(napi_env env, napi_callback_info info) {
   size_t argc = 4;
   napi_value argv[4];
@@ -486,6 +1095,17 @@ static napi_value fsStat(napi_env env, napi_callback_info info) {
 
   std::string path = getStringArg(env, argv[0]);
   bool useBigint = argc > 1 && getBool(env, argv[1], false);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 2, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Stat;
+    wrap->path = path;
+    wrap->useBigint = useBigint;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_stat(s_fsLoop, &wrap->req, path.c_str(), fsAfterAsync);
+    return result;
+  }
 
   // throwIfNoEntry: argv[3] (default true for statSync)
   bool throwIfNoEntry = true;
@@ -509,7 +1129,7 @@ static napi_value fsStat(napi_env env, napi_callback_info info) {
   return jsResult;
 }
 
-// binding.lstat(path, useBigint, req, throwIfNoEntry)
+// binding.lstat(path, useBigint, req?, throwIfNoEntry?)
 static napi_value fsLstat(napi_env env, napi_callback_info info) {
   size_t argc = 4;
   napi_value argv[4];
@@ -518,6 +1138,17 @@ static napi_value fsLstat(napi_env env, napi_callback_info info) {
 
   std::string path = getStringArg(env, argv[0]);
   bool useBigint = argc > 1 && getBool(env, argv[1], false);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 2, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Stat;
+    wrap->path = path;
+    wrap->useBigint = useBigint;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_lstat(s_fsLoop, &wrap->req, path.c_str(), fsAfterAsync);
+    return result;
+  }
 
   bool throwIfNoEntry = true;
   if (argc > 3 && !isNullOrUndefined(env, argv[3])) {
@@ -540,7 +1171,7 @@ static napi_value fsLstat(napi_env env, napi_callback_info info) {
   return jsResult;
 }
 
-// binding.fstat(fd, useBigint, req, shouldNotThrow)
+// binding.fstat(fd, useBigint, req?, shouldNotThrow?)
 static napi_value fsFstat(napi_env env, napi_callback_info info) {
   size_t argc = 4;
   napi_value argv[4];
@@ -549,6 +1180,16 @@ static napi_value fsFstat(napi_env env, napi_callback_info info) {
 
   int fd = getInt32(env, argv[0]);
   bool useBigint = argc > 1 && getBool(env, argv[1], false);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 2, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Stat;
+    wrap->useBigint = useBigint;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_fstat(s_fsLoop, &wrap->req, fd, fsAfterAsync);
+    return result;
+  }
 
   bool shouldNotThrow = false;
   if (argc > 3 && !isNullOrUndefined(env, argv[3])) {
@@ -570,15 +1211,26 @@ static napi_value fsFstat(napi_env env, napi_callback_info info) {
   return jsResult;
 }
 
-// binding.statfs(path, useBigint)
+// binding.statfs(path, useBigint, req?)
 static napi_value fsStatFs(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
+  size_t argc = 3;
+  napi_value argv[3];
   FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string path = getStringArg(env, argv[0]);
   bool useBigint = argc > 1 && getBool(env, argv[1], false);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 2, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::StatFs;
+    wrap->path = path;
+    wrap->useBigint = useBigint;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_statfs(s_fsLoop, &wrap->req, path.c_str(), fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_statfs(nullptr, &req, path.c_str(), nullptr);
@@ -624,14 +1276,26 @@ static napi_value fsStatFs(napi_env env, napi_callback_info info) {
   return jsResult;
 }
 
-// binding.rename(oldPath, newPath)
+// binding.rename(oldPath, newPath, req?)
 static napi_value fsRename(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
+  size_t argc = 3;
+  napi_value argv[3];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string oldPath = getStringArg(env, argv[0]);
   std::string newPath = getStringArg(env, argv[1]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 2, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    wrap->path = oldPath;
+    wrap->dest = newPath;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_rename(s_fsLoop, &wrap->req, oldPath.c_str(), newPath.c_str(), fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_rename(nullptr, &req, oldPath.c_str(), newPath.c_str(), nullptr);
@@ -642,13 +1306,24 @@ static napi_value fsRename(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.unlink(path)
+// binding.unlink(path, req?)
 static napi_value fsUnlink(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1];
+  size_t argc = 2;
+  napi_value argv[2];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string path = getStringArg(env, argv[0]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 1, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    wrap->path = path;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_unlink(s_fsLoop, &wrap->req, path.c_str(), fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_unlink(nullptr, &req, path.c_str(), nullptr);
@@ -659,15 +1334,84 @@ static napi_value fsUnlink(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.mkdir(path, mode, recursive)
+// binding.mkdir(path, mode, recursive, req?)
 static napi_value fsMkdir(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
+  size_t argc = 4;
+  napi_value argv[4];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string path = getStringArg(env, argv[0]);
   int mode = getInt32(env, argv[1], 0777);
   bool recursive = argc > 2 && getBool(env, argv[2], false);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 3, fsData);
+  if (asyncReq) {
+    if (recursive) {
+      // For async recursive mkdir, do it synchronously on the main thread
+      // (it's a series of mkdir calls) and then call the callback.
+      // This matches what most implementations do for simplicity.
+      auto *wrap = new FSReqWrap();
+      wrap->resultType = FSReqResultType::MkdirResult;
+      wrap->path = path;
+
+      // Do recursive mkdir synchronously.
+      std::string firstCreated;
+      std::string current;
+      size_t pos = 0;
+      if (!path.empty() && path[0] == '/') {
+        current = "/";
+        pos = 1;
+      }
+      bool hadError = false;
+      int errResult = 0;
+      while (pos <= path.size()) {
+        size_t slash = path.find('/', pos);
+        if (slash == std::string::npos)
+          slash = path.size();
+        std::string component = path.substr(pos, slash - pos);
+        pos = slash + 1;
+        if (component.empty() || component == ".")
+          continue;
+        if (!current.empty() && current.back() != '/')
+          current += '/';
+        current += component;
+        uv_fs_t mkReq;
+        int mkResult = uv_fs_mkdir(nullptr, &mkReq, current.c_str(), mode, nullptr);
+        uv_fs_req_cleanup(&mkReq);
+        if (mkResult == 0) {
+          if (firstCreated.empty())
+            firstCreated = current;
+        } else if (mkResult != UV_EEXIST) {
+          hadError = true;
+          errResult = mkResult;
+          wrap->path = current;
+          break;
+        }
+      }
+
+      wrap->firstCreated = firstCreated;
+      napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+
+      if (hadError) {
+        // Simulate error by setting req.result and calling callback.
+        wrap->req.result = errResult;
+        fsAfterAsync(&wrap->req);
+      } else {
+        // Simulate success.
+        wrap->req.result = 0;
+        fsAfterAsync(&wrap->req);
+      }
+      return result;
+    }
+
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    wrap->path = path;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_mkdir(s_fsLoop, &wrap->req, path.c_str(), mode, fsAfterAsync);
+    return result;
+  }
 
   if (!recursive) {
     uv_fs_t req;
@@ -680,12 +1424,10 @@ static napi_value fsMkdir(napi_env env, napi_callback_info info) {
   }
 
   // Recursive mkdir: create each component.
-  // Walk the path and create directories as needed.
   std::string firstCreated;
   std::string current;
   size_t pos = 0;
 
-  // Handle absolute path.
   if (!path.empty() && path[0] == '/') {
     current = "/";
     pos = 1;
@@ -726,13 +1468,24 @@ static napi_value fsMkdir(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.rmdir(path)
+// binding.rmdir(path, req?)
 static napi_value fsRmdir(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1];
+  size_t argc = 2;
+  napi_value argv[2];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string path = getStringArg(env, argv[0]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 1, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    wrap->path = path;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_rmdir(s_fsLoop, &wrap->req, path.c_str(), fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_rmdir(nullptr, &req, path.c_str(), nullptr);
@@ -743,15 +1496,27 @@ static napi_value fsRmdir(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.readdir(path, encoding, withFileTypes)
+// binding.readdir(path, encoding, withFileTypes, req?)
 static napi_value fsReaddir(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
+  size_t argc = 4;
+  napi_value argv[4];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string path = getStringArg(env, argv[0]);
   // encoding is argv[1] - we always return UTF-8 strings.
   bool withFileTypes = argc > 2 && getBool(env, argv[2], false);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 3, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Readdir;
+    wrap->path = path;
+    wrap->withFileTypes = withFileTypes;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_scandir(s_fsLoop, &wrap->req, path.c_str(), 0, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_scandir(nullptr, &req, path.c_str(), 0, nullptr);
@@ -795,7 +1560,6 @@ static napi_value fsReaddir(napi_env env, napi_callback_info info) {
     napi_set_element(env, resultArr, 1, typesArr);
     return resultArr;
   } else {
-    // Return array of name strings.
     napi_value namesArr;
     napi_create_array_with_length(env, names.size(), &namesArr);
     for (size_t i = 0; i < names.size(); i++) {
@@ -807,14 +1571,25 @@ static napi_value fsReaddir(napi_env env, napi_callback_info info) {
   }
 }
 
-// binding.chmod(path, mode)
+// binding.chmod(path, mode, req?)
 static napi_value fsChmod(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
+  size_t argc = 3;
+  napi_value argv[3];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string path = getStringArg(env, argv[0]);
   int mode = getInt32(env, argv[1]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 2, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    wrap->path = path;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_chmod(s_fsLoop, &wrap->req, path.c_str(), mode, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_chmod(nullptr, &req, path.c_str(), mode, nullptr);
@@ -825,14 +1600,24 @@ static napi_value fsChmod(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.fchmod(fd, mode)
+// binding.fchmod(fd, mode, req?)
 static napi_value fsFchmod(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
+  size_t argc = 3;
+  napi_value argv[3];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   int fd = getInt32(env, argv[0]);
   int mode = getInt32(env, argv[1]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 2, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_fchmod(s_fsLoop, &wrap->req, fd, mode, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_fchmod(nullptr, &req, fd, mode, nullptr);
@@ -843,15 +1628,26 @@ static napi_value fsFchmod(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.chown(path, uid, gid)
+// binding.chown(path, uid, gid, req?)
 static napi_value fsChown(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
+  size_t argc = 4;
+  napi_value argv[4];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string path = getStringArg(env, argv[0]);
   int uid = getInt32(env, argv[1]);
   int gid = getInt32(env, argv[2]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 3, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    wrap->path = path;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_chown(s_fsLoop, &wrap->req, path.c_str(), uid, gid, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_chown(nullptr, &req, path.c_str(), uid, gid, nullptr);
@@ -862,15 +1658,25 @@ static napi_value fsChown(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.fchown(fd, uid, gid)
+// binding.fchown(fd, uid, gid, req?)
 static napi_value fsFchown(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
+  size_t argc = 4;
+  napi_value argv[4];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   int fd = getInt32(env, argv[0]);
   int uid = getInt32(env, argv[1]);
   int gid = getInt32(env, argv[2]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 3, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_fchown(s_fsLoop, &wrap->req, fd, uid, gid, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_fchown(nullptr, &req, fd, uid, gid, nullptr);
@@ -881,15 +1687,26 @@ static napi_value fsFchown(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.lchown(path, uid, gid)
+// binding.lchown(path, uid, gid, req?)
 static napi_value fsLchown(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
+  size_t argc = 4;
+  napi_value argv[4];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string path = getStringArg(env, argv[0]);
   int uid = getInt32(env, argv[1]);
   int gid = getInt32(env, argv[2]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 3, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    wrap->path = path;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_lchown(s_fsLoop, &wrap->req, path.c_str(), uid, gid, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_lchown(nullptr, &req, path.c_str(), uid, gid, nullptr);
@@ -900,14 +1717,26 @@ static napi_value fsLchown(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.link(existingPath, newPath)
+// binding.link(existingPath, newPath, req?)
 static napi_value fsLink(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
+  size_t argc = 3;
+  napi_value argv[3];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string existingPath = getStringArg(env, argv[0]);
   std::string newPath = getStringArg(env, argv[1]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 2, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    wrap->path = existingPath;
+    wrap->dest = newPath;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_link(s_fsLoop, &wrap->req, existingPath.c_str(), newPath.c_str(), fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_link(nullptr, &req, existingPath.c_str(), newPath.c_str(), nullptr);
@@ -918,15 +1747,27 @@ static napi_value fsLink(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.symlink(target, path, flags)
+// binding.symlink(target, path, flags, req?)
 static napi_value fsSymlink(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
+  size_t argc = 4;
+  napi_value argv[4];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string target = getStringArg(env, argv[0]);
   std::string path = getStringArg(env, argv[1]);
   int flags = argc > 2 ? getInt32(env, argv[2], 0) : 0;
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 3, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    wrap->path = target;
+    wrap->dest = path;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_symlink(s_fsLoop, &wrap->req, target.c_str(), path.c_str(), flags, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_symlink(nullptr, &req, target.c_str(), path.c_str(), flags, nullptr);
@@ -937,14 +1778,24 @@ static napi_value fsSymlink(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.readlink(path, encoding)
+// binding.readlink(path, encoding, req?)
 static napi_value fsReadlink(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
+  size_t argc = 3;
+  napi_value argv[3];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string path = getStringArg(env, argv[0]);
-  // encoding is argv[1] — we always return a UTF-8 string.
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 2, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::StringPtr;
+    wrap->path = path;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_readlink(s_fsLoop, &wrap->req, path.c_str(), fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_readlink(nullptr, &req, path.c_str(), nullptr);
@@ -960,13 +1811,24 @@ static napi_value fsReadlink(napi_env env, napi_callback_info info) {
   return jsResult;
 }
 
-// binding.realpath(path, encoding)
+// binding.realpath(path, encoding, req?)
 static napi_value fsRealpath(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
+  size_t argc = 3;
+  napi_value argv[3];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string path = getStringArg(env, argv[0]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 2, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::StringPtr;
+    wrap->path = path;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_realpath(s_fsLoop, &wrap->req, path.c_str(), fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_realpath(nullptr, &req, path.c_str(), nullptr);
@@ -982,14 +1844,24 @@ static napi_value fsRealpath(napi_env env, napi_callback_info info) {
   return jsResult;
 }
 
-// binding.ftruncate(fd, len)
+// binding.ftruncate(fd, len, req?)
 static napi_value fsFtruncate(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
+  size_t argc = 3;
+  napi_value argv[3];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   int fd = getInt32(env, argv[0]);
   int64_t len = getInt64(env, argv[1], 0);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 2, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_ftruncate(s_fsLoop, &wrap->req, fd, len, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_ftruncate(nullptr, &req, fd, len, nullptr);
@@ -1000,15 +1872,26 @@ static napi_value fsFtruncate(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.utimes(path, atime, mtime)
+// binding.utimes(path, atime, mtime, req?)
 static napi_value fsUtimes(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
+  size_t argc = 4;
+  napi_value argv[4];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string path = getStringArg(env, argv[0]);
   double atime = getDouble(env, argv[1]);
   double mtime = getDouble(env, argv[2]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 3, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    wrap->path = path;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_utime(s_fsLoop, &wrap->req, path.c_str(), atime, mtime, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_utime(nullptr, &req, path.c_str(), atime, mtime, nullptr);
@@ -1019,15 +1902,25 @@ static napi_value fsUtimes(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.futimes(fd, atime, mtime)
+// binding.futimes(fd, atime, mtime, req?)
 static napi_value fsFutimes(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
+  size_t argc = 4;
+  napi_value argv[4];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   int fd = getInt32(env, argv[0]);
   double atime = getDouble(env, argv[1]);
   double mtime = getDouble(env, argv[2]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 3, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_futime(s_fsLoop, &wrap->req, fd, atime, mtime, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_futime(nullptr, &req, fd, atime, mtime, nullptr);
@@ -1038,15 +1931,26 @@ static napi_value fsFutimes(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.lutimes(path, atime, mtime)
+// binding.lutimes(path, atime, mtime, req?)
 static napi_value fsLutimes(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
+  size_t argc = 4;
+  napi_value argv[4];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string path = getStringArg(env, argv[0]);
   double atime = getDouble(env, argv[1]);
   double mtime = getDouble(env, argv[2]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 3, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    wrap->path = path;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_lutime(s_fsLoop, &wrap->req, path.c_str(), atime, mtime, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_lutime(nullptr, &req, path.c_str(), atime, mtime, nullptr);
@@ -1057,15 +1961,25 @@ static napi_value fsLutimes(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.mkdtemp(prefix, encoding)
+// binding.mkdtemp(prefix, encoding, req?)
 static napi_value fsMkdtemp(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
+  size_t argc = 3;
+  napi_value argv[3];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string prefix = getStringArg(env, argv[0]);
-  // libuv requires "XXXXXX" suffix for the template.
   std::string tmpl = prefix + "XXXXXX";
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 2, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::StringPath;
+    wrap->path = prefix;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_mkdtemp(s_fsLoop, &wrap->req, tmpl.c_str(), fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_mkdtemp(nullptr, &req, tmpl.c_str(), nullptr);
@@ -1080,15 +1994,27 @@ static napi_value fsMkdtemp(napi_env env, napi_callback_info info) {
   return jsResult;
 }
 
-// binding.copyFile(src, dest, mode)
+// binding.copyFile(src, dest, mode, req?)
 static napi_value fsCopyFile(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
+  size_t argc = 4;
+  napi_value argv[4];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   std::string src = getStringArg(env, argv[0]);
   std::string dest = getStringArg(env, argv[1]);
   int flags = argc > 2 ? getInt32(env, argv[2], 0) : 0;
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 3, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    wrap->path = src;
+    wrap->dest = dest;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_copyfile(s_fsLoop, &wrap->req, src.c_str(), dest.c_str(), flags, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_copyfile(nullptr, &req, src.c_str(), dest.c_str(), flags, nullptr);
@@ -1116,13 +2042,23 @@ static napi_value fsExistsSync(napi_env env, napi_callback_info info) {
   return jsResult;
 }
 
-// binding.fsync(fd)
+// binding.fsync(fd, req?)
 static napi_value fsFsync(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1];
+  size_t argc = 2;
+  napi_value argv[2];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   int fd = getInt32(env, argv[0]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 1, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_fsync(s_fsLoop, &wrap->req, fd, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_fsync(nullptr, &req, fd, nullptr);
@@ -1133,13 +2069,23 @@ static napi_value fsFsync(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
-// binding.fdatasync(fd)
+// binding.fdatasync(fd, req?)
 static napi_value fsFdatasync(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1];
+  size_t argc = 2;
+  napi_value argv[2];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   int fd = getInt32(env, argv[0]);
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 1, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Void;
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_fdatasync(s_fsLoop, &wrap->req, fd, fsAfterAsync);
+    return result;
+  }
 
   uv_fs_t req;
   int result = uv_fs_fdatasync(nullptr, &req, fd, nullptr);
@@ -1151,7 +2097,7 @@ static napi_value fsFdatasync(napi_env env, napi_callback_info info) {
 }
 
 // binding.readFileUtf8(path, flags)
-// Fast path for reading entire file as UTF-8 string.
+// Fast path for reading entire file as UTF-8 string (sync only).
 static napi_value fsReadFileUtf8(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2];
@@ -1223,7 +2169,7 @@ static napi_value fsReadFileUtf8(napi_env env, napi_callback_info info) {
 }
 
 // binding.writeFileUtf8(path, data, flags, mode)
-// Fast path for writing string data as UTF-8.
+// Fast path for writing string data as UTF-8 (sync only).
 static napi_value fsWriteFileUtf8(napi_env env, napi_callback_info info) {
   size_t argc = 4;
   napi_value argv[4];
@@ -1252,9 +2198,9 @@ static napi_value fsWriteFileUtf8(napi_env env, napi_callback_info info) {
     int written = uv_fs_write(nullptr, &writeReq, fd, &buf, 1, -1, nullptr);
     uv_fs_req_cleanup(&writeReq);
     if (written < 0) {
-      uv_fs_t closeReq;
-      uv_fs_close(nullptr, &closeReq, fd, nullptr);
-      uv_fs_req_cleanup(&closeReq);
+      uv_fs_t closeReq2;
+      uv_fs_close(nullptr, &closeReq2, fd, nullptr);
+      uv_fs_req_cleanup(&closeReq2);
       return throwUVException(env, written, "write", path.c_str());
     }
     offset += static_cast<size_t>(written);
@@ -1291,10 +2237,11 @@ static napi_value fsInternalModuleStat(napi_env env, napi_callback_info info) {
   return jsResult;
 }
 
-// binding.readBuffers(fd, buffers, position) - read into array of buffers
+// binding.readBuffers(fd, buffers, position, req?)
 static napi_value fsReadBuffers(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
+  size_t argc = 4;
+  napi_value argv[4];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   int fd = getInt32(env, argv[0]);
@@ -1319,6 +2266,17 @@ static napi_value fsReadBuffers(napi_env env, napi_callback_info info) {
     position = getInt64(env, argv[2], -1);
   }
 
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 3, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Integer;
+    // Keep buffer array alive.
+    napi_create_reference(env, argv[1], 1, &wrap->bufferRef);
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_read(s_fsLoop, &wrap->req, fd, bufs.data(), numBuffers, position, fsAfterAsync);
+    return result;
+  }
+
   uv_fs_t req;
   int result = uv_fs_read(nullptr, &req, fd, bufs.data(), numBuffers, position, nullptr);
   uv_fs_req_cleanup(&req);
@@ -1331,10 +2289,11 @@ static napi_value fsReadBuffers(napi_env env, napi_callback_info info) {
   return jsResult;
 }
 
-// binding.writeBuffers(fd, buffers, position, undefined, ctx)
+// binding.writeBuffers(fd, buffers, position, req?, ctx?)
 static napi_value fsWriteBuffers(napi_env env, napi_callback_info info) {
   size_t argc = 5;
   napi_value argv[5];
+  FsBindingData *fsData = getFsData(env, info);
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   int fd = getInt32(env, argv[0]);
@@ -1356,6 +2315,16 @@ static napi_value fsWriteBuffers(napi_env env, napi_callback_info info) {
   int64_t position = -1;
   if (argc > 2 && !isNullOrUndefined(env, argv[2])) {
     position = getInt64(env, argv[2], -1);
+  }
+
+  napi_value asyncReq = getAsyncReq(env, argc, argv, 3, fsData);
+  if (asyncReq) {
+    auto *wrap = new FSReqWrap();
+    wrap->resultType = FSReqResultType::Integer;
+    napi_create_reference(env, argv[1], 1, &wrap->bufferRef);
+    napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
+    uv_fs_write(s_fsLoop, &wrap->req, fd, bufs.data(), numBuffers, position, fsAfterAsync);
+    return result;
   }
 
   uv_fs_t req;
@@ -1403,12 +2372,10 @@ static napi_value fsRmSync(napi_env env, napi_callback_info info) {
   }
 
   // Recursive remove: use a simple DFS.
-  // First stat to determine type.
   uv_fs_t statReq;
   int statResult = uv_fs_lstat(nullptr, &statReq, path.c_str(), nullptr);
   if (statResult < 0) {
     uv_fs_req_cleanup(&statReq);
-    // If it doesn't exist, that's OK for rm with force (caller handles).
     return throwUVException(env, statResult, "stat", path.c_str());
   }
   bool isDir = S_ISDIR(statReq.statbuf.st_mode);
@@ -1427,8 +2394,6 @@ static napi_value fsRmSync(napi_env env, napi_callback_info info) {
   // Directory: scan and remove children recursively.
   std::vector<std::string> stack;
   stack.push_back(path);
-
-  // Collect all entries depth-first, then remove in reverse order.
   std::vector<std::pair<std::string, bool>> entries; // path, isDir
 
   while (!stack.empty()) {
@@ -1449,7 +2414,6 @@ static napi_value fsRmSync(napi_env env, napi_callback_info info) {
         entries.push_back({childPath, true});
         stack.push_back(childPath);
       } else if (ent.type == UV_DIRENT_UNKNOWN) {
-        // Need to stat to determine type.
         uv_fs_t childStat;
         int childStatResult = uv_fs_lstat(nullptr, &childStat, childPath.c_str(), nullptr);
         if (childStatResult == 0 && S_ISDIR(childStat.statbuf.st_mode)) {
@@ -1494,7 +2458,7 @@ static napi_value fsRmSync(napi_env env, napi_callback_info info) {
 }
 
 // ---------------------------------------------------------------------------
-// FSReqCallback constructor (stub for now — needed for async ops in Step 28)
+// FSReqCallback constructor
 // ---------------------------------------------------------------------------
 
 static napi_value fsReqCallbackCtor(napi_env env, napi_callback_info info) {
@@ -1549,6 +2513,14 @@ napi_value initFsBinding(napi_env env, napi_value exports) {
     napi_set_named_property(env, exports, "bigintStatFsValues", typedArr);
   }
 
+  // Create kUsePromises sentinel.
+  {
+    napi_value sentinel;
+    napi_create_object(env, &sentinel);
+    napi_create_reference(env, sentinel, 1, &fsData->kUsePromisesRef);
+    napi_set_named_property(env, exports, "kUsePromises", sentinel);
+  }
+
   // FSReqCallback constructor.
   {
     napi_value ctor;
@@ -1556,31 +2528,25 @@ napi_value initFsBinding(napi_env env, napi_value exports) {
     napi_set_named_property(env, exports, "FSReqCallback", ctor);
   }
 
-  // Register all sync fs functions. Stat functions need fsData as callback data.
+  // Register all fs functions. All get fsData as callback data.
 #define SET_FN(name, fn) \
   do { \
     napi_value fnVal; \
-    napi_create_function(env, name, NAPI_AUTO_LENGTH, fn, nullptr, &fnVal); \
-    napi_set_named_property(env, exports, name, fnVal); \
-  } while (0)
-
-#define SET_FN_DATA(name, fn, data) \
-  do { \
-    napi_value fnVal; \
-    napi_create_function(env, name, NAPI_AUTO_LENGTH, fn, data, &fnVal); \
+    napi_create_function(env, name, NAPI_AUTO_LENGTH, fn, fsData, &fnVal); \
     napi_set_named_property(env, exports, name, fnVal); \
   } while (0)
 
   SET_FN("access", fsAccess);
   SET_FN("open", fsOpen);
+  SET_FN("openFileHandle", fsOpenFileHandle);
   SET_FN("close", fsClose);
   SET_FN("read", fsRead);
   SET_FN("writeBuffer", fsWriteBuffer);
   SET_FN("writeString", fsWriteString);
-  SET_FN_DATA("stat", fsStat, fsData);
-  SET_FN_DATA("lstat", fsLstat, fsData);
-  SET_FN_DATA("fstat", fsFstat, fsData);
-  SET_FN_DATA("statfs", fsStatFs, fsData);
+  SET_FN("stat", fsStat);
+  SET_FN("lstat", fsLstat);
+  SET_FN("fstat", fsFstat);
+  SET_FN("statfs", fsStatFs);
   SET_FN("rename", fsRename);
   SET_FN("unlink", fsUnlink);
   SET_FN("mkdir", fsMkdir);
@@ -1612,7 +2578,6 @@ napi_value initFsBinding(napi_env env, napi_value exports) {
   SET_FN("rmSync", fsRmSync);
 
 #undef SET_FN
-#undef SET_FN_DATA
 
   // Add finalizer to clean up fsData.
   napi_add_finalizer(env, exports, fsData, [](napi_env e, void *data, void *) {
@@ -1621,6 +2586,8 @@ napi_value initFsBinding(napi_env env, napi_value exports) {
     napi_delete_reference(e, d->bigintStatValuesRef);
     napi_delete_reference(e, d->statFsValuesRef);
     napi_delete_reference(e, d->bigintStatFsValuesRef);
+    if (d->kUsePromisesRef)
+      napi_delete_reference(e, d->kUsePromisesRef);
     delete d;
   }, nullptr, nullptr);
 

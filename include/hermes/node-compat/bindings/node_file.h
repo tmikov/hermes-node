@@ -10,8 +10,15 @@
 
 #include <node_api_types.h>
 
+struct uv_loop_s;
+typedef struct uv_loop_s uv_loop_t;
+
 namespace hermes {
 namespace node_compat {
+
+/// Set the event loop for async fs operations.
+/// Must be called before initFsBinding().
+void setFsEventLoop(uv_loop_t *loop);
 
 /// Init function for the 'fs' binding.
 /// Follows the napi_addon_register_func signature.

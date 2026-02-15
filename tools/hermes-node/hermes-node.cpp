@@ -449,6 +449,7 @@ static int runBootstrap(
       },
       runtime.get());
   setTimersEventLoop(eventLoop.getLoop());
+  setFsEventLoop(eventLoop.getLoop());
 
   BindingRegistry registry;
   registry.registerBinding("async_context_frame", initAsyncContextFrameBinding);
@@ -783,6 +784,10 @@ static int runBootstrap(
   // Run the loop once more to process close callbacks.
   uv_run(eventLoop.getLoop(), UV_RUN_NOWAIT);
 
+  // Close the event loop. This runs uv_run(UV_RUN_DEFAULT) which may
+  // complete pending async fs operations, so NAPI env must still be valid.
+  eventLoop.close();
+
   if (tickCallbackRef) {
     napi_delete_reference(env, tickCallbackRef);
   }
@@ -794,7 +799,6 @@ static int runBootstrap(
   napi_close_handle_scope(env, scope);
   hermes_napi_destroy_env(env);
   runtime.reset();
-  eventLoop.close();
 
   return exitCode;
 }
