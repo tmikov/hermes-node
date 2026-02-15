@@ -61,8 +61,20 @@
 - Create Runtime via `vm::Runtime::create(config)`, env via `hermes_napi_create_env(*rt_)`
 - Open handle scope in SetUp, close in TearDown
 
+## Module Loader
+- `hermesNodeModuleLoader` lib in `lib/module-loader/`, depends only on NAPI headers
+- `ModuleLoader` class: `setLibJsPath/setLibJsNodePath` -> `init(env, primordials, internalBindingFn)` -> `require(env, name, &result)` -> `detach(env)`
+- JS side (`libjs/loader.js`): IIFE returning setup function; setup returns require function
+- Shim override: checks `libjs/shims/<name>.js` before `libjs-node/<name>.js`
+- Sets `globalThis.primordials` and `globalThis.internalBinding` during init
+- `//# sourceURL=<path>` for Hermes stack traces in wrapped modules
+- `(0, eval)(wrapped)` for global-scope indirect eval
+- Tests use `TEST_DATA_PATH` and `LIBJS_PATH` CMake compile definitions for filesystem paths
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`
 - `Runtime::create(RuntimeConfig)` returns `shared_ptr<Runtime>`
 - Enable microtasks: `RuntimeConfig::Builder().withMicrotaskQueue(true)`
+- `napi_run_script` does global eval with `compileFlags.strict = false`; no way to set source URL via API, use `//# sourceURL=` comment instead
+- Hermes supports `//# sourceURL=` for custom filenames in stack traces

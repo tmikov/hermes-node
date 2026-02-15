@@ -47,7 +47,7 @@ be omitted):
 | Step 3 | Implement libuv-backed event loop adapter | 2 | done | |
 | Step 4 | Implement primordials thin shim | — | done | |
 | Step 5 | Implement internalBinding registry | 1 | done | |
-| Step 6 | Implement internal module loader | 5 | | |
+| Step 6 | Implement internal module loader | 5 | done | |
 | Step 7 | Implement process object (basic properties) | 5 | | |
 | Step 8 | Implement bootstrap sequence | 3, 4, 6, 7 | | |
 | Step 9 | Port constants binding | 5 | | |
@@ -133,4 +133,18 @@ be omitted):
 - **What was done**: Implemented `BindingRegistry` with `registerBinding`, `getBinding` (lazy init + cache), `createInternalBindingFunction` (JS-callable `internalBinding(name)` function). CMake library `hermesNodeBindingRegistry` is STATIC, depends only on NAPI headers. Wrote 8 GTest tests: basic get, caching, unknown name throws, multiple bindings, throwing init function, JS function creation and invocation, JS error on unknown, detach/reattach.
 - **Issues**: Tests that include `hermes_napi.h` (heavyweight) need: (1) `${CMAKE_BINARY_DIR}/hermes/lib/config` for `libhermesvm-config.h`, (2) `-DHERMESVM_GC_${HERMESVM_GCKIND}` compile definition since Hermes's `add_definitions()` is scoped to its subdirectory.
 - **Notes for next step**: Link against `hermesNodeBindingRegistry` for the binding registry. Tests using `hermes_napi_create_env` need `hermesvm_a` (bundles all Hermes), `hermes/API/napi/` include, `libhermesvm-config.h` include, and `HERMESVM_GC_HADES` define. All NAPI calls require an open handle scope (`napi_open_handle_scope`).
+
+### Step 6: Implement internal module loader
+- **Files**: created `include/hermes/node-compat/module-loader/module_loader.h`, `lib/module-loader/module_loader.cpp`, `lib/module-loader/CMakeLists.txt`, `libjs/loader.js`, `unittests/ModuleLoaderTest.cpp`, `unittests/module-loader-testdata/` (8 test JS files). Modified `CMakeLists.txt` (top-level), `unittests/CMakeLists.txt`.
+- **Decisions**:
+  - Split into C++ (`ModuleLoader` class) and JS (`loader.js`) sides. C++ reads loader.js from disk, evaluates it to get a setup function, then calls setup with native helpers.
+  - C++ provides `readFileSync(path)` native function to JS for reading module source from disk.
+  - JS side handles: module resolution, caching, circular dependencies, wrapping.
+  - Module wrapper: `(function(exports, require, module, __filename, __dirname) { ... })`. primordials and internalBinding are set as globals rather than wrapper parameters, matching how Node modules access them as free variables.
+  - Shim override mechanism: loader checks `libjs/shims/<name>.js` before `libjs-node/<name>.js`, enabling overrides for modules like `internal/options`.
+  - `//# sourceURL=<filepath>` appended to wrapped source for Hermes stack traces.
+  - `(0, eval)(wrapped)` used for indirect eval (global scope) in the loader.
+  - Public header depends only on `<node_api_types.h>` (lightweight).
+- **What was done**: Implemented `ModuleLoader` class with `setLibJsPath`, `setLibJsNodePath`, `init`, `require`, `detach`. JS loader.js implements CJS-style module system with cache, circular dependency support, and shim overrides. CMake library `hermesNodeModuleLoader` is STATIC. Wrote 8 GTest tests: basic require, caching, transitive require, circular require, nested paths (internal/foo), primordials accessible, internalBinding accessible, nonexistent module throws. All tests pass under ASAN.
+- **Notes for next step**: Link against `hermesNodeModuleLoader` for the module loader. The loader sets `globalThis.primordials` and `globalThis.internalBinding` during init so that loaded modules can access them. Test data uses `TEST_DATA_PATH` CMake define for module resolution base path.
 

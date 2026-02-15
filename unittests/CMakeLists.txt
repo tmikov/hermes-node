@@ -44,3 +44,19 @@ target_include_directories(BindingRegistryTest PRIVATE
 target_compile_definitions(BindingRegistryTest PRIVATE
   HERMESVM_GC_${HERMESVM_GCKIND}
 )
+
+add_node_compat_unittest(ModuleLoaderTest ModuleLoaderTest.cpp)
+target_link_libraries(ModuleLoaderTest
+  hermesNodeModuleLoader
+  hermesNodeBindingRegistry
+  hermesvm_a
+)
+target_include_directories(ModuleLoaderTest PRIVATE
+  ${CMAKE_SOURCE_DIR}/hermes/API/napi
+  ${CMAKE_BINARY_DIR}/hermes/lib/config
+)
+target_compile_definitions(ModuleLoaderTest PRIVATE
+  HERMESVM_GC_${HERMESVM_GCKIND}
+  LIBJS_PATH="${CMAKE_SOURCE_DIR}/libjs/"
+  TEST_DATA_PATH="${CMAKE_SOURCE_DIR}/unittests/module-loader-testdata/"
+)
