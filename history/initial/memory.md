@@ -162,6 +162,16 @@
 - `copyArrayBuffer`: raw memcpy between ArrayBuffers
 - Users: `buffer.js`, `internal/buffer.js`, `internal/blob.js`, `internal/webstreams/util.js`, `internal/util/comparisons.js`
 
+## Encoding Binding
+- `initEncodingBinding` — 6 functions + 1 property (encodeIntoResults Uint32Array)
+- `encodeUtf8String(str)`: returns Uint8Array of UTF-8 bytes
+- `encodeInto(str, dest)`: writes UTF-8 into pre-allocated Uint8Array, updates encodeIntoResults[0]=charsRead, [1]=bytesWritten
+- `decodeUTF8(buf, ignoreBOM, fatal)`: UTF-8 bytes to string; BOM strip, fatal validation, Hermes sanitization fallback
+- `decodeLatin1(buf, ignoreBOM, fatal)`: Latin-1 bytes to string via UTF-8 conversion
+- `toASCII`/`toUnicode`: stubbed (pass-through, no ADA/IDNA library)
+- Users: `internal/encoding.js` (TextEncoder/TextDecoder), `url.js` (toASCII for IDNA domains)
+- **Gotcha**: `napi_get_value_string_utf8` writes null terminator — cannot write directly into an ArrayBuffer of exact string length; use temp buffer + memcpy
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`

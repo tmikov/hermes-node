@@ -60,7 +60,7 @@ be omitted):
 | Step 16 | Implement internal/options shim | 6 | done | |
 | Step 17 | Verify bootstrap modules load | 8, 9–16 | done | |
 | Step 18 | Port buffer binding | 5 | done | |
-| Step 19 | Port encoding_binding | 5 | | |
+| Step 19 | Port encoding_binding | 5 | done | |
 | Step 20 | Port async_wrap binding (stub) | 5 | | |
 | Step 21 | Implement process.nextTick | 3, 7 | | |
 | Step 22 | Implement timers binding | 3, 5 | | |
@@ -284,3 +284,16 @@ be omitted):
   - UTF-8 write truncation: backs off to valid UTF-8 boundary when maxLength cuts a multi-byte sequence.
 - **What was done**: Implemented `initBufferBinding` with 34 functions and 2 constants covering all exports from Node's `node_buffer.cc` that `lib/buffer.js` and `lib/internal/buffer.js` use. Functions: byteLengthUtf8, compare, compareOffset, copy, fill, indexOfBuffer/Number/String, swap16/32/64, isUtf8, isAscii, atob, btoa, setBufferPrototype, copyArrayBuffer, createUnsafeArrayBuffer, 7 slice methods (ascii/base64/base64url/latin1/hex/ucs2/utf8), 7 write methods (3 static + 4 method-style). Constants: kMaxLength, kStringMaxLength. Registered in bootstrap. JS test covers all functions with positive and negative cases.
 - **Notes for next step**: The buffer JS module (`libjs-node/buffer.js`) also requires `internal/util` (for encodingsMap, normalizeEncoding), `internal/util/types`, and `internal/errors`. The `internal/buffer.js` module adds 60+ read/write prototype methods in pure JS. `internal/blob.js` and `internal/webstreams/util.js` also use kMaxLength and copyArrayBuffer from this binding.
+
+### Step 19: Port encoding_binding
+- **Files**: created `include/hermes/node-compat/bindings/node_encoding.h`, `lib/bindings/node_encoding.cpp`, `test/test-encoding.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `CMakeLists.txt` (top-level).
+- **Decisions**:
+  - No simdutf dependency: UTF-8 validation and Latin-1 to UTF-8 conversion implemented in C++ without external libraries.
+  - No ADA library dependency: `toASCII` and `toUnicode` (IDNA domain name conversion) are stubbed as pass-through (return input unchanged). Correct for ASCII domains; internationalized domain names won't be converted to punycode.
+  - `encodeIntoResults` is a Uint32Array(2) stored on the exports object and updated via `napi_set_element` (not a shared backing store like Node's `AliasedUint32Array`).
+  - `encodeInto` captures `encodeIntoResults` via `napi_ref` callback data to update it after each call.
+  - `decodeUTF8` handles BOM stripping (3-byte UTF-8 BOM EF BB BF) when `ignoreBOM=false`, fatal mode validation, and Hermes invalid UTF-8 sanitization fallback.
+  - `decodeLatin1` converts Latin-1 bytes to UTF-8 (each byte 0x80-0xFF becomes 2-byte UTF-8 sequence).
+- **What was done**: Implemented `initEncodingBinding` with 6 functions and 1 property: `encodeUtf8String` (string to Uint8Array), `encodeInto` (encode into pre-allocated buffer), `decodeUTF8` (UTF-8 bytes to string), `decodeLatin1` (Latin-1 bytes to string), `toASCII` (stub), `toUnicode` (stub), `encodeIntoResults` (Uint32Array). Registered in bootstrap. JS test covers all functions with 50+ assertions including multi-byte encoding, BOM handling, truncation, fatal mode, invalid UTF-8 handling.
+- **Issues**: `napi_get_value_string_utf8` writes a null terminator, so writing directly into an ArrayBuffer of exact string length causes heap-buffer-overflow. Fixed by using a temporary buffer and memcpy.
+- **Notes for next step**: The `internal/encoding.js` module also depends on `buffer`, `internal/errors`, `internal/validators`. When ICU is unavailable, TextDecoder only supports UTF-8 and Latin-1/windows-1252 fast paths (which we provide); other encodings fall through to a JS-based ICU converter that will fail without ICU.

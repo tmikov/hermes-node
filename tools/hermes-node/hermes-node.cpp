@@ -16,6 +16,7 @@
 #include <hermes/node-compat/bindings/node_buffer.h>
 #include <hermes/node-compat/bindings/node_config.h>
 #include <hermes/node-compat/bindings/node_constants.h>
+#include <hermes/node-compat/bindings/node_encoding.h>
 #include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_string_decoder.h>
 #include <hermes/node-compat/bindings/node_types.h>
@@ -214,6 +215,7 @@ static int runBootstrap(
   registry.registerBinding("buffer", initBufferBinding);
   registry.registerBinding("config", initConfigBinding);
   registry.registerBinding("constants", initConstantsBinding);
+  registry.registerBinding("encoding_binding", initEncodingBinding);
   registry.registerBinding("errors", initErrorsBinding);
   registry.registerBinding("string_decoder", initStringDecoderBinding);
   registry.registerBinding("symbols", initSymbolsBinding);
