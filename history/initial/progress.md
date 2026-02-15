@@ -44,7 +44,7 @@ be omitted):
 |------|-------------|------------|--------|-----------------------|
 | Step 1 | Create repo and CMake scaffolding | — | done | |
 | Step 2 | Vendor libuv | 1 | done | |
-| Step 3 | Implement libuv-backed event loop adapter | 2 | | |
+| Step 3 | Implement libuv-backed event loop adapter | 2 | done | |
 | Step 4 | Implement primordials thin shim | — | | |
 | Step 5 | Implement internalBinding registry | 1 | | |
 | Step 6 | Implement internal module loader | 5 | | |
@@ -96,4 +96,15 @@ be omitted):
   - Added LLVH include directories to `add_node_compat_unittest()` helper since gtest headers reference `llvh/Support/raw_ostream.h`.
 - **What was done**: Vendored libuv source tree from Node.js checkout. Created wrapper CMake that builds only the static `uv_a` target. Added `external/libuv` to top-level build. Wrote 3 GTest tests (version check, version string, loop init/close). Fixed two build issues: ASAN flag propagation and LLVH include paths for gtest. All tests pass under ASAN.
 - **Notes for next step**: Link against `uv_a` for libuv. The `uv_a` target exports its include directories. libuv warning in `linux.c:1853` (const qualifier) is harmless upstream issue.
+
+### Step 3: Implement libuv-backed event loop adapter
+- **Files**: created `include/hermes/node-compat/event-loop/uv_event_loop.h`, `include/hermes/node-compat/event-loop/hermes_napi_event_loop.h`, `lib/event-loop/uv_event_loop.cpp`, `lib/event-loop/CMakeLists.txt`, `unittests/UvEventLoopTest.cpp`. Modified `CMakeLists.txt` (top-level), `unittests/CMakeLists.txt`.
+- **Decisions**:
+  - Used PIMPL pattern to avoid exposing Hermes VM internals in our public header. The header only needs `<uv.h>` and the standalone `hermes_napi_event_loop` struct definition.
+  - Created a standalone `hermes_napi_event_loop.h` header that duplicates the struct definition from `hermes/API/napi/hermes_napi.h` to avoid dragging in all Hermes VM headers (which need LLVH, generated configs, etc.).
+  - `cancel_work` returns false (cancellation not supported). The NAPI spec allows this, and `napi_cancel_async_work` returns `napi_generic_failure`.
+  - Task queue uses a mutex-protected singly-linked list (LIFO push, reversed on drain for FIFO).
+  - `uv_async_t` handle is unref'd when idle (so the loop can exit), ref'd when tasks are pending (so the loop stays alive to process them).
+- **What was done**: Implemented `UvEventLoop` class backing `hermes_napi_event_loop` with libuv. `post_work` uses `uv_queue_work` (threadpool). `post_task` uses `uv_async_t` + task queue. Wrote 10 GTest tests covering lifecycle, post_work (single and multiple), cancel_work, post_task (same thread, cross-thread, multiple), and combined work+task. All pass under ASAN.
+- **Notes for next step**: Link against `hermesNodeEventLoop` for the event loop. The `hermes_napi_event_loop.h` standalone header must stay in sync with `hermes_napi.h` if the struct changes. When building against Hermes NAPI internals, need LLVH includes + `libhermesvm-config.h` from `cmake-build-asan/hermes/lib/config/`.
 

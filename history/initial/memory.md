@@ -14,9 +14,16 @@
 ## Build Gotchas
 - ASAN flags: Hermes sets `-fsanitize=address` via `CMAKE_CXX_FLAGS` inside its subdirectory scope only. Our top-level CMakeLists.txt must propagate them via `add_compile_options`/`add_link_options` when `HERMES_ENABLE_ADDRESS_SANITIZER` is ON.
 - LLVH includes: gtest headers need `llvh/Support/raw_ostream.h`. The `add_node_compat_unittest()` helper adds LLVH include dirs (`hermes/external/llvh/include`, `gen/include`, build-dir `include`).
+- **hermes_napi.h is heavyweight**: It includes `hermes/VM/Runtime.h` etc., pulling in all VM internals (needs LLVH + `libhermesvm-config.h` from `cmake-build-*/hermes/lib/config/`). Avoid including it in public headers. Use our standalone `hermes_napi_event_loop.h` for the event loop struct.
 
 ## Vendored Deps
 - libuv 1.51.0 in `external/libuv/libuv/`, static target `uv_a`
+
+## Event Loop Adapter
+- `hermesNodeEventLoop` lib in `lib/event-loop/`, links `uv_a` (PUBLIC)
+- `UvEventLoop` class (PIMPL): init/run/close lifecycle, getEventLoop() for NAPI, getLoop() for libuv
+- `uv_async_t` handle: unref'd when idle, ref'd when tasks pending (so loop exits cleanly)
+- Task queue: mutex + singly-linked list, LIFO push, reversed to FIFO on drain
 
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task

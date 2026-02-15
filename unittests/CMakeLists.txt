@@ -20,3 +20,6 @@ endfunction()
 
 add_node_compat_unittest(UvIntegrationTest UvIntegrationTest.cpp)
 target_link_libraries(UvIntegrationTest uv_a)
+
+add_node_compat_unittest(UvEventLoopTest UvEventLoopTest.cpp)
+target_link_libraries(UvEventLoopTest hermesNodeEventLoop)
