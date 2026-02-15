@@ -223,6 +223,13 @@
 - Node's `console` requires: `.write()`, `.listenerCount()`, `.once()`, `.removeListener()`
 - Upgrade to proper Writable streams when stream module is available (Step 25-26)
 
+## Stream Wrap Binding (stub)
+- `initStreamWrapBinding` — WriteWrap (ctor), ShutdownWrap (ctor), streamBaseState Int32Array(4), 4 index constants
+- Constants: kReadBytesOrError=0, kArrayBufferOffset=1, kBytesWritten=2, kLastWriteWasAsync=3
+- Core stream module (`stream.js`, `internal/streams/*.js`) is pure JS, does NOT use stream_wrap
+- `stream_wrap` consumers: `net.js`, `internal/stream_base_commons.js`, `internal/child_process.js`, `internal/http2/core.js`, `internal/webstreams/adapters.js`
+- `internal/stream_base_commons.js` also needs `internalBinding('uv')` (UV_EOF) — not yet implemented
+
 ## Core Module Verification (Step 24)
 - `events`, `path`, `buffer`, `util` all load and work with no additional shims or fixes
 - Full dependency chain resolves cleanly: internal/errors, internal/util, internal/validators, internal/util/types, internal/util/inspect, internal/event_target, async_hooks, etc.

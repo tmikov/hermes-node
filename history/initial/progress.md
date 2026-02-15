@@ -66,7 +66,7 @@ be omitted):
 | Step 22 | Implement timers binding | 3, 5 | done | |
 | Step 23 | Implement process.stdout/stderr (minimal) | 7, 21 | done | |
 | Step 24 | Verify core modules load and work | 17–23 | done | |
-| Step 25 | Port stream_wrap binding (minimal) | 5, 3 | | |
+| Step 25 | Port stream_wrap binding (minimal) | 5, 3 | done | |
 | Step 26 | Verify streams work | 24, 25 | | |
 | Step 27 | Port fs binding — sync operations | 2, 5, 9 | | |
 | Step 28 | Port fs binding — async operations | 3, 27 | | |
@@ -349,3 +349,12 @@ be omitted):
 - **Files**: created `test/test-core-modules.js`. Modified `CMakeLists.txt` (added test to `check-hermes-node-js`).
 - **What was done**: All four core modules (`events`, `path`, `buffer`, `util`) load and work correctly on the first attempt with no fixes needed. Test covers: EventEmitter (on/emit/once/removeListener/listenerCount), path operations (join/dirname/extname/basename/isAbsolute/normalize/resolve/parse/sep/delimiter), Buffer operations (from string/array, alloc, toString, hex/base64 encoding, concat, compare, slice, isBuffer), util functions (format with %s/%d/%j, inspect, inherits, types.isDate/isRegExp/isMap, promisify), and integration test (process.nextTick + setTimeout ordering). All 17 existing tests plus the new test pass under ASAN.
 - **Notes for next step**: The entire dependency chain (internal/errors, internal/util, internal/validators, internal/util/types, internal/util/inspect, internal/event_target, async_hooks, etc.) loads without issues. No new shims or bindings were needed — all prerequisites from Steps 9-23 were sufficient.
+
+### Step 25: Port stream_wrap binding (minimal)
+- **Files**: created `include/hermes/node-compat/bindings/node_stream_wrap.h`, `lib/bindings/node_stream_wrap.cpp`, `test/test-stream-wrap.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `CMakeLists.txt` (top-level).
+- **Decisions**:
+  - Minimal stub binding providing `WriteWrap` and `ShutdownWrap` constructors, 4 index constants, and `streamBaseState` Int32Array(4). Sufficient for the stream module to load; full implementation deferred to networking phase.
+  - `WriteWrap` and `ShutdownWrap` are plain constructor functions (JS side sets properties like `.handle`, `.oncomplete`, `.callback`). No native wrapping needed for the stub.
+  - `streamBaseState` is `Int32Array(4)` matching Node's `AliasedInt32Array` with fields: kReadBytesOrError=0, kArrayBufferOffset=1, kBytesWritten=2, kLastWriteWasAsync=3.
+- **What was done**: Implemented `initStreamWrapBinding` with stub constructors, constants, and shared state array. Registered in bootstrap. JS test verifies all exports, constructor functionality, property setting, instance independence, and array writability. All 19 tests pass under ASAN.
+- **Notes for next step**: The core stream module (`stream.js`, `internal/streams/*.js`) does NOT reference `stream_wrap` at all -- it is pure JavaScript. The `stream_wrap` binding is consumed by `net.js`, `internal/stream_base_commons.js`, `internal/child_process.js`, and `internal/http2/core.js`. The `internal/stream_base_commons.js` also needs `internalBinding('uv')` (UV_EOF) which is not yet implemented.

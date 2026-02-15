@@ -110,6 +110,10 @@ add_custom_target(check-hermes-node-js
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
     $<TARGET_FILE:hermes-node>
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-stream-wrap.js
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
+    $<TARGET_FILE:hermes-node>
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/test-core-modules.js
   DEPENDS hermes hermes-node
   COMMENT "Running JS tests"

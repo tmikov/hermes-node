@@ -21,6 +21,7 @@
 #include <hermes/node-compat/bindings/node_encoding.h>
 #include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_stdio.h>
+#include <hermes/node-compat/bindings/node_stream_wrap.h>
 #include <hermes/node-compat/bindings/node_string_decoder.h>
 #include <hermes/node-compat/bindings/node_task_queue.h>
 #include <hermes/node-compat/bindings/node_timers.h>
@@ -457,6 +458,7 @@ static int runBootstrap(
   registry.registerBinding("encoding_binding", initEncodingBinding);
   registry.registerBinding("errors", initErrorsBinding);
   registry.registerBinding("stdio", initStdioBinding);
+  registry.registerBinding("stream_wrap", initStreamWrapBinding);
   registry.registerBinding("string_decoder", initStringDecoderBinding);
   registry.registerBinding("symbols", initSymbolsBinding);
   registry.registerBinding("task_queue", initTaskQueueBinding);
