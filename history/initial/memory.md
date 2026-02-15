@@ -25,6 +25,29 @@
 - `uv_async_t` handle: unref'd when idle, ref'd when tasks pending (so loop exits cleanly)
 - Task queue: mutex + singly-linked list, LIFO push, reversed to FIFO on drain
 
+## Hermes JS Engine Limitations
+- No `FinalizationRegistry` (typeof is undefined)
+- No `Atomics` (typeof is undefined)
+- No async generators (SyntaxError)
+- `WeakRef`: supported
+- Private class fields (`#x`): supported
+- `BigInt`, `BigInt64Array`: supported
+- RegExp: lookbehind, named groups, hasIndices/d flag all supported
+- `AggregateError`: supported
+- Hermes warns about undeclared globals in strict mode — use `var X = globalThis.X` in IIFEs
+
+## JS Test Infrastructure
+- `check-hermes-node-js` CMake target runs JS tests via `test/run-primordials-test.sh`
+- Tests use stock `hermes` CLI binary (CMake target `hermes`)
+- Hermes doesn't support multiple file args; concatenate files before running
+- Hermes doesn't have `load()` function
+
+## Primordials
+- `libjs/primordials.js`: thin shim, sets `globalThis.primordials`
+- Reuses Node's algorithmic approach (enumerate+copy prototypes)
+- Safe* variants are just the originals (no tamper-resistance)
+- 156 test assertions in `test/primordials.js`
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`

@@ -37,8 +37,17 @@ add_subdirectory(tools/hermes-node)
 # Unit tests
 add_subdirectory(unittests)
 
-# check-hermes-node target: run all tests (unit tests + lit tests)
+# JS tests (run with stock hermes CLI)
+add_custom_target(check-hermes-node-js
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-primordials-test.sh
+    $<TARGET_FILE:hermes>
+    ${CMAKE_CURRENT_SOURCE_DIR}
+  DEPENDS hermes
+  COMMENT "Running JS tests"
+)
+
+# check-hermes-node target: run all tests (unit tests + JS tests)
 add_custom_target(check-hermes-node
-  DEPENDS NodeCompatUnitTests
+  DEPENDS NodeCompatUnitTests check-hermes-node-js
   COMMENT "Running hermes-node-compat tests"
 )

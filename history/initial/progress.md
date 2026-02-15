@@ -45,7 +45,7 @@ be omitted):
 | Step 1 | Create repo and CMake scaffolding | — | done | |
 | Step 2 | Vendor libuv | 1 | done | |
 | Step 3 | Implement libuv-backed event loop adapter | 2 | done | |
-| Step 4 | Implement primordials thin shim | — | | |
+| Step 4 | Implement primordials thin shim | — | done | |
 | Step 5 | Implement internalBinding registry | 1 | | |
 | Step 6 | Implement internal module loader | 5 | | |
 | Step 7 | Implement process object (basic properties) | 5 | | |
@@ -107,4 +107,17 @@ be omitted):
   - `uv_async_t` handle is unref'd when idle (so the loop can exit), ref'd when tasks are pending (so the loop stays alive to process them).
 - **What was done**: Implemented `UvEventLoop` class backing `hermes_napi_event_loop` with libuv. `post_work` uses `uv_queue_work` (threadpool). `post_task` uses `uv_async_t` + task queue. Wrote 10 GTest tests covering lifecycle, post_work (single and multiple), cancel_work, post_task (same thread, cross-thread, multiple), and combined work+task. All pass under ASAN.
 - **Notes for next step**: Link against `hermesNodeEventLoop` for the event loop. The `hermes_napi_event_loop.h` standalone header must stay in sync with `hermes_napi.h` if the struct changes. When building against Hermes NAPI internals, need LLVH includes + `libhermesvm-config.h` from `cmake-build-asan/hermes/lib/config/`.
+
+### Step 4: Implement primordials thin shim
+- **Files**: created `libjs/primordials.js`, `test/primordials.js`, `test/run-primordials-test.sh`. Modified `CMakeLists.txt` (top-level).
+- **Decisions**:
+  - Reused Node's algorithmic approach (enumerate prototypes with `Reflect.ownKeys` + `getOwnPropertyDescriptor`, create uncurried copies). This ensures we get exactly the right property names without manual enumeration.
+  - Skip `FinalizationRegistry` and `Atomics` (not available in Hermes). They are conditionally included if present.
+  - Skip `AsyncIteratorPrototype` (requires async generators, unsupported by Hermes). Provide minimal stub with `[Symbol.asyncIterator]`.
+  - `Safe*` variants are just the originals (SafeMap === Map, etc.). No freezing.
+  - `hardenRegExp` is identity function.
+  - `makeSafe` copies prototype/statics but doesn't freeze.
+  - Test runs by concatenating primordials.js + test file and running with stock `hermes` CLI.
+- **What was done**: Implemented full primordials shim covering: uncurryThis/applyBind, all built-in constructors and their prototypes (Array, String, Object, Map, Set, RegExp, Promise, Error types, TypedArrays, BigInt, DataView, etc.), namespace objects (Math, JSON, Reflect), abstract intrinsics (TypedArray, ArrayIterator, StringIterator, IteratorPrototype), Safe* variants, SafePromise helpers (All/Race/Any/AllSettled and void variants), SafeArrayIterator/SafeStringIterator, hardenRegExp, SafeStringPrototypeSearch, SafeArrayPrototypePushApply. Test has 156 assertions covering all major categories. Added `check-hermes-node-js` CMake target for JS tests.
+- **Notes for next step**: Hermes limitations: no `FinalizationRegistry`, no `Atomics`, no async generators. The `hermes` CLI binary must be built (target `hermes`) for JS tests. Hermes warns about undeclared globals in strict mode — we added `var Promise = globalThis.Promise` etc. in the IIFE to suppress these in the shim itself.
 
