@@ -179,6 +179,23 @@
 - `Providers`: 48 non-crypto provider types (NONE=0 through ZLIB); crypto providers omitted (no OpenSSL)
 - Used by: `internal/async_hooks.js` (primary consumer), `internal/promise_hooks.js` (setPromiseHooks), `internal/bootstrap/node.js` (setupHooks call)
 
+## Task Queue Binding
+- `initTaskQueueBinding` — tickInfo Uint32Array(2), runMicrotasks, setTickCallback, enqueueMicrotask, setPromiseRejectCallback, promiseRejectEvents
+- `setTaskQueueDrainMicrotasks(fn, data)`: host sets drain callback before binding init (avoids hermes_napi.h dependency in bindings lib)
+- `enqueueMicrotask`: uses `Promise.resolve().then(fn)` (portable NAPI approach)
+- promiseRejectEvents: kPromiseRejectWithNoHandler=0, kPromiseHandlerAddedAfterReject=1, kPromiseResolveAfterResolved=2, kPromiseRejectAfterResolved=3
+- Used by: `internal/process/task_queues.js` (setupTaskQueue, processTicksAndRejections)
+
+## Async Context Frame Binding (stub)
+- `initAsyncContextFrameBinding` — getContinuationPreservedEmbedderData (returns undefined), setContinuationPreservedEmbedderData (no-op)
+- Used by: `internal/async_context_frame.js` (inactive when `--async-context-frame` option is false)
+
+## Event Loop Tick Integration
+- `uv_check_t` handle runs after I/O polling: drains microtasks then calls tick callback (runNextTicks)
+- Handle is unref'd (doesn't keep loop alive), properly closed with `uv_close` + `UV_RUN_NOWAIT` before loop teardown
+- Post-script-execution: explicitly drain microtasks and call tick callback before entering event loop
+- Bootstrap: load `internal/process/task_queues` -> `setupTaskQueue()` -> set `process.nextTick` and `process._tickCallback`
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`

@@ -62,7 +62,7 @@ be omitted):
 | Step 18 | Port buffer binding | 5 | done | |
 | Step 19 | Port encoding_binding | 5 | done | |
 | Step 20 | Port async_wrap binding (stub) | 5 | done | |
-| Step 21 | Implement process.nextTick | 3, 7 | | |
+| Step 21 | Implement process.nextTick | 3, 7 | done | |
 | Step 22 | Implement timers binding | 3, 5 | | |
 | Step 23 | Implement process.stdout/stderr (minimal) | 7, 21 | | |
 | Step 24 | Verify core modules load and work | 17–23 | | |
@@ -306,3 +306,14 @@ be omitted):
   - `constants` object has all 13 fields/uid constants from Node's `AsyncHooks::Fields` and `AsyncHooks::UidFields` enums.
   - `Providers` object has all 48 provider types from `NODE_ASYNC_PROVIDER_TYPES` (non-crypto only, since we have no OpenSSL).
 - **What was done**: Implemented `initAsyncWrapBinding` with stub functions, shared typed arrays, constants, and Providers enum. Registered in bootstrap. JS test verifies all function types, no-op invocations, shared array types/sizes/writability, all constant values, and Providers entries. All tests pass under ASAN.
+
+### Step 21: Implement process.nextTick
+- **Files**: created `include/hermes/node-compat/bindings/node_task_queue.h`, `lib/bindings/node_task_queue.cpp`, `include/hermes/node-compat/bindings/node_async_context_frame.h`, `lib/bindings/node_async_context_frame.cpp`, `test/test-nexttick.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `CMakeLists.txt`.
+- **Decisions**:
+  - `task_queue` binding uses a host-provided callback (`setTaskQueueDrainMicrotasks`) for `runMicrotasks` instead of directly including `hermes_napi.h`. This avoids the bindings library depending on heavyweight Hermes VM headers.
+  - `enqueueMicrotask` uses `Promise.resolve().then(fn)` as a portable NAPI way to enqueue microtasks (no direct access to Hermes job queue from NAPI).
+  - `async_context_frame` binding is a stub with `getContinuationPreservedEmbedderData` (returns undefined) and `setContinuationPreservedEmbedderData` (no-op). Required by `internal/async_context_frame.js`.
+  - Bootstrap loads `internal/process/task_queues` via the module loader, calls `setupTaskQueue()`, and sets `process.nextTick` and `process._tickCallback` from the returned object.
+  - Event loop integration via `uv_check_t` handle (runs after I/O polling): drains microtasks then calls tick callback. Handle is unref'd so it doesn't keep the loop alive. Properly closed with `uv_close` + `UV_RUN_NOWAIT` before loop teardown.
+  - Post-script-execution: explicitly drains microtasks and calls tick callback before entering the event loop, so nextTick callbacks queued during script execution run immediately.
+- **What was done**: Implemented `initTaskQueueBinding` (tickInfo Uint32Array, runMicrotasks, setTickCallback, enqueueMicrotask, setPromiseRejectCallback, promiseRejectEvents constants) and `initAsyncContextFrameBinding` (stub). Wired bootstrap to load task_queues module, set up process.nextTick, and integrate with event loop. JS test verifies binding exports, nextTick ordering, nested nextTick, argument passing, enqueueMicrotask, and strict mode this binding. All tests pass under ASAN.

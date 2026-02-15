@@ -13,6 +13,7 @@
 #include "hermes/VM/Runtime.h"
 
 #include <hermes/node-compat/binding-registry/binding_registry.h>
+#include <hermes/node-compat/bindings/node_async_context_frame.h>
 #include <hermes/node-compat/bindings/node_async_wrap.h>
 #include <hermes/node-compat/bindings/node_buffer.h>
 #include <hermes/node-compat/bindings/node_config.h>
@@ -20,6 +21,7 @@
 #include <hermes/node-compat/bindings/node_encoding.h>
 #include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_string_decoder.h>
+#include <hermes/node-compat/bindings/node_task_queue.h>
 #include <hermes/node-compat/bindings/node_types.h>
 #include <hermes/node-compat/bindings/node_symbols.h>
 #include <hermes/node-compat/bindings/node_util.h>
@@ -168,6 +170,52 @@ static napi_status installConsole(napi_env env) {
 }
 
 // ---------------------------------------------------------------------------
+// Event loop tick integration
+// ---------------------------------------------------------------------------
+
+/// Data passed to the uv_check_t callback for draining microtasks and ticks.
+struct TickDrainData {
+  napi_env env;
+  hermes::vm::Runtime *runtime;
+  napi_ref tickCallbackRef;
+};
+
+/// Called on each event loop iteration (after I/O polling). Drains the
+/// microtask queue and then calls the JS tick callback (runNextTicks).
+static void onCheckDrainTicks(uv_check_t *handle) {
+  auto *data = static_cast<TickDrainData *>(handle->data);
+
+  // Open a handle scope for NAPI calls.
+  napi_handle_scope scope;
+  napi_open_handle_scope(data->env, &scope);
+
+  // Drain microtasks first.
+  data->runtime->drainJobs();
+
+  // Call the JS tick callback (runNextTicks) if set.
+  if (data->tickCallbackRef) {
+    napi_value tickCb;
+    napi_get_reference_value(data->env, data->tickCallbackRef, &tickCb);
+
+    napi_valuetype cbType;
+    napi_typeof(data->env, tickCb, &cbType);
+    if (cbType == napi_function) {
+      napi_value global;
+      napi_get_global(data->env, &global);
+      napi_value result;
+      napi_status st =
+          napi_call_function(data->env, global, tickCb, 0, nullptr, &result);
+      if (st != napi_ok) {
+        // Print and clear any exception from the tick callback.
+        printAndClearException(data->env);
+      }
+    }
+  }
+
+  napi_close_handle_scope(data->env, scope);
+}
+
+// ---------------------------------------------------------------------------
 // Bootstrap
 // ---------------------------------------------------------------------------
 
@@ -212,7 +260,15 @@ static int runBootstrap(
   }
 
   // 5. Register native bindings.
+  // Set the drain microtasks callback before task_queue binding init.
+  setTaskQueueDrainMicrotasks(
+      [](void *data) {
+        static_cast<hermes::vm::Runtime *>(data)->drainJobs();
+      },
+      runtime.get());
+
   BindingRegistry registry;
+  registry.registerBinding("async_context_frame", initAsyncContextFrameBinding);
   registry.registerBinding("async_wrap", initAsyncWrapBinding);
   registry.registerBinding("buffer", initBufferBinding);
   registry.registerBinding("config", initConfigBinding);
@@ -221,6 +277,7 @@ static int runBootstrap(
   registry.registerBinding("errors", initErrorsBinding);
   registry.registerBinding("string_decoder", initStringDecoderBinding);
   registry.registerBinding("symbols", initSymbolsBinding);
+  registry.registerBinding("task_queue", initTaskQueueBinding);
   registry.registerBinding("types", initTypesBinding);
   registry.registerBinding("util", initUtilBinding);
   registry.attach(env);
@@ -301,7 +358,68 @@ static int runBootstrap(
     }
   }
 
-  // 10. Load and execute the user script.
+  // 10. Set up process.nextTick via internal/process/task_queues.
+  napi_ref tickCallbackRef = nullptr;
+  if (exitCode == 0) {
+    napi_value taskQueuesModule;
+    if (loader.require(env, "internal/process/task_queues", &taskQueuesModule) !=
+        napi_ok) {
+      std::fprintf(
+          stderr,
+          "Error: failed to load internal/process/task_queues\n");
+      printAndClearException(env);
+      exitCode = 1;
+    } else {
+      // Call setupTaskQueue() to get nextTick and runNextTicks.
+      napi_value setupFn;
+      napi_get_named_property(
+          env, taskQueuesModule, "setupTaskQueue", &setupFn);
+
+      napi_value setupResult;
+      napi_status st =
+          napi_call_function(env, taskQueuesModule, setupFn, 0, nullptr,
+                             &setupResult);
+      if (st != napi_ok) {
+        std::fprintf(stderr, "Error: failed to call setupTaskQueue()\n");
+        printAndClearException(env);
+        exitCode = 1;
+      } else {
+        // setupResult = { nextTick, runNextTicks }
+        napi_value nextTickFn;
+        napi_get_named_property(env, setupResult, "nextTick", &nextTickFn);
+
+        napi_value runNextTicksFn;
+        napi_get_named_property(
+            env, setupResult, "runNextTicks", &runNextTicksFn);
+
+        // Set process.nextTick = nextTick
+        napi_value processObj;
+        napi_get_named_property(env, global, "process", &processObj);
+        napi_set_named_property(env, processObj, "nextTick", nextTickFn);
+        napi_set_named_property(
+            env, processObj, "_tickCallback", runNextTicksFn);
+
+        // Store runNextTicks as a ref for the event loop check callback.
+        napi_create_reference(env, runNextTicksFn, 1, &tickCallbackRef);
+      }
+    }
+  }
+
+  // 11. Set up the event loop check handle for tick draining.
+  uv_check_t checkHandle;
+  TickDrainData tickDrainData{env, runtime.get(), tickCallbackRef};
+  bool checkHandleActive = false;
+
+  if (exitCode == 0 && tickCallbackRef) {
+    uv_check_init(eventLoop.getLoop(), &checkHandle);
+    checkHandle.data = &tickDrainData;
+    uv_check_start(&checkHandle, onCheckDrainTicks);
+    // Unref so the check handle alone doesn't keep the loop alive.
+    uv_unref(reinterpret_cast<uv_handle_t *>(&checkHandle));
+    checkHandleActive = true;
+  }
+
+  // 12. Load and execute the user script.
   if (exitCode == 0) {
     std::string scriptSource = readFile(scriptPath);
     if (scriptSource.empty()) {
@@ -322,13 +440,39 @@ static int runBootstrap(
     }
   }
 
-  // 11. Run event loop.
+  // 13. Run event loop.
   if (exitCode == 0) {
+    // Drain microtasks queued during script execution.
     runtime->drainJobs();
+
+    // Drain any nextTick callbacks queued during script execution.
+    if (tickCallbackRef) {
+      napi_value tickCb;
+      napi_get_reference_value(env, tickCallbackRef, &tickCb);
+      napi_value tickResult;
+      napi_call_function(env, global, tickCb, 0, nullptr, &tickResult);
+
+      bool pending = false;
+      napi_is_exception_pending(env, &pending);
+      if (pending)
+        printAndClearException(env);
+    }
+
     eventLoop.run();
   }
 
-  // 12. Cleanup (reverse order of creation).
+  // 14. Cleanup (reverse order of creation).
+  if (checkHandleActive) {
+    uv_check_stop(&checkHandle);
+    uv_close(reinterpret_cast<uv_handle_t *>(&checkHandle), nullptr);
+    // Run the loop once more to process the close callback.
+    uv_run(eventLoop.getLoop(), UV_RUN_NOWAIT);
+  }
+
+  if (tickCallbackRef) {
+    napi_delete_reference(env, tickCallbackRef);
+  }
+
   loader.detach(env);
   proc.detach(env);
   registry.detach(env);
