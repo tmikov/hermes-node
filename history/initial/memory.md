@@ -256,6 +256,14 @@
 - `rmSync`: DFS implementation (collect entries, remove in reverse order)
 - `mkdir` recursive: walk path components, create each, return first created path
 
+## FS Dir Binding
+- `initFsDirBinding` — opendir(path, encoding, req?), opendirSync(path), DirHandle with read(encoding, bufferSize, req?) + close(req?)
+- `setFsDirEventLoop(uv_loop_t*)`: host sets loop before binding init (same pattern as fs/timers)
+- DirHandle: plain JS object with native data via `napi_wrap`, GC destructor closes dir if not explicitly closed
+- Read result: flat array `[name1, type1, name2, type2, ...]` or null at EOF
+- **Gotcha**: `uv_dirent_t.name` points to `uv_fs_t` request-owned memory. Must build JS result BEFORE `uv_fs_req_cleanup`.
+- Patched `internal/fs/dir.js`: replaced `async* entries()` with manual async iterator (Hermes async generator limitation)
+
 ## FS Module Shims
 - `internal/blob.js`: stub (Blob not supported), exports createBlobFromFilePath (throws), isBlob (false)
 - `internal/url.js`: minimal toPathIfFileURL, pathToFileURL, fileURLToPath, isURL

@@ -70,7 +70,7 @@ be omitted):
 | Step 26 | Verify streams work | 24, 25 | done | |
 | Step 27 | Port fs binding — sync operations | 2, 5, 9 | done | |
 | Step 28 | Port fs binding — async operations | 3, 27 | done | |
-| Step 29 | Port fs_dir binding | 27 | | |
+| Step 29 | Port fs_dir binding | 27 | done | |
 | Step 30 | Port fs_event_wrap binding | 3, 5 | | |
 | Step 31 | Verify fs sync operations | 27, 9 | | |
 | Step 32 | Verify fs async operations | 28, 29 | | |
@@ -401,3 +401,19 @@ be omitted):
   - `malloc(sizeof(uv_buf_t))` for `req->bufs` leaked — libuv overwrites the pointer during async dispatch (copies to internal `bufsml`). Fixed by passing local/stack bufs.
   - `eventLoop.close()` after `hermes_napi_destroy_env` caused use-after-free — reordered cleanup.
 - **Notes for next step**: `fs.promises` API NOT tested (requires async generators, unsupported by Hermes). `kUsePromises` code path exists but untestable via the JS fs module. Steps 29 (fs_dir), 31-33 (verify/test) can proceed.
+
+### Step 29: Port fs_dir binding
+- **Files**: created `include/hermes/node-compat/bindings/node_file_dir.h`, `lib/bindings/node_file_dir.cpp`, `test/test-fs-dir.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `CMakeLists.txt`, `libjs-node/internal/fs/dir.js`, `libjs-node/README.md`.
+- **Decisions**:
+  - Separate `node_file_dir.cpp` from `node_file.cpp` for the `fs_dir` binding (cleaner separation).
+  - DirHandle is a plain JS object with `read()` and `close()` methods, native data attached via `napi_wrap` with GC destructor.
+  - `opendir(path, encoding, req?)` supports both sync (no req arg) and async (FSReqCallback req) modes.
+  - `opendirSync(path)` is a convenience sync-only variant (used by `dir.js`).
+  - Read result is flat array `[name1, type1, name2, type2, ...]` or `null` at EOF.
+  - Encoding arg is accepted but unused (always returns UTF-8 strings).
+  - Async uses same pattern as fs binding: `DirReqWrap` struct with `uv_fs_t`, callback ref, dir handle ref.
+- **What was done**: Implemented `initFsDirBinding` with `opendir`, `opendirSync`, DirHandle with `read` and `close` methods (sync and async). Patched `internal/fs/dir.js` to replace `async* entries()` with manual async iterator (Hermes limitation). 9 test cases: opendirSync+readSync+closeSync, empty directory, dirent types (file/dir/symlink), ENOENT error, async opendir+read+close, async error, bufferSize option, double close throws, read after close throws. All 22 tests pass under ASAN.
+- **Issues**:
+  - `uv_fs_readdir` fills `uv_dirent_t.name` with pointers to `uv_fs_t` request-owned memory. Must call `buildReadResult` BEFORE `uv_fs_req_cleanup` to avoid use-after-free.
+  - `internal/fs/dir.js` line 294 has `async* entries()` — async generator unsupported by Hermes. Replaced with manual async iterator.
+- **Notes for next step**: The `Dir.entries()` async iterator works but `for await...of` requires Hermes async iteration support. `readSyncRecursive` in `dir.js` calls `dirBinding.opendir(path, encoding)` in sync mode (no req arg) — this works because our `opendir` function handles both sync and async.

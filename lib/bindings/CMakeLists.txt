@@ -12,6 +12,7 @@ add_hermes_library(hermesNodeBindings STATIC
   node_encoding.cpp
   node_errors.cpp
   node_file.cpp
+  node_file_dir.cpp
   node_stdio.cpp
   node_stream_wrap.cpp
   node_string_decoder.cpp

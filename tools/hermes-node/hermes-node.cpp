@@ -21,6 +21,7 @@
 #include <hermes/node-compat/bindings/node_encoding.h>
 #include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_file.h>
+#include <hermes/node-compat/bindings/node_file_dir.h>
 #include <hermes/node-compat/bindings/node_stdio.h>
 #include <hermes/node-compat/bindings/node_stream_wrap.h>
 #include <hermes/node-compat/bindings/node_string_decoder.h>
@@ -450,6 +451,7 @@ static int runBootstrap(
       runtime.get());
   setTimersEventLoop(eventLoop.getLoop());
   setFsEventLoop(eventLoop.getLoop());
+  setFsDirEventLoop(eventLoop.getLoop());
 
   BindingRegistry registry;
   registry.registerBinding("async_context_frame", initAsyncContextFrameBinding);
@@ -460,6 +462,7 @@ static int runBootstrap(
   registry.registerBinding("encoding_binding", initEncodingBinding);
   registry.registerBinding("errors", initErrorsBinding);
   registry.registerBinding("fs", initFsBinding);
+  registry.registerBinding("fs_dir", initFsDirBinding);
   registry.registerBinding("stdio", initStdioBinding);
   registry.registerBinding("stream_wrap", initStreamWrapBinding);
   registry.registerBinding("string_decoder", initStringDecoderBinding);

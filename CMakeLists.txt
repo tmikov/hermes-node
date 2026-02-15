@@ -127,6 +127,10 @@ add_custom_target(check-hermes-node-js
     $<TARGET_FILE:hermes-node>
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/test-fs-async.js
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
+    $<TARGET_FILE:hermes-node>
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-fs-dir.js
   DEPENDS hermes hermes-node
   COMMENT "Running JS tests"
 )
