@@ -26,6 +26,16 @@ Node's existing C++ bindings in `src/node_*.cc` encode the precise contract that
 
 Hermes already has a Node-API implementation, which provides the target API surface. The porting work is primarily replacing V8 API calls (`v8::Local<Value>`, `FunctionCallbackInfo<Value>`, etc.) with their Node-API equivalents (`napi_value`, `napi_callback_info`, etc.) and adapting the internal infrastructure that Node's bindings depend on (primarily the `Environment` context object and the `AsyncWrap` request lifecycle).
 
+### Keep C++ close to Node's implementation
+
+When porting native bindings, keep the C++ implementation as close to Node's `src/node_*.cc` as reasonable. In particular, when Node uses a third-party library (simdutf for SIMD-accelerated string operations, Ada for URL/IDNA, llhttp for HTTP parsing, c-ares for DNS, etc.), vendor and use that same library rather than hand-rolling equivalent functionality. This ensures:
+
+- **Behavioral parity** — identical edge-case handling and spec compliance
+- **Performance** — battle-tested optimizations (e.g. SIMD acceleration) for free
+- **Easier future porting** — our code structure mirrors Node's, making diffs and updates mechanical
+
+The vendoring pattern is: `external/$lib/` with a wrapper `CMakeLists.txt` + `README.md`, and the unmodified upstream source in `external/$lib/$lib/`.
+
 ### Architecture overview
 
 ```
@@ -41,6 +51,7 @@ Hermes already has a Node-API implementation, which provides the target API surf
 │               Hermes JS engine                   │
 ├──────────────────────────────────────────────────┤
 │    libuv, llhttp, OpenSSL, zlib, c-ares, ICU     │
+│    simdutf, Ada, ...                             │
 └──────────────────────────────────────────────────┘
 ```
 

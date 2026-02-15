@@ -46,6 +46,7 @@ cmake --build cmake-build-asan --target check-hermes-node
 - Async hooks: stubbed (no-op)
 - Node version: v24.13.0 LTS
 - JS loaded from disk at runtime
+- **C++ porting philosophy**: Keep our native binding implementations as close to Node's as reasonable. When Node uses a third-party library (simdutf, Ada, llhttp, c-ares, etc.), vendor and use that same library rather than hand-rolling equivalent functionality. This ensures behavioral parity, gets us battle-tested optimizations, and makes future porting easier since our code structure mirrors Node's.
 
 ## Progress Tracking
 
