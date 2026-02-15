@@ -11,6 +11,7 @@ add_hermes_library(hermesNodeBindings STATIC
   node_constants.cpp
   node_encoding.cpp
   node_errors.cpp
+  node_stdio.cpp
   node_string_decoder.cpp
   node_symbols.cpp
   node_task_queue.cpp

@@ -214,6 +214,15 @@
 - `libjs/shims/internal/bootstrap/realm.js`: minimal `BuiltinModule` class (exists/canBeRequiredByUsers/isBuiltin all return false)
 - Required by: `internal/util/inspect.js` (stack trace formatting)
 
+## Stdio Binding
+- `initStdioBinding` — writeString(fd, str), writeBuffer(fd, buf), getHandleType(fd)
+- `process.stdout`/`process.stderr`: created in bootstrap as plain objects, not Writable streams
+- Minimal event emitter stubs: on/once/removeListener (return this), listenerCount (returns 0)
+- `.write(data, cb)`: sync `uv_fs_write`, handles strings/typed arrays, calls cb synchronously
+- `.isTTY`: `uv_guess_handle(fd) == UV_TTY`
+- Node's `console` requires: `.write()`, `.listenerCount()`, `.once()`, `.removeListener()`
+- Upgrade to proper Writable streams when stream module is available (Step 25-26)
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`
