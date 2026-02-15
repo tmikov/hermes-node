@@ -15,6 +15,8 @@
 - ASAN flags: Hermes sets `-fsanitize=address` via `CMAKE_CXX_FLAGS` inside its subdirectory scope only. Our top-level CMakeLists.txt must propagate them via `add_compile_options`/`add_link_options` when `HERMES_ENABLE_ADDRESS_SANITIZER` is ON.
 - LLVH includes: gtest headers need `llvh/Support/raw_ostream.h`. The `add_node_compat_unittest()` helper adds LLVH include dirs (`hermes/external/llvh/include`, `gen/include`, build-dir `include`).
 - **hermes_napi.h is heavyweight**: It includes `hermes/VM/Runtime.h` etc., pulling in all VM internals (needs LLVH + `libhermesvm-config.h` from `cmake-build-*/hermes/lib/config/`). Avoid including it in public headers. Use our standalone `hermes_napi_event_loop.h` for the event loop struct.
+- **GC define not propagated**: Hermes uses `add_definitions(-DHERMESVM_GC_${HERMESVM_GCKIND})` scoped to its subdirectory. Our targets that include Hermes VM headers need `target_compile_definitions(... PRIVATE HERMESVM_GC_${HERMESVM_GCKIND})`.
+- **Handle scopes required**: All NAPI calls that create JS values require an open handle scope (`napi_open_handle_scope`). Tests must open one in SetUp and close in TearDown.
 
 ## Vendored Deps
 - libuv 1.51.0 in `external/libuv/libuv/`, static target `uv_a`
@@ -47,6 +49,17 @@
 - Reuses Node's algorithmic approach (enumerate+copy prototypes)
 - Safe* variants are just the originals (no tamper-resistance)
 - 156 test assertions in `test/primordials.js`
+
+## Binding Registry
+- `hermesNodeBindingRegistry` lib in `lib/binding-registry/`, depends only on NAPI headers (lightweight)
+- `BindingRegistry::registerBinding(name, initFunc)` + `getBinding(env, name, &result)` with lazy init + `napi_ref` cache
+- `createInternalBindingFunction(env, &fn)` creates JS `internalBinding(name)` function
+- `attach(env)` / `detach(env)` lifecycle; detach clears all cached refs
+
+## NAPI Test Pattern
+- Tests needing `napi_env`: link `hermesvm_a`, include `hermes/API/napi/`, add `HERMESVM_GC_${HERMESVM_GCKIND}` define, add `${CMAKE_BINARY_DIR}/hermes/lib/config` include
+- Create Runtime via `vm::Runtime::create(config)`, env via `hermes_napi_create_env(*rt_)`
+- Open handle scope in SetUp, close in TearDown
 
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task

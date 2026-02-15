@@ -30,6 +30,7 @@ add_subdirectory(external/libuv)
 # Our C++ libraries
 add_subdirectory(lib/placeholder)
 add_subdirectory(lib/event-loop)
+add_subdirectory(lib/binding-registry)
 
 # CLI tools
 add_subdirectory(tools/hermes-node)

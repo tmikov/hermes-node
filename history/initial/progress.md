@@ -46,7 +46,7 @@ be omitted):
 | Step 2 | Vendor libuv | 1 | done | |
 | Step 3 | Implement libuv-backed event loop adapter | 2 | done | |
 | Step 4 | Implement primordials thin shim | — | done | |
-| Step 5 | Implement internalBinding registry | 1 | | |
+| Step 5 | Implement internalBinding registry | 1 | done | |
 | Step 6 | Implement internal module loader | 5 | | |
 | Step 7 | Implement process object (basic properties) | 5 | | |
 | Step 8 | Implement bootstrap sequence | 3, 4, 6, 7 | | |
@@ -120,4 +120,17 @@ be omitted):
   - Test runs by concatenating primordials.js + test file and running with stock `hermes` CLI.
 - **What was done**: Implemented full primordials shim covering: uncurryThis/applyBind, all built-in constructors and their prototypes (Array, String, Object, Map, Set, RegExp, Promise, Error types, TypedArrays, BigInt, DataView, etc.), namespace objects (Math, JSON, Reflect), abstract intrinsics (TypedArray, ArrayIterator, StringIterator, IteratorPrototype), Safe* variants, SafePromise helpers (All/Race/Any/AllSettled and void variants), SafeArrayIterator/SafeStringIterator, hardenRegExp, SafeStringPrototypeSearch, SafeArrayPrototypePushApply. Test has 156 assertions covering all major categories. Added `check-hermes-node-js` CMake target for JS tests.
 - **Notes for next step**: Hermes limitations: no `FinalizationRegistry`, no `Atomics`, no async generators. The `hermes` CLI binary must be built (target `hermes`) for JS tests. Hermes warns about undeclared globals in strict mode — we added `var Promise = globalThis.Promise` etc. in the IIFE to suppress these in the shim itself.
+
+### Step 5: Implement internalBinding registry
+- **Files**: created `include/hermes/node-compat/binding-registry/binding_registry.h`, `lib/binding-registry/binding_registry.cpp`, `lib/binding-registry/CMakeLists.txt`, `unittests/BindingRegistryTest.cpp`. Modified `CMakeLists.txt` (top-level), `unittests/CMakeLists.txt`.
+- **Decisions**:
+  - `BindingRegistry` class stores `name -> Entry` map where Entry has `napi_addon_register_func initFunc` and `napi_ref cachedRef`.
+  - Lazy initialization: `getBinding()` calls initFunc only on first access, caches result as strong `napi_ref`.
+  - `createInternalBindingFunction()` creates a JS function that wraps `getBinding()`, passing the registry pointer as NAPI callback data.
+  - Public header depends only on `<node_api_types.h>` (lightweight), not `hermes_napi.h`.
+  - `attach()`/`detach()` lifecycle: `detach()` deletes all cached `napi_ref`s before env destruction.
+  - Binding name buffer is 256 bytes (sufficient for all Node binding names).
+- **What was done**: Implemented `BindingRegistry` with `registerBinding`, `getBinding` (lazy init + cache), `createInternalBindingFunction` (JS-callable `internalBinding(name)` function). CMake library `hermesNodeBindingRegistry` is STATIC, depends only on NAPI headers. Wrote 8 GTest tests: basic get, caching, unknown name throws, multiple bindings, throwing init function, JS function creation and invocation, JS error on unknown, detach/reattach.
+- **Issues**: Tests that include `hermes_napi.h` (heavyweight) need: (1) `${CMAKE_BINARY_DIR}/hermes/lib/config` for `libhermesvm-config.h`, (2) `-DHERMESVM_GC_${HERMESVM_GCKIND}` compile definition since Hermes's `add_definitions()` is scoped to its subdirectory.
+- **Notes for next step**: Link against `hermesNodeBindingRegistry` for the binding registry. Tests using `hermes_napi_create_env` need `hermesvm_a` (bundles all Hermes), `hermes/API/napi/` include, `libhermesvm-config.h` include, and `HERMESVM_GC_HADES` define. All NAPI calls require an open handle scope (`napi_open_handle_scope`).
 
