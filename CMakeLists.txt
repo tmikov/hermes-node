@@ -32,6 +32,7 @@ add_subdirectory(lib/event-loop)
 add_subdirectory(lib/binding-registry)
 add_subdirectory(lib/module-loader)
 add_subdirectory(lib/process)
+add_subdirectory(lib/bindings)
 
 # CLI tools
 add_subdirectory(tools/hermes-node)
@@ -47,6 +48,10 @@ add_custom_target(check-hermes-node-js
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-boot-test.sh
     $<TARGET_FILE:hermes-node>
     ${CMAKE_CURRENT_SOURCE_DIR}
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
+    $<TARGET_FILE:hermes-node>
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-constants.js
   DEPENDS hermes hermes-node
   COMMENT "Running JS tests"
 )

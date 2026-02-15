@@ -50,7 +50,7 @@ be omitted):
 | Step 6 | Implement internal module loader | 5 | done | |
 | Step 7 | Implement process object (basic properties) | 5 | done | |
 | Step 8 | Implement bootstrap sequence | 3, 4, 6, 7 | done | |
-| Step 9 | Port constants binding | 5 | | |
+| Step 9 | Port constants binding | 5 | done | |
 | Step 10 | Port types binding | 5 | | |
 | Step 11 | Port util binding | 5 | | |
 | Step 12 | Port string_decoder binding | 5 | | |
@@ -170,4 +170,16 @@ be omitted):
   - Removed `hermesNodePlaceholder` library from the build (no longer needed).
   - Added `#ifndef HERMES_NAPI_HERMES_NAPI_H` guard around struct definition in standalone `hermes_napi_event_loop.h` to prevent redefinition when both headers are included.
 - **What was done**: Full bootstrap sequence: create Hermes runtime (microtasks enabled) -> init libuv event loop -> create napi_env -> install console -> register bindings (empty for now) -> load primordials.js -> create process global -> init module loader -> execute user script -> drain microtasks -> run event loop -> cleanup. hermes-node tool now links `hermesNodeEventLoop`, `hermesNodeBindingRegistry`, `hermesNodeModuleLoader`, `hermesNodeProcess`, `hermesvm_a`. Bootstrap test (`test/test-boot.js`) verifies console.log, process.platform, process.pid, process.cwd(), process.argv, process.version. Shell script `test/run-boot-test.sh` added to `check-hermes-node-js` target. All tests pass under ASAN.
-- **Notes for next step**: Future steps (9-15) register native bindings in the `BindingRegistry` before bootstrap. When including `hermes_napi.h` alongside our `uv_event_loop.h`, `hermes_napi.h` must come first in include order (or use the guard). The tool needs LLVH include dirs + GC define + config include, same as unit tests.
+- **Notes for next step**: Future steps (10-15) register native bindings in the `BindingRegistry` before bootstrap. When including `hermes_napi.h` alongside our `uv_event_loop.h`, `hermes_napi.h` must come first in include order (or use the guard). The tool needs LLVH include dirs + GC define + config include, same as unit tests.
+
+### Step 9: Port constants binding
+- **Files**: created `include/hermes/node-compat/bindings/node_constants.h`, `lib/bindings/node_constants.cpp`, `lib/bindings/CMakeLists.txt`, `test/test-constants.js`, `test/run-hermes-node-test.sh`. Modified `CMakeLists.txt` (top-level), `tools/hermes-node/hermes-node.cpp`, `tools/hermes-node/CMakeLists.txt`.
+- **Decisions**:
+  - Created `lib/bindings/` directory for all native bindings with a single `hermesNodeBindings` library target. Future bindings (types, util, etc.) will add source files to this same library.
+  - Binding init function follows `napi_addon_register_func` signature: `initConstantsBinding(env, exports)` returns populated exports object.
+  - Constants organized in nested objects matching Node's layout: `os.errno`, `os.signals`, `os.priority`, `os.dlopen`, `fs`, `crypto`, `zlib`, `trace`.
+  - crypto, zlib, trace: empty objects (stubbed). No OpenSSL/zlib dependencies.
+  - Used `SET_CONST` macro with `napi_create_int32`/`napi_set_named_property` for each constant. All constants guarded by `#ifdef` for portability.
+  - Created generic `run-hermes-node-test.sh` test runner (takes test script as argument, checks for PASS output) for reuse by future binding tests.
+- **What was done**: Implemented `initConstantsBinding` covering all POSIX errno codes, signal numbers, libuv priority/dirent/fs constants, file open flags, permission bits, access flags, copy file flags, and dlopen constants. Registered in bootstrap via `registry.registerBinding("constants", initConstantsBinding)`. JS test verifies signal values (SIGINT=2, SIGTERM=15), errno codes, fs constants (O_RDONLY=0), access flags, dirent types, and stub objects.
+- **Notes for next step**: Add new binding source files to `lib/bindings/CMakeLists.txt` and register in `hermes-node.cpp`. The `hermesNodeBindings` library links `uv_a` publicly for libuv constants. Use `run-hermes-node-test.sh` for future binding JS tests.

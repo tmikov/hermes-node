@@ -13,6 +13,7 @@
 #include "hermes/VM/Runtime.h"
 
 #include <hermes/node-compat/binding-registry/binding_registry.h>
+#include <hermes/node-compat/bindings/node_constants.h>
 #include <hermes/node-compat/event-loop/uv_event_loop.h>
 #include <hermes/node-compat/module-loader/module_loader.h>
 #include <hermes/node-compat/process/node_process.h>
@@ -203,7 +204,7 @@ static int runBootstrap(
 
   // 5. Register native bindings.
   BindingRegistry registry;
-  // No bindings registered yet; future steps (9-15) will add them.
+  registry.registerBinding("constants", initConstantsBinding);
   registry.attach(env);
 
   // 6. Load and execute primordials.js.

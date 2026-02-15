@@ -39,8 +39,9 @@
 - Hermes warns about undeclared globals in strict mode — use `var X = globalThis.X` in IIFEs
 
 ## JS Test Infrastructure
-- `check-hermes-node-js` CMake target runs: `run-primordials-test.sh` (hermes CLI) + `run-boot-test.sh` (hermes-node)
-- Primordials tests use stock `hermes` CLI binary; bootstrap test uses `hermes-node`
+- `check-hermes-node-js` CMake target runs: `run-primordials-test.sh` (hermes CLI) + `run-boot-test.sh` + binding tests (hermes-node)
+- `run-hermes-node-test.sh <binary> <src-dir> <test.js>`: generic test runner, checks for PASS output
+- Primordials tests use stock `hermes` CLI binary; bootstrap/binding tests use `hermes-node`
 - Hermes doesn't support multiple file args; concatenate files before running
 - Hermes doesn't have `load()` function
 
@@ -87,6 +88,14 @@
 - Minimal console via NAPI (Hermes VM's `installConsoleBindings` uses internal VM APIs)
 - **Include order**: `hermes_napi.h` must come before `uv_event_loop.h` to avoid `hermes_napi_event_loop` struct redefinition
 - hermes-node CMake: links `hermesvm_a` + all our libs; needs LLVH includes + GC define + config include (same as unit tests)
+
+## Native Bindings
+- `hermesNodeBindings` lib in `lib/bindings/`, links `uv_a` publicly
+- Add new binding source files to `lib/bindings/CMakeLists.txt`
+- Register in `hermes-node.cpp` via `registry.registerBinding("name", initFunc)` before `registry.attach(env)`
+- Init function signature: `napi_value init(napi_env env, napi_value exports)` (same as `napi_addon_register_func`)
+- Public headers: `include/hermes/node-compat/bindings/`
+- Constants binding: `initConstantsBinding` — os.errno, os.signals, os.priority, os.dlopen, fs, crypto/zlib/trace (stubs)
 
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task

@@ -8,6 +8,7 @@ add_hermes_tool(hermes-node
   LINK_LIBS
     hermesNodeEventLoop
     hermesNodeBindingRegistry
+    hermesNodeBindings
     hermesNodeModuleLoader
     hermesNodeProcess
     hermesvm_a
