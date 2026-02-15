@@ -53,7 +53,7 @@ be omitted):
 | Step 9 | Port constants binding | 5 | done | |
 | Step 10 | Port types binding | 5 | done | |
 | Step 11 | Port util binding | 5 | done | |
-| Step 12 | Port string_decoder binding | 5 | | |
+| Step 12 | Port string_decoder binding | 5 | done | |
 | Step 13 | Port errors binding | 5 | | |
 | Step 14 | Port config binding | 5 | | |
 | Step 15 | Port symbols binding | 5 | | |
@@ -212,3 +212,15 @@ be omitted):
 - **What was done**: Implemented `initUtilBinding` with 15 functions and 3 sub-objects covering all exports from Node's `node_util.cc` that `lib/*.js` files use. Registered in bootstrap. JS test covers sleep, guessHandleType, getOwnNonIndexProperties (including ONLY_ENUMERABLE filter), privateSymbols (type checks + property key usage), all constants values, shouldAbortOnUncaughtToggle, stubs, getConstructorName, arrayBufferViewHasBuffer, isInsideNodeModules, getCallSites, parseEnv. All tests pass under ASAN.
 - **Issues**: Hermes NAPI `napi_get_all_property_names` with both `plusIncludeSymbols().plusKeepSymbols()` and `plusIncludeNonSymbols()` causes string property names to be returned as Hermes internal SymbolIDs (exposed as JS Symbols). Worked around by making two separate calls -- one for strings (skip_symbols), one for symbols (skip_strings).
 - **Notes for next step**: The `defineLazyProperties` implementation creates getter descriptors that call `require(id)[key]` on access. It uses `napi_add_finalizer` for cleanup. The `privateSymbols` are regular JS Symbols, not truly private -- this is acceptable in our controlled environment.
+
+### Step 12: Port string_decoder binding
+- **Files**: created `include/hermes/node-compat/bindings/node_string_decoder.h`, `lib/bindings/node_string_decoder.cpp`, `test/test-string-decoder.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `CMakeLists.txt` (top-level).
+- **Decisions**:
+  - Ported Node's `StringDecoder` state machine to work with NAPI. The decoder state is a 7-byte buffer (Uint8Array) matching Node's layout: bytes 0-3 incomplete char buffer, byte 4 missing bytes, byte 5 buffered bytes, byte 6 encoding enum.
+  - Encoding enum values match Node's `enum encoding`: ASCII=0, UTF8=1, BASE64=2, UCS2=3, BINARY/LATIN1=4, HEX=5, BUFFER=6, BASE64URL=7.
+  - String creation from raw bytes uses NAPI directly: `napi_create_string_utf8` (UTF-8), `napi_create_string_latin1` (ASCII/Latin1), `napi_create_string_utf16` (UCS2/UTF16LE). Hex and Base64/Base64URL are encoded to ASCII strings in C++.
+  - String concatenation (prepend + body) uses `String.prototype.concat` via NAPI.
+  - Hermes `napi_create_string_utf8` rejects invalid UTF-8 (raises RangeError). Added fallback: on failure, sanitize bytes by replacing invalid sequences with U+FFFD replacement character, then retry.
+- **What was done**: Implemented `initStringDecoderBinding` with: constants (kIncompleteCharactersStart through kNumFields, kSize), encodings array (8 entries), decode() and flush() functions. Full multi-byte character boundary handling for UTF-8, UCS2, Base64/Base64URL. Registered in bootstrap. JS test covers all constants, encodings array, UTF-8 (simple, multi-byte, split across chunks, flush), Latin1, ASCII, Hex, Base64 (including split), UCS2 (including odd-byte split). All tests pass under ASAN.
+- **Issues**: Hermes `napi_create_string_utf8` returns `napi_generic_failure` for invalid UTF-8 (unlike V8 which produces replacement chars). Worked around with UTF-8 sanitization that replaces invalid byte sequences with U+FFFD.
+- **Notes for next step**: The `encodings` array and `encodingsMap` in `internal/util.js` are used by `string_decoder.js` and `buffer.js`. The string_decoder JS module (`libjs-node/string_decoder.js`) uses `Buffer.alloc(kSize)` for state, so it depends on the buffer module (Step 18).

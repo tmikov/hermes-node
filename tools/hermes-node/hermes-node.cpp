@@ -14,6 +14,7 @@
 
 #include <hermes/node-compat/binding-registry/binding_registry.h>
 #include <hermes/node-compat/bindings/node_constants.h>
+#include <hermes/node-compat/bindings/node_string_decoder.h>
 #include <hermes/node-compat/bindings/node_types.h>
 #include <hermes/node-compat/bindings/node_util.h>
 #include <hermes/node-compat/event-loop/uv_event_loop.h>
@@ -207,6 +208,7 @@ static int runBootstrap(
   // 5. Register native bindings.
   BindingRegistry registry;
   registry.registerBinding("constants", initConstantsBinding);
+  registry.registerBinding("string_decoder", initStringDecoderBinding);
   registry.registerBinding("types", initTypesBinding);
   registry.registerBinding("util", initUtilBinding);
   registry.attach(env);

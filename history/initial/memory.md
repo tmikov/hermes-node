@@ -105,8 +105,15 @@
 - `Object.prototype.toString` tag: boxed primitives, function subtypes (AsyncFunction, GeneratorFunction), iterators (Map/Set Iterator), GeneratorObject, Arguments
 - Stubs: `isProxy` (no NAPI detection), `isModuleNamespaceObject` (V8-specific)
 
+## String Decoder Binding
+- `initStringDecoderBinding` — state machine for multi-byte character decoding across chunk boundaries
+- Decoder state is 7-byte Uint8Array: [0-3] incomplete char buf, [4] missing bytes, [5] buffered bytes, [6] encoding enum
+- Encoding enum matches Node: ASCII=0, UTF8=1, BASE64=2, UCS2=3, LATIN1=4, HEX=5, BUFFER=6, BASE64URL=7
+- Used by `internal/util.js` for `encodingsMap` and by `string_decoder.js`
+
 ## Hermes NAPI Bugs/Workarounds
 - **`napi_get_all_property_names` with mixed string+symbol**: When both `plusIncludeSymbols().plusKeepSymbols()` and `plusIncludeNonSymbols()` are set (via `napi_key_all_properties` without skip flags), string property names are returned as Hermes internal SymbolIDs (exposed as JS Symbols). Workaround: make two separate calls — one with `napi_key_skip_symbols` for strings, one with `napi_key_skip_strings` for symbols.
+- **`napi_create_string_utf8` rejects invalid UTF-8**: Unlike V8 (which produces replacement chars), Hermes raises a RangeError and returns `napi_generic_failure`. Workaround: catch failure, clear exception, sanitize bytes by replacing invalid sequences with U+FFFD, retry.
 
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
