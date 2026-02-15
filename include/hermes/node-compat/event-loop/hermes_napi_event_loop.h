@@ -16,6 +16,8 @@
 
 #include <js_native_api_types.h>
 
+// Skip if hermes_napi.h already defined this struct.
+#ifndef HERMES_NAPI_HERMES_NAPI_H
 struct hermes_napi_event_loop {
   void (*post_work)(
       void *loop_data,
@@ -32,5 +34,6 @@ struct hermes_napi_event_loop {
 
   void *data;
 };
+#endif
 
 #endif // HERMES_NODE_COMPAT_HERMES_NAPI_EVENT_LOOP_H

@@ -5,5 +5,24 @@
 
 add_hermes_tool(hermes-node
   hermes-node.cpp
-  LINK_LIBS hermesNodePlaceholder
+  LINK_LIBS
+    hermesNodeEventLoop
+    hermesNodeBindingRegistry
+    hermesNodeModuleLoader
+    hermesNodeProcess
+    hermesvm_a
+)
+
+# hermes_napi.h (internal), generated config, and LLVH headers.
+target_include_directories(hermes-node PRIVATE
+  ${CMAKE_SOURCE_DIR}/hermes/API/napi
+  ${CMAKE_BINARY_DIR}/hermes/lib/config
+  ${CMAKE_SOURCE_DIR}/hermes/external/llvh/include
+  ${CMAKE_SOURCE_DIR}/hermes/external/llvh/gen/include
+  ${CMAKE_BINARY_DIR}/hermes/external/llvh/include
+)
+
+# GC define needed for Hermes VM headers included via hermes_napi.h.
+target_compile_definitions(hermes-node PRIVATE
+  HERMESVM_GC_${HERMESVM_GCKIND}
 )

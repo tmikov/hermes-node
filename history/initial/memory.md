@@ -39,8 +39,8 @@
 - Hermes warns about undeclared globals in strict mode — use `var X = globalThis.X` in IIFEs
 
 ## JS Test Infrastructure
-- `check-hermes-node-js` CMake target runs JS tests via `test/run-primordials-test.sh`
-- Tests use stock `hermes` CLI binary (CMake target `hermes`)
+- `check-hermes-node-js` CMake target runs: `run-primordials-test.sh` (hermes CLI) + `run-boot-test.sh` (hermes-node)
+- Primordials tests use stock `hermes` CLI binary; bootstrap test uses `hermes-node`
 - Hermes doesn't support multiple file args; concatenate files before running
 - Hermes doesn't have `load()` function
 
@@ -80,10 +80,18 @@
 - `process.memoryUsage()` RSS via `uv_resident_set_memory`; heap stats stubbed (no Hermes heap API via NAPI)
 - `process.uptime()` passes `NodeProcess*` as callback data to access `getStartTime()`
 
+## Bootstrap Sequence
+- `hermes-node` binary: full bootstrap in `tools/hermes-node/hermes-node.cpp`
+- Sequence: runtime (microtasks on) -> event loop -> napi_env -> console -> bindings -> primordials -> process -> module loader -> user script -> drainJobs -> uv_run -> cleanup
+- `--node-lib-path <dir>` overrides project root for libjs/libjs-node paths; default: `bin/../`
+- Minimal console via NAPI (Hermes VM's `installConsoleBindings` uses internal VM APIs)
+- **Include order**: `hermes_napi.h` must come before `uv_event_loop.h` to avoid `hermes_napi_event_loop` struct redefinition
+- hermes-node CMake: links `hermesvm_a` + all our libs; needs LLVH includes + GC define + config include (same as unit tests)
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`
 - `Runtime::create(RuntimeConfig)` returns `shared_ptr<Runtime>`
-- Enable microtasks: `RuntimeConfig::Builder().withMicrotaskQueue(true)`
+- Enable microtasks: `RuntimeConfig::Builder().withMicrotaskQueue(true)`, drain with `runtime->drainJobs()`
 - `napi_run_script` does global eval with `compileFlags.strict = false`; no way to set source URL via API, use `//# sourceURL=` comment instead
 - Hermes supports `//# sourceURL=` for custom filenames in stack traces

@@ -49,7 +49,7 @@ be omitted):
 | Step 5 | Implement internalBinding registry | 1 | done | |
 | Step 6 | Implement internal module loader | 5 | done | |
 | Step 7 | Implement process object (basic properties) | 5 | done | |
-| Step 8 | Implement bootstrap sequence | 3, 4, 6, 7 | | |
+| Step 8 | Implement bootstrap sequence | 3, 4, 6, 7 | done | |
 | Step 9 | Port constants binding | 5 | | |
 | Step 10 | Port types binding | 5 | | |
 | Step 11 | Port util binding | 5 | | |
@@ -160,3 +160,14 @@ be omitted):
   - `process.kill(pid, sig)` takes numeric signal (JS-side signal name lookup deferred to bootstrap).
 - **What was done**: Implemented `NodeProcess` class with all non-I/O properties and methods. Properties: pid, ppid, platform, arch, version, versions, argv, execPath, title, env. Methods: cwd, chdir, hrtime, hrtime.bigint, cpuUsage, memoryUsage, uptime, exit, abort, umask, kill. CMake library `hermesNodeProcess` links `uv_a` publicly. Wrote 24 GTest tests covering all properties and methods. All pass under ASAN.
 - **Notes for next step**: Link against `hermesNodeProcess`. The process object is created via C++ and set as a JS global. Step 8 (bootstrap) will integrate it with the module loader. Deferred: `process.nextTick` (Step 21), `process.stdout/stderr` (Step 23), signal handling, `process.on('exit')`.
+
+### Step 8: Implement bootstrap sequence
+- **Files**: modified `tools/hermes-node/hermes-node.cpp`, `tools/hermes-node/CMakeLists.txt`, `CMakeLists.txt` (top-level), `include/hermes/node-compat/event-loop/hermes_napi_event_loop.h`. Created `test/test-boot.js`, `test/run-boot-test.sh`.
+- **Decisions**:
+  - Implemented a minimal `console` object (log/info/warn/error) via NAPI in hermes-node.cpp since Hermes VM's `installConsoleBindings` uses internal VM APIs not accessible via NAPI. `console.log`/`info` write to stdout; `console.warn`/`error` write to stderr.
+  - `--node-lib-path <dir>` option points to the project root; paths to `libjs/` and `libjs-node/` are derived from it. Default path resolution uses executable location (`bin/../`).
+  - Runtime created with `withMicrotaskQueue(true)` and `runtime->drainJobs()` before event loop to flush Promise microtasks.
+  - Removed `hermesNodePlaceholder` library from the build (no longer needed).
+  - Added `#ifndef HERMES_NAPI_HERMES_NAPI_H` guard around struct definition in standalone `hermes_napi_event_loop.h` to prevent redefinition when both headers are included.
+- **What was done**: Full bootstrap sequence: create Hermes runtime (microtasks enabled) -> init libuv event loop -> create napi_env -> install console -> register bindings (empty for now) -> load primordials.js -> create process global -> init module loader -> execute user script -> drain microtasks -> run event loop -> cleanup. hermes-node tool now links `hermesNodeEventLoop`, `hermesNodeBindingRegistry`, `hermesNodeModuleLoader`, `hermesNodeProcess`, `hermesvm_a`. Bootstrap test (`test/test-boot.js`) verifies console.log, process.platform, process.pid, process.cwd(), process.argv, process.version. Shell script `test/run-boot-test.sh` added to `check-hermes-node-js` target. All tests pass under ASAN.
+- **Notes for next step**: Future steps (9-15) register native bindings in the `BindingRegistry` before bootstrap. When including `hermes_napi.h` alongside our `uv_event_loop.h`, `hermes_napi.h` must come first in include order (or use the guard). The tool needs LLVH include dirs + GC define + config include, same as unit tests.
