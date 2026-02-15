@@ -42,39 +42,17 @@ Hermes supports async generators but they are off by default. Enabled via `Runti
 
 ---
 
-## Hermes NAPI Bugs and Quirks
+## Hermes NAPI Bugs
 
-These are issues specific to Hermes's Node-API implementation.
+Actual bugs in Hermes's Node-API implementation.
 
 ### `napi_get_all_property_names` Returns Strings as Symbols
 When both `plusIncludeSymbols().plusKeepSymbols()` and `plusIncludeNonSymbols()` are set (via `napi_key_all_properties`), string property names are returned as Hermes internal SymbolIDs (exposed as JS Symbols).
-- **Workaround:** Make two separate calls — one with `napi_key_skip_symbols` for strings, one with `napi_key_skip_strings` for symbols.
-- **Affected:** `getOwnNonIndexProperties` in the `util` binding.
+- **Fixed upstream** in Hermes NAPI (`454e8a3c1`). Workaround removed.
 
 ### `napi_create_string_utf8` Rejects Invalid UTF-8
 Unlike V8 (which produces U+FFFD replacement characters), Hermes raises a RangeError and returns `napi_generic_failure`.
-- **Workaround:** Catch failure, clear exception, sanitize bytes by replacing invalid sequences with U+FFFD, retry.
-- **Affected:** `string_decoder` binding, `encoding_binding` (`decodeUTF8`).
-
-### `napi_get_value_string_utf8` Appends Null Terminator
-Cannot write directly into an ArrayBuffer of exact string length — the null terminator causes a heap-buffer-overflow.
-- **Workaround:** Use a temporary buffer and `memcpy` to the target.
-- **Affected:** `encoding_binding` (`encodeUtf8String`).
-
-### `napi_default` (= 0) Makes Properties Non-Enumerable
-This is technically correct per the NAPI spec but is a footgun. Properties defined with `napi_default` are non-writable, non-configurable, and non-enumerable.
-- **Impact:** The `...internalBinding('types')` spread in `internal/util/types.js` silently produced an empty object.
-- **Fix:** Use `napi_enumerable` for any binding whose exports are spread in JS code. Currently only the `types` binding requires this.
-- **General rule:** Use `napi_set_named_property` (which creates enumerable+writable+configurable properties) unless you specifically need restricted attributes.
-
-### `napi_property_descriptor` Getter Must Be Function Pointer
-The `getter` field of `napi_property_descriptor` must be a `napi_callback` (C function pointer), NOT a `napi_value` (JS function). Using a `napi_value` compiles without warning but crashes at runtime.
-- **Affected:** `process.title` getter/setter, `FSEvent.initialized` getter.
-
-### `napi_add_finalizer` Attached to Wrong Object
-Attaching a finalizer to a temporary getter function (which may be GC'd before the target object) causes use-after-free.
-- **Fix:** Always attach finalizers to the target object that owns the data, not to intermediate callbacks or getters.
-- **Affected:** `defineLazyProperties` in `util` binding (caused crash in `test-fs-read.js` under ASAN).
+- **Fixed upstream** in Hermes NAPI (`db4fdc0fe`). Workarounds removed from `string_decoder`, `buffer`, and `encoding_binding`.
 
 ---
 

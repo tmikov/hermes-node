@@ -1,0 +1,1 @@
+- Removed dependencies on Ada and Simdutf should be put back
