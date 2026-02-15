@@ -54,7 +54,7 @@ be omitted):
 | Step 10 | Port types binding | 5 | done | |
 | Step 11 | Port util binding | 5 | done | |
 | Step 12 | Port string_decoder binding | 5 | done | |
-| Step 13 | Port errors binding | 5 | | |
+| Step 13 | Port errors binding | 5 | done | |
 | Step 14 | Port config binding | 5 | | |
 | Step 15 | Port symbols binding | 5 | | |
 | Step 16 | Implement internal/options shim | 6 | | |
@@ -224,3 +224,13 @@ be omitted):
 - **What was done**: Implemented `initStringDecoderBinding` with: constants (kIncompleteCharactersStart through kNumFields, kSize), encodings array (8 entries), decode() and flush() functions. Full multi-byte character boundary handling for UTF-8, UCS2, Base64/Base64URL. Registered in bootstrap. JS test covers all constants, encodings array, UTF-8 (simple, multi-byte, split across chunks, flush), Latin1, ASCII, Hex, Base64 (including split), UCS2 (including odd-byte split). All tests pass under ASAN.
 - **Issues**: Hermes `napi_create_string_utf8` returns `napi_generic_failure` for invalid UTF-8 (unlike V8 which produces replacement chars). Worked around with UTF-8 sanitization that replaces invalid byte sequences with U+FFFD.
 - **Notes for next step**: The `encodings` array and `encodingsMap` in `internal/util.js` are used by `string_decoder.js` and `buffer.js`. The string_decoder JS module (`libjs-node/string_decoder.js`) uses `Buffer.alloc(kSize)` for state, so it depends on the buffer module (Step 18).
+
+### Step 13: Port errors binding
+- **Files**: created `include/hermes/node-compat/bindings/node_errors.h`, `lib/bindings/node_errors.cpp`, `test/test-errors.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `CMakeLists.txt` (top-level).
+- **Decisions**:
+  - `triggerUncaughtException(error, fromPromise)` prints the error's stack trace (or stringified value) to stderr and calls `std::exit(1)`. Sufficient for initial use; proper `process._fatalException` integration deferred.
+  - `noSideEffectsToString(value)` uses `napi_coerce_to_string`. Not truly side-effect-free (toString can be overridden), but sufficient for error formatting use case.
+  - Source map / stack trace callbacks stubbed as no-ops: `setPrepareStackTraceCallback`, `setGetSourceMapErrorSource`, `setSourceMapsEnabled`, `setMaybeCacheGeneratedSourceMap`, `setEnhanceStackForFatalException`. No source map support in Hermes.
+  - `getErrorSourcePositions` stubbed returning undefined (requires V8 internal APIs).
+  - `exitCodes` object contains all 13 exit codes from Node's `ExitCode` enum in `node_exit_code.h`.
+- **What was done**: Implemented `initErrorsBinding` with `triggerUncaughtException`, `noSideEffectsToString`, 6 stub functions, and `exitCodes` object. Registered in bootstrap. JS test verifies all function types, stub invocations don't throw, `noSideEffectsToString` for various types, and all 13 exit code values. All tests pass under ASAN.

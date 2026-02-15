@@ -111,6 +111,11 @@
 - Encoding enum matches Node: ASCII=0, UTF8=1, BASE64=2, UCS2=3, LATIN1=4, HEX=5, BUFFER=6, BASE64URL=7
 - Used by `internal/util.js` for `encodingsMap` and by `string_decoder.js`
 
+## Errors Binding
+- `initErrorsBinding` — triggerUncaughtException (prints + exit(1)), noSideEffectsToString, 6 stub callbacks, exitCodes object
+- Exit codes from Node's `ExitCode` enum: kNoFailure=0, kGenericUserError=1, kInvalidCommandLineArgument=9, kBootstrapFailure=10, kAbort=134, etc. (13 total)
+- Widely used: `exitCodes.kGenericUserError` in async_hooks, process/execution, test_runner; `triggerUncaughtException` in diagnostics_channel, promise_hooks, promises
+
 ## Hermes NAPI Bugs/Workarounds
 - **`napi_get_all_property_names` with mixed string+symbol**: When both `plusIncludeSymbols().plusKeepSymbols()` and `plusIncludeNonSymbols()` are set (via `napi_key_all_properties` without skip flags), string property names are returned as Hermes internal SymbolIDs (exposed as JS Symbols). Workaround: make two separate calls — one with `napi_key_skip_symbols` for strings, one with `napi_key_skip_strings` for symbols.
 - **`napi_create_string_utf8` rejects invalid UTF-8**: Unlike V8 (which produces replacement chars), Hermes raises a RangeError and returns `napi_generic_failure`. Workaround: catch failure, clear exception, sanitize bytes by replacing invalid sequences with U+FFFD, retry.
