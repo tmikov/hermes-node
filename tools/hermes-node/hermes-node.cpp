@@ -548,6 +548,73 @@ static int runBootstrap(
       if (createStdioStream(env, 2, &stderrStream) == napi_ok) {
         napi_set_named_property(env, processObj, "stderr", stderrStream);
       }
+
+      // Add minimal process event emitter methods (on/emit/emitWarning).
+      // Needed for process.on('exit'), process.on('warning'), etc.
+      const char *processEventEmitterCode =
+          "(function(process) {\n"
+          "  var handlers = {};\n"
+          "  process.on = function(event, fn) {\n"
+          "    if (!handlers[event]) handlers[event] = [];\n"
+          "    handlers[event].push(fn);\n"
+          "    return process;\n"
+          "  };\n"
+          "  process.off = process.removeListener = function(event, fn) {\n"
+          "    var list = handlers[event];\n"
+          "    if (list) {\n"
+          "      var idx = list.indexOf(fn);\n"
+          "      if (idx >= 0) list.splice(idx, 1);\n"
+          "    }\n"
+          "    return process;\n"
+          "  };\n"
+          "  process.once = function(event, fn) {\n"
+          "    function wrapper() {\n"
+          "      process.off(event, wrapper);\n"
+          "      fn.apply(this, arguments);\n"
+          "    }\n"
+          "    return process.on(event, wrapper);\n"
+          "  };\n"
+          "  process.emit = function(event) {\n"
+          "    var list = handlers[event];\n"
+          "    if (!list) return false;\n"
+          "    var args = Array.prototype.slice.call(arguments, 1);\n"
+          "    var copy = list.slice();\n"
+          "    for (var i = 0; i < copy.length; i++) {\n"
+          "      copy[i].apply(process, args);\n"
+          "    }\n"
+          "    return true;\n"
+          "  };\n"
+          "  process.listeners = function(event) {\n"
+          "    return (handlers[event] || []).slice();\n"
+          "  };\n"
+          "  process.listenerCount = function(event) {\n"
+          "    return (handlers[event] || []).length;\n"
+          "  };\n"
+          "  process.emitWarning = function(warning, type, code) {\n"
+          "    if (typeof type === 'object' && type !== null) {\n"
+          "      code = type.code; type = type.type || type.name;\n"
+          "    }\n"
+          "    if (typeof warning === 'string') {\n"
+          "      var w = new Error(warning);\n"
+          "      w.name = type || 'Warning';\n"
+          "      if (code) w.code = code;\n"
+          "      warning = w;\n"
+          "    }\n"
+          "    process.emit('warning', warning);\n"
+          "  };\n"
+          "});\n"
+          "//# sourceURL=hermes-node:process-events\n";
+      napi_value processEventEmitterStr;
+      napi_create_string_utf8(
+          env,
+          processEventEmitterCode,
+          NAPI_AUTO_LENGTH,
+          &processEventEmitterStr);
+      napi_value setupFn;
+      if (napi_run_script(env, processEventEmitterStr, &setupFn) == napi_ok) {
+        napi_value callResult;
+        napi_call_function(env, global, setupFn, 1, &processObj, &callResult);
+      }
     }
   }
 
@@ -697,6 +764,16 @@ static int runBootstrap(
     }
   }
 
+  // 11a2. Set globalThis.Buffer.
+  if (exitCode == 0) {
+    napi_value bufferModule;
+    if (loader.require(env, "buffer", &bufferModule) == napi_ok) {
+      napi_value bufferCtor;
+      napi_get_named_property(env, bufferModule, "Buffer", &bufferCtor);
+      napi_set_named_property(env, global, "Buffer", bufferCtor);
+    }
+  }
+
   // 11b. Initialize debuglog (must happen before any debug() call).
   if (exitCode == 0) {
     napi_value debuglogModule;
@@ -739,23 +816,23 @@ static int runBootstrap(
   }
 
   // 12. Load and execute the user script.
+  // Use the module loader's __loadUserScript() so the script gets a
+  // path-aware require() that supports relative imports (e.g. require('../foo')).
   if (exitCode == 0) {
-    std::string scriptSource = readFile(scriptPath);
-    if (scriptSource.empty()) {
-      std::fprintf(
-          stderr, "Error: failed to read script '%s'\n", scriptPath);
-      exitCode = 1;
-    } else {
-      scriptSource += "\n//# sourceURL=" + std::string(scriptPath) + "\n";
+    napi_value loadUserScriptFn;
+    napi_get_named_property(
+        env, global, "__loadUserScript", &loadUserScriptFn);
 
-      napi_value scriptStr;
-      napi_create_string_utf8(
-          env, scriptSource.c_str(), scriptSource.size(), &scriptStr);
-      napi_value result;
-      if (napi_run_script(env, scriptStr, &result) != napi_ok) {
-        printAndClearException(env);
-        exitCode = 1;
-      }
+    napi_value scriptPathStr;
+    napi_create_string_utf8(
+        env, scriptPath, NAPI_AUTO_LENGTH, &scriptPathStr);
+
+    napi_value result;
+    if (napi_call_function(
+            env, global, loadUserScriptFn, 1, &scriptPathStr, &result) !=
+        napi_ok) {
+      printAndClearException(env);
+      exitCode = 1;
     }
   }
 
@@ -780,7 +857,30 @@ static int runBootstrap(
     eventLoop.run();
   }
 
-  // 14. Cleanup (reverse order of creation).
+  // 14. Emit 'exit' event on process object.
+  {
+    napi_value processObj;
+    napi_get_named_property(env, global, "process", &processObj);
+    napi_value emitFn;
+    napi_get_named_property(env, processObj, "emit", &emitFn);
+    napi_valuetype emitType;
+    napi_typeof(env, emitFn, &emitType);
+    if (emitType == napi_function) {
+      napi_value exitStr, exitCodeVal;
+      napi_create_string_utf8(env, "exit", NAPI_AUTO_LENGTH, &exitStr);
+      napi_create_int32(env, exitCode, &exitCodeVal);
+      napi_value emitArgs[2] = {exitStr, exitCodeVal};
+      napi_value emitResult;
+      napi_call_function(
+          env, processObj, emitFn, 2, emitArgs, &emitResult);
+      bool pending = false;
+      napi_is_exception_pending(env, &pending);
+      if (pending)
+        printAndClearException(env);
+    }
+  }
+
+  // 15. Cleanup (reverse order of creation).
   // Close timer and fs_event libuv handles first.
   closeTimersHandles();
   closeFsEventWrapHandles();

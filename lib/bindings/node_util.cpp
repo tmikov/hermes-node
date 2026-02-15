@@ -527,16 +527,11 @@ static napi_value defineLazyProperties(napi_env env, napi_callback_info info) {
       lpd->requireRef = nullptr;
     }
 
-    // Create the getter function with lpd as callback data.
-    napi_value getter;
-    napi_create_function(
-        env, keyBuf, keyLen, lazyPropGetter, lpd, &getter);
-
-    // Wrap the lpd so it gets cleaned up.
-    // We use a weak reference approach: define a tiny wrappe object for
-    // cleanup.
-    // Actually, we can use napi_add_finalizer on the getter function.
-    napi_add_finalizer(env, getter, lpd, lazyPropDataCleanup, nullptr, nullptr);
+    // Attach lpd cleanup to the target object (not a separate getter function).
+    // The target outlives any accessor getters defined on it, so the data
+    // won't be freed while the getter is still reachable.
+    napi_add_finalizer(
+        env, target, lpd, lazyPropDataCleanup, nullptr, nullptr);
 
     // Define the lazy property as a configurable getter.
     napi_property_descriptor desc = {};

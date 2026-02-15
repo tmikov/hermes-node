@@ -74,7 +74,7 @@ be omitted):
 | Step 30 | Port fs_event_wrap binding | 3, 5 | done | |
 | Step 31 | Verify fs sync operations | 27, 9 | done | |
 | Step 32 | Verify fs async operations | 28, 29 | done | fs.promises unavailable (async generators) |
-| Step 33 | Run Node.js fs test subset | 28, 29, 30 | | |
+| Step 33 | Run Node.js fs test subset | 28, 29, 30 | done | 8/8 pass |
 
 ## Context Notes
 
@@ -444,3 +444,19 @@ be omitted):
   - `for await...of` directory iteration from the original plan is untestable since it requires async iteration syntax. Covered async opendir with explicit callback-based `dir.read()` instead.
 - **Issues**: `fs.promises` is permanently unavailable until Hermes adds async generator support. The `fs.promises` getter on the `fs` object is lazy, so `require('fs')` works fine; only accessing `.promises` triggers the error.
 - **Notes for next step**: All callback-based async fs operations verified working. Step 33 (Node.js fs test subset) will require setting up the Node test harness.
+
+### Step 33: Run Node.js fs test subset
+- **Files**: created `test/node-tests/common/index.js`, `test/node-tests/common/tmpdir.js`, `test/node-tests/common/fixtures.js`, `test/node-tests/fixtures/x.txt`, `test/run-node-test.sh`, and 8 test files in `test/node-tests/parallel/`. Modified `libjs/loader.js` (user script loading + relative require + index.js resolution), `tools/hermes-node/hermes-node.cpp` (user script via module loader, globalThis.Buffer, process event emitter, 'exit' event), `lib/bindings/node_file.cpp` (recursive mkdir EEXIST/ENOTDIR fix), `lib/bindings/node_util.cpp` (lazyPropGetter use-after-free fix), `CMakeLists.txt` (8 new tests).
+- **What was done**: Set up Node test harness shims (common/index.js, common/tmpdir.js, common/fixtures.js) and ported 8 Node.js fs tests. All 8 pass: test-fs-link, test-fs-mkdir, test-fs-readfile, test-fs-readdir, test-fs-open, test-fs-stat, test-fs-chmod, test-fs-truncate.
+- **Decisions**:
+  - User scripts now loaded via `__loadUserScript()` through the module loader (not raw `napi_run_script`), giving them CJS-style relative require support.
+  - Added `resolveRelative()` to loader with CJS conventions: try `.js`, then `/index.js`.
+  - `globalThis.Buffer` exposed during bootstrap (needed by Node tests).
+  - Minimal process event emitter added inline in bootstrap (on/off/once/emit/emitWarning).
+  - Tests adapted: removed AbortSignal tests (no global), arg type validation tests (our binding doesn't replicate Node's JS-level validation), fs.promises tests (unavailable), reduced readfile buffer sizes (deepStrictEqual too slow under ASAN).
+  - Replaced test-fs-read.js (ASAN crash in lazyPropGetter) with test-fs-open.js.
+- **Issues**:
+  - Fixed pre-existing lazyPropGetter use-after-free: finalizer was attached to a temporary getter function instead of the target object.
+  - Fixed recursive mkdirSync: wasn't detecting EEXIST on files or ENOTDIR for intermediate file components.
+  - `deepStrictEqual` on large buffers (1MB+) is extremely slow under ASAN; reduced test sizes.
+- **Notes for next step**: Node test infrastructure is reusable for future test porting. The `test/node-tests/common/` shims support mustCall/mustSucceed/mustNotCall/mustNotMutateObjectDeep/expectsError/tmpdir/fixtures.

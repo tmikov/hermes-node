@@ -1456,13 +1456,34 @@ static napi_value fsMkdir(napi_env env, napi_callback_info info) {
       if (firstCreated.empty())
         firstCreated = current;
     } else if (result != UV_EEXIST) {
-      return throwUVException(env, result, "mkdir", current.c_str());
+      return throwUVException(env, result, "mkdir", path.c_str());
+    }
+    // UV_EEXIST: path exists — continue (may be a dir or a file).
+  }
+
+  // After iterating all components, verify the full path is a directory.
+  // If it's a file (or doesn't exist), throw the appropriate error.
+  {
+    uv_fs_t statReq;
+    int statRes = uv_fs_stat(nullptr, &statReq, path.c_str(), nullptr);
+    if (statRes == 0) {
+      bool isDir =
+          (uv_fs_get_statbuf(&statReq)->st_mode & S_IFMT) == S_IFDIR;
+      uv_fs_req_cleanup(&statReq);
+      if (!isDir) {
+        return throwUVException(env, UV_EEXIST, "mkdir", path.c_str());
+      }
+    } else {
+      uv_fs_req_cleanup(&statReq);
+      // The path doesn't exist — an intermediate component was a file.
+      return throwUVException(env, UV_ENOTDIR, "mkdir", path.c_str());
     }
   }
 
   if (!firstCreated.empty()) {
     napi_value jsResult;
-    napi_create_string_utf8(env, firstCreated.c_str(), firstCreated.size(), &jsResult);
+    napi_create_string_utf8(
+        env, firstCreated.c_str(), firstCreated.size(), &jsResult);
     return jsResult;
   }
   return nullptr;

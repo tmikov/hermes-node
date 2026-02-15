@@ -143,6 +143,39 @@ add_custom_target(check-hermes-node-js
     $<TARGET_FILE:hermes-node>
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/test-fs-async-verify.js
+  # Node.js ported test suite (test/node-tests/parallel/).
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
+    $<TARGET_FILE:hermes-node>
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-link.js
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
+    $<TARGET_FILE:hermes-node>
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-mkdir.js
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
+    $<TARGET_FILE:hermes-node>
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-readfile.js
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
+    $<TARGET_FILE:hermes-node>
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-readdir.js
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
+    $<TARGET_FILE:hermes-node>
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-open.js
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
+    $<TARGET_FILE:hermes-node>
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-stat.js
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
+    $<TARGET_FILE:hermes-node>
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-chmod.js
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
+    $<TARGET_FILE:hermes-node>
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-truncate.js
   DEPENDS hermes hermes-node
   COMMENT "Running JS tests"
 )

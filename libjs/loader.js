@@ -91,16 +91,74 @@
     }
 
     // Create a require function bound to the requesting module's filepath
-    // (for relative path resolution in the future).
+    // so that relative requires (./foo, ../bar) resolve correctly.
     function makeRequire(fromFilepath) {
+      var lastSlash = fromFilepath.lastIndexOf('/');
+      var fromDir = lastSlash >= 0 ? fromFilepath.substring(0, lastSlash) : '.';
+
       function require(name) {
+        // Relative path requires are resolved relative to the requiring file.
+        if (name.charAt(0) === '.') {
+          var resolvedPath = resolveRelative(fromDir, name);
+          // Check cache by resolved path.
+          if (cache[resolvedPath]) {
+            return cache[resolvedPath].exports;
+          }
+          var mod = loadModule(resolvedPath, resolvedPath);
+          return mod.exports;
+        }
         return requireModule(name);
       }
       require.resolve = function(name) {
+        if (name.charAt(0) === '.') {
+          return resolveRelative(fromDir, name);
+        }
         var resolved = resolve(name);
         return resolved.filepath;
       };
       return require;
+    }
+
+    // Resolve a relative require to a file path, trying CJS conventions:
+    // 1. exact path, 2. path + .js, 3. path/index.js
+    function resolveRelative(fromDir, name) {
+      var base = resolvePath(fromDir, name);
+      // If already ends in .js, use as-is.
+      if (base.length > 3 && base.substring(base.length - 3) === '.js') {
+        return base;
+      }
+      // Try base.js first.
+      var withJs = base + '.js';
+      try {
+        readFileSync(withJs);
+        return withJs;
+      } catch (e) {
+        // fall through
+      }
+      // Try base/index.js (directory with index).
+      var indexJs = base + '/index.js';
+      try {
+        readFileSync(indexJs);
+        return indexJs;
+      } catch (e) {
+        // fall through
+      }
+      // Default to .js extension (will fail at load time with a clear error).
+      return withJs;
+    }
+
+    // Simple path resolution: resolve a relative path against a base directory.
+    function resolvePath(base, relative) {
+      var parts = base.split('/');
+      var relParts = relative.split('/');
+      for (var i = 0; i < relParts.length; i++) {
+        if (relParts[i] === '..') {
+          parts.pop();
+        } else if (relParts[i] !== '.' && relParts[i] !== '') {
+          parts.push(relParts[i]);
+        }
+      }
+      return parts.join('/');
     }
 
     // The main require implementation.
@@ -135,6 +193,12 @@
       globalThis.primordials = primordials;
       globalThis.internalBinding = internalBinding;
       globalThis.require = requireModule;
+
+      // Expose loadUserScript for the C++ bootstrap to run user scripts
+      // as CJS modules (with path-aware require for relative imports).
+      globalThis.__loadUserScript = function(filepath) {
+        loadModule(filepath, filepath);
+      };
     }
 
     // Return the require function.
