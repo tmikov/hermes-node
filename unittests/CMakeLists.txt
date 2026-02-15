@@ -60,3 +60,16 @@ target_compile_definitions(ModuleLoaderTest PRIVATE
   LIBJS_PATH="${CMAKE_SOURCE_DIR}/libjs/"
   TEST_DATA_PATH="${CMAKE_SOURCE_DIR}/unittests/module-loader-testdata/"
 )
+
+add_node_compat_unittest(NodeProcessTest NodeProcessTest.cpp)
+target_link_libraries(NodeProcessTest
+  hermesNodeProcess
+  hermesvm_a
+)
+target_include_directories(NodeProcessTest PRIVATE
+  ${CMAKE_SOURCE_DIR}/hermes/API/napi
+  ${CMAKE_BINARY_DIR}/hermes/lib/config
+)
+target_compile_definitions(NodeProcessTest PRIVATE
+  HERMESVM_GC_${HERMESVM_GCKIND}
+)

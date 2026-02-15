@@ -71,6 +71,15 @@
 - `(0, eval)(wrapped)` for global-scope indirect eval
 - Tests use `TEST_DATA_PATH` and `LIBJS_PATH` CMake compile definitions for filesystem paths
 
+## Process Object
+- `hermesNodeProcess` lib in `lib/process/`, links `uv_a` publicly
+- `NodeProcess` class: `setArgv`/`setExecPath` -> `create(env, &result)` -> `detach(env)`
+- `process.env` is a JS `Proxy` with native C trap functions (get/set/delete/has/ownKeys/getOwnPropertyDescriptor)
+- `process.title` uses `napi_property_descriptor` with `napi_callback` getter/setter (function pointers, NOT `napi_value`)
+- `process.hrtime.bigint()` uses `napi_create_bigint_uint64`
+- `process.memoryUsage()` RSS via `uv_resident_set_memory`; heap stats stubbed (no Hermes heap API via NAPI)
+- `process.uptime()` passes `NodeProcess*` as callback data to access `getStartTime()`
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`

@@ -48,7 +48,7 @@ be omitted):
 | Step 4 | Implement primordials thin shim | — | done | |
 | Step 5 | Implement internalBinding registry | 1 | done | |
 | Step 6 | Implement internal module loader | 5 | done | |
-| Step 7 | Implement process object (basic properties) | 5 | | |
+| Step 7 | Implement process object (basic properties) | 5 | done | |
 | Step 8 | Implement bootstrap sequence | 3, 4, 6, 7 | | |
 | Step 9 | Port constants binding | 5 | | |
 | Step 10 | Port types binding | 5 | | |
@@ -148,3 +148,15 @@ be omitted):
 - **What was done**: Implemented `ModuleLoader` class with `setLibJsPath`, `setLibJsNodePath`, `init`, `require`, `detach`. JS loader.js implements CJS-style module system with cache, circular dependency support, and shim overrides. CMake library `hermesNodeModuleLoader` is STATIC. Wrote 8 GTest tests: basic require, caching, transitive require, circular require, nested paths (internal/foo), primordials accessible, internalBinding accessible, nonexistent module throws. All tests pass under ASAN.
 - **Notes for next step**: Link against `hermesNodeModuleLoader` for the module loader. The loader sets `globalThis.primordials` and `globalThis.internalBinding` during init so that loaded modules can access them. Test data uses `TEST_DATA_PATH` CMake define for module resolution base path.
 
+### Step 7: Implement process object (basic properties)
+- **Files**: created `include/hermes/node-compat/process/node_process.h`, `lib/process/node_process.cpp`, `lib/process/CMakeLists.txt`, `unittests/NodeProcessTest.cpp`. Modified `CMakeLists.txt` (top-level), `unittests/CMakeLists.txt`.
+- **Decisions**:
+  - `NodeProcess` class owns the process object lifecycle: `setArgv`/`setExecPath` -> `create(env)` -> `detach(env)`.
+  - `process.env` uses a JS `Proxy` with native trap functions (get/set/deleteProperty/has/ownKeys/getOwnPropertyDescriptor) that call `getenv`/`setenv`/`unsetenv`/`uv_os_environ` directly. No intermediate KVStore abstraction.
+  - `process.title` uses `napi_property_descriptor` with `napi_callback` getter/setter (function pointers, NOT `napi_value` JS functions).
+  - `process.hrtime()` returns `[seconds, nanoseconds]` array; `process.hrtime.bigint()` returns BigInt via `napi_create_bigint_uint64`.
+  - `process.memoryUsage()` provides RSS via `uv_resident_set_memory`; heap stats stubbed to 0 (no Hermes heap stats API via NAPI).
+  - `process.uptime()` uses `NodeProcess*` as callback data to access start time recorded in constructor.
+  - `process.kill(pid, sig)` takes numeric signal (JS-side signal name lookup deferred to bootstrap).
+- **What was done**: Implemented `NodeProcess` class with all non-I/O properties and methods. Properties: pid, ppid, platform, arch, version, versions, argv, execPath, title, env. Methods: cwd, chdir, hrtime, hrtime.bigint, cpuUsage, memoryUsage, uptime, exit, abort, umask, kill. CMake library `hermesNodeProcess` links `uv_a` publicly. Wrote 24 GTest tests covering all properties and methods. All pass under ASAN.
+- **Notes for next step**: Link against `hermesNodeProcess`. The process object is created via C++ and set as a JS global. Step 8 (bootstrap) will integrate it with the module loader. Deferred: `process.nextTick` (Step 21), `process.stdout/stderr` (Step 23), signal handling, `process.on('exit')`.

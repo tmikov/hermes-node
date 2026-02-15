@@ -32,6 +32,7 @@ add_subdirectory(lib/placeholder)
 add_subdirectory(lib/event-loop)
 add_subdirectory(lib/binding-registry)
 add_subdirectory(lib/module-loader)
+add_subdirectory(lib/process)
 
 # CLI tools
 add_subdirectory(tools/hermes-node)
