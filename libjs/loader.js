@@ -134,6 +134,7 @@
     if (typeof globalThis !== 'undefined') {
       globalThis.primordials = primordials;
       globalThis.internalBinding = internalBinding;
+      globalThis.require = requireModule;
     }
 
     // Return the require function.

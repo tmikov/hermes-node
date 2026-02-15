@@ -125,6 +125,12 @@
 - `initSymbolsBinding` — 21 unique symbols from Node's `PER_ISOLATE_SYMBOL_PROPERTIES`
 - Used by: `internal/async_hooks.js` (owner_symbol, resource_symbol, async_id_symbol, trigger_async_id_symbol), `internal/modules/cjs/loader.js` (imported_cjs_symbol), `internal/worker/js_transferable.js` (messaging_*_symbol), `vm.js` (vm_* symbols)
 
+## Options Shim
+- `libjs/shims/internal/options.js`: pure JS shim replacing Node's C++-backed `internal/options`
+- Static `optionsMap` with ~90 option defaults; `getOptionValue(name)` does map lookup
+- Exports: `getOptionValue`, `refreshOptions` (no-op), `getEmbedderOptions`, `getCLIOptionsInfo`, `getOptionsAsFlagsFromBinding`, `getAllowUnauthorized`, `generateConfigJsonSchema`
+- `globalThis.require` exposed by `loader.js` so user scripts can call `require()`
+
 ## Hermes NAPI Bugs/Workarounds
 - **`napi_get_all_property_names` with mixed string+symbol**: When both `plusIncludeSymbols().plusKeepSymbols()` and `plusIncludeNonSymbols()` are set (via `napi_key_all_properties` without skip flags), string property names are returned as Hermes internal SymbolIDs (exposed as JS Symbols). Workaround: make two separate calls — one with `napi_key_skip_symbols` for strings, one with `napi_key_skip_strings` for symbols.
 - **`napi_create_string_utf8` rejects invalid UTF-8**: Unlike V8 (which produces replacement chars), Hermes raises a RangeError and returns `napi_generic_failure`. Workaround: catch failure, clear exception, sanitize bytes by replacing invalid sequences with U+FFFD, retry.

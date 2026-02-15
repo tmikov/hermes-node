@@ -57,7 +57,7 @@ be omitted):
 | Step 13 | Port errors binding | 5 | done | |
 | Step 14 | Port config binding | 5 | done | |
 | Step 15 | Port symbols binding | 5 | done | |
-| Step 16 | Implement internal/options shim | 6 | | |
+| Step 16 | Implement internal/options shim | 6 | done | |
 | Step 17 | Verify bootstrap modules load | 8, 9–16 | | |
 | Step 18 | Port buffer binding | 5 | | |
 | Step 19 | Port encoding_binding | 5 | | |
@@ -251,3 +251,14 @@ be omitted):
   - Used X-macro `SYMBOL_PROPERTIES(V)` for maintainability — adding/removing symbols requires changing only the macro.
   - Symbol descriptions match Node's exact strings (e.g., `handle_onclose_symbol` has description "handle_onclose").
 - **What was done**: Implemented `initSymbolsBinding` creating 21 unique symbols. Registered in bootstrap. JS test verifies all symbols exist, are typeof 'symbol', are unique, have descriptive toString, and are usable as property keys. All tests pass under ASAN.
+
+### Step 16: Implement internal/options shim
+- **Files**: created `libjs/shims/internal/options.js`, `test/test-options.js`. Modified `libjs/loader.js`, `CMakeLists.txt` (top-level).
+- **Decisions**:
+  - Pure JS shim (not native binding) using the loader's shim override mechanism: `libjs/shims/internal/options.js` is loaded instead of `libjs-node/internal/options.js`.
+  - Static `optionsMap` with sensible defaults for all ~90 options queried by Node's `lib/*.js` modules. Boolean flags default to false, string flags to '', array flags to []. Node v24 defaults used where relevant (e.g., `--experimental-require-module` true, `--experimental-detect-module` true).
+  - `getOptionValue(name)` does a simple map lookup, returns undefined for unknown options.
+  - `getEmbedderOptions()` returns `{ noBrowserGlobals: false, hasEmbedderPreload: false, noGlobalSearchPaths: false }`.
+  - `getCLIOptionsInfo()`, `getOptionsAsFlagsFromBinding()`, `getAllowUnauthorized()`, `refreshOptions()`, `generateConfigJsonSchema()` all stubbed with minimal implementations.
+  - Added `globalThis.require = requireModule` in `loader.js` so user scripts (and tests) can call `require()`.
+- **What was done**: Implemented full options shim covering all exports from Node's `internal/options.js`. Added JS test verifying all exported functions, option value types (boolean/string/number/array), defaults, and unknown option behavior. All tests pass under ASAN.
