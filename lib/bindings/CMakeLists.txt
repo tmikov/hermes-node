@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 add_hermes_library(hermesNodeBindings STATIC
+  node_config.cpp
   node_constants.cpp
   node_errors.cpp
   node_string_decoder.cpp

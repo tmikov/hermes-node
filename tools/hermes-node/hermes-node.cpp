@@ -13,6 +13,7 @@
 #include "hermes/VM/Runtime.h"
 
 #include <hermes/node-compat/binding-registry/binding_registry.h>
+#include <hermes/node-compat/bindings/node_config.h>
 #include <hermes/node-compat/bindings/node_constants.h>
 #include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_string_decoder.h>
@@ -208,6 +209,7 @@ static int runBootstrap(
 
   // 5. Register native bindings.
   BindingRegistry registry;
+  registry.registerBinding("config", initConfigBinding);
   registry.registerBinding("constants", initConstantsBinding);
   registry.registerBinding("errors", initErrorsBinding);
   registry.registerBinding("string_decoder", initStringDecoderBinding);

@@ -55,7 +55,7 @@ be omitted):
 | Step 11 | Port util binding | 5 | done | |
 | Step 12 | Port string_decoder binding | 5 | done | |
 | Step 13 | Port errors binding | 5 | done | |
-| Step 14 | Port config binding | 5 | | |
+| Step 14 | Port config binding | 5 | done | |
 | Step 15 | Port symbols binding | 5 | | |
 | Step 16 | Implement internal/options shim | 6 | | |
 | Step 17 | Verify bootstrap modules load | 8, 9–16 | | |
@@ -234,3 +234,12 @@ be omitted):
   - `getErrorSourcePositions` stubbed returning undefined (requires V8 internal APIs).
   - `exitCodes` object contains all 13 exit codes from Node's `ExitCode` enum in `node_exit_code.h`.
 - **What was done**: Implemented `initErrorsBinding` with `triggerUncaughtException`, `noSideEffectsToString`, 6 stub functions, and `exitCodes` object. Registered in bootstrap. JS test verifies all function types, stub invocations don't throw, `noSideEffectsToString` for various types, and all 13 exit code values. All tests pass under ASAN.
+
+### Step 14: Port config binding
+- **Files**: created `include/hermes/node-compat/bindings/node_config.h`, `lib/bindings/node_config.cpp`, `test/test-config.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `CMakeLists.txt` (top-level).
+- **Decisions**:
+  - All feature flags reflect Hermes build capabilities: `hasOpenSSL`, `hasInspector`, `hasIntl`, `hasSmallICU`, `hasTracing` all false. `hasNodeOptions` true. `noBrowserGlobals` false. `fipsMode` false. `openSSLIsBoringSSL` false.
+  - `isDebugBuild` derived from `NDEBUG` preprocessor macro.
+  - `bits` is `8 * sizeof(intptr_t)` (32 or 64).
+  - `getDefaultLocale()` reads `LC_ALL`/`LC_MESSAGES`/`LANG` env vars, strips encoding suffix, converts underscore to hyphen for BCP 47 format. Falls back to "en-US".
+- **What was done**: Implemented `initConfigBinding` with 10 boolean properties, `bits` integer, and `getDefaultLocale` function. Registered in bootstrap. JS test verifies all property types and values. All tests pass under ASAN.
