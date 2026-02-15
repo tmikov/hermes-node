@@ -292,6 +292,11 @@
 - `fs.readdirSync(dir, { recursive: true })` works and returns nested paths (e.g. `sub/nested.txt`)
 - `fs.statSync(path, { bigint: true })` returns BigInt values for size, ino, mtimeNs, etc.
 
+## FS Async Verification (Step 32)
+- All 32 callback-based async fs operations verified: chmod, lstat, ftruncate, link, symlink, readlink, realpath, utimes, access, stat bigint, fsync, fdatasync, mkdir recursive, readdir withFileTypes/recursive, writeFile/readFile Buffer, write string, copyFile, opendir sequential reads, EISDIR error, concurrent async (5 parallel), lchown, chown, fchown, fchmod, fstat, fstat bigint, lutimes, rmdir, futimes, statfs
+- **`fs.promises` permanently unavailable**: `internal/fs/promises.js` has `async function*` (lines 1273, 1294) which Hermes rejects as SyntaxError at parse time. The `fs.promises` getter is lazy, so `require('fs')` works fine; only accessing `.promises` fails.
+- `for await...of` directory iteration untestable; use callback-based `dir.read()` instead
+
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
 - `napi_env__` takes `Runtime&` + optional `hermes_napi_event_loop*`

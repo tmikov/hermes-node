@@ -73,7 +73,7 @@ be omitted):
 | Step 29 | Port fs_dir binding | 27 | done | |
 | Step 30 | Port fs_event_wrap binding | 3, 5 | done | |
 | Step 31 | Verify fs sync operations | 27, 9 | done | |
-| Step 32 | Verify fs async operations | 28, 29 | | |
+| Step 32 | Verify fs async operations | 28, 29 | done | fs.promises unavailable (async generators) |
 | Step 33 | Run Node.js fs test subset | 28, 29, 30 | | |
 
 ## Context Notes
@@ -435,3 +435,12 @@ be omitted):
 - **Files**: created `test/test-fs-sync-verify.js`. Modified `CMakeLists.txt` (added test).
 - **What was done**: Created comprehensive edge case tests for fs sync operations beyond what Step 27's test covered. 17 test cases: accessSync with combined R_OK|W_OK flags, symlink+readlink path verification, lstatSync isSymbolicLink on symlinks, statSync follows symlinks to isFile, rmSync recursive cleanup, accessSync ENOENT error, mkdirSync recursive returns first created path, mkdirSync recursive on existing returns undefined, lchownSync, readdirSync recursive option, writeFileSync/readFileSync with binary Buffer, statSync with bigint option, readdirSync withFileTypes on symlinks (isSymbolicLink dirent), fdatasyncSync, lutimesSync on symlinks. All 24 tests pass under ASAN.
 - **Notes for next step**: All fs sync operations verified working correctly including edge cases around symlinks, bigint stats, recursive readdir, and lutimes.
+
+### Step 32: Verify fs async operations
+- **Files**: created `test/test-fs-async-verify.js`. Modified `CMakeLists.txt` (added test).
+- **What was done**: Created 32 comprehensive async fs test cases covering all callback-based async operations: chmod, lstat, ftruncate, link, symlink+readlink, realpath, utimes, access, stat with bigint, fsync, fdatasync, mkdir recursive, readdir withFileTypes, readdir recursive, writeFile+readFile with Buffer, write string, copyFile+verify, opendir sequential reads (10 files), EISDIR error, concurrent async ops (5 parallel write+read), fs.promises graceful failure, lchown, chown, fchown, fchmod, fstat, fstat with bigint, lutimes, rmdir, futimes, statfs. All 32 tests pass under ASAN.
+- **Decisions**:
+  - `fs.promises` cannot load on Hermes (SyntaxError from `async function*` in `internal/fs/promises.js`). Test documents this with a graceful failure check.
+  - `for await...of` directory iteration from the original plan is untestable since it requires async iteration syntax. Covered async opendir with explicit callback-based `dir.read()` instead.
+- **Issues**: `fs.promises` is permanently unavailable until Hermes adds async generator support. The `fs.promises` getter on the `fs` object is lazy, so `require('fs')` works fine; only accessing `.promises` triggers the error.
+- **Notes for next step**: All callback-based async fs operations verified working. Step 33 (Node.js fs test subset) will require setting up the Node test harness.
