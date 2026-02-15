@@ -7,6 +7,7 @@
 
 #include <hermes/node-compat/bindings/node_string_decoder.h>
 #include <node_api.h>
+#include <simdutf.h>
 
 #include <algorithm>
 #include <cstring>
@@ -73,49 +74,17 @@ static napi_status makeHexString(
   return napi_create_string_latin1(env, out.data(), out.size(), result);
 }
 
-/// Base64 encode bytes.
+/// Base64 encode bytes using simdutf.
 static napi_status makeBase64String(
     napi_env env,
     const char *data,
     size_t length,
     napi_value *result,
     bool urlSafe) {
-  static const char stdTable[] =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  static const char urlTable[] =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-  const char *table = urlSafe ? urlTable : stdTable;
-
-  std::string out;
-  out.reserve(((length + 2) / 3) * 4);
-
-  size_t i = 0;
-  while (i + 2 < length) {
-    auto a = static_cast<unsigned char>(data[i++]);
-    auto b = static_cast<unsigned char>(data[i++]);
-    auto c = static_cast<unsigned char>(data[i++]);
-    out.push_back(table[a >> 2]);
-    out.push_back(table[((a & 0x03) << 4) | (b >> 4)]);
-    out.push_back(table[((b & 0x0f) << 2) | (c >> 6)]);
-    out.push_back(table[c & 0x3f]);
-  }
-
-  if (i < length) {
-    auto a = static_cast<unsigned char>(data[i++]);
-    out.push_back(table[a >> 2]);
-    if (i < length) {
-      auto b = static_cast<unsigned char>(data[i]);
-      out.push_back(table[((a & 0x03) << 4) | (b >> 4)]);
-      out.push_back(table[(b & 0x0f) << 2]);
-    } else {
-      out.push_back(table[(a & 0x03) << 4]);
-      if (!urlSafe)
-        out.push_back('=');
-    }
-    if (!urlSafe)
-      out.push_back('=');
-  }
-
+  auto opts = urlSafe ? simdutf::base64_url : simdutf::base64_default;
+  size_t outLen = simdutf::base64_length_from_binary(length, opts);
+  std::string out(outLen, '\0');
+  simdutf::binary_to_base64(data, length, &out[0], opts);
   return napi_create_string_latin1(env, out.data(), out.size(), result);
 }
 

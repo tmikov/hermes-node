@@ -7,6 +7,8 @@
 
 #include <hermes/node-compat/bindings/node_encoding.h>
 #include <node_api.h>
+#include <simdutf.h>
+#include <ada.h>
 
 #include <cstring>
 #include <string>
@@ -103,40 +105,7 @@ static bool getBufferData(napi_env env, napi_value val, BufInfo *out) {
 
 /// Validate UTF-8 data. Returns true if valid.
 static bool isValidUtf8(const uint8_t *data, size_t length) {
-  size_t i = 0;
-  while (i < length) {
-    uint8_t b = data[i];
-    if (b < 0x80) {
-      ++i;
-    } else if ((b & 0xE0) == 0xC0) {
-      if (i + 1 >= length || (data[i + 1] & 0xC0) != 0x80)
-        return false;
-      if (b < 0xC2) // overlong
-        return false;
-      i += 2;
-    } else if ((b & 0xF0) == 0xE0) {
-      if (i + 2 >= length || (data[i + 1] & 0xC0) != 0x80 ||
-          (data[i + 2] & 0xC0) != 0x80)
-        return false;
-      uint32_t cp =
-          ((b & 0x0F) << 12) | ((data[i + 1] & 0x3F) << 6) | (data[i + 2] & 0x3F);
-      if (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF))
-        return false;
-      i += 3;
-    } else if ((b & 0xF8) == 0xF0) {
-      if (i + 3 >= length || (data[i + 1] & 0xC0) != 0x80 ||
-          (data[i + 2] & 0xC0) != 0x80 || (data[i + 3] & 0xC0) != 0x80)
-        return false;
-      uint32_t cp = ((b & 0x07) << 18) | ((data[i + 1] & 0x3F) << 12) |
-          ((data[i + 2] & 0x3F) << 6) | (data[i + 3] & 0x3F);
-      if (cp < 0x10000 || cp > 0x10FFFF)
-        return false;
-      i += 4;
-    } else {
-      return false;
-    }
-  }
-  return true;
+  return simdutf::validate_utf8(reinterpret_cast<const char *>(data), length);
 }
 
 // ---------------------------------------------------------------------------
@@ -144,18 +113,11 @@ static bool isValidUtf8(const uint8_t *data, size_t length) {
 // ---------------------------------------------------------------------------
 
 static std::string latin1ToUtf8(const uint8_t *data, size_t length) {
-  std::string result;
-  result.reserve(length * 2); // worst case
-  for (size_t i = 0; i < length; ++i) {
-    uint8_t b = data[i];
-    if (b < 0x80) {
-      result.push_back(static_cast<char>(b));
-    } else {
-      // Latin-1 U+0080..U+00FF -> 2-byte UTF-8
-      result.push_back(static_cast<char>(0xC0 | (b >> 6)));
-      result.push_back(static_cast<char>(0x80 | (b & 0x3F)));
-    }
-  }
+  size_t utf8Len = simdutf::utf8_length_from_latin1(
+      reinterpret_cast<const char *>(data), length);
+  std::string result(utf8Len, '\0');
+  (void)simdutf::convert_latin1_to_utf8(
+      reinterpret_cast<const char *>(data), length, &result[0]);
   return result;
 }
 
@@ -166,29 +128,9 @@ static std::string latin1ToUtf8(const uint8_t *data, size_t length) {
 
 // Count UTF-16 code units consumed from a JS string when encoding to UTF-8.
 // This is needed for encodeInto to report how many characters were read.
-// We count based on the UTF-8 output: each 1-3 byte sequence = 1 char,
-// each 4-byte sequence = 2 chars (surrogate pair in UTF-16).
 static size_t countUtf16UnitsFromUtf8(const uint8_t *data, size_t length) {
-  size_t units = 0;
-  size_t i = 0;
-  while (i < length) {
-    uint8_t b = data[i];
-    if (b < 0x80) {
-      units += 1;
-      i += 1;
-    } else if ((b & 0xE0) == 0xC0) {
-      units += 1;
-      i += 2;
-    } else if ((b & 0xF0) == 0xE0) {
-      units += 1;
-      i += 3;
-    } else {
-      // 4-byte sequence -> surrogate pair = 2 UTF-16 code units
-      units += 2;
-      i += 4;
-    }
-  }
-  return units;
+  return simdutf::utf16_length_from_utf8(
+      reinterpret_cast<const char *>(data), length);
 }
 
 // ---------------------------------------------------------------------------
@@ -338,8 +280,7 @@ static napi_value decodeLatin1(napi_env env, napi_callback_info info) {
 
 // ---------------------------------------------------------------------------
 // toASCII(domain: string): string
-// IDNA ToASCII. Stubbed: returns the input unchanged since we don't have
-// the ADA library. Pure-ASCII domains pass through correctly.
+// IDNA ToASCII using Ada's IDNA implementation.
 // ---------------------------------------------------------------------------
 
 static napi_value toASCII(napi_env env, napi_callback_info info) {
@@ -347,14 +288,22 @@ static napi_value toASCII(napi_env env, napi_callback_info info) {
   napi_value argv[1];
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
-  // Just return the input string as-is. This is correct for ASCII domains.
-  // Non-ASCII (internationalized) domain names won't be converted to punycode.
-  return argv[0];
+  // Get domain string as UTF-8.
+  size_t len = 0;
+  napi_get_value_string_utf8(env, argv[0], nullptr, 0, &len);
+  std::string domain(len, '\0');
+  napi_get_value_string_utf8(env, argv[0], &domain[0], len + 1, &len);
+
+  std::string ascii = ada::idna::to_ascii(domain);
+
+  napi_value result;
+  napi_create_string_utf8(env, ascii.data(), ascii.size(), &result);
+  return result;
 }
 
 // ---------------------------------------------------------------------------
 // toUnicode(domain: string): string
-// IDNA ToUnicode. Stubbed: returns the input unchanged.
+// IDNA ToUnicode using Ada's IDNA implementation.
 // ---------------------------------------------------------------------------
 
 static napi_value toUnicode(napi_env env, napi_callback_info info) {
@@ -362,7 +311,17 @@ static napi_value toUnicode(napi_env env, napi_callback_info info) {
   napi_value argv[1];
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
-  return argv[0];
+  // Get domain string as UTF-8.
+  size_t len = 0;
+  napi_get_value_string_utf8(env, argv[0], nullptr, 0, &len);
+  std::string domain(len, '\0');
+  napi_get_value_string_utf8(env, argv[0], &domain[0], len + 1, &len);
+
+  std::string unicode = ada::idna::to_unicode(domain);
+
+  napi_value result;
+  napi_create_string_utf8(env, unicode.data(), unicode.size(), &result);
+  return result;
 }
 
 // ---------------------------------------------------------------------------

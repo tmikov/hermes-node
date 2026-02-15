@@ -36,4 +36,7 @@ target_include_directories(hermesNodeBindings
 target_link_libraries(hermesNodeBindings
   PUBLIC
     uv_a
+  PRIVATE
+    simdutf
+    ada
 )

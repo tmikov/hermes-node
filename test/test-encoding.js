@@ -244,5 +244,36 @@ assertions++;
 assertEquals(enc.toUnicode('example.com'), 'example.com', 'toUnicode ASCII domain');
 assertions++;
 
+// IDN: internationalized domain names (now using Ada library)
+// German umlaut domain
+assertEquals(enc.toASCII('m\u00fcnchen.de'), 'xn--mnchen-3ya.de', 'toASCII German umlaut');
+assertions++;
+
+// Chinese domain
+assertEquals(enc.toASCII('\u4e2d\u6587.com'), 'xn--fiq228c.com', 'toASCII Chinese domain');
+assertions++;
+
+// Mixed ASCII and non-ASCII labels
+assertEquals(enc.toASCII('www.\u00e9xample.com'), 'www.xn--xample-9ua.com', 'toASCII mixed labels');
+assertions++;
+
+// toASCII of already-punycoded domain should be idempotent
+assertEquals(enc.toASCII('xn--mnchen-3ya.de'), 'xn--mnchen-3ya.de', 'toASCII punycode idempotent');
+assertions++;
+
+// toUnicode should convert punycode back to Unicode
+assertEquals(enc.toUnicode('xn--mnchen-3ya.de'), 'm\u00fcnchen.de', 'toUnicode German umlaut');
+assertions++;
+
+assertEquals(enc.toUnicode('xn--fiq228c.com'), '\u4e2d\u6587.com', 'toUnicode Chinese domain');
+assertions++;
+
+// Empty string
+assertEquals(enc.toASCII(''), '', 'toASCII empty');
+assertions++;
+
+assertEquals(enc.toUnicode(''), '', 'toUnicode empty');
+assertions++;
+
 console.log('encoding_binding: ' + assertions + ' assertions passed');
 console.log('PASS');

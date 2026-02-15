@@ -26,6 +26,8 @@ endif()
 
 # Vendored external dependencies
 add_subdirectory(external/libuv)
+add_subdirectory(external/simdutf)
+add_subdirectory(external/ada)
 
 # Our C++ libraries
 add_subdirectory(lib/event-loop)

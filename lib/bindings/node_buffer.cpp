@@ -7,6 +7,7 @@
 
 #include <hermes/node-compat/bindings/node_buffer.h>
 #include <node_api.h>
+#include <simdutf.h>
 
 #include <algorithm>
 #include <climits>
@@ -101,158 +102,49 @@ static bool getAnyBufInfo(napi_env env, napi_value val, BufInfo *out) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers: base64 encode/decode
+// Helpers: base64 encode/decode (using simdutf)
 // ---------------------------------------------------------------------------
 
-static const char kBase64Table[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-static const char kBase64UrlTable[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-
-static std::string base64Encode(const uint8_t *data, size_t len) {
-  std::string out;
-  out.reserve(((len + 2) / 3) * 4);
-  size_t i = 0;
-  while (i + 2 < len) {
-    auto a = data[i++];
-    auto b = data[i++];
-    auto c = data[i++];
-    out.push_back(kBase64Table[a >> 2]);
-    out.push_back(kBase64Table[((a & 0x03) << 4) | (b >> 4)]);
-    out.push_back(kBase64Table[((b & 0x0f) << 2) | (c >> 6)]);
-    out.push_back(kBase64Table[c & 0x3f]);
-  }
-  if (i < len) {
-    auto a = data[i++];
-    out.push_back(kBase64Table[a >> 2]);
-    if (i < len) {
-      auto b = data[i];
-      out.push_back(kBase64Table[((a & 0x03) << 4) | (b >> 4)]);
-      out.push_back(kBase64Table[(b & 0x0f) << 2]);
-    } else {
-      out.push_back(kBase64Table[(a & 0x03) << 4]);
-      out.push_back('=');
-    }
-    out.push_back('=');
-  }
+static std::string base64Encode(
+    const uint8_t *data,
+    size_t len,
+    simdutf::base64_options opts = simdutf::base64_default) {
+  size_t outLen = simdutf::base64_length_from_binary(len, opts);
+  std::string out(outLen, '\0');
+  simdutf::binary_to_base64(
+      reinterpret_cast<const char *>(data), len, &out[0], opts);
   return out;
 }
 
-static std::string base64UrlEncode(const uint8_t *data, size_t len) {
-  std::string out;
-  out.reserve(((len + 2) / 3) * 4);
-  size_t i = 0;
-  while (i + 2 < len) {
-    auto a = data[i++];
-    auto b = data[i++];
-    auto c = data[i++];
-    out.push_back(kBase64UrlTable[a >> 2]);
-    out.push_back(kBase64UrlTable[((a & 0x03) << 4) | (b >> 4)]);
-    out.push_back(kBase64UrlTable[((b & 0x0f) << 2) | (c >> 6)]);
-    out.push_back(kBase64UrlTable[c & 0x3f]);
-  }
-  if (i < len) {
-    auto a = data[i++];
-    out.push_back(kBase64UrlTable[a >> 2]);
-    if (i < len) {
-      auto b = data[i];
-      out.push_back(kBase64UrlTable[((a & 0x03) << 4) | (b >> 4)]);
-      out.push_back(kBase64UrlTable[(b & 0x0f) << 2]);
-    } else {
-      out.push_back(kBase64UrlTable[(a & 0x03) << 4]);
-    }
-  }
-  return out;
-}
-
-/// Build a base64 decode table. Returns -1 for invalid chars, -2 for padding.
-static const int8_t *base64DecodeTable() {
-  static int8_t table[256];
-  static bool initialized = false;
-  if (!initialized) {
-    std::memset(table, -1, sizeof(table));
-    for (int i = 0; i < 64; i++)
-      table[static_cast<uint8_t>(kBase64Table[i])] = static_cast<int8_t>(i);
-    // URL-safe variants
-    table[static_cast<uint8_t>('-')] = 62;
-    table[static_cast<uint8_t>('_')] = 63;
-    table[static_cast<uint8_t>('=')] = -2; // padding
-    initialized = true;
-  }
-  return table;
-}
-
-/// Decode base64/base64url. Returns decoded bytes, or negative error code.
+/// Decode base64/base64url. Returns 0 on success, negative error code.
 /// -1 = single char remained (input remainder)
 /// -2 = invalid character
-/// -3 = overflow
 static int base64Decode(
     const char *input,
     size_t inputLen,
-    std::vector<uint8_t> &out) {
-  const int8_t *table = base64DecodeTable();
-  out.clear();
-  out.reserve((inputLen / 4) * 3);
-
-  uint32_t accum = 0;
-  int bits = 0;
-  size_t padding = 0;
-
-  for (size_t i = 0; i < inputLen; i++) {
-    auto c = static_cast<uint8_t>(input[i]);
-    // Skip whitespace
-    if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f')
-      continue;
-
-    int8_t val = table[c];
-    if (val == -2) {
-      // padding
-      padding++;
-      continue;
-    }
-    if (val == -1) {
-      return -2; // invalid character
-    }
-    if (padding > 0) {
-      return -2; // data after padding
-    }
-
-    accum = (accum << 6) | static_cast<uint32_t>(val);
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      out.push_back(static_cast<uint8_t>((accum >> bits) & 0xFF));
-    }
+    std::vector<uint8_t> &out,
+    simdutf::base64_options opts = simdutf::base64_default) {
+  size_t maxLen = simdutf::maximal_binary_length_from_base64(input, inputLen);
+  out.resize(maxLen);
+  size_t outLen = maxLen;
+  auto r = simdutf::base64_to_binary_safe(
+      input,
+      inputLen,
+      reinterpret_cast<char *>(out.data()),
+      outLen,
+      opts,
+      simdutf::last_chunk_handling_options::loose);
+  if (r.error == simdutf::error_code::SUCCESS) {
+    out.resize(outLen);
+    return 0;
   }
-
-  // Check for remainder (incomplete group)
-  if (bits == 2 || bits == 4) {
-    // 1 or 2 extra base64 digits without padding — this is valid for base64url
-    // but "remainder" for strict base64. Node returns -1 for this case.
-    // However, Node only returns -1 for atob with exactly 1 char remainder.
-    // bits==2 means 1 extra char (6 bits, used 0), bits==4 means we already
-    // output the byte above. Actually:
-    // 1 char = 6 bits = 0 bytes (remainder of 1 char)
-    // 2 chars = 12 bits = 1 byte + 4 remainder bits
-    // 3 chars = 18 bits = 2 bytes + 2 remainder bits
-    // With no padding:
-    //   bits==6 after the loop: 1 char remainder -> error -1
-    //   bits==4: consumed 2 chars (got 1 byte) or 3+1 chars, fine.
-    //   bits==2: consumed 3 chars (got 2 bytes), fine.
-    // Actually bits tracking: bits accumulates mod 8. Let me re-think.
-    // After processing N valid base64 chars: total bits = N*6
-    //   N%4==0: bits=0 (all consumed)
-    //   N%4==1: bits=6 -> remainder. This is the -1 error case.
-    //   N%4==2: bits=4 (12 bits, 1 byte emitted, 4 remainder) -> valid
-    //   N%4==3: bits=2 (18 bits, 2 bytes emitted, 2 remainder) -> valid
-  }
-
-  // bits == 6 means exactly 1 char remains (N%4==1) — this is invalid
-  if (bits == 6) {
+  if (r.error == simdutf::error_code::BASE64_INPUT_REMAINDER) {
+    out.resize(outLen);
     return -1;
   }
-
-  return 0; // success
+  // INVALID_BASE64_CHARACTER or other error
+  out.clear();
+  return -2;
 }
 
 // ---------------------------------------------------------------------------
@@ -295,44 +187,11 @@ static size_t hexDecode(const char *src, size_t srcLen, uint8_t *dst, size_t dst
 }
 
 // ---------------------------------------------------------------------------
-// Helpers: UTF-8 validation
+// Helpers: UTF-8 / ASCII validation (using simdutf)
 // ---------------------------------------------------------------------------
 
 static bool isValidUtf8(const uint8_t *data, size_t len) {
-  size_t i = 0;
-  while (i < len) {
-    uint8_t b = data[i];
-    if (b < 0x80) {
-      i++;
-    } else if ((b & 0xE0) == 0xC0) {
-      if (i + 1 >= len || (data[i + 1] & 0xC0) != 0x80)
-        return false;
-      if (b < 0xC2) // overlong
-        return false;
-      i += 2;
-    } else if ((b & 0xF0) == 0xE0) {
-      if (i + 2 >= len || (data[i + 1] & 0xC0) != 0x80 ||
-          (data[i + 2] & 0xC0) != 0x80)
-        return false;
-      uint32_t cp = ((b & 0x0F) << 12) | ((data[i + 1] & 0x3F) << 6) |
-          (data[i + 2] & 0x3F);
-      if (cp < 0x0800 || (cp >= 0xD800 && cp <= 0xDFFF))
-        return false;
-      i += 3;
-    } else if ((b & 0xF8) == 0xF0) {
-      if (i + 3 >= len || (data[i + 1] & 0xC0) != 0x80 ||
-          (data[i + 2] & 0xC0) != 0x80 || (data[i + 3] & 0xC0) != 0x80)
-        return false;
-      uint32_t cp = ((b & 0x07) << 18) | ((data[i + 1] & 0x3F) << 12) |
-          ((data[i + 2] & 0x3F) << 6) | (data[i + 3] & 0x3F);
-      if (cp < 0x10000 || cp > 0x10FFFF)
-        return false;
-      i += 4;
-    } else {
-      return false;
-    }
-  }
-  return true;
+  return simdutf::validate_utf8(reinterpret_cast<const char *>(data), len);
 }
 
 // ---------------------------------------------------------------------------
@@ -734,7 +593,8 @@ static napi_value fillCb(napi_env env, napi_callback_info info) {
   } else if (enc == BASE64 || enc == BASE64URL) {
     std::string str = getStringLatin1(env, argv[1]);
     std::vector<uint8_t> decoded;
-    int err = base64Decode(str.data(), str.size(), decoded);
+    auto b64opts = enc == BASE64URL ? simdutf::base64_url : simdutf::base64_default;
+    int err = base64Decode(str.data(), str.size(), decoded, b64opts);
     if (err < 0 || decoded.empty()) {
       napi_value result;
       napi_create_int32(env, -1, &result);
@@ -975,7 +835,8 @@ static napi_value indexOfStringCb(napi_env env, napi_callback_info info) {
   } else if (enc == BASE64 || enc == BASE64URL) {
     std::string b64Str = getStringLatin1(env, argv[1]);
     std::vector<uint8_t> decoded;
-    base64Decode(b64Str.data(), b64Str.size(), decoded);
+    auto b64opts = enc == BASE64URL ? simdutf::base64_url : simdutf::base64_default;
+    base64Decode(b64Str.data(), b64Str.size(), decoded, b64opts);
     needleBytes.assign(decoded.begin(), decoded.end());
     needlePtr = reinterpret_cast<const uint8_t *>(needleBytes.data());
     needleLen = needleBytes.size();
@@ -1144,13 +1005,8 @@ static napi_value isAsciiCb(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
-  bool valid = true;
-  for (size_t i = 0; i < buf.length; i++) {
-    if (buf.data[i] > 127) {
-      valid = false;
-      break;
-    }
-  }
+  bool valid = simdutf::validate_ascii(
+      reinterpret_cast<const char *>(buf.data), buf.length);
 
   napi_value result;
   napi_get_boolean(env, valid, &result);
@@ -1207,7 +1063,8 @@ static napi_value btoaCb(napi_env env, napi_callback_info info) {
     bytes[i] = static_cast<uint8_t>(input16[i]);
   }
 
-  std::string encoded = base64Encode(bytes.data(), bytes.size());
+  std::string encoded =
+      base64Encode(bytes.data(), bytes.size(), simdutf::base64_default);
 
   napi_value result;
   napi_create_string_latin1(env, encoded.data(), encoded.size(), &result);
@@ -1407,7 +1264,8 @@ static napi_value base64SliceCb(napi_env env, napi_callback_info info) {
     napi_create_string_utf8(env, "", 0, &result);
     return result;
   }
-  std::string b64 = base64Encode(args.buf.data + args.start, len);
+  std::string b64 =
+      base64Encode(args.buf.data + args.start, len, simdutf::base64_default);
   napi_value result;
   napi_create_string_latin1(env, b64.data(), b64.size(), &result);
   return result;
@@ -1423,7 +1281,8 @@ static napi_value base64urlSliceCb(napi_env env, napi_callback_info info) {
     napi_create_string_utf8(env, "", 0, &result);
     return result;
   }
-  std::string b64 = base64UrlEncode(args.buf.data + args.start, len);
+  std::string b64 =
+      base64Encode(args.buf.data + args.start, len, simdutf::base64_url);
   napi_value result;
   napi_create_string_latin1(env, b64.data(), b64.size(), &result);
   return result;
@@ -1670,7 +1529,7 @@ static napi_value base64WriteCb(napi_env env, napi_callback_info info) {
 
   std::string str = getStringLatin1(env, args.str);
   std::vector<uint8_t> decoded;
-  base64Decode(str.data(), str.size(), decoded);
+  base64Decode(str.data(), str.size(), decoded, simdutf::base64_default);
 
   size_t written = std::min(decoded.size(), args.maxLength);
   std::memcpy(args.buf.data + args.offset, decoded.data(), written);
@@ -1693,7 +1552,7 @@ static napi_value base64urlWriteCb(napi_env env, napi_callback_info info) {
 
   std::string str = getStringLatin1(env, args.str);
   std::vector<uint8_t> decoded;
-  base64Decode(str.data(), str.size(), decoded);
+  base64Decode(str.data(), str.size(), decoded, simdutf::base64_url);
 
   size_t written = std::min(decoded.size(), args.maxLength);
   std::memcpy(args.buf.data + args.offset, decoded.data(), written);
