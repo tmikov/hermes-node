@@ -63,16 +63,14 @@ static napi_value fsEventNew(napi_env env, napi_callback_info info) {
       wrap,
       [](napi_env, void *data, void *) {
         auto *w = static_cast<FSEventWrap *>(data);
-        if (w->initialized && !w->closing) {
-          // Handle wasn't closed properly; stop watching.
+        if (w->initialized) {
+          // uv_close is async — the close callback will delete.
           uv_fs_event_stop(&w->handle);
-          if (!uv_is_closing(reinterpret_cast<uv_handle_t *>(&w->handle))) {
-            uv_close(
-                reinterpret_cast<uv_handle_t *>(&w->handle),
-                [](uv_handle_t *h) {
-                  // wrap already freed by NAPI
-                });
-          }
+          uv_close(
+              reinterpret_cast<uv_handle_t *>(&w->handle), [](uv_handle_t *h) {
+                delete static_cast<FSEventWrap *>(h->data);
+              });
+          return;
         }
         delete w;
       },
@@ -92,7 +90,7 @@ static napi_value fsEventStart(napi_env env, napi_callback_info info) {
   napi_value argv[4], thisObj;
   napi_get_cb_info(env, info, &argc, argv, &thisObj, nullptr);
 
-  FSEventWrap *wrap;
+  FSEventWrap *wrap = nullptr;
   napi_unwrap(env, thisObj, reinterpret_cast<void **>(&wrap));
   if (!wrap) {
     napi_value zero;
@@ -174,13 +172,14 @@ static void onFsEventClose(uv_handle_t *handle) {
     napi_delete_reference(wrap->env, wrap->selfRef);
     wrap->selfRef = nullptr;
   }
+  delete wrap;
 }
 
 static napi_value fsEventClose(napi_env env, napi_callback_info info) {
   napi_value thisObj;
   napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
 
-  FSEventWrap *wrap;
+  FSEventWrap *wrap = nullptr;
   napi_unwrap(env, thisObj, reinterpret_cast<void **>(&wrap));
   if (!wrap || wrap->closing)
     return nullptr;
@@ -190,6 +189,9 @@ static napi_value fsEventClose(napi_env env, napi_callback_info info) {
   if (wrap->initialized &&
       !uv_is_closing(reinterpret_cast<uv_handle_t *>(&wrap->handle))) {
     uv_close(reinterpret_cast<uv_handle_t *>(&wrap->handle), onFsEventClose);
+    // The close callback now owns 'wrap'. Remove the GC wrap so the
+    // finalizer won't run and try to double-delete.
+    napi_remove_wrap(env, thisObj, nullptr);
   } else {
     // Not initialized or already closing, just release ref.
     if (wrap->selfRef) {
@@ -209,7 +211,7 @@ static napi_value fsEventRef(napi_env env, napi_callback_info info) {
   napi_value thisObj;
   napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
 
-  FSEventWrap *wrap;
+  FSEventWrap *wrap = nullptr;
   napi_unwrap(env, thisObj, reinterpret_cast<void **>(&wrap));
   if (wrap && wrap->initialized && !wrap->closing) {
     uv_ref(reinterpret_cast<uv_handle_t *>(&wrap->handle));
@@ -221,7 +223,7 @@ static napi_value fsEventUnref(napi_env env, napi_callback_info info) {
   napi_value thisObj;
   napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
 
-  FSEventWrap *wrap;
+  FSEventWrap *wrap = nullptr;
   napi_unwrap(env, thisObj, reinterpret_cast<void **>(&wrap));
   if (wrap && wrap->initialized && !wrap->closing) {
     uv_unref(reinterpret_cast<uv_handle_t *>(&wrap->handle));
@@ -233,7 +235,7 @@ static napi_value fsEventHasRef(napi_env env, napi_callback_info info) {
   napi_value thisObj;
   napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
 
-  FSEventWrap *wrap;
+  FSEventWrap *wrap = nullptr;
   napi_unwrap(env, thisObj, reinterpret_cast<void **>(&wrap));
 
   bool has = false;
@@ -254,7 +256,7 @@ static napi_value fsEventGetInitialized(napi_env env, napi_callback_info info) {
   napi_value thisObj;
   napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
 
-  FSEventWrap *wrap;
+  FSEventWrap *wrap = nullptr;
   napi_unwrap(env, thisObj, reinterpret_cast<void **>(&wrap));
 
   bool val = wrap && wrap->initialized && !wrap->closing;

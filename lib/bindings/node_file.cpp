@@ -3066,11 +3066,14 @@ static napi_value statWatcherNew(napi_env env, napi_callback_info info) {
       wrap,
       [](napi_env, void *d, void *) {
         auto *w = static_cast<StatWatcherWrap *>(d);
-        if (w->initialized && !w->closing) {
+        if (w->initialized) {
+          // uv_close is async — the close callback will delete.
           uv_fs_poll_stop(&w->handle);
-          if (!uv_is_closing(reinterpret_cast<uv_handle_t *>(&w->handle))) {
-            uv_close(reinterpret_cast<uv_handle_t *>(&w->handle), nullptr);
-          }
+          uv_close(
+              reinterpret_cast<uv_handle_t *>(&w->handle), [](uv_handle_t *h) {
+                delete static_cast<StatWatcherWrap *>(h->data);
+              });
+          return;
         }
         delete w;
       },
@@ -3086,7 +3089,7 @@ static napi_value statWatcherStart(napi_env env, napi_callback_info info) {
   napi_value argv[2], thisObj;
   napi_get_cb_info(env, info, &argc, argv, &thisObj, nullptr);
 
-  StatWatcherWrap *wrap;
+  StatWatcherWrap *wrap = nullptr;
   napi_unwrap(env, thisObj, reinterpret_cast<void **>(&wrap));
   if (!wrap)
     return nullptr;
@@ -3122,6 +3125,7 @@ static void onStatWatcherClose(uv_handle_t *handle) {
     napi_delete_reference(wrap->env, wrap->selfRef);
     wrap->selfRef = nullptr;
   }
+  delete wrap;
 }
 
 /// StatWatcher.prototype.close()
@@ -3129,7 +3133,7 @@ static napi_value statWatcherClose(napi_env env, napi_callback_info info) {
   napi_value thisObj;
   napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
 
-  StatWatcherWrap *wrap;
+  StatWatcherWrap *wrap = nullptr;
   napi_unwrap(env, thisObj, reinterpret_cast<void **>(&wrap));
   if (!wrap || wrap->closing)
     return nullptr;
@@ -3141,6 +3145,9 @@ static napi_value statWatcherClose(napi_env env, napi_callback_info info) {
     uv_fs_poll_stop(&wrap->handle);
     uv_close(
         reinterpret_cast<uv_handle_t *>(&wrap->handle), onStatWatcherClose);
+    // The close callback now owns 'wrap'. Remove the GC wrap so the
+    // finalizer won't run and try to double-delete.
+    napi_remove_wrap(env, thisObj, nullptr);
   } else if (wrap->selfRef) {
     napi_delete_reference(env, wrap->selfRef);
     wrap->selfRef = nullptr;
@@ -3154,7 +3161,7 @@ static napi_value statWatcherRef(napi_env env, napi_callback_info info) {
   napi_value thisObj;
   napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
 
-  StatWatcherWrap *wrap;
+  StatWatcherWrap *wrap = nullptr;
   napi_unwrap(env, thisObj, reinterpret_cast<void **>(&wrap));
   if (wrap && wrap->initialized && !wrap->closing)
     uv_ref(reinterpret_cast<uv_handle_t *>(&wrap->handle));
@@ -3166,7 +3173,7 @@ static napi_value statWatcherUnref(napi_env env, napi_callback_info info) {
   napi_value thisObj;
   napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
 
-  StatWatcherWrap *wrap;
+  StatWatcherWrap *wrap = nullptr;
   napi_unwrap(env, thisObj, reinterpret_cast<void **>(&wrap));
   if (wrap && wrap->initialized && !wrap->closing)
     uv_unref(reinterpret_cast<uv_handle_t *>(&wrap->handle));
