@@ -5,9 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// hermes_napi.h must come before uv_event_loop.h to avoid double definition
-// of hermes_napi_event_loop struct.
-#include "hermes_napi.h"
+// napi/hermes_napi.h must come before uv_event_loop.h to avoid double
+// definition of hermes_napi_event_loop struct.
+#include "napi/hermes_napi.h"
 
 #include "hermes/Public/RuntimeConfig.h"
 #include "hermes/VM/Runtime.h"

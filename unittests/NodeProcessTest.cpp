@@ -7,7 +7,7 @@
 
 #include <hermes/node-compat/process/node_process.h>
 
-#include "hermes_napi.h"
+#include "napi/hermes_napi.h"
 
 #include "hermes/Public/RuntimeConfig.h"
 #include "hermes/VM/Runtime.h"

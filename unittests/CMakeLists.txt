@@ -30,21 +30,6 @@ target_link_libraries(BindingRegistryTest
   hermesNapi
   hermesvm_a
 )
-# hermes_napi.h (internal) lives in hermes/API/napi/.
-# hermesvm_a propagates most Hermes includes, but we also need:
-#   - hermes/API/napi/ for hermes_napi.h
-#   - Generated config header in the build tree
-target_include_directories(BindingRegistryTest PRIVATE
-  ${CMAKE_SOURCE_DIR}/hermes/API/napi
-  # Generated config (libhermesvm-config.h) — not propagated from Hermes scope.
-  ${CMAKE_BINARY_DIR}/hermes/lib/config
-)
-# Hermes uses add_definitions(-DHERMESVM_GC_${HERMESVM_GCKIND}) inside its
-# subdirectory scope. Targets outside that scope need the define explicitly
-# when including Hermes VM headers (e.g. hermes_napi.h).
-target_compile_definitions(BindingRegistryTest PRIVATE
-  HERMESVM_GC_${HERMESVM_GCKIND}
-)
 
 add_node_compat_unittest(ModuleLoaderTest ModuleLoaderTest.cpp)
 target_link_libraries(ModuleLoaderTest
@@ -53,12 +38,7 @@ target_link_libraries(ModuleLoaderTest
   hermesNapi
   hermesvm_a
 )
-target_include_directories(ModuleLoaderTest PRIVATE
-  ${CMAKE_SOURCE_DIR}/hermes/API/napi
-  ${CMAKE_BINARY_DIR}/hermes/lib/config
-)
 target_compile_definitions(ModuleLoaderTest PRIVATE
-  HERMESVM_GC_${HERMESVM_GCKIND}
   LIBJS_PATH="${CMAKE_SOURCE_DIR}/libjs/"
   TEST_DATA_PATH="${CMAKE_SOURCE_DIR}/unittests/module-loader-testdata/"
 )
@@ -68,11 +48,4 @@ target_link_libraries(NodeProcessTest
   hermesNodeProcess
   hermesNapi
   hermesvm_a
-)
-target_include_directories(NodeProcessTest PRIVATE
-  ${CMAKE_SOURCE_DIR}/hermes/API/napi
-  ${CMAKE_BINARY_DIR}/hermes/lib/config
-)
-target_compile_definitions(NodeProcessTest PRIVATE
-  HERMESVM_GC_${HERMESVM_GCKIND}
 )
