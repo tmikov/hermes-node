@@ -800,6 +800,29 @@ static int runBootstrap(
     }
   }
 
+  // 11c. Load and install the real console module.
+  // This replaces the minimal C++ console installed in step 4 with Node's
+  // full implementation (util.inspect formatting, console.time/table/dir,
+  // etc.).  Node's global.js creates the console object and binds method
+  // properties, but the stdout/stderr streams are bound separately via
+  // kBindStreamsLazy (called from pre_execution.js in Node).
+  if (exitCode == 0) {
+    const char *consoleInitCode =
+        "(function() {"
+        "  var c = require('console');"
+        "  var ctor = require('internal/console/constructor');"
+        "  c[ctor.kBindStreamsLazy](process);"
+        "  globalThis.console = c;"
+        "})()";
+    napi_value initScript, initResult;
+    napi_create_string_utf8(
+        env, consoleInitCode, NAPI_AUTO_LENGTH, &initScript);
+    if (napi_run_script(env, initScript, &initResult) != napi_ok) {
+      // Non-fatal: fall back to the minimal C++ console from step 4.
+      printAndClearException(env);
+    }
+  }
+
   // 12. Set up the event loop check handle for tick draining.
   uv_check_t checkHandle;
   TickDrainData tickDrainData{env, runtime.get(), tickCallbackRef};
