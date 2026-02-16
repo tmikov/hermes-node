@@ -209,20 +209,6 @@ if (!('stackTraceLimit' in Error)) {
 }
 
 // ---------------------------------------------------------------------------
-// Promise.withResolvers polyfill
-// ---------------------------------------------------------------------------
-// Hermes does not yet have Promise.withResolvers (TC39 stage 4, ES2024).
-// Used by Node's internal/streams/duplexify.js (as primordials
-// PromiseWithResolvers) for stream operators and Duplex.from().
-if (typeof Promise.withResolvers !== 'function') {
-  Promise.withResolvers = function withResolvers() {
-    var resolve, reject;
-    var promise = new Promise(function(res, rej) { resolve = res; reject = rej; });
-    return { promise: promise, resolve: resolve, reject: reject };
-  };
-}
-
-// ---------------------------------------------------------------------------
 // FinalizationRegistry polyfill (no-op)
 // ---------------------------------------------------------------------------
 // Hermes does not yet have FinalizationRegistry. Provide a no-op polyfill so
