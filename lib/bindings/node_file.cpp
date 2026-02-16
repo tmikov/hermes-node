@@ -15,6 +15,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -188,6 +190,34 @@ static napi_value throwUVException(
     const char *path = nullptr,
     const char *dest = nullptr) {
   napi_value errObj = createUVException(env, errorno, syscall, path, dest);
+  napi_throw(env, errObj);
+  return nullptr;
+}
+
+/// Throw a cp-style error with code, syscall, path properties.
+/// Used by cpSyncCheckPaths, cpSyncOverrideFile, cpSyncCopyDir.
+static napi_value throwCpError(
+    napi_env env,
+    const char *code,
+    const std::string &message,
+    const char *path = nullptr) {
+  napi_value msgVal;
+  napi_create_string_utf8(env, message.c_str(), message.size(), &msgVal);
+  napi_value errObj;
+  napi_create_error(env, nullptr, msgVal, &errObj);
+
+  napi_value val;
+  napi_create_string_utf8(env, code, NAPI_AUTO_LENGTH, &val);
+  napi_set_named_property(env, errObj, "code", val);
+
+  napi_create_string_utf8(env, "cp", NAPI_AUTO_LENGTH, &val);
+  napi_set_named_property(env, errObj, "syscall", val);
+
+  if (path) {
+    napi_create_string_utf8(env, path, NAPI_AUTO_LENGTH, &val);
+    napi_set_named_property(env, errObj, "path", val);
+  }
+
   napi_throw(env, errObj);
   return nullptr;
 }
@@ -2529,6 +2559,392 @@ static napi_value fsRmSync(napi_env env, napi_callback_info info) {
 }
 
 // ---------------------------------------------------------------------------
+// cpSync helpers and bindings
+// ---------------------------------------------------------------------------
+
+/// Copy atime/mtime from src to dest. Returns false if an exception was thrown.
+static bool
+copyUtimes(napi_env env, const std::string &src, const std::string &dest) {
+  uv_fs_t req;
+  int result = uv_fs_stat(nullptr, &req, src.c_str(), nullptr);
+  if (result < 0) {
+    uv_fs_req_cleanup(&req);
+    throwUVException(env, result, "stat", src.c_str());
+    return false;
+  }
+
+  const double source_atime =
+      req.statbuf.st_atim.tv_sec + req.statbuf.st_atim.tv_nsec / 1e9;
+  const double source_mtime =
+      req.statbuf.st_mtim.tv_sec + req.statbuf.st_mtim.tv_nsec / 1e9;
+  uv_fs_req_cleanup(&req);
+
+  int utime_result = uv_fs_utime(
+      nullptr, &req, dest.c_str(), source_atime, source_mtime, nullptr);
+  uv_fs_req_cleanup(&req);
+  if (utime_result < 0) {
+    throwUVException(env, utime_result, "utime", dest.c_str());
+    return false;
+  }
+  return true;
+}
+
+/// Split a path into its components.
+static std::vector<std::string> normalizePathToArray(
+    const std::filesystem::path &path) {
+  std::vector<std::string> parts;
+  std::filesystem::path absPath = std::filesystem::absolute(path);
+  for (const auto &part : absPath) {
+    if (!part.empty())
+      parts.push_back(part.string());
+  }
+  return parts;
+}
+
+/// Check if src is a prefix of dest (i.e. dest is inside src directory).
+static bool isInsideDir(
+    const std::filesystem::path &src,
+    const std::filesystem::path &dest) {
+  auto srcArr = normalizePathToArray(src);
+  auto destArr = normalizePathToArray(dest);
+  if (srcArr.size() > destArr.size())
+    return false;
+  return std::equal(srcArr.begin(), srcArr.end(), destArr.begin());
+}
+
+// binding.cpSyncCheckPaths(src, dest, dereference, recursive)
+static napi_value fsCpSyncCheckPaths(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value argv[4];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  std::string src = getStringArg(env, argv[0]);
+  std::string dest = getStringArg(env, argv[1]);
+  bool dereference = getBool(env, argv[2], false);
+  bool recursive = getBool(env, argv[3], false);
+
+  namespace fs = std::filesystem;
+  std::error_code ec;
+
+  // Note: Node uses inverted logic -- dereference=true means follow symlinks
+  // (stat), dereference=false means don't follow (lstat/symlink_status).
+  // But the JS caller passes opts.dereference which is false by default.
+  // Node's C++ code: dereference ? symlink_status : status
+  // This is CORRECT because Node's "dereference" param is actually the
+  // negation: when dereference=false, we use status() (follows symlinks).
+  auto src_status =
+      dereference ? fs::symlink_status(src, ec) : fs::status(src, ec);
+
+  if (ec) {
+    int errorno = ec.value() > 0 ? -ec.value() : ec.value();
+    return throwUVException(
+        env, errorno, dereference ? "lstat" : "stat", src.c_str());
+  }
+
+  auto dest_status =
+      dereference ? fs::status(dest, ec) : fs::symlink_status(dest, ec);
+
+  bool dest_exists = !ec && dest_status.type() != fs::file_type::not_found;
+  bool src_is_dir = (src_status.type() == fs::file_type::directory) ||
+      (dereference && src_status.type() == fs::file_type::symlink);
+
+  fs::path srcPath(src);
+  fs::path destPath(dest);
+
+  if (!ec) {
+    // Check if src and dest are identical.
+    if (fs::equivalent(srcPath, destPath, ec) && !ec) {
+      std::string msg = "src and dest cannot be the same " + dest;
+      return throwCpError(env, "ERR_FS_CP_EINVAL", msg, dest.c_str());
+    }
+
+    bool dest_is_dir = dest_status.type() == fs::file_type::directory;
+    if (src_is_dir && !dest_is_dir) {
+      std::string msg =
+          "Cannot overwrite non-directory " + dest + " with directory " + src;
+      return throwCpError(env, "ERR_FS_CP_DIR_TO_NON_DIR", msg, dest.c_str());
+    }
+
+    if (!src_is_dir && dest_is_dir) {
+      std::string msg =
+          "Cannot overwrite directory " + dest + " with non-directory " + src;
+      return throwCpError(env, "ERR_FS_CP_NON_DIR_TO_DIR", msg, dest.c_str());
+    }
+  }
+
+  // Check if dest is a subdirectory of src (string prefix check).
+  std::string srcStr = src;
+  if (!srcStr.empty() && srcStr.back() != fs::path::preferred_separator) {
+    srcStr += fs::path::preferred_separator;
+  }
+  if (src_is_dir && dest.substr(0, srcStr.size()) == srcStr) {
+    std::string msg =
+        "Cannot copy " + src + " to a subdirectory of self " + dest;
+    return throwCpError(env, "ERR_FS_CP_EINVAL", msg, dest.c_str());
+  }
+
+  // Walk parent paths to detect subdirectory-of-self.
+  auto dest_parent = destPath.parent_path();
+  while (srcPath.parent_path() != dest_parent &&
+         dest_parent.has_parent_path() &&
+         dest_parent.parent_path() != dest_parent) {
+    ec.clear();
+    if (fs::equivalent(srcPath, destPath.parent_path(), ec) && !ec) {
+      std::string msg =
+          "Cannot copy " + src + " to a subdirectory of self " + dest;
+      return throwCpError(env, "ERR_FS_CP_EINVAL", msg, dest.c_str());
+    }
+    if (ec)
+      break;
+    dest_parent = dest_parent.parent_path();
+  }
+
+  if (src_is_dir && !recursive) {
+    std::string msg =
+        "Recursive option not enabled, cannot copy a directory: " + src;
+    return throwCpError(env, "ERR_FS_EISDIR", msg, src.c_str());
+  }
+
+  switch (src_status.type()) {
+    case fs::file_type::socket: {
+      std::string msg = "Cannot copy a socket file: " + dest;
+      return throwCpError(env, "ERR_FS_CP_SOCKET", msg, dest.c_str());
+    }
+    case fs::file_type::fifo: {
+      std::string msg = "Cannot copy a FIFO pipe: " + dest;
+      return throwCpError(env, "ERR_FS_CP_FIFO_PIPE", msg, dest.c_str());
+    }
+    case fs::file_type::unknown: {
+      std::string msg = "Cannot copy an unknown file type: " + dest;
+      return throwCpError(env, "ERR_FS_CP_UNKNOWN", msg, dest.c_str());
+    }
+    default:
+      break;
+  }
+
+  // Create parent directories of dest if needed.
+  if (!dest_exists || !fs::exists(destPath.parent_path())) {
+    fs::create_directories(destPath.parent_path(), ec);
+  }
+
+  return nullptr;
+}
+
+// binding.cpSyncOverrideFile(src, dest, mode, preserveTimestamps)
+static napi_value fsCpSyncOverrideFile(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value argv[4];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  std::string src = getStringArg(env, argv[0]);
+  std::string dest = getStringArg(env, argv[1]);
+  int32_t mode = getInt32(env, argv[2], 0);
+  bool preserveTimestamps = getBool(env, argv[3], false);
+
+  std::error_code ec;
+
+  // Remove destination first.
+  if (!std::filesystem::remove(dest, ec) && ec) {
+    return throwUVException(env, -(ec.value()), "unlink", dest.c_str());
+  }
+
+  if (mode == 0) {
+    // No special mode: use faster std::filesystem API.
+    if (!std::filesystem::copy_file(src, dest, ec)) {
+      int errorno = ec.value() > 0 ? -ec.value() : ec.value();
+      return throwUVException(env, errorno, "cp", dest.c_str());
+    }
+  } else {
+    // Use uv_fs_copyfile for EXCL/FICLONE flags.
+    uv_fs_t req;
+    int result =
+        uv_fs_copyfile(nullptr, &req, src.c_str(), dest.c_str(), mode, nullptr);
+    uv_fs_req_cleanup(&req);
+    if (result < 0) {
+      return throwUVException(env, result, "cp", src.c_str(), dest.c_str());
+    }
+  }
+
+  if (preserveTimestamps) {
+    copyUtimes(env, src, dest);
+  }
+
+  return nullptr;
+}
+
+// binding.cpSyncCopyDir(src, dest, force, dereference, errorOnExist,
+//                       verbatimSymlinks, preserveTimestamps)
+static napi_value fsCpSyncCopyDir(napi_env env, napi_callback_info info) {
+  size_t argc = 7;
+  napi_value argv[7];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  std::string src = getStringArg(env, argv[0]);
+  std::string dest = getStringArg(env, argv[1]);
+  bool force = getBool(env, argv[2], false);
+  bool dereference = getBool(env, argv[3], false);
+  bool errorOnExist = getBool(env, argv[4], false);
+  bool verbatimSymlinks = getBool(env, argv[5], false);
+  bool preserveTimestamps = getBool(env, argv[6], false);
+
+  namespace fs = std::filesystem;
+  std::error_code ec;
+
+  fs::create_directories(dest, ec);
+  if (ec) {
+    int errorno = ec.value() > 0 ? -ec.value() : ec.value();
+    return throwUVException(env, errorno, "mkdir", dest.c_str());
+  }
+
+  auto fileCopyOpts = fs::copy_options::recursive;
+  if (force) {
+    fileCopyOpts |= fs::copy_options::overwrite_existing;
+  } else if (!errorOnExist) {
+    fileCopyOpts |= fs::copy_options::skip_existing;
+  }
+
+  // Recursive directory copy lambda.
+  std::function<bool(fs::path, fs::path)> copyDirContents;
+  copyDirContents = [&](fs::path srcDir, fs::path destDir) -> bool {
+    std::error_code err;
+    for (auto &dirEntry : fs::directory_iterator(srcDir, err)) {
+      if (err) {
+        int errorno = err.value() > 0 ? -err.value() : err.value();
+        throwUVException(env, errorno, "scandir", srcDir.string().c_str());
+        return false;
+      }
+
+      auto destFilePath = destDir / dirEntry.path().filename();
+
+      if (dirEntry.is_symlink()) {
+        if (verbatimSymlinks) {
+          fs::copy_symlink(dirEntry.path(), destFilePath, err);
+          if (err) {
+            int errorno = err.value() > 0 ? -err.value() : err.value();
+            throwUVException(env, errorno, "cp", destDir.string().c_str());
+            return false;
+          }
+        } else {
+          auto symlinkTarget = fs::read_symlink(dirEntry.path(), err);
+          if (err) {
+            int errorno = err.value() > 0 ? -err.value() : err.value();
+            throwUVException(
+                env, errorno, "readlink", dirEntry.path().string().c_str());
+            return false;
+          }
+
+          if (fs::exists(destFilePath)) {
+            if (fs::is_symlink(destFilePath)) {
+              auto currentDestTarget = fs::read_symlink(destFilePath, err);
+              if (err) {
+                int errorno = err.value() > 0 ? -err.value() : err.value();
+                throwUVException(
+                    env, errorno, "readlink", destFilePath.string().c_str());
+                return false;
+              }
+
+              if (!dereference && fs::is_directory(symlinkTarget) &&
+                  isInsideDir(symlinkTarget, currentDestTarget)) {
+                std::string msg = "Cannot copy " + symlinkTarget.string() +
+                    " to a subdirectory of self " + currentDestTarget.string();
+                throwCpError(
+                    env,
+                    "ERR_FS_CP_EINVAL",
+                    msg,
+                    destFilePath.string().c_str());
+                return false;
+              }
+
+              if (fs::is_directory(destFilePath) &&
+                  isInsideDir(currentDestTarget, symlinkTarget)) {
+                std::string msg = "cannot overwrite " +
+                    currentDestTarget.string() + " with " +
+                    symlinkTarget.string();
+                throwCpError(
+                    env,
+                    "ERR_FS_CP_SYMLINK_TO_SUBDIRECTORY",
+                    msg,
+                    destFilePath.string().c_str());
+                return false;
+              }
+
+              fs::remove(destFilePath, err);
+              if (err) {
+                int errorno = err.value() > 0 ? -err.value() : err.value();
+                throwUVException(
+                    env, errorno, "unlink", destFilePath.string().c_str());
+                return false;
+              }
+            } else if (fs::is_regular_file(destFilePath)) {
+              if (!dereference || (!force && errorOnExist)) {
+                int errorno = -EEXIST;
+                throwUVException(
+                    env, errorno, "cp", destFilePath.string().c_str());
+                return false;
+              }
+            }
+          }
+
+          auto symlinkTargetAbsolute =
+              fs::weakly_canonical(fs::absolute(srcDir / symlinkTarget));
+          if (dirEntry.is_directory()) {
+            fs::create_directory_symlink(
+                symlinkTargetAbsolute, destFilePath, err);
+          } else {
+            fs::create_symlink(symlinkTargetAbsolute, destFilePath, err);
+          }
+          if (err) {
+            int errorno = err.value() > 0 ? -err.value() : err.value();
+            throwUVException(
+                env, errorno, "symlink", destFilePath.string().c_str());
+            return false;
+          }
+        }
+      } else if (dirEntry.is_directory()) {
+        auto entryDirPath = srcDir / dirEntry.path().filename();
+        fs::create_directory(destFilePath, err);
+        // Ignore error if directory already exists.
+        if (err && err.value() != EEXIST) {
+          int errorno = err.value() > 0 ? -err.value() : err.value();
+          throwUVException(
+              env, errorno, "mkdir", destFilePath.string().c_str());
+          return false;
+        }
+        if (!copyDirContents(entryDirPath, destFilePath))
+          return false;
+      } else if (dirEntry.is_regular_file()) {
+        fs::copy_file(dirEntry.path(), destFilePath, fileCopyOpts, err);
+        if (err) {
+          if (err.value() == EEXIST) {
+            std::string msg =
+                "[ERR_FS_CP_EEXIST]: Target already exists: "
+                "cp returned EEXIST (" +
+                destFilePath.string() + " already exists)";
+            throwCpError(
+                env, "ERR_FS_CP_EEXIST", msg, destFilePath.string().c_str());
+            return false;
+          }
+          int errorno = err.value() > 0 ? -err.value() : err.value();
+          throwUVException(env, errorno, "cp", destDir.string().c_str());
+          return false;
+        }
+
+        if (preserveTimestamps) {
+          auto srcFile = dirEntry.path().string();
+          auto destFile = destFilePath.string();
+          if (!copyUtimes(env, srcFile, destFile))
+            return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  copyDirContents(fs::path(src), fs::path(dest));
+  return nullptr;
+}
+
+// ---------------------------------------------------------------------------
 // FSReqCallback constructor
 // ---------------------------------------------------------------------------
 
@@ -2934,6 +3350,9 @@ napi_value initFsBinding(napi_env env, napi_value exports) {
   SET_FN("readBuffers", fsReadBuffers);
   SET_FN("writeBuffers", fsWriteBuffers);
   SET_FN("rmSync", fsRmSync);
+  SET_FN("cpSyncCheckPaths", fsCpSyncCheckPaths);
+  SET_FN("cpSyncOverrideFile", fsCpSyncOverrideFile);
+  SET_FN("cpSyncCopyDir", fsCpSyncCopyDir);
 
 #undef SET_FN
 
