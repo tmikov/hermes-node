@@ -258,10 +258,10 @@ static napi_value stdioWrite(napi_env env, napi_callback_info info) {
   return trueVal;
 }
 
-/// No-op stub for event emitter methods.
-static napi_value stdioNoop(napi_env env, napi_callback_info /*info*/) {
+/// No-op stub for event emitter methods.  Returns `this` for chaining.
+static napi_value stdioNoop(napi_env env, napi_callback_info info) {
   napi_value thisArg;
-  napi_get_cb_info(env, nullptr, nullptr, nullptr, &thisArg, nullptr);
+  napi_get_cb_info(env, info, nullptr, nullptr, &thisArg, nullptr);
   return thisArg;
 }
 
