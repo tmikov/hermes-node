@@ -1,3 +1,5 @@
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 'use strict';
 
 // Test fs_dir binding: opendirSync, Dir.readSync, Dir.closeSync, async opendir

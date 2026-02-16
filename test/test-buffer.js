@@ -1,4 +1,6 @@
 // Copyright (c) Tzvetan Mikov.
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 // Test the buffer binding.
 'use strict';
 

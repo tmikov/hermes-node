@@ -1,3 +1,4 @@
+// RUN: TEST_THREAD_ID=$$ %hermes-node %s
 'use strict';
 const common = require('../common');
 

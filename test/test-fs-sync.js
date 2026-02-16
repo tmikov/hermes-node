@@ -1,3 +1,5 @@
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 // Test synchronous fs operations via the fs binding.
 'use strict';
 

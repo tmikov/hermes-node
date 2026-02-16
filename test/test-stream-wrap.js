@@ -1,3 +1,5 @@
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 // Test for the stream_wrap binding stub.
 'use strict';
 

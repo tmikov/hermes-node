@@ -1,3 +1,5 @@
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 // Test fs.cpSync() functionality.
 'use strict';
 

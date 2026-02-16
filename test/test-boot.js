@@ -1,4 +1,6 @@
 // Copyright (c) Tzvetan Mikov.
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 // Minimal bootstrap test -- verifies that the runtime, console, and process
 // are properly wired up.
 'use strict';

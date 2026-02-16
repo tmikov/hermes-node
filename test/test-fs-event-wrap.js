@@ -1,4 +1,6 @@
 // Copyright (c) Tzvetan Mikov.
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 // Test for fs_event_wrap, uv binding, and fs.watch/watchFile support.
 
 'use strict';

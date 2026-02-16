@@ -1,5 +1,7 @@
 // Copyright (c) Tzvetan Mikov.
-// Test: Step 26 — Verify streams work
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
+// Test: Step 26 -- Verify streams work
 
 'use strict';
 

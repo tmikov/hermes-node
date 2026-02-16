@@ -1,4 +1,6 @@
 // Copyright (c) Tzvetan Mikov.
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 // Test: core modules load and work (events, path, buffer, util)
 // Step 24: Verify core modules load and work
 

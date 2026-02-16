@@ -1,4 +1,6 @@
 // Copyright (c) Tzvetan Mikov.
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 // Test: Node's real console module (loaded in bootstrap step 11c).
 'use strict';
 

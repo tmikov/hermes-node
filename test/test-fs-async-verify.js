@@ -1,4 +1,6 @@
 // Copyright (c) Tzvetan Mikov.
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 // Test: comprehensive verification of async fs operations (Step 32).
 // Covers callback-based async edge cases and fs.promises operations.
 'use strict';

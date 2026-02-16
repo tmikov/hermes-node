@@ -1,3 +1,5 @@
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 // Test async fs operations via the fs module (callback and promise APIs).
 'use strict';
 

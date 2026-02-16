@@ -1,4 +1,6 @@
 // Copyright (c) Tzvetan Mikov.
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 // Step 31: Verify fs sync operations -- edge cases beyond test-fs-sync.js
 'use strict';
 

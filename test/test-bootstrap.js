@@ -1,4 +1,6 @@
 // Copyright (c) Tzvetan Mikov.
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 // Step 17: Verify bootstrap modules load.
 // Tests that the core internal modules can be loaded successfully.
 'use strict';

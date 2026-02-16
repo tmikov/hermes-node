@@ -1,3 +1,5 @@
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 // Test for the async_wrap binding stub.
 'use strict';
 

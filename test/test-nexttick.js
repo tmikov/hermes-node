@@ -1,3 +1,5 @@
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 // Test for process.nextTick (task_queue binding + internal/process/task_queues).
 'use strict';
 

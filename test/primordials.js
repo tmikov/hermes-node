@@ -1,6 +1,6 @@
 // Copyright (c) Tzvetan Mikov.
+// RUN: cat %source_dir/libjs/primordials.js %s > %t.js && %hermes -Xasync-generators %t.js
 // Test for the primordials thin shim.
-// Run with: hermes libjs/primordials.js test/primordials.js
 'use strict';
 
 var passed = 0;

@@ -1,4 +1,12 @@
 // Copyright (c) Tzvetan Mikov.
+// RUN: %hermes-node %s > %t.out 2> %t.err
+// RUN: %FileCheck --check-prefix=STDOUT %s < %t.out
+// RUN: %FileCheck --check-prefix=STDERR %s < %t.err
+// RUN: ! grep stderr-test %t.out
+// STDOUT: stdout-test
+// STDOUT: console-test
+// STDOUT: PASS
+// STDERR: stderr-test
 // Test process.stdout and process.stderr (minimal writable streams).
 'use strict';
 

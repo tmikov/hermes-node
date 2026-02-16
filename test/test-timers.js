@@ -1,3 +1,5 @@
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 // Test: timers binding (setTimeout, setInterval, setImmediate, clearTimeout,
 // clearInterval, clearImmediate, timer.unref)
 
@@ -46,15 +48,15 @@ setImmediate(function() {
   results.push('immediate');
 });
 
-// 2. setTimeout with 10ms
+// 2. setTimeout with 100ms (needs margin for parallel test execution under load)
 setTimeout(function() {
-  results.push('timeout10');
-}, 10);
+  results.push('timeout100');
+}, 100);
 
-// 3. setTimeout with 50ms
+// 3. setTimeout with 200ms
 setTimeout(function() {
-  results.push('timeout50');
-}, 50);
+  results.push('timeout200');
+}, 200);
 
 // 4. setInterval (2 iterations then clear)
 var intervalCount = 0;
@@ -116,24 +118,24 @@ setTimeout(function() {
 
     // Check immediate before timers
     assert(
-      results.indexOf('immediate') < results.indexOf('timeout10'),
-      'immediate fires before timeout10'
+      results.indexOf('immediate') < results.indexOf('timeout100'),
+      'immediate fires before timeout100'
     );
 
     // Check nextTick before timers
     assert(
-      results.indexOf('nextTick') < results.indexOf('timeout10'),
-      'nextTick fires before timeout10'
+      results.indexOf('nextTick') < results.indexOf('timeout100'),
+      'nextTick fires before timeout100'
     );
 
     // Check timeouts fired
-    assert(results.indexOf('timeout10') >= 0, 'timeout10 fired');
-    assert(results.indexOf('timeout50') >= 0, 'timeout50 fired');
+    assert(results.indexOf('timeout100') >= 0, 'timeout100 fired');
+    assert(results.indexOf('timeout200') >= 0, 'timeout200 fired');
 
     // Check timeout ordering
     assert(
-      results.indexOf('timeout10') < results.indexOf('timeout50'),
-      'timeout10 fires before timeout50'
+      results.indexOf('timeout100') < results.indexOf('timeout200'),
+      'timeout100 fires before timeout200'
     );
 
     // Check interval fired twice
@@ -163,4 +165,4 @@ setTimeout(function() {
     console.error('Results:', JSON.stringify(results));
     process.exit(1);
   }
-}, 200);
+}, 500);

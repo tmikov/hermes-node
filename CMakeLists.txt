@@ -42,152 +42,22 @@ add_subdirectory(tools/hermes-node)
 # Unit tests
 add_subdirectory(unittests)
 
-# JS tests (run with stock hermes CLI and hermes-node)
-add_custom_target(check-hermes-node-js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-primordials-test.sh
-    $<TARGET_FILE:hermes>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-boot-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-constants.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-types.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-util.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-string-decoder.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-errors.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-config.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-symbols.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-options.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-bootstrap.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-buffer.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-encoding.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-async-wrap.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-nexttick.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-timers.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-stdio-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-console.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-stream-wrap.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-core-modules.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-streams.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-fs-sync.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-fs-async.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-fs-dir.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-fs-event-wrap.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-fs-sync-verify.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-fs-async-verify.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-hermes-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/test-fs-cp-sync.js
-  # Node.js ported test suite (test/node-tests/parallel/).
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-link.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-mkdir.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-readfile.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-readdir.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-open.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-stat.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-chmod.js
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-node-test.sh
-    $<TARGET_FILE:hermes-node>
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/node-tests/parallel/test-fs-truncate.js
+# JS tests (Lit-based)
+# Python is needed by hermes-lit (Hermes's find_package is subdirectory-scoped).
+find_package(Python COMPONENTS Interpreter)
+set(LLVH_LIT_ARGS "-sv")
+set(HERMES_NODE_LIT_PARAMS
+  hermes_node=${HERMES_TOOLS_OUTPUT_DIR}/hermes-node
+  hermes=${HERMES_TOOLS_OUTPUT_DIR}/hermes
+  FileCheck=${HERMES_TOOLS_OUTPUT_DIR}/FileCheck
+  source_dir=${CMAKE_CURRENT_SOURCE_DIR}
+  test_exec_root=${CMAKE_CURRENT_BINARY_DIR}/test
+)
+
+add_lit_testsuite(check-hermes-node-js "Running hermes-node JS tests"
+  ${CMAKE_CURRENT_SOURCE_DIR}/test
+  PARAMS ${HERMES_NODE_LIT_PARAMS}
   DEPENDS hermes hermes-node
-  COMMENT "Running JS tests"
 )
 
 # check-hermes-node target: run all tests (unit tests + JS tests)

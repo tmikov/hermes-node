@@ -1,3 +1,5 @@
+// RUN: %hermes-node %s | %FileCheck %s
+// CHECK: PASS
 /*
  * Copyright (c) Tzvetan Mikov.
  *
