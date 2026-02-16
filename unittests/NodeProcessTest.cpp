@@ -42,7 +42,7 @@ class NodeProcessTest : public ::testing::Test {
                                         .build())
                       .build();
     rt_ = hermes::vm::Runtime::create(config);
-    env_ = hermes_napi_create_env(*rt_);
+    env_ = hermes_napi_create_env(rt_.get());
     ASSERT_EQ(napi_open_handle_scope(env_, &scope_), napi_ok);
 
     proc_.setArgv({"hermes-node", "test-script.js", "--flag"});

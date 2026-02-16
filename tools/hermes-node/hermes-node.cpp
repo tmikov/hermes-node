@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// napi/hermes_napi.h must come before uv_event_loop.h to avoid double
-// definition of hermes_napi_event_loop struct.
 #include "napi/hermes_napi.h"
 
 #include "hermes/Public/RuntimeConfig.h"
@@ -432,7 +430,8 @@ static int runBootstrap(
   }
 
   // 3. Create napi_env with event loop.
-  napi_env env = hermes_napi_create_env(*runtime, eventLoop.getEventLoop());
+  napi_env env =
+      hermes_napi_create_env(runtime.get(), eventLoop.getEventLoop());
 
   napi_handle_scope scope;
   napi_open_handle_scope(env, &scope);

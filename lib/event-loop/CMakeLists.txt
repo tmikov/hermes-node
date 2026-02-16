@@ -10,8 +10,9 @@ add_hermes_library(hermesNodeEventLoop STATIC
 target_include_directories(hermesNodeEventLoop PUBLIC
   # Our own public headers.
   ${CMAKE_SOURCE_DIR}/include
-  # Hermes public NAPI type headers (js_native_api_types.h for napi_status).
-  ${CMAKE_SOURCE_DIR}/hermes/include/hermes/napi
+  # Hermes public NAPI headers: napi/hermes_napi.h -> hermes/napi/node_api.h.
+  ${CMAKE_SOURCE_DIR}/hermes/API
+  ${CMAKE_SOURCE_DIR}/hermes/include
 )
 
 target_link_libraries(hermesNodeEventLoop PUBLIC

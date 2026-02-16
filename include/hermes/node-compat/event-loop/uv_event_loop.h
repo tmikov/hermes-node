@@ -8,7 +8,7 @@
 #ifndef HERMES_NODE_COMPAT_UV_EVENT_LOOP_H
 #define HERMES_NODE_COMPAT_UV_EVENT_LOOP_H
 
-#include <hermes/node-compat/event-loop/hermes_napi_event_loop.h>
+#include <napi/hermes_napi.h>
 #include <uv.h>
 
 namespace hermes {
