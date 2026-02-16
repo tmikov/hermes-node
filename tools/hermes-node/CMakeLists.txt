@@ -14,6 +14,21 @@ add_hermes_tool(hermes-node
     hermesvm_a
 )
 
+# hermesNapi was removed from hermesvm_a upstream (54c50a06a).
+# We must whole-archive link it so all NAPI symbols are available.
+if(APPLE)
+  target_link_libraries(hermes-node -force_load hermesNapi)
+elseif(MSVC)
+  target_link_libraries(hermes-node hermesNapi)
+  target_link_options(hermes-node PRIVATE /WHOLEARCHIVE:hermesNapi)
+else()
+  target_link_libraries(hermes-node
+    -Wl,--whole-archive
+    hermesNapi
+    -Wl,--no-whole-archive
+  )
+endif()
+
 # hermes_napi.h (internal), generated config, and LLVH headers.
 target_include_directories(hermes-node PRIVATE
   ${CMAKE_SOURCE_DIR}/hermes/API/napi

@@ -27,6 +27,7 @@ target_link_libraries(UvEventLoopTest hermesNodeEventLoop)
 add_node_compat_unittest(BindingRegistryTest BindingRegistryTest.cpp)
 target_link_libraries(BindingRegistryTest
   hermesNodeBindingRegistry
+  hermesNapi
   hermesvm_a
 )
 # hermes_napi.h (internal) lives in hermes/API/napi/.
@@ -49,6 +50,7 @@ add_node_compat_unittest(ModuleLoaderTest ModuleLoaderTest.cpp)
 target_link_libraries(ModuleLoaderTest
   hermesNodeModuleLoader
   hermesNodeBindingRegistry
+  hermesNapi
   hermesvm_a
 )
 target_include_directories(ModuleLoaderTest PRIVATE
@@ -64,6 +66,7 @@ target_compile_definitions(ModuleLoaderTest PRIVATE
 add_node_compat_unittest(NodeProcessTest NodeProcessTest.cpp)
 target_link_libraries(NodeProcessTest
   hermesNodeProcess
+  hermesNapi
   hermesvm_a
 )
 target_include_directories(NodeProcessTest PRIVATE
