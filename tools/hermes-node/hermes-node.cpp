@@ -15,6 +15,7 @@
 #include <hermes/node-compat/bindings/node_async_context_frame.h>
 #include <hermes/node-compat/bindings/node_async_wrap.h>
 #include <hermes/node-compat/bindings/node_buffer.h>
+#include <hermes/node-compat/bindings/node_cares_wrap.h>
 #include <hermes/node-compat/bindings/node_config.h>
 #include <hermes/node-compat/bindings/node_constants.h>
 #include <hermes/node-compat/bindings/node_credentials.h>
@@ -459,11 +460,13 @@ static int runBootstrap(
   setFsDirEventLoop(eventLoop.getLoop());
   setFsEventWrapEventLoop(eventLoop.getLoop());
   setHandleWrapEventLoop(eventLoop.getLoop());
+  setCaresWrapEventLoop(eventLoop.getLoop());
 
   BindingRegistry registry;
   registry.registerBinding("async_context_frame", initAsyncContextFrameBinding);
   registry.registerBinding("async_wrap", initAsyncWrapBinding);
   registry.registerBinding("buffer", initBufferBinding);
+  registry.registerBinding("cares_wrap", initCaresWrapBinding);
   registry.registerBinding("config", initConfigBinding);
   registry.registerBinding("constants", initConstantsBinding);
   registry.registerBinding("credentials", initCredentialsBinding);

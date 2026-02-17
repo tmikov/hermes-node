@@ -49,7 +49,7 @@ be omitted):
 | N5.5 | Integrate Ada into url binding | — | done | Native binding + comprehensive URL shim |
 | N5.6 | Implement HandleWrap + LibuvStreamBase | — | done | Base classes for all native stream types |
 | N5.7 | Vendor c-ares | — | done | |
-| N5.8 | Implement `dns.lookup()` via libuv | N5.7 | | |
+| N5.8 | Implement `dns.lookup()` via libuv | N5.7 | done | |
 | N5.9 | Implement c-ares DNS queries | N5.7, N5.8 | | |
 | N5.10 | Port `tcp_wrap` binding | N5.6 | | |
 | N5.11 | Port `pipe_wrap` binding | N5.6 | | |
@@ -129,3 +129,14 @@ be omitted):
 -- Used `add_subdirectory` with c-ares's own CMake build (same pattern as libuv), rather than hand-rolling source lists.
 -- When `CARES_SHARED=OFF`, c-ares names the static target `c-ares` (no `_static` suffix). The `_static` suffix is only appended when shared is also being built.
 - **Notes for next step**: Link against `cares_a` (alias for `c-ares`) or `c-ares::cares_static`. The `ares_init()` API is deprecated; use `ares_init_options()` instead.
+
+### Step N5.8: Implement `dns.lookup()` via libuv
+- **Files**: created `include/hermes/node-compat/bindings/node_cares_wrap.h`, `lib/bindings/node_cares_wrap.cpp`, `libjs/shims/internal/perf/observe.js`, `test/test-dns.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`.
+- **Decisions**:
+-- `dns.lookup()` uses `uv_getaddrinfo` (libuv OS resolver), not c-ares directly. c-ares queries (N5.9) will extend this binding.
+-- Hostname is converted to ASCII via `ada::idna::to_ascii()` before passing to `uv_getaddrinfo`, matching Node's approach for internationalized domain names.
+-- `ChannelWrap`, `QueryReqWrap`, and `getnameinfo` are included as stubs so `dns.js` and `dns/callback_resolver.js` can load without errors. These will be fleshed out in N5.9.
+-- Created `internal/perf/observe.js` shim (no-op) since `dns.js` imports `hasObserver`/`startPerf`/`stopPerf` for performance observation. We don't have `internalBinding('performance')`.
+-- `initializeDns()` from `dns/utils.js` is not called during our bootstrap (Node calls it in pre_execution). `dnsOrder` defaults to `undefined`, which falls through to `DNS_ORDER_VERBATIM` in `dns.lookup()`.
+- **What was done**: Full `cares_wrap` binding with: `getaddrinfo` (async via `uv_getaddrinfo`), `getnameinfo` (async via `uv_getnameinfo`), `canonicalizeIP`, `strerror`, `GetAddrInfoReqWrap`/`GetNameInfoReqWrap`/`QueryReqWrap` constructors, `ChannelWrap` stub with `getServers`/`setServers`/`cancel`/`setLocalAddress` stubs, and constants (`AF_INET`, `AF_INET6`, `AF_UNSPEC`, `AI_*`, `DNS_ORDER_*`). Test covers binding API, `dns.lookup()` with localhost/IP passthrough/all mode/family filtering/empty hostname, and `ChannelWrap` stub.
+- **Notes for next step**: N5.9 (c-ares DNS queries) should extend this binding's `ChannelWrap` to use real `ares_channel` with `uv_poll_t` integration. `QueryReqWrap` needs oncomplete callback support. `strerror` currently uses `uv_strerror` — for c-ares-specific errors it should use `ares_strerror`.

@@ -9,6 +9,7 @@ add_hermes_library(hermesNodeBindings STATIC
   node_async_context_frame.cpp
   node_async_wrap.cpp
   node_buffer.cpp
+  node_cares_wrap.cpp
   node_config.cpp
   node_constants.cpp
   node_credentials.cpp

@@ -88,6 +88,15 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `ares_init()` is deprecated; use `ares_init_options()` instead.
 - c-ares uses its own CMake build (897 lines). We delegate via `add_subdirectory` like libuv.
 
+## cares_wrap Binding (DNS)
+- `initCaresWrapBinding` in `node_cares_wrap.cpp`: `getaddrinfo` (async, `uv_getaddrinfo`), `getnameinfo` (async, `uv_getnameinfo`), `canonicalizeIP`, `strerror`, constructors, constants
+- `setCaresWrapEventLoop(loop)` called in hermes-node.cpp
+- Hostname IDNA: `ada::idna::to_ascii()` before `uv_getaddrinfo` (Ada already linked)
+- Async pattern: `GetAddrInfoReq` struct with `napi_ref` to JS request obj, `uv_getaddrinfo_t`, order. Callback builds IP string array via `uv_inet_ntop`, calls `reqObj.oncomplete(status, addresses)`.
+- `ChannelWrap`/`QueryReqWrap`: stubs for N5.9 so `dns/callback_resolver.js` loads
+- `dns.js` needs `internal/perf/observe` shim (no-op `hasObserver`/`startPerf`/`stopPerf`)
+- `initializeDns()` not called in our bootstrap; `dnsOrder` defaults to `undefined`, falls through to verbatim — works fine
+
 ## Hermes VM Bugs (not fixable in NAPI layer)
 - `_decodeUTF8SlowPath` OOB read: `napi_create_string_utf8` with truncated multi-byte UTF-8 (e.g. `[0xc3]` — lead byte with no continuation) reads past buffer. Avoid passing truncated multi-byte sequences to `napi_create_string_utf8`.
 
