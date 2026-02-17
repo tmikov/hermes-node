@@ -82,6 +82,12 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `require('tty')` needs `net.js` which needs `cares_wrap`/`tcp_wrap`/`pipe_wrap`. Can't test `tty` module until those are implemented.
 - Pattern for new stream wraps: inherit `LibuvStreamBase`, call `initStream()` after `uv_*_init()`, call `addStreamMethods(env, prototype)`, use `napi_define_class` for constructor.
 
+## Vendored c-ares
+- c-ares 1.34.6 in `external/cares/cares/`, static target `c-ares`, alias `cares_a`
+- When `CARES_SHARED=OFF`, static target is named `c-ares` (no `_static` suffix). The suffix is only set inside the `IF (CARES_SHARED)` block.
+- `ares_init()` is deprecated; use `ares_init_options()` instead.
+- c-ares uses its own CMake build (897 lines). We delegate via `add_subdirectory` like libuv.
+
 ## Hermes VM Bugs (not fixable in NAPI layer)
 - `_decodeUTF8SlowPath` OOB read: `napi_create_string_utf8` with truncated multi-byte UTF-8 (e.g. `[0xc3]` — lead byte with no continuation) reads past buffer. Avoid passing truncated multi-byte sequences to `napi_create_string_utf8`.
 

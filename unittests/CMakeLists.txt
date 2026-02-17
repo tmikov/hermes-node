@@ -49,3 +49,6 @@ target_link_libraries(NodeProcessTest
   hermesNapi
   hermesvm_a
 )
+
+add_node_compat_unittest(CAresIntegrationTest CAresIntegrationTest.cpp)
+target_link_libraries(CAresIntegrationTest cares_a)

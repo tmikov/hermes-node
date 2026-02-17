@@ -48,7 +48,7 @@ be omitted):
 | N5.4 | Integrate simdutf into buffer/encoding | — | done | Already mostly integrated; replaced last hand-rolled UTF-8 trim |
 | N5.5 | Integrate Ada into url binding | — | done | Native binding + comprehensive URL shim |
 | N5.6 | Implement HandleWrap + LibuvStreamBase | — | done | Base classes for all native stream types |
-| N5.7 | Vendor c-ares | — | | |
+| N5.7 | Vendor c-ares | — | done | |
 | N5.8 | Implement `dns.lookup()` via libuv | N5.7 | | |
 | N5.9 | Implement c-ares DNS queries | N5.7, N5.8 | | |
 | N5.10 | Port `tcp_wrap` binding | N5.6 | | |
@@ -121,3 +121,11 @@ be omitted):
 -- `setRawMode` uses `UV_TTY_MODE_RAW_VT` (not `UV_TTY_MODE_RAW`), matching Node's approach for better VT control sequence support.
 - **Issues**: `require('tty')` cannot be tested yet because `tty.js` depends on `net.js` which requires `cares_wrap`, `tcp_wrap`, and `pipe_wrap` bindings (N5.8/N5.10/N5.11). Test only covers the native `tty_wrap` binding directly.
 - **Notes for next step**: N5.20 (process.stdin) depends on this + N5.6 (done). Once tcp_wrap/pipe_wrap/cares_wrap are implemented, the tty module will be testable end-to-end. The binding pattern used here (inherit LibuvStreamBase, call `addStreamMethods`, use `napi_define_class`) is the template for tcp_wrap and pipe_wrap.
+
+### Step N5.7: Vendor c-ares
+- **Files**: created `external/cares/README.md`, `external/cares/CMakeLists.txt`, `external/cares/cares/` (vendored source), `unittests/CAresIntegrationTest.cpp`. Modified `CMakeLists.txt`, `unittests/CMakeLists.txt`.
+- **What was done**: Vendored c-ares 1.34.6 from Node.js v24.13.0 `deps/cares/`. Wrapper CMake sets `CARES_STATIC=ON`, `CARES_SHARED=OFF`, `CARES_BUILD_TOOLS=OFF`, `CARES_BUILD_TESTS=OFF`, `CARES_INSTALL=OFF` and delegates to c-ares's own CMake. Alias target `cares_a` for consistency with `uv_a`. GTest with 3 tests: library init/cleanup, version check, channel init/destroy.
+- **Decisions**:
+-- Used `add_subdirectory` with c-ares's own CMake build (same pattern as libuv), rather than hand-rolling source lists.
+-- When `CARES_SHARED=OFF`, c-ares names the static target `c-ares` (no `_static` suffix). The `_static` suffix is only appended when shared is also being built.
+- **Notes for next step**: Link against `cares_a` (alias for `c-ares`) or `c-ares::cares_static`. The `ares_init()` API is deprecated; use `ares_init_options()` instead.
