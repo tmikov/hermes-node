@@ -332,7 +332,8 @@ class ProcessWrap : public HandleWrapBase {
     napi_value thisObj;
     napi_get_cb_info(env, info, &argc, argv, &thisObj, nullptr);
 
-    auto *wrap = static_cast<ProcessWrap *>(HandleWrapBase::unwrap(env, thisObj));
+    auto *wrap =
+        static_cast<ProcessWrap *>(HandleWrapBase::unwrap(env, thisObj));
     if (!wrap) {
       napi_value result;
       napi_create_int32(env, UV_ESRCH, &result);
@@ -449,12 +450,13 @@ class ProcessWrap : public HandleWrapBase {
     // Spawn the process.
     int err = uv_spawn(getHandleWrapEventLoop(), &wrap->process_, &options);
 
-    if (err == 0) {
-      // uv_spawn succeeded. Initialize HandleWrapBase now.
-      // process_.data is set by uv_spawn to the handle itself;
-      // we override it to point to our wrap.
-      wrap->init(env, thisObj, reinterpret_cast<uv_handle_t *>(&wrap->process_));
+    // uv_spawn always calls uv__handle_init, even on failure, so the handle
+    // is registered with the loop regardless.  We must call init() in both
+    // cases so HandleWrapBase will uv_close() it during cleanup (matching
+    // Node's MarkAsInitialized() pattern).
+    wrap->init(env, thisObj, reinterpret_cast<uv_handle_t *>(&wrap->process_));
 
+    if (err == 0) {
       // Set pid on the JS object.
       napi_value pidVal;
       napi_create_int32(env, wrap->process_.pid, &pidVal);
@@ -474,7 +476,8 @@ class ProcessWrap : public HandleWrapBase {
     napi_value thisObj;
     napi_get_cb_info(env, info, &argc, argv, &thisObj, nullptr);
 
-    auto *wrap = static_cast<ProcessWrap *>(HandleWrapBase::unwrap(env, thisObj));
+    auto *wrap =
+        static_cast<ProcessWrap *>(HandleWrapBase::unwrap(env, thisObj));
     if (!wrap) {
       napi_value result;
       napi_create_int32(env, UV_ESRCH, &result);
@@ -492,10 +495,7 @@ class ProcessWrap : public HandleWrapBase {
   }
 
   /// libuv exit callback -- fired when the child process exits.
-  static void OnExit(
-      uv_process_t *handle,
-      int64_t exitStatus,
-      int termSignal) {
+  static void OnExit(uv_process_t *handle, int64_t exitStatus, int termSignal) {
     auto *wrap = static_cast<ProcessWrap *>(handle->data);
     if (!wrap || !wrap->env())
       return;
@@ -582,7 +582,8 @@ napi_value initProcessWrapBinding(napi_env env, napi_value exports) {
       protoProps,
       &processCtor);
 
-  // Get the prototype and add handle methods (ref/unref/hasRef/close/getAsyncId).
+  // Get the prototype and add handle methods
+  // (ref/unref/hasRef/close/getAsyncId).
   napi_value prototype;
   napi_get_named_property(env, processCtor, "prototype", &prototype);
   HandleWrapBase::addHandleWrapMethods(env, prototype);

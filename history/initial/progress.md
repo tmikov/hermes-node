@@ -60,7 +60,7 @@ be omitted):
 | N5.16 | Verify HTTP works | N5.12, N5.15 | done | |
 | N5.17 | Port `process_wrap` binding | N5.6, N5.11 | done | Also added spawn_sync stub |
 | N5.18 | Port `spawn_sync` binding | N5.17 | done | |
-| N5.19 | Verify `child_process` module works | N5.17, N5.18 | | |
+| N5.19 | Verify `child_process` module works | N5.17, N5.18 | done | Fixed spawn-fail UAF bug |
 | N5.20 | Implement `process.stdin` | N5.3, N5.6 | | |
 | N5.21 | Add missing `os` constants | N5.1 | | |
 | N5.22 | Run Node.js net test subset | N5.12 | | |
@@ -251,3 +251,11 @@ be omitted):
 - **What was done**: Full `spawn_sync` binding replacing the stub. SyncProcessRunner with option parsing (file, args, cwd, envPairs, uid, gid, detached, timeout, maxBuffer, killSignal, stdio), StdioPipe with input writing and output capture, timeout handling, kill logic. Result object with pid, status, signal, output array, error code. Test covers: spawnSync basic, stderr capture, non-zero exit, stdin input, timeout, execSync, execFileSync, encoding option, execSync throw on error, cwd option, env option, invalid command error, maxBuffer overflow.
 - **Issues**: `napi_call_function` for `Buffer.from()` from inside a NAPI callback causes ASAN crash (stack-use-after-return for interpreter GCScope). Fixed by doing Buffer wrapping in JS instead of native code.
 - **Notes for next step**: N5.19 (verify child_process) is fully unblocked -- both async and sync child process APIs now work. `napi_create_buffer_copy` returns plain Uint8Array in Hermes NAPI, so any sync binding returning buffers needs JS-side `Buffer.from()` wrapping.
+
+### Step N5.19: Verify `child_process` module works
+- **Files**: created `test/test-child-process.js`, `test/node-tests/parallel/test-child-process-exec-cwd.js`, `test/node-tests/parallel/test-child-process-exec-env.js`, `test/node-tests/parallel/test-child-process-spawnsync-timeout.js`, `test/node-tests/parallel/test-child-process-spawnsync-env.js`. Modified `lib/bindings/node_process_wrap.cpp`.
+- **Decisions**:
+-- Test uses exit-code-based testing (not FileCheck pipe) because async child process cleanup can race with SIGPIPE when stdout is piped to FileCheck.
+- **What was done**: Created comprehensive verification test with 15 test cases covering: spawn stdout capture, exec callback, execSync, spawnSync, execFile/execFileSync, spawn with env, spawnSync with env, spawn with cwd, spawnSync with cwd, spawn and kill (SIGTERM), exit code propagation, stderr capture, exec with timeout, spawnSync with input, spawnSync with encoding, spawn invalid command (ENOENT), spawnSync invalid command. Ported 4 Node.js tests (exec-cwd, exec-env, spawnsync-timeout, spawnsync-env).
+- **Issues**: heap-use-after-free in `uv__queue_remove` when spawning invalid command. Root cause: `uv_spawn` always calls `uv__handle_init` (registering the handle with the loop) even on failure, but ProcessWrap only called `init()` on success. When spawn failed, the handle remained in the loop's queue but was freed by the GC lambda finalizer without `uv_close`. Fixed by calling `init()` unconditionally after `uv_spawn` (matching Node's `MarkAsInitialized()` pattern), so the handle is properly closed via HandleWrapBase's normal cleanup path. Note: `napi_wrap` in `init()` returns `napi_invalid_arg` (object already wrapped by constructor), but this is harmless -- the original lambda finalizer correctly delegates to `doClose()` when state is `kInitialized`.
+- **Notes for next step**: N5.24 (run Node.js child_process test subset) is unblocked. The `napi_wrap` double-wrap in ProcessWrap (constructor wraps, init tries to re-wrap and fails) is a pre-existing design issue that works correctly in practice but should be cleaned up in a future refactor.
