@@ -23,6 +23,7 @@ add_hermes_library(hermesNodeBindings STATIC
   node_stdio.cpp
   node_stream_wrap.cpp
   node_tcp_wrap.cpp
+  node_udp_wrap.cpp
   node_string_decoder.cpp
   node_symbols.cpp
   node_task_queue.cpp

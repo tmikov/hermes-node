@@ -36,6 +36,7 @@
 #include <hermes/node-compat/bindings/node_trace_events.h>
 #include <hermes/node-compat/bindings/node_tty_wrap.h>
 #include <hermes/node-compat/bindings/node_types.h>
+#include <hermes/node-compat/bindings/node_udp_wrap.h>
 #include <hermes/node-compat/bindings/node_url.h>
 #include <hermes/node-compat/bindings/node_util.h>
 #include <hermes/node-compat/bindings/node_uv.h>
@@ -485,6 +486,7 @@ static int runBootstrap(
   registry.registerBinding("symbols", initSymbolsBinding);
   registry.registerBinding("task_queue", initTaskQueueBinding);
   registry.registerBinding("tcp_wrap", initTcpWrapBinding);
+  registry.registerBinding("udp_wrap", initUdpWrapBinding);
   registry.registerBinding("timers", initTimersBinding);
   registry.registerBinding("trace_events", initTraceEventsBinding);
   registry.registerBinding("tty_wrap", initTtyWrapBinding);

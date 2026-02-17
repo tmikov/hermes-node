@@ -54,7 +54,7 @@ be omitted):
 | N5.10 | Port `tcp_wrap` binding | N5.6 | done | |
 | N5.11 | Port `pipe_wrap` binding | N5.6 | done | |
 | N5.12 | Verify `net` module works | N5.8, N5.10, N5.11 | done | |
-| N5.13 | Port `udp_wrap` binding | N5.6 | | |
+| N5.13 | Port `udp_wrap` binding | N5.6 | done | |
 | N5.14 | Vendor llhttp | — | | |
 | N5.15 | Port `http_parser` binding | N5.6, N5.14 | | |
 | N5.16 | Verify HTTP works | N5.12, N5.15 | | |
@@ -185,3 +185,15 @@ be omitted):
 -- `test-net-pipe-connect-errors` uses `internalBinding('credentials').getuid()` fallback since `process.getuid()` is not yet wired.
 - **Issues**: `process.getuid()` is not defined on the process object -- the credentials binding has getuid but it's not exposed on `process`. Should be addressed when `process` is fully wired.
 - **Notes for next step**: All net module functionality verified working: TCP server/client, Unix domain sockets, DNS integration, error handling, timeouts, back-pressure. N5.13 (udp_wrap), N5.14 (vendor llhttp), N5.17 (process_wrap), N5.20 (process.stdin), N5.21 (os constants), N5.22 (net test subset) are now unblocked.
+
+### Step N5.13: Port `udp_wrap` binding
+- **Files**: created `include/hermes/node-compat/bindings/node_udp_wrap.h`, `lib/bindings/node_udp_wrap.cpp`, `test/test-udp-wrap.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`.
+- **Decisions**:
+-- UDPWrap inherits HandleWrapBase (NOT LibuvStreamBase) because UDP is a datagram protocol, not a stream.
+-- RecvCb wraps `napi_create_buffer_copy` result with `Buffer.from()` because Hermes NAPI creates a plain Uint8Array (not a Node.js Buffer). Without this, `buf.toString()` gives comma-separated byte values instead of UTF-8 string.
+-- SendReqData uses variable-length `bufs[1]` member with malloc for additional bufs, matching Node's approach.
+-- `uv_udp_try_send` used as synchronous fast path. Returns `totalSize + 1` on sync success (Node convention). Falls back to `uv_udp_send` on EAGAIN/ENOSYS.
+-- No dgram shims needed: all dependencies (diagnostics_channel, internal/dgram, abort_listener) already available.
+- **What was done**: Full `udp_wrap` binding with UDP constructor, SendWrap constructor, and constants (UV_UDP_IPV6ONLY, UV_UDP_REUSEADDR, UV_UDP_REUSEPORT). Methods: open, bind/bind6, connect/connect6, disconnect, send/send6, recvStart/recvStop, getsockname/getpeername, addMembership/dropMembership, addSourceSpecificMembership/dropSourceSpecificMembership, setMulticastInterface/setMulticastTTL/setMulticastLoopback, setBroadcast, setTTL, bufferSize, getSendQueueSize/getSendQueueCount. All handle methods (ref/unref/hasRef/close/getAsyncId) inherited via HandleWrapBase. Test covers binding exports, prototype methods, bind+getsockname, connect/disconnect, and full send/recv data flow with proper cleanup.
+- **Issues**: `napi_create_buffer_copy` in Hermes NAPI returns a plain Uint8Array, not a Node.js Buffer. This caused `buf.toString()` in the recv callback to return comma-separated byte values instead of UTF-8, making assertions fail silently (exception swallowed by RecvCb error handling). Fixed by calling `Buffer.from()` on the raw Uint8Array in RecvCb.
+- **Notes for next step**: `dgram` module should work with this binding. N5.14 (vendor llhttp) is the next unblocked step for HTTP support.
