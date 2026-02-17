@@ -277,5 +277,66 @@ assertions++;
 assertEquals(enc.toUnicode(''), '', 'toUnicode empty');
 assertions++;
 
+// --- Edge cases: simdutf code paths ---
+
+// decodeUTF8 fatal mode with truncated multi-byte sequences
+// Note: non-fatal mode with truncated sequences triggers Hermes OOB read
+// in _decodeUTF8SlowPath (VM bug), so only test fatal mode here.
+threw = false;
+try { enc.decodeUTF8(new Uint8Array([0xc3, 0x00]), false, true); } catch (e) { threw = true; }
+assert(threw, 'decodeUTF8 fatal: invalid continuation byte');
+assertions++;
+
+threw = false;
+try { enc.decodeUTF8(new Uint8Array([0xe4, 0xb8, 0x00]), false, true); } catch (e) { threw = true; }
+assert(threw, 'decodeUTF8 fatal: invalid 3-byte sequence');
+assertions++;
+
+threw = false;
+try { enc.decodeUTF8(new Uint8Array([0xf0, 0x9f, 0x98, 0x00]), false, true); } catch (e) { threw = true; }
+assert(threw, 'decodeUTF8 fatal: invalid 4-byte sequence');
+assertions++;
+
+// decodeUTF8 fatal mode with overlong encoding
+threw = false;
+try { enc.decodeUTF8(new Uint8Array([0xc0, 0x80]), false, true); } catch (e) { threw = true; }
+assert(threw, 'decodeUTF8 fatal: overlong NUL');
+assertions++;
+
+// decodeLatin1: full 256-byte range (every Latin-1 byte is valid)
+var allBytes = new Uint8Array(256);
+for (var i = 0; i < 256; i++) allBytes[i] = i;
+decoded = enc.decodeLatin1(allBytes, false, false);
+assertEquals(decoded.length, 256, 'decodeLatin1 full range length');
+assertions++;
+assertEquals(decoded.charCodeAt(0), 0, 'decodeLatin1 NUL');
+assertions++;
+assertEquals(decoded.charCodeAt(65), 65, 'decodeLatin1 A');
+assertions++;
+assertEquals(decoded.charCodeAt(255), 255, 'decodeLatin1 0xFF');
+assertions++;
+
+// encodeInto with 4-byte emoji character
+var emojiBuf = new Uint8Array(4);
+enc.encodeInto('\uD83D\uDE00', emojiBuf); // U+1F600
+results = enc.encodeIntoResults;
+assertEquals(results[0], 2, 'encodeInto emoji: 2 UTF-16 units read');
+assertions++;
+assertEquals(results[1], 4, 'encodeInto emoji: 4 bytes written');
+assertions++;
+assertEquals(emojiBuf[0], 0xf0, 'encodeInto emoji byte 0');
+assertions++;
+assertEquals(emojiBuf[1], 0x9f, 'encodeInto emoji byte 1');
+assertions++;
+
+// encodeInto: buffer too small for emoji
+var tinyBuf = new Uint8Array(3);
+enc.encodeInto('\uD83D\uDE00', tinyBuf);
+results = enc.encodeIntoResults;
+assertEquals(results[0], 0, 'encodeInto truncated emoji: 0 chars read');
+assertions++;
+assertEquals(results[1], 0, 'encodeInto truncated emoji: 0 bytes written');
+assertions++;
+
 console.log('encoding_binding: ' + assertions + ' assertions passed');
 console.log('PASS');

@@ -1456,38 +1456,9 @@ static napi_value utf8WriteStaticCb(napi_env env, napi_callback_info info) {
   // Get UTF-8 bytes of the string.
   std::string str = getStringUtf8(env, args.str);
 
-  // We need to truncate at a valid UTF-8 boundary.
+  // Truncate at a valid UTF-8 boundary using simdutf.
   size_t written = std::min(str.size(), args.maxLength);
-  // Back off to a valid UTF-8 boundary.
-  while (written > 0 && (str[written - 1] & 0x80)) {
-    // Check if we're in the middle of a multi-byte sequence.
-    size_t back = 0;
-    for (size_t j = written - 1; j < written; j--) {
-      auto b = static_cast<uint8_t>(str[j]);
-      if ((b & 0xC0) != 0x80) {
-        // This is a lead byte. Check if the full sequence fits.
-        size_t seqLen = 1;
-        if ((b & 0xE0) == 0xC0)
-          seqLen = 2;
-        else if ((b & 0xF0) == 0xE0)
-          seqLen = 3;
-        else if ((b & 0xF8) == 0xF0)
-          seqLen = 4;
-        if (j + seqLen <= args.maxLength) {
-          written = j + seqLen;
-        } else {
-          written = j;
-        }
-        break;
-      }
-      back++;
-      if (back >= 4) {
-        written = written - back;
-        break;
-      }
-    }
-    break;
-  }
+  written = simdutf::trim_partial_utf8(str.data(), written);
 
   std::memcpy(args.buf.data + args.offset, str.data(), written);
 

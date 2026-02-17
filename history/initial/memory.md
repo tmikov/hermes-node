@@ -57,5 +57,14 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `getUserInfo` takes (options, ctx) -- options may be null/object. Returns {uid, gid, username, homedir, shell}.
 - `credentials` binding: `getTempDir()` checks TMPDIR/TMP/TEMP env vars; `safeGetenv(key)` is simplified getenv.
 
+## simdutf Integration
+- Fully integrated in `node_buffer.cpp` and `node_encoding.cpp`: UTF-8/ASCII validation, base64, Latin-1↔UTF-8, UTF-16 length calc.
+- `utf8WriteStaticCb` uses `simdutf::trim_partial_utf8()` for boundary truncation.
+- Hex codec and substring search remain hand-rolled (simdutf doesn't support these).
+- UCS2 slice/write use NAPI UTF-16 functions directly (no manual transcoding).
+
+## Hermes VM Bugs (not fixable in NAPI layer)
+- `_decodeUTF8SlowPath` OOB read: `napi_create_string_utf8` with truncated multi-byte UTF-8 (e.g. `[0xc3]` — lead byte with no continuation) reads past buffer. Avoid passing truncated multi-byte sequences to `napi_create_string_utf8`.
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

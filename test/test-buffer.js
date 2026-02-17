@@ -246,4 +246,77 @@ expectedFns.forEach(function(name) {
   assert(typeof b[name] === 'function', name + ' is a function');
 });
 
+// --- Edge cases: simdutf code paths ---
+
+// isUtf8: truncated multi-byte sequences
+assert(b.isUtf8(new Uint8Array([0xc3])) === false, 'isUtf8 truncated 2-byte');
+assert(b.isUtf8(new Uint8Array([0xe4, 0xb8])) === false, 'isUtf8 truncated 3-byte');
+assert(b.isUtf8(new Uint8Array([0xf0, 0x9f, 0x98])) === false, 'isUtf8 truncated 4-byte');
+// Overlong encoding
+assert(b.isUtf8(new Uint8Array([0xc0, 0x80])) === false, 'isUtf8 overlong NUL');
+// 4-byte emoji
+assert(b.isUtf8(new Uint8Array([0xf0, 0x9f, 0x98, 0x80])) === true, 'isUtf8 4-byte emoji');
+
+// base64 edge cases
+// Empty string decode
+assertEq(b.atob(''), '', 'atob empty string');
+// Padding-only
+assertEq(b.atob('===='), -2, 'atob padding-only');
+// base64url slice of empty buffer
+var emptyBuf = new Uint8Array(0);
+assertEq(b.base64urlSlice.call(emptyBuf, 0, 0), '', 'base64urlSlice empty');
+assertEq(b.base64Slice.call(emptyBuf, 0, 0), '', 'base64Slice empty');
+// Single byte base64 encode/decode roundtrip
+var oneByteBuf = new Uint8Array([0xff]);
+var b64One = b.base64Slice.call(oneByteBuf, 0, 1);
+var wbuf_b64 = new Uint8Array(1);
+b.base64Write.call(wbuf_b64, b64One, 0, 1);
+assertEq(wbuf_b64[0], 0xff, 'base64 roundtrip single byte');
+
+// utf8WriteStatic: UTF-8 boundary truncation edge cases
+// 2-byte char (é = 0xc3 0xa9) that doesn't fit in 1 byte
+var wbuf_utf8_1 = new Uint8Array(1);
+written = b.utf8WriteStatic(wbuf_utf8_1, '\u00e9', 0, 1);
+assertEq(written, 0, 'utf8WriteStatic truncates 2-byte char at 1 byte');
+
+// 3-byte char (世 = 0xe4 0xb8 0x96) that doesn't fit in 2 bytes
+var wbuf_utf8_2 = new Uint8Array(2);
+written = b.utf8WriteStatic(wbuf_utf8_2, '\u4e16', 0, 2);
+assertEq(written, 0, 'utf8WriteStatic truncates 3-byte char at 2 bytes');
+
+// 4-byte emoji (😀 = 0xf0 0x9f 0x98 0x80) that doesn't fit in 3 bytes
+var wbuf_utf8_3 = new Uint8Array(3);
+written = b.utf8WriteStatic(wbuf_utf8_3, '\uD83D\uDE00', 0, 3);
+assertEq(written, 0, 'utf8WriteStatic truncates 4-byte char at 3 bytes');
+
+// Mixed ASCII + multi-byte: "A\u00e9" = [0x41, 0xc3, 0xa9], maxLength=2 -> only 'A'
+var wbuf_utf8_4 = new Uint8Array(2);
+written = b.utf8WriteStatic(wbuf_utf8_4, 'A\u00e9', 0, 2);
+assertEq(written, 1, 'utf8WriteStatic keeps ASCII, truncates partial 2-byte');
+assertEq(wbuf_utf8_4[0], 0x41, 'utf8WriteStatic partial keeps A');
+
+// Exact fit: "A\u00e9" in 3 bytes
+var wbuf_utf8_5 = new Uint8Array(3);
+written = b.utf8WriteStatic(wbuf_utf8_5, 'A\u00e9', 0, 3);
+assertEq(written, 3, 'utf8WriteStatic exact fit A+2-byte');
+assertEq(wbuf_utf8_5[0], 0x41, 'utf8WriteStatic exact A');
+assertEq(wbuf_utf8_5[1], 0xc3, 'utf8WriteStatic exact é byte 1');
+assertEq(wbuf_utf8_5[2], 0xa9, 'utf8WriteStatic exact é byte 2');
+
+// Empty string write
+var wbuf_utf8_6 = new Uint8Array(4);
+written = b.utf8WriteStatic(wbuf_utf8_6, '', 0, 4);
+assertEq(written, 0, 'utf8WriteStatic empty string');
+
+// hexWrite edge cases
+var wbuf_hex = new Uint8Array(4);
+written = b.hexWrite.call(wbuf_hex, '', 0, 4);
+assertEq(written, 0, 'hexWrite empty string');
+// Odd-length hex string (trailing nibble ignored)
+var wbuf_hex2 = new Uint8Array(4);
+written = b.hexWrite.call(wbuf_hex2, '4865f', 0, 4);
+assertEq(written, 2, 'hexWrite odd-length string');
+assertEq(wbuf_hex2[0], 0x48, 'hexWrite odd byte 0');
+assertEq(wbuf_hex2[1], 0x65, 'hexWrite odd byte 1');
+
 console.log('PASS');
