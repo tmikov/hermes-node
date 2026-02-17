@@ -36,6 +36,32 @@ if (typeof c.os.priority !== 'object')
 if (typeof c.os.dlopen !== 'object')
   throw new Error('os.dlopen should be an object');
 
+// --- os UV_UDP constants ---
+if (typeof c.os.UV_UDP_REUSEADDR !== 'number')
+  throw new Error('UV_UDP_REUSEADDR should be a number');
+if (c.os.UV_UDP_REUSEADDR !== 4)
+  throw new Error('UV_UDP_REUSEADDR should be 4');
+if (typeof c.os.UV_UDP_IPV6ONLY !== 'number')
+  throw new Error('UV_UDP_IPV6ONLY should be a number');
+if (c.os.UV_UDP_IPV6ONLY !== 1)
+  throw new Error('UV_UDP_IPV6ONLY should be 1');
+if (typeof c.os.UV_UDP_PARTIAL !== 'number')
+  throw new Error('UV_UDP_PARTIAL should be a number');
+if (c.os.UV_UDP_PARTIAL !== 2)
+  throw new Error('UV_UDP_PARTIAL should be 2');
+// UV_UDP_REUSEPORT may not be defined on all platforms.
+if (c.os.UV_UDP_REUSEPORT !== undefined &&
+    typeof c.os.UV_UDP_REUSEPORT !== 'number')
+  throw new Error('UV_UDP_REUSEPORT should be a number if defined');
+
+// --- os socket type constants ---
+if (typeof c.os.SOCK_STREAM !== 'number')
+  throw new Error('SOCK_STREAM should be a number');
+if (typeof c.os.SOCK_DGRAM !== 'number')
+  throw new Error('SOCK_DGRAM should be a number');
+if (typeof c.os.SOCK_RAW !== 'number')
+  throw new Error('SOCK_RAW should be a number');
+
 // --- fs ---
 if (typeof c.fs.O_RDONLY !== 'number')
   throw new Error('O_RDONLY should be a number');
@@ -79,5 +105,20 @@ if (typeof c.zlib !== 'object')
 // --- trace (stubbed, should be empty object) ---
 if (typeof c.trace !== 'object')
   throw new Error('trace should be an object');
+
+// --- Verify os module exposes constants ---
+var os = require('os');
+if (typeof os.constants !== 'object')
+  throw new Error('os.constants should be an object');
+if (typeof os.constants.signals !== 'object')
+  throw new Error('os.constants.signals should be an object');
+if (typeof os.constants.errno !== 'object')
+  throw new Error('os.constants.errno should be an object');
+if (typeof os.constants.UV_UDP_REUSEADDR !== 'number')
+  throw new Error('os.constants.UV_UDP_REUSEADDR should be a number');
+if (typeof os.constants.SOCK_STREAM !== 'number')
+  throw new Error('os.constants.SOCK_STREAM should be a number');
+if (typeof os.constants.SOCK_DGRAM !== 'number')
+  throw new Error('os.constants.SOCK_DGRAM should be a number');
 
 console.log('PASS');

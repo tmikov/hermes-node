@@ -58,6 +58,11 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `getUserInfo` takes (options, ctx) -- options may be null/object. Returns {uid, gid, username, homedir, shell}.
 - `credentials` binding: `getTempDir()` checks TMPDIR/TMP/TEMP env vars; `safeGetenv(key)` is simplified getenv.
 
+## Constants Binding
+- `node_constants.cpp`: os (signals, errno, priority, dlopen, UV_UDP_*, SOCK_*), fs, crypto/zlib/trace (stubs)
+- Node only puts `UV_UDP_REUSEADDR` in `os_constants`; we also add IPV6ONLY/PARTIAL/REUSEPORT + SOCK_* for completeness
+- `dgram.js` gets `UV_UDP_REUSEADDR` from `constants.os`; other UDP constants from `udp_wrap` binding directly
+
 ## simdutf Integration
 - Fully integrated in `node_buffer.cpp` and `node_encoding.cpp`: UTF-8/ASCII validation, base64, Latin-1↔UTF-8, UTF-16 length calc.
 - `utf8WriteStaticCb` uses `simdutf::trim_partial_utf8()` for boundary truncation.

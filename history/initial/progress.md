@@ -62,7 +62,7 @@ be omitted):
 | N5.18 | Port `spawn_sync` binding | N5.17 | done | |
 | N5.19 | Verify `child_process` module works | N5.17, N5.18 | done | Fixed spawn-fail UAF bug |
 | N5.20 | Implement `process.stdin` | N5.3, N5.6 | done | Also upgraded stdout/stderr to proper streams |
-| N5.21 | Add missing `os` constants | N5.1 | | |
+| N5.21 | Add missing `os` constants | N5.1 | done | Added UV_UDP + SOCK_* constants |
 | N5.22 | Run Node.js net test subset | N5.12 | | |
 | N5.23 | Run Node.js http test subset | N5.16 | | |
 | N5.24 | Run Node.js child_process test subset | N5.19 | | |
@@ -274,3 +274,12 @@ be omitted):
 - **What was done**: Full process.stdin/stdout/stderr implementation with proper stream types. Removed ~180 lines of C++ stdio code (stdioWrite, stdioNoop, stdioListenerCount, createStdioStream). Added shutdown cleanup that closes native stdio handles before event loop destruction. Updated test-stdio.js for proper Node behavior (isTTY is true or undefined, not boolean). New comprehensive test covering stream types, event emitter methods, stdin piping via child process, stdout/stderr separation, console.log/error routing.
 - **Issues**: ASAN heap-use-after-free during shutdown: GC finalizer tried to `uv_close` a PipeWrap/TTYWrap handle after the event loop was destroyed. Fixed by explicitly closing stdio native handles (`_handle.close()`) before event loop shutdown.
 - **Notes for next step**: `require('tty')` now works (all deps available). `process.stdin` works for pipe/file/TTY inputs. The `signal_wrap` binding is a no-op shim -- process signal handling (SIGWINCH for TTY resize, SIGINT etc.) requires a real implementation in a future step.
+
+### Step N5.21: Add missing `os` constants
+- **Files**: modified `lib/bindings/node_constants.cpp`, `test/test-constants.js`.
+- **What was done**: Added missing libuv UDP constants (`UV_UDP_IPV6ONLY`, `UV_UDP_PARTIAL`, `UV_UDP_REUSEPORT`) and POSIX socket type constants (`SOCK_STREAM`, `SOCK_DGRAM`, `SOCK_RAW`, `SOCK_SEQPACKET`, `SOCK_RDM`) to the `os` section of the constants binding. Updated test to verify all new constants and also verify they're accessible via `require('os').constants`.
+- **Decisions**:
+-- Node.js itself only puts `UV_UDP_REUSEADDR` in `os_constants`; the other `UV_UDP_*` constants are exported by `udp_wrap` binding. Added them to `os` section for completeness (users may access via `os.constants`).
+-- Socket type constants (`SOCK_*`) are not used by any of our JS modules but are useful for user code and completeness. Protected with `#ifdef` guards.
+-- `UV_UDP_REUSEPORT` conditionally defined (not available on all libuv builds).
+- **Notes for next step**: All constants needed by networking modules are now in place. N5.22/N5.23/N5.24 (test subsets) are the remaining tasks.

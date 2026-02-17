@@ -16,6 +16,7 @@
 
 #if !defined(_WIN32)
 #include <dlfcn.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #endif
 
@@ -602,8 +603,30 @@ napi_value initConstantsBinding(napi_env env, napi_value exports) {
   napi_create_object(env, &dlopenObj);
   defineDlopenConstants(env, dlopenObj);
 
-  // UV_UDP_REUSEADDR on os object.
+  // Libuv UDP constants on os object.
   SET_CONST(osObj, UV_UDP_REUSEADDR);
+  SET_CONST(osObj, UV_UDP_IPV6ONLY);
+  SET_CONST(osObj, UV_UDP_PARTIAL);
+#ifdef UV_UDP_REUSEPORT
+  SET_CONST(osObj, UV_UDP_REUSEPORT);
+#endif
+
+  // Socket type constants.
+#ifdef SOCK_STREAM
+  SET_CONST(osObj, SOCK_STREAM);
+#endif
+#ifdef SOCK_DGRAM
+  SET_CONST(osObj, SOCK_DGRAM);
+#endif
+#ifdef SOCK_RAW
+  SET_CONST(osObj, SOCK_RAW);
+#endif
+#ifdef SOCK_SEQPACKET
+  SET_CONST(osObj, SOCK_SEQPACKET);
+#endif
+#ifdef SOCK_RDM
+  SET_CONST(osObj, SOCK_RDM);
+#endif
 
   // Assemble os sub-objects.
   napi_set_named_property(env, osObj, "errno", errnoObj);
