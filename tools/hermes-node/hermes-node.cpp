@@ -27,6 +27,8 @@
 #include <hermes/node-compat/bindings/node_http_parser.h>
 #include <hermes/node-compat/bindings/node_os.h>
 #include <hermes/node-compat/bindings/node_pipe_wrap.h>
+#include <hermes/node-compat/bindings/node_process_wrap.h>
+#include <hermes/node-compat/bindings/node_spawn_sync.h>
 #include <hermes/node-compat/bindings/node_stdio.h>
 #include <hermes/node-compat/bindings/node_stream_wrap.h>
 #include <hermes/node-compat/bindings/node_string_decoder.h>
@@ -482,6 +484,8 @@ static int runBootstrap(
   registry.registerBinding("http_parser", initHttpParserBinding);
   registry.registerBinding("os", initOsBinding);
   registry.registerBinding("pipe_wrap", initPipeWrapBinding);
+  registry.registerBinding("process_wrap", initProcessWrapBinding);
+  registry.registerBinding("spawn_sync", initSpawnSyncBinding);
   registry.registerBinding("stdio", initStdioBinding);
   registry.registerBinding("stream_wrap", initStreamWrapBinding);
   registry.registerBinding("string_decoder", initStringDecoderBinding);

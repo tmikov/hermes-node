@@ -58,7 +58,7 @@ be omitted):
 | N5.14 | Vendor llhttp | — | done | |
 | N5.15 | Port `http_parser` binding | N5.6, N5.14 | done | |
 | N5.16 | Verify HTTP works | N5.12, N5.15 | done | |
-| N5.17 | Port `process_wrap` binding | N5.6, N5.11 | | |
+| N5.17 | Port `process_wrap` binding | N5.6, N5.11 | done | Also added spawn_sync stub |
 | N5.18 | Port `spawn_sync` binding | N5.17 | | |
 | N5.19 | Verify `child_process` module works | N5.17, N5.18 | | |
 | N5.20 | Implement `process.stdin` | N5.3, N5.6 | | |
@@ -226,3 +226,15 @@ be omitted):
 - **Files**: created `test/test-http.js`, `test/node-tests/common/countdown.js`, `test/node-tests/parallel/test-http-request-end.js`, `test/node-tests/parallel/test-http-status-code.js`, `test/node-tests/parallel/test-http-client-get-url.js`, `test/node-tests/parallel/test-http-date-header.js`.
 - **What was done**: Comprehensive HTTP module verification with 11 tests: simple GET request+response, POST with request body, chunked transfer encoding (multiple writes), HTTP keep-alive (multiple requests on same connection via Agent), request headers received correctly, response headers set correctly, HTTP status codes (200/201/204/301/404/500), large response body streaming (50KB), client timeout, server close while connections active, hostname resolution via dns.lookup. Ported 4 Node.js tests: http-request-end (POST body + req.end return value), http-status-code (sequential status code verification with Countdown), http-client-get-url (URL string/parsed/URL constructor variants), http-date-header (Date header present in response, absent in request). Created Countdown helper for test harness.
 - **Notes for next step**: N5.23 (run Node.js http test subset) is unblocked. HTTP module fully verified working for GET/POST, chunked encoding, keep-alive, headers, status codes, streaming, timeouts, DNS integration. All 56 tests pass.
+
+### Step N5.17: Port `process_wrap` binding
+- **Files**: created `include/hermes/node-compat/bindings/node_process_wrap.h`, `lib/bindings/node_process_wrap.cpp`, `include/hermes/node-compat/bindings/node_spawn_sync.h`, `lib/bindings/node_spawn_sync.cpp`, `test/test-process-wrap.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`.
+- **Decisions**:
+-- ProcessWrap inherits HandleWrapBase (NOT LibuvStreamBase) because processes are not streams.
+-- `uv_process_t` is NOT initialized in the constructor. Unlike TCP/Pipe, `uv_spawn` both initializes the handle and starts the process. HandleWrapBase::init() is called only after a successful `uv_spawn`.
+-- GC finalizer on the constructor uses `napi_wrap` directly (not through HandleWrapBase::init) so the object can be collected even if spawn was never called. If state is kClosed (never initialized), just deletes. If initialized, calls doClose().
+-- OnExit callback passes exit status as double (can exceed int32 range) and signal as string name (e.g. "SIGTERM"). Uses local `signoString()` function matching Node's `signo_string()`.
+-- ParseStdioOptions handles all stdio types: ignore, pipe, overlapped, wrap, and fd/inherit. For pipe/overlapped/wrap, extracts `uv_stream_t*` from the JS handle object via HandleWrapBase::unwrap + handle() cast.
+-- Created `spawn_sync` stub binding so `internal/child_process.js` can load (it imports `spawn_sync` at module load time). The stub throws "not implemented" when called.
+- **What was done**: Full `process_wrap` binding with Process constructor, spawn(options) method (parses file/args/cwd/envPairs/stdio/uid/gid/detached/windowsHide/windowsVerbatimArguments), kill(signal) method. OnExit callback with exit code and signal name. HandleWrap methods (ref/unref/hasRef/close/getAsyncId) inherited. Stub `spawn_sync` binding. Test covers: binding exports, Process constructor methods, spawn+stdout capture via pipe, spawn+kill with SIGTERM signal verification. Verified child_process module loads and spawn/exec/kill work end-to-end through the JS API.
+- **Notes for next step**: N5.18 (spawn_sync) needs to replace the stub with a real implementation. N5.19 (verify child_process) is partially unblocked -- async spawn/exec/execFile/kill all work, but spawnSync/execSync/execFileSync require N5.18. The `cluster.js` shim from N5.10 is still needed since child_process is now loadable.

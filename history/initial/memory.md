@@ -160,5 +160,18 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - 204 No Content correctly omits body
 - Client `timeout` option works (fires 'timeout' event, then destroy to abort)
 
+## Process Wrap Binding
+- `ProcessWrap` inherits `HandleWrapBase` (NOT LibuvStreamBase -- processes are not streams).
+- `uv_process_t` is NOT initialized in constructor. `uv_spawn` both initializes the handle AND starts the process. `HandleWrapBase::init()` is called only after successful `uv_spawn`.
+- GC finalizer: uses `napi_wrap` directly in constructor (not via HandleWrapBase::init). If state is kClosed (never spawned), just deletes. If initialized, calls doClose().
+- OnExit callback: `onexit(exitStatus, signalName)`. exitStatus as double (int64_t range), signal as string ("SIGTERM" etc.) via `signoString()`.
+- ParseStdioOptions: handles ignore/pipe/overlapped/wrap/fd. For pipe: extracts `uv_stream_t*` from JS handle via `HandleWrapBase::unwrap() -> handle()`.
+- `spawn_sync` stub binding: throws "not implemented". Needed so `internal/child_process.js` can load (imports `spawn_sync` at module load time).
+
+## Child Process Module
+- `require('child_process')` loads and works for async operations (spawn, exec, execFile, kill).
+- spawnSync/execSync/execFileSync require N5.18 (real spawn_sync implementation).
+- `cluster.js` shim still needed (breaks `child_process` -> `dgram` -> `udp_wrap` chain at load time).
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues
