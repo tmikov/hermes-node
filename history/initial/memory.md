@@ -121,5 +121,14 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - **OnConnection**: same pattern as TCPWrap — module-level `napi_ref` to Pipe constructor.
 - `net.createServer`/`net.connect` with Unix domain socket paths now fully functional.
 
+## Net Module (verified)
+- `require('net')` loads and works for TCP and Unix domain sockets.
+- TCP echo, concurrent connections, server address, socket properties, setTimeout, setNoDelay/setKeepAlive, error handling (ECONNREFUSED), DNS hostname lookup integration all verified.
+- `net.isIP`/`net.isIPv4`/`net.isIPv6` work correctly.
+- 4 Node.js tests ported and passing: server-close, socket-timeout, write-slow, pipe-connect-errors.
+- `process.getuid()` not wired on process object. Use `internalBinding('credentials').getuid()` as fallback.
+- Write-slow test: original uses 2MB data with 20ms delays; under ASAN this hangs. Reduce data size for ASAN CI.
+- Test common module now has `localhostIPv4` and `PIPE` properties for net tests.
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

@@ -53,7 +53,7 @@ be omitted):
 | N5.9 | Implement c-ares DNS queries | N5.7, N5.8 | done | |
 | N5.10 | Port `tcp_wrap` binding | N5.6 | done | |
 | N5.11 | Port `pipe_wrap` binding | N5.6 | done | |
-| N5.12 | Verify `net` module works | N5.8, N5.10, N5.11 | | |
+| N5.12 | Verify `net` module works | N5.8, N5.10, N5.11 | done | |
 | N5.13 | Port `udp_wrap` binding | N5.6 | | |
 | N5.14 | Vendor llhttp | — | | |
 | N5.15 | Port `http_parser` binding | N5.6, N5.14 | | |
@@ -176,3 +176,12 @@ be omitted):
 -- Reused PipeConnectReqData struct (same pattern as ConnectReqData in tcp_wrap) with `uv_connect_t` + `napi_ref` to JS request object.
 - **What was done**: Full `pipe_wrap` binding replacing the stub. PipeWrap class with open, bind, listen, connect, fchmod, getsockname, getpeername. Connection acceptance via OnConnection. PipeConnectWrap constructor. Constants (SOCKET, SERVER, IPC, UV_READABLE, UV_WRITABLE). All stream/handle methods inherited. Test covers binding API and full data flow (server listen -> client connect -> server write -> client read -> verify). Also verified end-to-end with `net.createServer`/`net.connect` using Unix domain sockets.
 - **Notes for next step**: `require('net')` now works for both TCP and Unix domain sockets. N5.12 (verify net module) is unblocked. N5.17 (process_wrap) is also unblocked since it depends on N5.6 + N5.11.
+
+### Step N5.12: Verify `net` module works
+- **Files**: created `test/test-net.js`, `test/node-tests/parallel/test-net-server-close.js`, `test/node-tests/parallel/test-net-socket-timeout.js`, `test/node-tests/parallel/test-net-write-slow.js`, `test/node-tests/parallel/test-net-pipe-connect-errors.js`. Modified `test/node-tests/common/index.js`.
+- **What was done**: Comprehensive net module verification with 10 tests (TCP echo, concurrent connections, server address, socket properties, setNoDelay/setKeepAlive, setTimeout, net.isIP/isIPv4/isIPv6, ECONNREFUSED error handling, Unix domain socket pipe, DNS hostname lookup integration). Ported 4 Node.js tests: server close, socket timeout validation, write-slow back-pressure, and pipe connect errors (ENOTSOCK/ENOENT/EACCES). Added `localhostIPv4` and `PIPE` properties to test common module.
+- **Decisions**:
+-- Reduced `test-net-write-slow` data size from 2MB to 100KB to fit within ASAN CI timeouts.
+-- `test-net-pipe-connect-errors` uses `internalBinding('credentials').getuid()` fallback since `process.getuid()` is not yet wired.
+- **Issues**: `process.getuid()` is not defined on the process object -- the credentials binding has getuid but it's not exposed on `process`. Should be addressed when `process` is fully wired.
+- **Notes for next step**: All net module functionality verified working: TCP server/client, Unix domain sockets, DNS integration, error handling, timeouts, back-pressure. N5.13 (udp_wrap), N5.14 (vendor llhttp), N5.17 (process_wrap), N5.20 (process.stdin), N5.21 (os constants), N5.22 (net test subset) are now unblocked.

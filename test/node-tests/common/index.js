@@ -242,6 +242,17 @@ function canCreateSymLink() {
   return !isWindows;
 }
 
+// --- localhostIPv4 ---
+var localhostIPv4 = '127.0.0.1';
+
+// --- PIPE (Unix domain socket path for tests) ---
+var tmpdir = require('./tmpdir');
+var PIPE = (function() {
+  var localRelative = path.relative(process.cwd(), tmpdir.path + '/');
+  var pipeName = 'node-test.' + process.pid + '.sock';
+  return localRelative + pipeName;
+})();
+
 var common = {
   allowGlobals: allowGlobals,
   canCreateSymLink: canCreateSymLink,
@@ -251,11 +262,13 @@ var common = {
   isLinux: isLinux,
   isMacOS: isMacOS,
   isWindows: isWindows,
+  localhostIPv4: localhostIPv4,
   mustCall: mustCall,
   mustCallAtLeast: mustCallAtLeast,
   mustNotCall: mustNotCall,
   mustNotMutateObjectDeep: mustNotMutateObjectDeep,
   mustSucceed: mustSucceed,
+  PIPE: PIPE,
   platformTimeout: platformTimeout,
   printSkipMessage: printSkipMessage,
   runWithInvalidFD: runWithInvalidFD,
