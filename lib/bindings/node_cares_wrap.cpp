@@ -364,6 +364,35 @@ static napi_value canonicalizeIPFn(napi_env env, napi_callback_info info) {
 }
 
 // ---------------------------------------------------------------------------
+// convertIpv6StringToBuffer(ip) -> Buffer(16) | throws
+// Parses an IPv6 address string into a 16-byte buffer.
+// ---------------------------------------------------------------------------
+
+static napi_value convertIpv6StringToBufferFn(
+    napi_env env,
+    napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  char ip[256];
+  size_t ipLen = 0;
+  napi_get_value_string_utf8(env, argv[0], ip, sizeof(ip), &ipLen);
+
+  unsigned char dst[16]; // IPv6 = 128 bits = 16 bytes
+  if (uv_inet_pton(AF_INET6, ip, dst) != 0) {
+    napi_throw_error(env, nullptr, "Invalid IPv6 address");
+    return nullptr;
+  }
+
+  // Create a Buffer with the 16-byte address.
+  void *bufData = nullptr;
+  napi_value result;
+  napi_create_buffer_copy(env, sizeof(dst), dst, &bufData, &result);
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // strerror(code) -> string
 // Uses ares_strerror for c-ares error codes, uv_strerror for libuv codes.
 // ---------------------------------------------------------------------------
@@ -1592,6 +1621,14 @@ napi_value initCaresWrapBinding(napi_env env, napi_value exports) {
       {"strerror",
        nullptr,
        strerrorFn,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"convertIpv6StringToBuffer",
+       nullptr,
+       convertIpv6StringToBufferFn,
        nullptr,
        nullptr,
        nullptr,

@@ -104,5 +104,15 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 ## Hermes VM Bugs (not fixable in NAPI layer)
 - `_decodeUTF8SlowPath` OOB read: `napi_create_string_utf8` with truncated multi-byte UTF-8 (e.g. `[0xc3]` — lead byte with no continuation) reads past buffer. Avoid passing truncated multi-byte sequences to `napi_create_string_utf8`.
 
+## TCP Wrap
+- `TCPWrap` inherits `LibuvStreamBase`, wraps `uv_tcp_t`. Constructor: `TCP(type)` where type is SOCKET(0) or SERVER(1).
+- Instance methods: bind, bind6, listen, connect, connect6, open, getsockname, getpeername, setNoDelay, setKeepAlive, reset.
+- **OnConnection**: stores module-level `napi_ref` to TCP constructor. When connection arrives, `napi_new_instance()` creates client TCPWrap, `uv_accept()` transfers the connection, calls `server.onconnection(status, clientHandle)`.
+- **ConnectReqData**: heap-allocated struct with `uv_connect_t`, `napi_env`, `napi_ref` to JS req. AfterConnect callback calls `reqObj.oncomplete(status, handle, req, readable, writable)`.
+- **AddressToJS**: helper converting `sockaddr` to JS object `{address, family, port}`.
+- **pipe_wrap stub**: `net.js` destructures `internalBinding('pipe_wrap')` at module load time. Stub exports Pipe constructor that throws "not implemented" + PipeConnectWrap passthrough + constants.
+- **cluster shim**: `net.js` → `cluster` → `child_process` → `dgram` → `udp_wrap`. Shim with `isPrimary: true` breaks the chain (standalone CLI is always primary).
+- **convertIpv6StringToBuffer**: added to cares_wrap. `net.js` line 65 needs it. Uses `uv_inet_pton(AF_INET6, ...)` → 16-byte buffer.
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

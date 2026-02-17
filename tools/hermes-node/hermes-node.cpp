@@ -25,11 +25,13 @@
 #include <hermes/node-compat/bindings/node_file_dir.h>
 #include <hermes/node-compat/bindings/node_fs_event_wrap.h>
 #include <hermes/node-compat/bindings/node_os.h>
+#include <hermes/node-compat/bindings/node_pipe_wrap.h>
 #include <hermes/node-compat/bindings/node_stdio.h>
 #include <hermes/node-compat/bindings/node_stream_wrap.h>
 #include <hermes/node-compat/bindings/node_string_decoder.h>
 #include <hermes/node-compat/bindings/node_symbols.h>
 #include <hermes/node-compat/bindings/node_task_queue.h>
+#include <hermes/node-compat/bindings/node_tcp_wrap.h>
 #include <hermes/node-compat/bindings/node_timers.h>
 #include <hermes/node-compat/bindings/node_trace_events.h>
 #include <hermes/node-compat/bindings/node_tty_wrap.h>
@@ -476,11 +478,13 @@ static int runBootstrap(
   registry.registerBinding("fs_dir", initFsDirBinding);
   registry.registerBinding("fs_event_wrap", initFsEventWrapBinding);
   registry.registerBinding("os", initOsBinding);
+  registry.registerBinding("pipe_wrap", initPipeWrapBinding);
   registry.registerBinding("stdio", initStdioBinding);
   registry.registerBinding("stream_wrap", initStreamWrapBinding);
   registry.registerBinding("string_decoder", initStringDecoderBinding);
   registry.registerBinding("symbols", initSymbolsBinding);
   registry.registerBinding("task_queue", initTaskQueueBinding);
+  registry.registerBinding("tcp_wrap", initTcpWrapBinding);
   registry.registerBinding("timers", initTimersBinding);
   registry.registerBinding("trace_events", initTraceEventsBinding);
   registry.registerBinding("tty_wrap", initTtyWrapBinding);

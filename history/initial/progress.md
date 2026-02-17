@@ -51,7 +51,7 @@ be omitted):
 | N5.7 | Vendor c-ares | — | done | |
 | N5.8 | Implement `dns.lookup()` via libuv | N5.7 | done | |
 | N5.9 | Implement c-ares DNS queries | N5.7, N5.8 | done | |
-| N5.10 | Port `tcp_wrap` binding | N5.6 | | |
+| N5.10 | Port `tcp_wrap` binding | N5.6 | done | |
 | N5.11 | Port `pipe_wrap` binding | N5.6 | | |
 | N5.12 | Verify `net` module works | N5.8, N5.10, N5.11 | | |
 | N5.13 | Port `udp_wrap` binding | N5.6 | | |
@@ -152,3 +152,16 @@ be omitted):
 - **What was done**: Full ChannelWrap implementation wrapping `ares_channel_t` with libuv I/O integration. Query methods for all DNS record types: A, AAAA, MX, NS, TXT, SRV, CNAME, PTR, NAPTR, SOA, CAA, Any. Reverse DNS via `getHostByAddr` (`ares_gethostbyaddr`). Real `getServers`/`setServers`/`cancel`/`setLocalAddress` implementations. Parse functions for all record types building JS objects matching Node's format. Test covering binding API, dns.Resolver, dns.resolve*/reverse at JS API level, cancel, strerror for c-ares codes.
 - **Issues**: ASAN heap-use-after-free when GC collected ChannelWrap during JS execution: destructor tried to `uv_close` the embedded `uv_timer_t` member, but after `delete this` the timer memory was freed, so when `uv_run` processed the close callback it accessed freed memory. Fixed by adding prevent-GC ref to keep ChannelWrap alive until all handles are properly closed via `closeChannel()`.
 - **Notes for next step**: `dns.resolve*` and `dns.reverse` are now functional. The `dns/promises` API should also work (it's built on the callback API). The `queryAny` method returns a "not implemented" error for now (c-ares doesn't have a single-call API for ANY queries). N5.10/N5.11 (tcp_wrap/pipe_wrap) are the next unblocked steps.
+
+### Step N5.10: Port `tcp_wrap` binding
+- **Files**: created `include/hermes/node-compat/bindings/node_tcp_wrap.h`, `lib/bindings/node_tcp_wrap.cpp`, `include/hermes/node-compat/bindings/node_pipe_wrap.h`, `lib/bindings/node_pipe_wrap.cpp`, `libjs/shims/cluster.js`, `test/test-tcp-wrap.js`. Modified `lib/bindings/node_cares_wrap.cpp`, `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`.
+- **Decisions**:
+-- TCPWrap inherits LibuvStreamBase following exact same pattern as TTYWrap. Constructor calls `uv_tcp_init` + `initStream()`.
+-- `reset()` implemented as regular close (FIN) rather than `uv_tcp_close_reset` (RST). The RST vs FIN distinction rarely matters in practice and avoids HandleWrapBase state management complexity.
+-- OnConnection callback stores a module-level `napi_ref` to the TCP constructor, uses `napi_new_instance` to create client handles, then `uv_accept`.
+-- ConnectReqData follows same pattern as WriteReqData: heap-allocated struct with `uv_connect_t`, `napi_ref` to JS req object. AfterConnect callback calls `reqObj.oncomplete(status, handle, req, readable, writable)`.
+-- Created pipe_wrap stub (Pipe constructor throws "not implemented") so `net.js` can load -- it destructures `internalBinding('pipe_wrap')` at module load time.
+-- Created `cluster.js` shim (`isPrimary: true`) to avoid `net.js` → `cluster` → `child_process` → `dgram` → `udp_wrap` chain. Standalone CLI is always primary.
+-- Added `convertIpv6StringToBuffer` to cares_wrap binding (needed by `net.js` via `internal/net.js`). Uses `uv_inet_pton(AF_INET6)` + `napi_create_buffer_copy`.
+- **What was done**: Full `tcp_wrap` binding with TCP constructor (SOCKET/SERVER types), open, bind/bind6, listen, connect/connect6, getsockname/getpeername, setNoDelay/setKeepAlive, reset. Connection acceptance via OnConnection callback. TCPConnectWrap constructor. Constants (SOCKET, SERVER, UV_TCP_IPV6ONLY, UV_TCP_REUSEPORT). All stream/handle methods inherited. Test covers binding API and full data flow (server listen → client connect → server write → client read → verify).
+- **Notes for next step**: `require('net')` now works for TCP. Pipe support (N5.11) needs full PipeWrap implementation (current stub throws). The `cluster.js` shim means cluster features won't work but standalone TCP is fully functional. `net.BlockList` and `net.SocketAddress` are lazy-loaded and need `block_list`/`socketaddress` bindings if used.

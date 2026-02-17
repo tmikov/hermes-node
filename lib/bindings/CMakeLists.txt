@@ -18,9 +18,11 @@ add_hermes_library(hermesNodeBindings STATIC
   node_file.cpp
   node_file_dir.cpp
   node_os.cpp
+  node_pipe_wrap.cpp
   node_fs_event_wrap.cpp
   node_stdio.cpp
   node_stream_wrap.cpp
+  node_tcp_wrap.cpp
   node_string_decoder.cpp
   node_symbols.cpp
   node_task_queue.cpp
