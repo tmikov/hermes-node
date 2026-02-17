@@ -1,5 +1,4 @@
 // Ported from Node.js test/parallel/test-net-bytes-read.js
-// Reduced buffer size from 1MB to 64KB for ASAN performance.
 // RUN: TEST_THREAD_ID=$$ %hermes-node %s
 
 'use strict';
@@ -8,8 +7,9 @@ var common = require('../common');
 var assert = require('assert');
 var net = require('net');
 
-// Use 64KB instead of 1MB to avoid ASAN slowness
-var big = Buffer.alloc(64 * 1024);
+// 256KB: compromise between 1MB (too slow under ASAN) and 64KB (too small
+// to stress multi-chunk reads).
+var big = Buffer.alloc(256 * 1024);
 
 var handler = common.mustCall(function(socket) {
   socket.end(big);

@@ -57,6 +57,16 @@ checkSpawnSyncRet(ret);
 assert.deepStrictEqual(ret.stdout, bufOptions.input);
 assert.deepStrictEqual(ret.stderr, Buffer.from(''));
 
+// Test all ArrayBufferView types piped to cat.
+// common.getArrayBufferViews expects a buffer with length a multiple of 8.
+const msgBuf = Buffer.from('hello world'.repeat(8));
+common.getArrayBufferViews(msgBuf).forEach(function(view) {
+  ret = spawnSync('cat', [], { input: view });
+  checkSpawnSyncRet(ret);
+  assert.deepStrictEqual(ret.stdout, msgBuf);
+  assert.deepStrictEqual(ret.stderr, Buffer.from(''));
+});
+
 // Test encoding option.
 ret = spawnSync('sh', args, { encoding: 'utf8' });
 

@@ -17,8 +17,11 @@ function test(fn, code, expectPidType) {
 }
 
 // With `shell: true` (exec), expect pid (of the shell).
-// Exit code 127 from /bin/sh for command not found.
-test(child_process.exec, 127, 'number');
+if (common.isWindows) {
+  test(child_process.exec, 1, 'number'); // Exit code of cmd.exe
+} else {
+  test(child_process.exec, 127, 'number'); // Exit code of /bin/sh
+}
 
 // With `shell: false` (execFile), expect no pid.
 test(child_process.execFile, 'ENOENT', 'undefined');

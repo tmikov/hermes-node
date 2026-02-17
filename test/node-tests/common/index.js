@@ -298,6 +298,30 @@ var PIPE = (function() {
   return localRelative + pipeName;
 })();
 
+// --- nodeLibPath: project root for --node-lib-path ---
+// Tests live in <root>/test/node-tests/parallel/, so 3 levels up.
+var nodeLibPath = path.resolve(__dirname, '../../..');
+
+// --- spawnArgs: construct args for spawning hermes-node children ---
+// Returns an array like ['--node-lib-path', '<root>', scriptPath, ...extra].
+function spawnArgs(scriptPath) {
+  var extra = [];
+  for (var i = 1; i < arguments.length; i++) {
+    extra.push(arguments[i]);
+  }
+  return ['--node-lib-path', nodeLibPath, scriptPath].concat(extra);
+}
+
+// --- spawnCmd: construct shell command for exec() with hermes-node children ---
+function spawnCmd(scriptPath) {
+  var extra = [];
+  for (var i = 1; i < arguments.length; i++) {
+    extra.push(arguments[i]);
+  }
+  var parts = [process.execPath, '--node-lib-path', nodeLibPath, scriptPath];
+  return parts.concat(extra).join(' ');
+}
+
 var common = {
   allowGlobals: allowGlobals,
   canCreateSymLink: canCreateSymLink,
@@ -315,12 +339,15 @@ var common = {
   mustNotCall: mustNotCall,
   mustNotMutateObjectDeep: mustNotMutateObjectDeep,
   mustSucceed: mustSucceed,
+  nodeLibPath: nodeLibPath,
   PIPE: PIPE,
   platformTimeout: platformTimeout,
   printSkipMessage: printSkipMessage,
   pwdCommand: pwdCommand,
   runWithInvalidFD: runWithInvalidFD,
   skip: skip,
+  spawnArgs: spawnArgs,
+  spawnCmd: spawnCmd,
 
   get isAIX() { return false; },
   get isIBMi() { return false; },

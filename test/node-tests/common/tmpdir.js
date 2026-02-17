@@ -51,10 +51,16 @@ function hasEnoughSpace(size) {
   }
 }
 
+function fileURL() {
+  var url = require('url');
+  return url.pathToFileURL(tmpPath);
+}
+
 module.exports = {
   refresh: refresh,
   resolve: resolve,
   hasEnoughSpace: hasEnoughSpace,
+  fileURL: fileURL,
 
   get path() {
     return tmpPath;

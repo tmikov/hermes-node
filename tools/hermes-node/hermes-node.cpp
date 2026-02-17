@@ -940,5 +940,24 @@ int main(int argc, char **argv) {
     libJsNodePath = rootDir + "/libjs-node/";
   }
 
-  return runBootstrap(argc, argv, scriptPath, libJsPath, libJsNodePath);
+  // Build a filtered argc/argv for the runtime: [argv[0], scriptPath, user
+  // args...], omitting hermes-node-specific flags like --node-lib-path.
+  std::vector<char *> filteredArgv;
+  filteredArgv.push_back(argv[0]);
+  // Find scriptPath in argv to get the index of user args.
+  for (int i = 1; i < argc; ++i) {
+    if (argv[i] == scriptPath) {
+      // scriptPath and everything after it are user-visible.
+      for (int j = i; j < argc; ++j)
+        filteredArgv.push_back(argv[j]);
+      break;
+    }
+  }
+
+  return runBootstrap(
+      static_cast<int>(filteredArgv.size()),
+      filteredArgv.data(),
+      scriptPath,
+      libJsPath,
+      libJsNodePath);
 }

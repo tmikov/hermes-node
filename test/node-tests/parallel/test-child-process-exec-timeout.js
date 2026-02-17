@@ -16,10 +16,21 @@ if (process.argv[2] === 'child') {
   return;
 }
 
+if (process.argv[2] === 'child-fast') {
+  console.log('child stdout');
+  console.error('child stderr');
+  return;
+}
+
+// Use 100ms timeout instead of 1ms. Under ASAN, hermes-node takes ~3s to start,
+// and 1ms timeouts cause intermittent hangs due to signal delivery races.
+// The child waits 20s to print, so 100ms is still well within the safe range.
+const TIMEOUT = 100;
+
 // Test 1: exec() with a timeout that expires (default SIGTERM).
-const cmd1 = process.execPath + ' ' + __filename + ' child';
+const cmd1 = common.spawnCmd(__filename, 'child');
 cp.exec(cmd1, {
-  timeout: 1,
+  timeout: TIMEOUT,
 }, common.mustCall(function(err, stdout, stderr) {
   assert.strictEqual(err.killed, true);
   assert.strictEqual(err.code, null);
@@ -33,9 +44,9 @@ cp.exec(cmd1, {
 }));
 
 // Test 2: exec() with a timeout and killSignal: SIGKILL.
-const cmd2 = process.execPath + ' ' + __filename + ' child';
+const cmd2 = common.spawnCmd(__filename, 'child');
 cp.exec(cmd2, {
-  timeout: 1,
+  timeout: TIMEOUT,
   killSignal: 'SIGKILL',
 }, common.mustCall(function(err, stdout, stderr) {
   assert.strictEqual(err.killed, true);
@@ -43,4 +54,13 @@ cp.exec(cmd2, {
   assert.strictEqual(err.signal, 'SIGKILL');
   assert.strictEqual(stdout.trim(), '');
   assert.strictEqual(stderr.trim(), '');
+}));
+
+// Test 3: exec() with a timeout that does NOT expire.
+const cmd3 = common.spawnCmd(__filename, 'child-fast');
+cp.exec(cmd3, {
+  timeout: 2 * 1000 * 1000,
+}, common.mustSucceed(function(stdout, stderr) {
+  assert.strictEqual(stdout.trim(), 'child stdout');
+  assert.strictEqual(stderr.trim(), 'child stderr');
 }));

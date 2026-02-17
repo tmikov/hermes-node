@@ -375,7 +375,8 @@ class ProcessWrap : public HandleWrapBase {
       napi_get_value_string_utf8(env, cwdVal, nullptr, 0, &cwdLen);
       cwd.resize(cwdLen);
       napi_get_value_string_utf8(env, cwdVal, &cwd[0], cwdLen + 1, &cwdLen);
-      options.cwd = cwd.c_str();
+      if (!cwd.empty())
+        options.cwd = cwd.c_str();
     }
 
     // options.envPairs
@@ -486,6 +487,14 @@ class ProcessWrap : public HandleWrapBase {
 
     int32_t signal = 0;
     napi_get_value_int32(env, argv[0], &signal);
+
+#ifdef _WIN32
+    // On Windows, non-standard signals are remapped to SIGKILL (matches Node).
+    if (signal != SIGKILL && signal != SIGTERM && signal != SIGINT &&
+        signal != SIGQUIT && signal != 0) {
+      signal = SIGKILL;
+    }
+#endif
 
     int err = uv_process_kill(&wrap->process_, signal);
 

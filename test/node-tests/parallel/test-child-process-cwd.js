@@ -33,7 +33,12 @@ function testCwd(options, expectPidType, expectCode, expectData, shouldCallExit)
 
   child.on('close', common.mustCall(function() {
     if (expectData) {
-      assert.strictEqual(data.trim(), expectData);
+      // In Windows, compare without considering case
+      if (common.isWindows) {
+        assert.strictEqual(data.trim().toLowerCase(), expectData.toLowerCase());
+      } else {
+        assert.strictEqual(data.trim(), expectData);
+      }
     }
   }));
 
@@ -48,11 +53,31 @@ function testCwd(options, expectPidType, expectCode, expectData, shouldCallExit)
     }));
 }
 
+// URL as cwd: invalid URLs should throw.
+{
+  // http URL: our shim throws about host (Node throws about scheme).
+  assert.throws(function() {
+    testCwd({
+      cwd: new URL('http://example.com/'),
+    }, 'number', 0, tmpdir.path);
+  }, /File URL host must be "localhost" or empty on/);
+
+  if (process.platform !== 'win32') {
+    assert.throws(function() {
+      testCwd({
+        cwd: new URL('file://host/dev/null'),
+      }, 'number', 0, tmpdir.path);
+    }, /File URL host must be "localhost" or empty on/);
+  }
+}
+
 // Assume these exist, and 'pwd' gives us the right directory back.
 testCwd({ cwd: tmpdir.path }, 'number', 0, tmpdir.path);
-const shouldExistDir = '/dev';
+const shouldExistDir = common.isWindows ? process.env.windir : '/dev';
 testCwd({ cwd: shouldExistDir }, 'number', 0, shouldExistDir);
+testCwd({ cwd: tmpdir.fileURL() }, 'number', 0, tmpdir.path);
 
 // Spawn() shouldn't try to chdir() to invalid arg, so this should just work.
+testCwd({ cwd: '' }, 'number');
 testCwd({ cwd: undefined }, 'number');
 testCwd({ cwd: null }, 'number');

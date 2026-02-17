@@ -570,7 +570,8 @@ class SyncProcessRunner {
     napi_typeof(env_, cwdVal, &cwdType);
     if (cwdType == napi_string) {
       extractString(env_, cwdVal, cwd_);
-      uvOptions_.cwd = cwd_.c_str();
+      if (!cwd_.empty())
+        uvOptions_.cwd = cwd_.c_str();
     }
 
     // options.envPairs
@@ -718,16 +719,34 @@ class SyncProcessRunner {
           napi_typeof(env_, inputVal, &inputType);
 
           if (inputType == napi_object) {
-            // Could be a Buffer/TypedArray.
+            // Could be a Buffer/TypedArray/DataView.
             bool isTypedArray = false;
             napi_is_typedarray(env_, inputVal, &isTypedArray);
             if (isTypedArray) {
               void *data = nullptr;
               size_t length = 0;
+              napi_typedarray_type type;
               napi_get_typedarray_info(
-                  env_, inputVal, nullptr, &length, &data, nullptr, nullptr);
+                  env_, inputVal, &type, &length, &data, nullptr, nullptr);
+              // length is element count; compute byte length from type.
+              static const size_t bytesPerElement[] = {
+                  1, 1, 1, 2, 2, 4, 4, 4, 8, 8};
+              size_t byteLength =
+                  length * bytesPerElement[static_cast<size_t>(type)];
               inputBuf = uv_buf_init(
-                  static_cast<char *>(data), static_cast<unsigned>(length));
+                  static_cast<char *>(data), static_cast<unsigned>(byteLength));
+            } else {
+              bool isDataView = false;
+              napi_is_dataview(env_, inputVal, &isDataView);
+              if (isDataView) {
+                void *data = nullptr;
+                size_t byteLength = 0;
+                napi_get_dataview_info(
+                    env_, inputVal, &byteLength, &data, nullptr, nullptr);
+                inputBuf = uv_buf_init(
+                    static_cast<char *>(data),
+                    static_cast<unsigned>(byteLength));
+              }
             }
           }
         }
