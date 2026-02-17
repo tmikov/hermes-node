@@ -52,3 +52,6 @@ target_link_libraries(NodeProcessTest
 
 add_node_compat_unittest(CAresIntegrationTest CAresIntegrationTest.cpp)
 target_link_libraries(CAresIntegrationTest cares_a)
+
+add_node_compat_unittest(LlhttpIntegrationTest LlhttpIntegrationTest.cpp)
+target_link_libraries(LlhttpIntegrationTest llhttp_a)

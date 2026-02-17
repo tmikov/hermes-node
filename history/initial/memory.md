@@ -130,5 +130,11 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - Write-slow test: original uses 2MB data with 20ms delays; under ASAN this hangs. Reduce data size for ASAN CI.
 - Test common module now has `localhostIPv4` and `PIPE` properties for net tests.
 
+## Vendored llhttp
+- llhttp 9.3.0 in `external/llhttp/llhttp/`, static target `llhttp_a`
+- Simple wrapper CMake (3 source files), not delegating to llhttp's own CMake
+- API: `llhttp_init(parser, type, settings)`, `llhttp_execute(parser, data, len)`. Callbacks via `llhttp_settings_t` function pointers.
+- Parser state: `parser->method`, `parser->status_code`, `parser->http_major/minor`, `parser->upgrade`, `parser->content_length`
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

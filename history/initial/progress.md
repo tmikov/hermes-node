@@ -55,7 +55,7 @@ be omitted):
 | N5.11 | Port `pipe_wrap` binding | N5.6 | done | |
 | N5.12 | Verify `net` module works | N5.8, N5.10, N5.11 | done | |
 | N5.13 | Port `udp_wrap` binding | N5.6 | done | |
-| N5.14 | Vendor llhttp | — | | |
+| N5.14 | Vendor llhttp | — | done | |
 | N5.15 | Port `http_parser` binding | N5.6, N5.14 | | |
 | N5.16 | Verify HTTP works | N5.12, N5.15 | | |
 | N5.17 | Port `process_wrap` binding | N5.6, N5.11 | | |
@@ -197,3 +197,11 @@ be omitted):
 - **What was done**: Full `udp_wrap` binding with UDP constructor, SendWrap constructor, and constants (UV_UDP_IPV6ONLY, UV_UDP_REUSEADDR, UV_UDP_REUSEPORT). Methods: open, bind/bind6, connect/connect6, disconnect, send/send6, recvStart/recvStop, getsockname/getpeername, addMembership/dropMembership, addSourceSpecificMembership/dropSourceSpecificMembership, setMulticastInterface/setMulticastTTL/setMulticastLoopback, setBroadcast, setTTL, bufferSize, getSendQueueSize/getSendQueueCount. All handle methods (ref/unref/hasRef/close/getAsyncId) inherited via HandleWrapBase. Test covers binding exports, prototype methods, bind+getsockname, connect/disconnect, and full send/recv data flow with proper cleanup.
 - **Issues**: `napi_create_buffer_copy` in Hermes NAPI returns a plain Uint8Array, not a Node.js Buffer. This caused `buf.toString()` in the recv callback to return comma-separated byte values instead of UTF-8, making assertions fail silently (exception swallowed by RecvCb error handling). Fixed by calling `Buffer.from()` on the raw Uint8Array in RecvCb.
 - **Notes for next step**: `dgram` module should work with this binding. N5.14 (vendor llhttp) is the next unblocked step for HTTP support.
+
+### Step N5.14: Vendor llhttp
+- **Files**: created `external/llhttp/README.md`, `external/llhttp/CMakeLists.txt`, `external/llhttp/llhttp/` (vendored source), `unittests/LlhttpIntegrationTest.cpp`. Modified `CMakeLists.txt`, `unittests/CMakeLists.txt`.
+- **Decisions**:
+-- Used a simple hand-written CMakeLists.txt (3 source files, 1 include dir) rather than delegating to llhttp's own CMake, since llhttp's CMake is oriented toward shared/installed libraries and we only need a static target.
+-- Named target `llhttp_a` for consistency with `uv_a` and `cares_a` naming convention.
+- **What was done**: Vendored llhttp 9.3.0 from Node.js v24.13.0 `deps/llhttp/`. Wrapper CMake builds static `llhttp_a` target. GTest with 3 tests: parse GET request (verifies method, URL, headers, completion), parse HTTP response (verifies status code), and version check.
+- **Notes for next step**: Link against `llhttp_a` for the http_parser binding (N5.15). llhttp API: `llhttp_init(parser, type, settings)`, `llhttp_execute(parser, data, len)`. Callbacks via `llhttp_settings_t` function pointers. Parser state accessible via `parser->method`, `parser->status_code`, `parser->http_major/minor`, etc.
