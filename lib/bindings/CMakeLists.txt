@@ -46,4 +46,5 @@ target_link_libraries(hermesNodeBindings
   PRIVATE
     simdutf
     ada
+    cares_a
 )

@@ -943,6 +943,9 @@ static int runBootstrap(
   // Run the loop once more to process close callbacks.
   uv_run(eventLoop.getLoop(), UV_RUN_NOWAIT);
 
+  // Mark the event loop as no longer alive for cares_wrap GC finalizers.
+  caresWrapShutdown();
+
   // Close the event loop. This runs uv_run(UV_RUN_DEFAULT) which may
   // complete pending async fs operations, so NAPI env must still be valid.
   eventLoop.close();

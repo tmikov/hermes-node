@@ -89,13 +89,17 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - c-ares uses its own CMake build (897 lines). We delegate via `add_subdirectory` like libuv.
 
 ## cares_wrap Binding (DNS)
-- `initCaresWrapBinding` in `node_cares_wrap.cpp`: `getaddrinfo` (async, `uv_getaddrinfo`), `getnameinfo` (async, `uv_getnameinfo`), `canonicalizeIP`, `strerror`, constructors, constants
-- `setCaresWrapEventLoop(loop)` called in hermes-node.cpp
+- `initCaresWrapBinding` in `node_cares_wrap.cpp`: `getaddrinfo`, `getnameinfo`, `canonicalizeIP`, `strerror`, constructors, constants, ChannelWrap with full c-ares integration
+- `setCaresWrapEventLoop(loop)` called in hermes-node.cpp before binding init
+- `caresWrapShutdown()` called before `eventLoop.close()` — closes all live ChannelWraps
 - Hostname IDNA: `ada::idna::to_ascii()` before `uv_getaddrinfo` (Ada already linked)
 - Async pattern: `GetAddrInfoReq` struct with `napi_ref` to JS request obj, `uv_getaddrinfo_t`, order. Callback builds IP string array via `uv_inet_ntop`, calls `reqObj.oncomplete(status, addresses)`.
-- `ChannelWrap`/`QueryReqWrap`: stubs for N5.9 so `dns/callback_resolver.js` loads
+- ChannelWrap: wraps `ares_channel_t` with per-socket `uv_poll_t` (AresTask) and `uv_timer_t` for timeout processing. Uses prevent-GC ref (`selfRef_`) — released in `closeChannel()` after all handles closed.
+- **GC safety**: ChannelWrap must NOT be GC'd while libuv handles are open — embedded `uv_timer_t` would be freed but `uv_close` callback fires later. Prevent-GC ref solves this. Static `s_channels` set tracks all live instances for shutdown.
+- Query types: A, AAAA, MX, NS, TXT, SRV, CNAME, PTR, NAPTR, SOA, CAA, reverse (getHostByAddr). Uses deprecated `ares_query()` + `ares_parse_*_reply()` API (simpler, Node v24 compatible).
 - `dns.js` needs `internal/perf/observe` shim (no-op `hasObserver`/`startPerf`/`stopPerf`)
 - `initializeDns()` not called in our bootstrap; `dnsOrder` defaults to `undefined`, falls through to verbatim — works fine
+- `strerror`: uses `ares_strerror` for c-ares codes (0..ARES_ECANCELLED), `uv_strerror` for libuv codes (negative)
 
 ## Hermes VM Bugs (not fixable in NAPI layer)
 - `_decodeUTF8SlowPath` OOB read: `napi_create_string_utf8` with truncated multi-byte UTF-8 (e.g. `[0xc3]` — lead byte with no continuation) reads past buffer. Avoid passing truncated multi-byte sequences to `napi_create_string_utf8`.

@@ -18,6 +18,10 @@ namespace node_compat {
 /// init).
 void setCaresWrapEventLoop(uv_loop_t *loop);
 
+/// Call before closing the event loop to prevent GC finalizers from touching
+/// libuv handles after the loop is destroyed.
+void caresWrapShutdown();
+
 /// Init function for the 'cares_wrap' binding.
 napi_value initCaresWrapBinding(napi_env env, napi_value exports);
 

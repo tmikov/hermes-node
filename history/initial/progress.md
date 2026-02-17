@@ -50,7 +50,7 @@ be omitted):
 | N5.6 | Implement HandleWrap + LibuvStreamBase | — | done | Base classes for all native stream types |
 | N5.7 | Vendor c-ares | — | done | |
 | N5.8 | Implement `dns.lookup()` via libuv | N5.7 | done | |
-| N5.9 | Implement c-ares DNS queries | N5.7, N5.8 | | |
+| N5.9 | Implement c-ares DNS queries | N5.7, N5.8 | done | |
 | N5.10 | Port `tcp_wrap` binding | N5.6 | | |
 | N5.11 | Port `pipe_wrap` binding | N5.6 | | |
 | N5.12 | Verify `net` module works | N5.8, N5.10, N5.11 | | |
@@ -140,3 +140,15 @@ be omitted):
 -- `initializeDns()` from `dns/utils.js` is not called during our bootstrap (Node calls it in pre_execution). `dnsOrder` defaults to `undefined`, which falls through to `DNS_ORDER_VERBATIM` in `dns.lookup()`.
 - **What was done**: Full `cares_wrap` binding with: `getaddrinfo` (async via `uv_getaddrinfo`), `getnameinfo` (async via `uv_getnameinfo`), `canonicalizeIP`, `strerror`, `GetAddrInfoReqWrap`/`GetNameInfoReqWrap`/`QueryReqWrap` constructors, `ChannelWrap` stub with `getServers`/`setServers`/`cancel`/`setLocalAddress` stubs, and constants (`AF_INET`, `AF_INET6`, `AF_UNSPEC`, `AI_*`, `DNS_ORDER_*`). Test covers binding API, `dns.lookup()` with localhost/IP passthrough/all mode/family filtering/empty hostname, and `ChannelWrap` stub.
 - **Notes for next step**: N5.9 (c-ares DNS queries) should extend this binding's `ChannelWrap` to use real `ares_channel` with `uv_poll_t` integration. `QueryReqWrap` needs oncomplete callback support. `strerror` currently uses `uv_strerror` — for c-ares-specific errors it should use `ares_strerror`.
+
+### Step N5.9: Implement c-ares DNS queries
+- **Files**: modified `lib/bindings/node_cares_wrap.cpp`, `include/hermes/node-compat/bindings/node_cares_wrap.h`, `tools/hermes-node/hermes-node.cpp`. Created `test/test-dns-resolve.js`.
+- **Decisions**:
+-- Used deprecated `ares_query()` + `ares_parse_*_reply()` API rather than newer `ares_query_dnsrec()` (simpler, and Node v24 still uses the older API path).
+-- ChannelWrap uses prevent-GC ref (`selfRef_`) pattern to prevent GC from collecting the ChannelWrap JS object while libuv handles (timer, poll watchers) are open. Released in `closeChannel()` after all handles are closed.
+-- `caresWrapShutdown()` closes all live ChannelWrap instances before event loop is destroyed (called in hermes-node.cpp before `eventLoop.close()`). Static `s_channels` set tracks all live instances.
+-- Socket I/O integration: per-socket `AresTask` struct with `uv_poll_t`, managed by `sockStateCb` from c-ares. `uv_timer_t` for timeout processing via `ares_timeout()`.
+-- `strerror` dispatches to `ares_strerror` for c-ares error codes (0 to ARES_ECANCELLED) and `uv_strerror` for libuv error codes (negative).
+- **What was done**: Full ChannelWrap implementation wrapping `ares_channel_t` with libuv I/O integration. Query methods for all DNS record types: A, AAAA, MX, NS, TXT, SRV, CNAME, PTR, NAPTR, SOA, CAA, Any. Reverse DNS via `getHostByAddr` (`ares_gethostbyaddr`). Real `getServers`/`setServers`/`cancel`/`setLocalAddress` implementations. Parse functions for all record types building JS objects matching Node's format. Test covering binding API, dns.Resolver, dns.resolve*/reverse at JS API level, cancel, strerror for c-ares codes.
+- **Issues**: ASAN heap-use-after-free when GC collected ChannelWrap during JS execution: destructor tried to `uv_close` the embedded `uv_timer_t` member, but after `delete this` the timer memory was freed, so when `uv_run` processed the close callback it accessed freed memory. Fixed by adding prevent-GC ref to keep ChannelWrap alive until all handles are properly closed via `closeChannel()`.
+- **Notes for next step**: `dns.resolve*` and `dns.reverse` are now functional. The `dns/promises` API should also work (it's built on the callback API). The `queryAny` method returns a "not implemented" error for now (c-ares doesn't have a single-call API for ANY queries). N5.10/N5.11 (tcp_wrap/pipe_wrap) are the next unblocked steps.
