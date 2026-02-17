@@ -44,7 +44,7 @@ be omitted):
 |------|-------------|------------|--------|-----------------------|
 | N5.1 | Port `os` binding | — | done | Also added credentials binding |
 | N5.2 | Port `credentials` binding | — | done | Done as part of N5.1 |
-| N5.3 | Port `tty_wrap` binding | N5.6 | | |
+| N5.3 | Port `tty_wrap` binding | N5.6 | done | |
 | N5.4 | Integrate simdutf into buffer/encoding | — | done | Already mostly integrated; replaced last hand-rolled UTF-8 trim |
 | N5.5 | Integrate Ada into url binding | — | done | Native binding + comprehensive URL shim |
 | N5.6 | Implement HandleWrap + LibuvStreamBase | — | done | Base classes for all native stream types |
@@ -112,3 +112,12 @@ be omitted):
 - **What was done**: Full HandleWrapBase with ref/unref/hasRef/close/getAsyncId and GC-safe lifecycle. Full LibuvStreamBase with readStart/readStop, writeBuffer/writeUtf8String/writeLatin1String/writeAsciiString/writeUcs2String/writev, shutdown, getWriteQueueSize, setBlocking. Enhanced stream_wrap binding to share streamBaseState pointer. All 39 existing tests pass.
 - **Notes for next step**: TCP/Pipe/TTY wraps should inherit LibuvStreamBase and call addStreamMethods() on their prototypes. The `onread` property is set by JS (net.js sets handle.onread = onStreamRead from stream_base_commons.js). The `owner_symbol` linking is also done in JS. String write methods use UTF-8 extraction for latin1/ascii (acceptable for networking; exact latin1 byte preservation would need napi_get_value_string_latin1 which doesn't exist in NAPI).
 
+### Step N5.3: Port `tty_wrap` binding
+- **Files**: created `include/hermes/node-compat/bindings/node_tty_wrap.h`, `lib/bindings/node_tty_wrap.cpp`, `test/test-tty-wrap.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`.
+- **What was done**: TTYWrap class inheriting LibuvStreamBase, wrapping `uv_tty_t`. Constructor `TTY(fd, ctx)` with error context pattern. Static `isTTY(fd)` using `uv_guess_handle`. Instance methods `getWindowSize(out)` and `setRawMode(flag)`. All stream methods inherited from LibuvStreamBase via `addStreamMethods()`.
+- **Decisions**:
+-- Error reporting uses same ctx-object pattern as os binding (errno/message/syscall/code).
+-- Constructor always allocates TTYWrap; on `uv_tty_init` failure, sets ctx error info and does NOT call `initStream` (so HandleWrapBase finalizer safely deletes without uv_close).
+-- `setRawMode` uses `UV_TTY_MODE_RAW_VT` (not `UV_TTY_MODE_RAW`), matching Node's approach for better VT control sequence support.
+- **Issues**: `require('tty')` cannot be tested yet because `tty.js` depends on `net.js` which requires `cares_wrap`, `tcp_wrap`, and `pipe_wrap` bindings (N5.8/N5.10/N5.11). Test only covers the native `tty_wrap` binding directly.
+- **Notes for next step**: N5.20 (process.stdin) depends on this + N5.6 (done). Once tcp_wrap/pipe_wrap/cares_wrap are implemented, the tty module will be testable end-to-end. The binding pattern used here (inherit LibuvStreamBase, call `addStreamMethods`, use `napi_define_class`) is the template for tcp_wrap and pipe_wrap.

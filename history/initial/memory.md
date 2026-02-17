@@ -75,6 +75,13 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - **getJsObject()**: public method on HandleWrapBase to get JS object from prevent-GC ref. Needed by libuv callbacks to call JS methods on the handle.
 - **Latin1 write limitation**: `writeLatin1String` uses UTF-8 extraction (no `napi_get_value_string_latin1` in NAPI). Acceptable for networking text but won't preserve exact byte values for chars > 127.
 
+## TTY Wrap
+- `TTYWrap` inherits `LibuvStreamBase`, wraps `uv_tty_t`. Constructor: `TTY(fd, ctx)`, static: `isTTY(fd)`, instance: `getWindowSize(out)`, `setRawMode(flag)`.
+- On `uv_tty_init` failure, set error on ctx and do NOT call `initStream` — HandleWrapBase finalizer checks `state_ == kClosed` and just deletes.
+- `uv_tty_init` can succeed on non-TTY fds (e.g. pipes). Don't assume it fails when `isTTY()` returns false.
+- `require('tty')` needs `net.js` which needs `cares_wrap`/`tcp_wrap`/`pipe_wrap`. Can't test `tty` module until those are implemented.
+- Pattern for new stream wraps: inherit `LibuvStreamBase`, call `initStream()` after `uv_*_init()`, call `addStreamMethods(env, prototype)`, use `napi_define_class` for constructor.
+
 ## Hermes VM Bugs (not fixable in NAPI layer)
 - `_decodeUTF8SlowPath` OOB read: `napi_create_string_utf8` with truncated multi-byte UTF-8 (e.g. `[0xc3]` — lead byte with no continuation) reads past buffer. Avoid passing truncated multi-byte sequences to `napi_create_string_utf8`.
 
