@@ -181,5 +181,14 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - Sync: spawnSync, execSync, execFileSync all work. Supports stdin input, timeout, maxBuffer, cwd, env.
 - `cluster.js` shim still needed (breaks `child_process` -> `dgram` -> `udp_wrap` chain at load time).
 
+## Process Stdio Streams
+- `process.stdin/stdout/stderr` are proper Node.js streams since N5.20. Lazy-initialized via getters.
+- `libjs/setup-stdio.js`: bootstrap script, runs after module loader/timers/debuglog but before console.
+- Uses `guessHandleType(fd)` from `internal/util` (backed by `uv_guess_handle` in util binding).
+- TTY -> `tty.WriteStream`/`tty.ReadStream`, PIPE/TCP -> `net.Socket`, FILE -> `SyncWriteStream`/`fs.ReadStream`.
+- stdin starts paused (readStop). stdout/stderr have `dummyDestroy` override to prevent fd closure.
+- **Shutdown**: must close native `_handle.close()` on stdio streams BEFORE event loop destroy. Otherwise GC finalizer triggers UAF.
+- `internal/process/signal.js` shimmed (no-op). No `signal_wrap` binding yet.
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

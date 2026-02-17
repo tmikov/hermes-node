@@ -188,184 +188,6 @@ static napi_status installConsole(napi_env env) {
 }
 
 // ---------------------------------------------------------------------------
-// Minimal process.stdout / process.stderr
-// ---------------------------------------------------------------------------
-
-/// write(data, callback) — synchronous write to the stream's fd.
-/// Handles strings and Uint8Arrays. Calls callback if provided.
-static napi_value stdioWrite(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
-  napi_value thisArg;
-  napi_get_cb_info(env, info, &argc, argv, &thisArg, nullptr);
-
-  // Get fd from this.fd.
-  napi_value fdVal;
-  napi_get_named_property(env, thisArg, "fd", &fdVal);
-  int32_t fd;
-  napi_get_value_int32(env, fdVal, &fd);
-
-  napi_valuetype dataType;
-  napi_typeof(env, argv[0], &dataType);
-
-  int bytesWritten = 0;
-  if (dataType == napi_string) {
-    // Write string as UTF-8.
-    size_t len = 0;
-    napi_get_value_string_utf8(env, argv[0], nullptr, 0, &len);
-    std::string buf(len, '\0');
-    napi_get_value_string_utf8(env, argv[0], &buf[0], len + 1, &len);
-
-    uv_buf_t uvBuf = uv_buf_init(&buf[0], static_cast<unsigned int>(len));
-    uv_fs_t req;
-    bytesWritten = uv_fs_write(nullptr, &req, fd, &uvBuf, 1, -1, nullptr);
-    uv_fs_req_cleanup(&req);
-  } else {
-    // Try as typed array (Buffer/Uint8Array).
-    void *data = nullptr;
-    size_t byteLength = 0;
-    napi_status st = napi_get_typedarray_info(
-        env, argv[0], nullptr, &byteLength, &data, nullptr, nullptr);
-    if (st != napi_ok) {
-      // Try coercing to string.
-      napi_value str;
-      napi_coerce_to_string(env, argv[0], &str);
-      size_t len = 0;
-      napi_get_value_string_utf8(env, str, nullptr, 0, &len);
-      std::string buf(len, '\0');
-      napi_get_value_string_utf8(env, str, &buf[0], len + 1, &len);
-
-      uv_buf_t uvBuf = uv_buf_init(&buf[0], static_cast<unsigned int>(len));
-      uv_fs_t req;
-      bytesWritten = uv_fs_write(nullptr, &req, fd, &uvBuf, 1, -1, nullptr);
-      uv_fs_req_cleanup(&req);
-    } else if (byteLength > 0) {
-      uv_buf_t uvBuf = uv_buf_init(
-          static_cast<char *>(data), static_cast<unsigned int>(byteLength));
-      uv_fs_t req;
-      bytesWritten = uv_fs_write(nullptr, &req, fd, &uvBuf, 1, -1, nullptr);
-      uv_fs_req_cleanup(&req);
-    }
-  }
-
-  if (bytesWritten < 0) {
-    std::string msg = "write failed: ";
-    msg += uv_strerror(bytesWritten);
-    napi_throw_error(env, uv_err_name(bytesWritten), msg.c_str());
-    return nullptr;
-  }
-
-  // Call callback if provided.
-  if (argc >= 2) {
-    napi_valuetype cbType;
-    napi_typeof(env, argv[1], &cbType);
-    if (cbType == napi_function) {
-      napi_value cbResult;
-      napi_call_function(env, thisArg, argv[1], 0, nullptr, &cbResult);
-    }
-  }
-
-  napi_value trueVal;
-  napi_get_boolean(env, true, &trueVal);
-  return trueVal;
-}
-
-/// No-op stub for event emitter methods.  Returns `this` for chaining.
-static napi_value stdioNoop(napi_env env, napi_callback_info info) {
-  napi_value thisArg;
-  napi_get_cb_info(env, info, nullptr, nullptr, &thisArg, nullptr);
-  return thisArg;
-}
-
-/// listenerCount() — always returns 0.
-static napi_value stdioListenerCount(
-    napi_env env,
-    napi_callback_info /*info*/) {
-  napi_value result;
-  napi_create_int32(env, 0, &result);
-  return result;
-}
-
-/// Create a minimal writable stdio stream object for the given fd.
-static napi_status createStdioStream(napi_env env, int fd, napi_value *result) {
-  napi_value stream;
-  napi_status st = napi_create_object(env, &stream);
-  if (st != napi_ok)
-    return st;
-
-  // stream.fd
-  napi_value fdVal;
-  st = napi_create_int32(env, fd, &fdVal);
-  if (st != napi_ok)
-    return st;
-  st = napi_set_named_property(env, stream, "fd", fdVal);
-  if (st != napi_ok)
-    return st;
-
-  // stream.isTTY
-  uv_handle_type handleType = uv_guess_handle(fd);
-  napi_value isTTY;
-  st = napi_get_boolean(env, handleType == UV_TTY, &isTTY);
-  if (st != napi_ok)
-    return st;
-  st = napi_set_named_property(env, stream, "isTTY", isTTY);
-  if (st != napi_ok)
-    return st;
-
-  // stream._isStdio = true
-  napi_value trueVal;
-  st = napi_get_boolean(env, true, &trueVal);
-  if (st != napi_ok)
-    return st;
-  st = napi_set_named_property(env, stream, "_isStdio", trueVal);
-  if (st != napi_ok)
-    return st;
-
-  // stream.write(data, callback)
-  napi_value writeFn;
-  st = napi_create_function(
-      env, "write", NAPI_AUTO_LENGTH, stdioWrite, nullptr, &writeFn);
-  if (st != napi_ok)
-    return st;
-  st = napi_set_named_property(env, stream, "write", writeFn);
-  if (st != napi_ok)
-    return st;
-
-  // Minimal event emitter stubs needed by console module.
-  napi_value noopFn;
-  st = napi_create_function(
-      env, "on", NAPI_AUTO_LENGTH, stdioNoop, nullptr, &noopFn);
-  if (st != napi_ok)
-    return st;
-  st = napi_set_named_property(env, stream, "on", noopFn);
-  if (st != napi_ok)
-    return st;
-  st = napi_set_named_property(env, stream, "once", noopFn);
-  if (st != napi_ok)
-    return st;
-  st = napi_set_named_property(env, stream, "removeListener", noopFn);
-  if (st != napi_ok)
-    return st;
-
-  napi_value listenerCountFn;
-  st = napi_create_function(
-      env,
-      "listenerCount",
-      NAPI_AUTO_LENGTH,
-      stdioListenerCount,
-      nullptr,
-      &listenerCountFn);
-  if (st != napi_ok)
-    return st;
-  st = napi_set_named_property(env, stream, "listenerCount", listenerCountFn);
-  if (st != napi_ok)
-    return st;
-
-  *result = stream;
-  return napi_ok;
-}
-
-// ---------------------------------------------------------------------------
 // Event loop tick integration
 // ---------------------------------------------------------------------------
 
@@ -563,15 +385,6 @@ static int runBootstrap(
       exitCode = 1;
     } else {
       napi_set_named_property(env, global, "process", processObj);
-
-      // Set up process.stdout (fd 1) and process.stderr (fd 2).
-      napi_value stdoutStream, stderrStream;
-      if (createStdioStream(env, 1, &stdoutStream) == napi_ok) {
-        napi_set_named_property(env, processObj, "stdout", stdoutStream);
-      }
-      if (createStdioStream(env, 2, &stderrStream) == napi_ok) {
-        napi_set_named_property(env, processObj, "stderr", stderrStream);
-      }
 
       // Add minimal process event emitter methods (on/emit/emitWarning).
       // Needed for process.on('exit'), process.on('warning'), etc.
@@ -842,7 +655,34 @@ static int runBootstrap(
     }
   }
 
-  // 11c. Load and install the real console module.
+  // 11c. Set up process.stdin, process.stdout, process.stderr as proper
+  // streams. This loads setup-stdio.js which installs lazy getters on the
+  // process object. The streams are created on first access using TTY,
+  // Pipe, SyncWriteStream, or fs.ReadStream depending on uv_guess_handle.
+  if (exitCode == 0) {
+    std::string setupStdioPath = libJsPath + "setup-stdio.js";
+    std::string setupStdioSource = readFile(setupStdioPath.c_str());
+    if (setupStdioSource.empty()) {
+      std::fprintf(
+          stderr,
+          "Error: failed to read setup-stdio.js from '%s'\n",
+          setupStdioPath.c_str());
+      exitCode = 1;
+    } else {
+      setupStdioSource += "\n//# sourceURL=" + setupStdioPath + "\n";
+      napi_value scriptStr;
+      napi_create_string_utf8(
+          env, setupStdioSource.c_str(), setupStdioSource.size(), &scriptStr);
+      napi_value result;
+      if (napi_run_script(env, scriptStr, &result) != napi_ok) {
+        std::fprintf(stderr, "Error: failed to execute setup-stdio.js\n");
+        printAndClearException(env);
+        exitCode = 1;
+      }
+    }
+  }
+
+  // 11d. Load and install the real console module.
   // This replaces the minimal C++ console installed in step 4 with Node's
   // full implementation (util.inspect formatting, console.time/table/dir,
   // etc.).  Node's global.js creates the console object and binds method
@@ -943,7 +783,48 @@ static int runBootstrap(
   }
 
   // 15. Cleanup (reverse order of creation).
-  // Close timer and fs_event libuv handles first.
+  // Close stdio stream native handles first (they may hold PipeWrap/TTYWrap
+  // handles that must be uv_close'd before the event loop is destroyed).
+  {
+    napi_value processObj;
+    napi_get_named_property(env, global, "process", &processObj);
+    const char *stdioNames[] = {"stdin", "stdout", "stderr"};
+    for (const char *name : stdioNames) {
+      napi_value stream;
+      napi_get_named_property(env, processObj, name, &stream);
+      napi_valuetype stype;
+      napi_typeof(env, stream, &stype);
+      if (stype == napi_object) {
+        // Close the underlying native handle (_handle.close()) directly.
+        // This avoids issues with the dummyDestroy override on stdout/stderr.
+        napi_value handle;
+        napi_get_named_property(env, stream, "_handle", &handle);
+        napi_valuetype htype;
+        napi_typeof(env, handle, &htype);
+        if (htype == napi_object) {
+          napi_value closeFn;
+          napi_get_named_property(env, handle, "close", &closeFn);
+          napi_valuetype ctype;
+          napi_typeof(env, closeFn, &ctype);
+          if (ctype == napi_function) {
+            napi_value closeResult;
+            napi_call_function(env, handle, closeFn, 0, nullptr, &closeResult);
+            bool pending = false;
+            napi_is_exception_pending(env, &pending);
+            if (pending) {
+              napi_value exc;
+              napi_get_and_clear_last_exception(env, &exc);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Run the loop once to process stdio close callbacks.
+  uv_run(eventLoop.getLoop(), UV_RUN_NOWAIT);
+
+  // Close timer and fs_event libuv handles.
   closeTimersHandles();
   closeFsEventWrapHandles();
 

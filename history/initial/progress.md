@@ -61,7 +61,7 @@ be omitted):
 | N5.17 | Port `process_wrap` binding | N5.6, N5.11 | done | Also added spawn_sync stub |
 | N5.18 | Port `spawn_sync` binding | N5.17 | done | |
 | N5.19 | Verify `child_process` module works | N5.17, N5.18 | done | Fixed spawn-fail UAF bug |
-| N5.20 | Implement `process.stdin` | N5.3, N5.6 | | |
+| N5.20 | Implement `process.stdin` | N5.3, N5.6 | done | Also upgraded stdout/stderr to proper streams |
 | N5.21 | Add missing `os` constants | N5.1 | | |
 | N5.22 | Run Node.js net test subset | N5.12 | | |
 | N5.23 | Run Node.js http test subset | N5.16 | | |
@@ -259,3 +259,18 @@ be omitted):
 - **What was done**: Created comprehensive verification test with 15 test cases covering: spawn stdout capture, exec callback, execSync, spawnSync, execFile/execFileSync, spawn with env, spawnSync with env, spawn with cwd, spawnSync with cwd, spawn and kill (SIGTERM), exit code propagation, stderr capture, exec with timeout, spawnSync with input, spawnSync with encoding, spawn invalid command (ENOENT), spawnSync invalid command. Ported 4 Node.js tests (exec-cwd, exec-env, spawnsync-timeout, spawnsync-env).
 - **Issues**: heap-use-after-free in `uv__queue_remove` when spawning invalid command. Root cause: `uv_spawn` always calls `uv__handle_init` (registering the handle with the loop) even on failure, but ProcessWrap only called `init()` on success. When spawn failed, the handle remained in the loop's queue but was freed by the GC lambda finalizer without `uv_close`. Fixed by calling `init()` unconditionally after `uv_spawn` (matching Node's `MarkAsInitialized()` pattern), so the handle is properly closed via HandleWrapBase's normal cleanup path. Note: `napi_wrap` in `init()` returns `napi_invalid_arg` (object already wrapped by constructor), but this is harmless -- the original lambda finalizer correctly delegates to `doClose()` when state is `kInitialized`.
 - **Notes for next step**: N5.24 (run Node.js child_process test subset) is unblocked. The `napi_wrap` double-wrap in ProcessWrap (constructor wraps, init tries to re-wrap and fails) is a pre-existing design issue that works correctly in practice but should be cleaned up in a future refactor.
+
+### Step N5.20: Implement `process.stdin`
+- **Files**: created `libjs/setup-stdio.js`, `libjs/shims/internal/process/signal.js`, `test/test-process-stdio.js`. Modified `tools/hermes-node/hermes-node.cpp`, `test/test-stdio.js`.
+- **Decisions**:
+-- Replaced the old minimal C++ stdio objects (plain objects with synchronous write) with proper Node.js-compatible streams backed by native handles. Approach adapted from Node's `internal/bootstrap/switches/is_main_thread.js`.
+-- Stdio setup done in JS (`libjs/setup-stdio.js`) rather than C++. Installs lazy getters on the process object for stdin/stdout/stderr. Streams are created on first access using `uv_guess_handle(fd)` to pick the right type.
+-- For TTY fds: `tty.WriteStream` / `tty.ReadStream` (wrapping native `TTYWrap`).
+-- For PIPE/TCP fds: `net.Socket` with appropriate readable/writable flags.
+-- For FILE fds: `SyncWriteStream` (stdout/stderr) or `fs.ReadStream` (stdin).
+-- stdin starts paused (`readStop()`) and only begins reading when user calls `.resume()` or `.read()`.
+-- stdout/stderr have `dummyDestroy` override (like Node) to prevent fd closure during normal operation. During shutdown, native handles are closed directly via `_handle.close()`.
+-- `internal/process/signal.js` shimmed as no-op (signal_wrap binding not implemented).
+- **What was done**: Full process.stdin/stdout/stderr implementation with proper stream types. Removed ~180 lines of C++ stdio code (stdioWrite, stdioNoop, stdioListenerCount, createStdioStream). Added shutdown cleanup that closes native stdio handles before event loop destruction. Updated test-stdio.js for proper Node behavior (isTTY is true or undefined, not boolean). New comprehensive test covering stream types, event emitter methods, stdin piping via child process, stdout/stderr separation, console.log/error routing.
+- **Issues**: ASAN heap-use-after-free during shutdown: GC finalizer tried to `uv_close` a PipeWrap/TTYWrap handle after the event loop was destroyed. Fixed by explicitly closing stdio native handles (`_handle.close()`) before event loop shutdown.
+- **Notes for next step**: `require('tty')` now works (all deps available). `process.stdin` works for pipe/file/TTY inputs. The `signal_wrap` binding is a no-op shim -- process signal handling (SIGWINCH for TTY resize, SIGINT etc.) requires a real implementation in a future step.
