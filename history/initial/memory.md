@@ -110,9 +110,16 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - **OnConnection**: stores module-level `napi_ref` to TCP constructor. When connection arrives, `napi_new_instance()` creates client TCPWrap, `uv_accept()` transfers the connection, calls `server.onconnection(status, clientHandle)`.
 - **ConnectReqData**: heap-allocated struct with `uv_connect_t`, `napi_env`, `napi_ref` to JS req. AfterConnect callback calls `reqObj.oncomplete(status, handle, req, readable, writable)`.
 - **AddressToJS**: helper converting `sockaddr` to JS object `{address, family, port}`.
-- **pipe_wrap stub**: `net.js` destructures `internalBinding('pipe_wrap')` at module load time. Stub exports Pipe constructor that throws "not implemented" + PipeConnectWrap passthrough + constants.
 - **cluster shim**: `net.js` → `cluster` → `child_process` → `dgram` → `udp_wrap`. Shim with `isPrimary: true` breaks the chain (standalone CLI is always primary).
 - **convertIpv6StringToBuffer**: added to cares_wrap. `net.js` line 65 needs it. Uses `uv_inet_pton(AF_INET6, ...)` → 16-byte buffer.
+
+## Pipe Wrap Binding
+- `PipeWrap` inherits `LibuvStreamBase`, wraps `uv_pipe_t`. Constructor: `Pipe(type)` where type is SOCKET(0), SERVER(1), or IPC(2). IPC flag passed to `uv_pipe_init`.
+- Instance methods: open, bind, listen, connect, fchmod, getsockname, getpeername.
+- **uv_pipe_connect**: does NOT return an error code (unlike `uv_tcp_connect`). Connect always returns 0; errors reported asynchronously via callback.
+- **getsockname/getpeername**: for pipes, return `{address: <path>}` (no port/family fields, just the socket path).
+- **OnConnection**: same pattern as TCPWrap — module-level `napi_ref` to Pipe constructor.
+- `net.createServer`/`net.connect` with Unix domain socket paths now fully functional.
 
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

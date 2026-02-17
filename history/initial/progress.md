@@ -52,7 +52,7 @@ be omitted):
 | N5.8 | Implement `dns.lookup()` via libuv | N5.7 | done | |
 | N5.9 | Implement c-ares DNS queries | N5.7, N5.8 | done | |
 | N5.10 | Port `tcp_wrap` binding | N5.6 | done | |
-| N5.11 | Port `pipe_wrap` binding | N5.6 | | |
+| N5.11 | Port `pipe_wrap` binding | N5.6 | done | |
 | N5.12 | Verify `net` module works | N5.8, N5.10, N5.11 | | |
 | N5.13 | Port `udp_wrap` binding | N5.6 | | |
 | N5.14 | Vendor llhttp | — | | |
@@ -165,3 +165,14 @@ be omitted):
 -- Added `convertIpv6StringToBuffer` to cares_wrap binding (needed by `net.js` via `internal/net.js`). Uses `uv_inet_pton(AF_INET6)` + `napi_create_buffer_copy`.
 - **What was done**: Full `tcp_wrap` binding with TCP constructor (SOCKET/SERVER types), open, bind/bind6, listen, connect/connect6, getsockname/getpeername, setNoDelay/setKeepAlive, reset. Connection acceptance via OnConnection callback. TCPConnectWrap constructor. Constants (SOCKET, SERVER, UV_TCP_IPV6ONLY, UV_TCP_REUSEPORT). All stream/handle methods inherited. Test covers binding API and full data flow (server listen → client connect → server write → client read → verify).
 - **Notes for next step**: `require('net')` now works for TCP. Pipe support (N5.11) needs full PipeWrap implementation (current stub throws). The `cluster.js` shim means cluster features won't work but standalone TCP is fully functional. `net.BlockList` and `net.SocketAddress` are lazy-loaded and need `block_list`/`socketaddress` bindings if used.
+
+### Step N5.11: Port `pipe_wrap` binding
+- **Files**: modified `lib/bindings/node_pipe_wrap.cpp`, created `test/test-pipe-wrap.js`.
+- **Decisions**:
+-- PipeWrap inherits LibuvStreamBase following the same pattern as TCPWrap and TTYWrap. Constructor takes `(type)` where type is SOCKET(0), SERVER(1), or IPC(2). IPC flag is passed to `uv_pipe_init`.
+-- `uv_pipe_connect` does not return an error code (unlike `uv_tcp_connect`), so Connect always returns 0 and errors are reported asynchronously via the callback.
+-- OnConnection callback uses a module-level `napi_ref` to the Pipe constructor (same pattern as TCPWrap).
+-- `getsockname`/`getpeername` for pipes return `{address: <path>}` (no port/family, just the socket path).
+-- Reused PipeConnectReqData struct (same pattern as ConnectReqData in tcp_wrap) with `uv_connect_t` + `napi_ref` to JS request object.
+- **What was done**: Full `pipe_wrap` binding replacing the stub. PipeWrap class with open, bind, listen, connect, fchmod, getsockname, getpeername. Connection acceptance via OnConnection. PipeConnectWrap constructor. Constants (SOCKET, SERVER, IPC, UV_READABLE, UV_WRITABLE). All stream/handle methods inherited. Test covers binding API and full data flow (server listen -> client connect -> server write -> client read -> verify). Also verified end-to-end with `net.createServer`/`net.connect` using Unix domain sockets.
+- **Notes for next step**: `require('net')` now works for both TCP and Unix domain sockets. N5.12 (verify net module) is unblocked. N5.17 (process_wrap) is also unblocked since it depends on N5.6 + N5.11.
