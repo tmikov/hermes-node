@@ -64,7 +64,7 @@ be omitted):
 | N5.20 | Implement `process.stdin` | N5.3, N5.6 | done | Also upgraded stdout/stderr to proper streams |
 | N5.21 | Add missing `os` constants | N5.1 | done | Added UV_UDP + SOCK_* constants |
 | N5.22 | Run Node.js net test subset | N5.12 | done | 12/12 net tests pass (4 existing + 8 new) |
-| N5.23 | Run Node.js http test subset | N5.16 | | |
+| N5.23 | Run Node.js http test subset | N5.16 | done | 12/12 HTTP tests pass (4 existing + 8 new) |
 | N5.24 | Run Node.js child_process test subset | N5.19 | | |
 
 ## Context Notes
@@ -295,3 +295,12 @@ be omitted):
 -- Missing `bytesRead`/`bytesWritten` on native stream handles. Node's `StreamBase` tracks these in `bytes_read_`/`bytes_written_` members. Added `bytesRead_`/`bytesWritten_` counters to `LibuvStreamBase`, incremented in `emitRead`/`doWrite`/`write*String`/`writev`, exposed as property getters via `napi_property_descriptor`.
 -- UAF during shutdown: GC finalizer (`HandleWrapBase::pointerCb`) called `uv_close` on handles after `eventLoop.close()` had destroyed the loop. Fixed with two changes: (1) `UvEventLoop::close()` now calls `uv_walk()` to force-close all remaining handles before `uv_loop_close()`, matching Node's `CleanupHandles()` approach. (2) `clearHandleWrapEventLoop()` nulls out the loop pointer after close, and `pointerCb` checks for force-closed handles (state kInitialized but `uv_is_closing` true) and just deletes the wrap.
 - **Notes for next step**: N5.23 (HTTP test subset) and N5.24 (child_process test subset) are the remaining tasks. The `uv_walk` shutdown fix is a general improvement that benefits all handle types.
+
+### Step N5.23: Run Node.js http test subset
+- **Files**: created `test/node-tests/parallel/test-http-methods.js`, `test-http-head-response-has-no-body.js`, `test-http-content-length.js`, `test-http-set-cookies.js`, `test-http-write-empty-string.js`, `test-http-no-content-length.js`, `test-http-contentLength0.js`, `test-http-keep-alive.js`. Modified `lib/bindings/node_http_parser.cpp`.
+- **Decisions**:
+-- Ported 8 new HTTP tests covering: METHODS array completeness, HEAD response with no body, Content-Length inference (chunked vs content-length vs zero), set-cookie header arrays, empty string writes, response without Content-Length, Content-Length with trailing space, keep-alive agent request queueing.
+- **What was done**: 8 new tests ported, 1 bug fixed. All 12 HTTP tests pass (4 existing + 8 new). Total test suite: 80 tests, all passing.
+- **Issues**:
+-- Missing `QUERY` method in HTTP parser's `methods` array. llhttp 9.3.0's `HTTP_METHOD_MAP` includes QUERY (RFC 9110), but our `kMethodNames` array in `node_http_parser.cpp` was missing it. Only `kAllMethodNames` had it. Fixed by adding QUERY to `kMethodNames`.
+- **Notes for next step**: N5.24 (child_process test subset) is the only remaining task.

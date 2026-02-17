@@ -5,9 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <hermes/node-compat/bindings/node_http_parser.h>
 #include <hermes/node-compat/bindings/handle_wrap_base.h>
 #include <hermes/node-compat/bindings/libuv_stream_base.h>
+#include <hermes/node-compat/bindings/node_http_parser.h>
 #include <node_api.h>
 #include <uv.h>
 
@@ -68,33 +68,29 @@ static constexpr size_t kMaxChunkExtensionsSize = 16384;
 // Standard methods (HTTP_METHOD_MAP from llhttp). Indexed by llhttp_method_t.
 // Note: indices 34+ are RTSP methods included in allMethods but not methods.
 static const char *const kMethodNames[] = {
-    "DELETE",      "GET",       "HEAD",         "POST",
-    "PUT",         "CONNECT",   "OPTIONS",      "TRACE",
-    "COPY",        "LOCK",      "MKCOL",        "MOVE",
-    "PROPFIND",    "PROPPATCH", "SEARCH",       "UNLOCK",
-    "BIND",        "REBIND",    "UNBIND",       "ACL",
-    "REPORT",      "MKACTIVITY", "CHECKOUT",    "MERGE",
-    "M-SEARCH",    "NOTIFY",    "SUBSCRIBE",    "UNSUBSCRIBE",
-    "PATCH",       "PURGE",     "MKCALENDAR",   "LINK",
-    "UNLINK",      "SOURCE",
+    "DELETE",     "GET",        "HEAD",        "POST",      "PUT",
+    "CONNECT",    "OPTIONS",    "TRACE",       "COPY",      "LOCK",
+    "MKCOL",      "MOVE",       "PROPFIND",    "PROPPATCH", "SEARCH",
+    "UNLOCK",     "BIND",       "REBIND",      "UNBIND",    "ACL",
+    "REPORT",     "MKACTIVITY", "CHECKOUT",    "MERGE",     "M-SEARCH",
+    "NOTIFY",     "SUBSCRIBE",  "UNSUBSCRIBE", "PATCH",     "PURGE",
+    "MKCALENDAR", "LINK",       "UNLINK",      "SOURCE",    "QUERY",
 };
 static constexpr int kMethodCount =
     static_cast<int>(sizeof(kMethodNames) / sizeof(kMethodNames[0]));
 
 // All methods including RTSP (HTTP_ALL_METHOD_MAP).
 static const char *const kAllMethodNames[] = {
-    "DELETE",        "GET",           "HEAD",          "POST",
-    "PUT",           "CONNECT",       "OPTIONS",       "TRACE",
-    "COPY",          "LOCK",          "MKCOL",         "MOVE",
-    "PROPFIND",      "PROPPATCH",     "SEARCH",        "UNLOCK",
-    "BIND",          "REBIND",        "UNBIND",        "ACL",
-    "REPORT",        "MKACTIVITY",    "CHECKOUT",      "MERGE",
-    "M-SEARCH",      "NOTIFY",        "SUBSCRIBE",     "UNSUBSCRIBE",
-    "PATCH",         "PURGE",         "MKCALENDAR",    "LINK",
-    "UNLINK",        "SOURCE",        "PRI",           "DESCRIBE",
-    "ANNOUNCE",      "SETUP",         "PLAY",          "PAUSE",
-    "TEARDOWN",      "GET_PARAMETER", "SET_PARAMETER", "REDIRECT",
-    "RECORD",        "FLUSH",         "QUERY",
+    "DELETE",     "GET",           "HEAD",          "POST",      "PUT",
+    "CONNECT",    "OPTIONS",       "TRACE",         "COPY",      "LOCK",
+    "MKCOL",      "MOVE",          "PROPFIND",      "PROPPATCH", "SEARCH",
+    "UNLOCK",     "BIND",          "REBIND",        "UNBIND",    "ACL",
+    "REPORT",     "MKACTIVITY",    "CHECKOUT",      "MERGE",     "M-SEARCH",
+    "NOTIFY",     "SUBSCRIBE",     "UNSUBSCRIBE",   "PATCH",     "PURGE",
+    "MKCALENDAR", "LINK",          "UNLINK",        "SOURCE",    "PRI",
+    "DESCRIBE",   "ANNOUNCE",      "SETUP",         "PLAY",      "PAUSE",
+    "TEARDOWN",   "GET_PARAMETER", "SET_PARAMETER", "REDIRECT",  "RECORD",
+    "FLUSH",      "QUERY",
 };
 static constexpr int kAllMethodCount =
     static_cast<int>(sizeof(kAllMethodNames) / sizeof(kAllMethodNames[0]));
@@ -138,10 +134,7 @@ class Parser {
   //            connectionsList?)
   // -------------------------------------------------------------------
   void initialize(int type, uint32_t maxHeaderSize, int lenientFlags) {
-    llhttp_init(
-        &parser_,
-        static_cast<llhttp_type_t>(type),
-        &settings_);
+    llhttp_init(&parser_, static_cast<llhttp_type_t>(type), &settings_);
     parser_.data = this;
 
     maxHttpHeaderSize_ = maxHeaderSize;
@@ -214,10 +207,7 @@ class Parser {
           "bytesParsed",
           createUint32(env, static_cast<uint32_t>(nread)));
       setProperty(
-          env,
-          errObj,
-          "code",
-          createString(env, llhttp_errno_name(err)));
+          env, errObj, "code", createString(env, llhttp_errno_name(err)));
       setProperty(
           env,
           errObj,
@@ -478,22 +468,15 @@ class Parser {
     }
 
     // Build headers array: [name1, value1, name2, value2, ...]
-    int numPairs =
-        self->numValues_ < self->numFields_ ? self->numValues_
-                                             : self->numFields_;
+    int numPairs = self->numValues_ < self->numFields_ ? self->numValues_
+                                                       : self->numFields_;
     napi_value headersArr;
     napi_create_array_with_length(env, numPairs * 2, &headersArr);
     for (int i = 0; i < numPairs; i++) {
       napi_set_element(
-          env,
-          headersArr,
-          i * 2,
-          createString(env, self->fields_[i]));
+          env, headersArr, i * 2, createString(env, self->fields_[i]));
       napi_set_element(
-          env,
-          headersArr,
-          i * 2 + 1,
-          createString(env, self->values_[i]));
+          env, headersArr, i * 2 + 1, createString(env, self->values_[i]));
     }
 
     // Build callback args: (versionMajor, versionMinor, headers, method,
@@ -522,8 +505,7 @@ class Parser {
     }
 
     napi_get_boolean(env, p->upgrade != 0, &args[7]);
-    napi_get_boolean(
-        env, llhttp_should_keep_alive(p) != 0, &args[8]);
+    napi_get_boolean(env, llhttp_should_keep_alive(p) != 0, &args[8]);
 
     napi_value cb;
     napi_get_element(env, jsObj, kOnHeadersComplete, &cb);
@@ -534,8 +516,7 @@ class Parser {
     }
 
     napi_value result;
-    napi_status st =
-        napi_call_function(env, jsObj, cb, 9, args, &result);
+    napi_status st = napi_call_function(env, jsObj, cb, 9, args, &result);
     if (st != napi_ok) {
       self->gotException_ = true;
       return HPE_USER;
@@ -653,14 +634,12 @@ class Parser {
     if (!jsObj)
       return;
 
-    int numPairs =
-        numValues_ < numFields_ ? numValues_ : numFields_;
+    int numPairs = numValues_ < numFields_ ? numValues_ : numFields_;
 
     napi_value headersArr;
     napi_create_array_with_length(env, numPairs * 2, &headersArr);
     for (int i = 0; i < numPairs; i++) {
-      napi_set_element(
-          env, headersArr, i * 2, createString(env, fields_[i]));
+      napi_set_element(env, headersArr, i * 2, createString(env, fields_[i]));
       napi_set_element(
           env, headersArr, i * 2 + 1, createString(env, values_[i]));
     }
@@ -738,8 +717,7 @@ class Parser {
     napi_set_named_property(env, obj, name, value);
   }
 
-  static void
-  pointerCb(napi_env /*env*/, void *data, void * /*hint*/) {
+  static void pointerCb(napi_env /*env*/, void *data, void * /*hint*/) {
     delete static_cast<Parser *>(data);
   }
 
@@ -852,8 +830,7 @@ class ConnectionsList {
   }
 
  private:
-  static void
-  pointerCb(napi_env /*env*/, void *data, void * /*hint*/) {
+  static void pointerCb(napi_env /*env*/, void *data, void * /*hint*/) {
     delete static_cast<ConnectionsList *>(data);
   }
 
@@ -941,7 +918,8 @@ static napi_value ParserExecute(napi_env env, napi_callback_info info) {
   size_t len;
   napi_value arrBuf;
   size_t offset;
-  napi_get_typedarray_info(env, args[0], nullptr, &len, &data, &arrBuf, &offset);
+  napi_get_typedarray_info(
+      env, args[0], nullptr, &len, &data, &arrBuf, &offset);
 
   return parser->execute(env, static_cast<const char *>(data), len);
 }
@@ -1050,8 +1028,9 @@ static napi_value ParserUnconsume(napi_env env, napi_callback_info info) {
 }
 
 // ---------- HTTPParser.prototype.getCurrentBuffer ----------
-static napi_value
-ParserGetCurrentBuffer(napi_env env, napi_callback_info info) {
+static napi_value ParserGetCurrentBuffer(
+    napi_env env,
+    napi_callback_info info) {
   napi_value jsThis;
   napi_get_cb_info(env, info, nullptr, nullptr, &jsThis, nullptr);
 
@@ -1073,8 +1052,7 @@ static napi_value ConnectionsListNew(napi_env env, napi_callback_info info) {
 }
 
 // ---------- ConnectionsList.prototype.all ----------
-static napi_value
-ConnectionsListAll(napi_env env, napi_callback_info info) {
+static napi_value ConnectionsListAll(napi_env env, napi_callback_info info) {
   napi_value jsThis;
   napi_get_cb_info(env, info, nullptr, nullptr, &jsThis, nullptr);
   auto *list = ConnectionsList::unwrap(env, jsThis);
@@ -1082,8 +1060,7 @@ ConnectionsListAll(napi_env env, napi_callback_info info) {
 }
 
 // ---------- ConnectionsList.prototype.idle ----------
-static napi_value
-ConnectionsListIdle(napi_env env, napi_callback_info info) {
+static napi_value ConnectionsListIdle(napi_env env, napi_callback_info info) {
   napi_value jsThis;
   napi_get_cb_info(env, info, nullptr, nullptr, &jsThis, nullptr);
   auto *list = ConnectionsList::unwrap(env, jsThis);
@@ -1091,8 +1068,7 @@ ConnectionsListIdle(napi_env env, napi_callback_info info) {
 }
 
 // ---------- ConnectionsList.prototype.active ----------
-static napi_value
-ConnectionsListActive(napi_env env, napi_callback_info info) {
+static napi_value ConnectionsListActive(napi_env env, napi_callback_info info) {
   napi_value jsThis;
   napi_get_cb_info(env, info, nullptr, nullptr, &jsThis, nullptr);
   auto *list = ConnectionsList::unwrap(env, jsThis);
@@ -1100,8 +1076,9 @@ ConnectionsListActive(napi_env env, napi_callback_info info) {
 }
 
 // ---------- ConnectionsList.prototype.expired ----------
-static napi_value
-ConnectionsListExpired(napi_env env, napi_callback_info info) {
+static napi_value ConnectionsListExpired(
+    napi_env env,
+    napi_callback_info info) {
   size_t argc = 2;
   napi_value args[2];
   napi_value jsThis;

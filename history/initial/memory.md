@@ -159,11 +159,12 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 ## HTTP Module (verified)
 - `require('http')` loads and works for both server and client
 - GET, POST with body, chunked transfer encoding, keep-alive, headers, status codes, streaming, timeouts, DNS hostname resolution all verified
-- 4 Node.js tests ported and passing: request-end, status-code, client-get-url, date-header
+- 12 Node.js tests ported and passing: request-end, status-code, client-get-url, date-header, methods, head-response-has-no-body, content-length, set-cookies, write-empty-string, no-content-length, contentLength0, keep-alive
 - `test/node-tests/common/countdown.js` helper added for tests needing sequential request counting
 - HTTP Agent keep-alive works (multiple requests on same connection)
 - 204 No Content correctly omits body
 - Client `timeout` option works (fires 'timeout' event, then destroy to abort)
+- `http.METHODS` includes QUERY (added in llhttp 9.3.0 per RFC 9110)
 
 ## Process Wrap Binding
 - `ProcessWrap` inherits `HandleWrapBase` (NOT LibuvStreamBase -- processes are not streams).
