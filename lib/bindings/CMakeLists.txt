@@ -24,6 +24,7 @@ add_hermes_library(hermesNodeBindings STATIC
   node_timers.cpp
   node_trace_events.cpp
   node_types.cpp
+  node_url.cpp
   node_util.cpp
   node_uv.cpp
 )

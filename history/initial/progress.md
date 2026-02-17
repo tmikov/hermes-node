@@ -46,7 +46,7 @@ be omitted):
 | N5.2 | Port `credentials` binding | — | done | Done as part of N5.1 |
 | N5.3 | Port `tty_wrap` binding | N5.6 | | |
 | N5.4 | Integrate simdutf into buffer/encoding | — | done | Already mostly integrated; replaced last hand-rolled UTF-8 trim |
-| N5.5 | Integrate Ada into url binding | — | | |
+| N5.5 | Integrate Ada into url binding | — | done | Native binding + comprehensive URL shim |
 | N5.6 | Implement HandleWrap + LibuvStreamBase | — | | |
 | N5.7 | Vendor c-ares | — | | |
 | N5.8 | Implement `dns.lookup()` via libuv | N5.7 | | |
@@ -80,6 +80,17 @@ be omitted):
 
 ### Step N5.2: Port `credentials` binding
 - Done as part of N5.1 (see above).
+
+### Step N5.5: Integrate Ada into url binding
+- **Files**: created `include/hermes/node-compat/bindings/node_url.h`, `lib/bindings/node_url.cpp`, `test/test-url.js`. Modified `libjs/shims/internal/url.js` (full rewrite), `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`.
+- **Decisions**:
+-- Wrote comprehensive self-contained `internal/url.js` shim rather than using Node's 1700-line original (too many dependencies: url_pattern, querystring, data_url, mime, etc.).
+-- Native binding uses Ada C++ API (`ada::url_aggregator` for parsing/component access, `ada::url` for format function). Ada was already vendored at `external/ada/`.
+-- URL globals (`URL`, `URLSearchParams`) set during bootstrap (step 11a3) after Buffer setup.
+-- `url_pattern` binding is a stub exporting `URLPattern: undefined`.
+-- Component offsets stored in shared Int32Array(9) following Node's layout.
+- **What was done**: Full native url binding with 8 functions (parse, update, canParse, domainToASCII, domainToUnicode, getOrigin, format, pathToFileURL). Comprehensive JS URL class with all getters/setters, URLSearchParams with full API, utility functions (fileURLToPath, pathToFileURL, toPathIfFileURL, urlToHttpOptions, isURL, domainToASCII/Unicode, encodeStr). Protocol sets for url.js compatibility. Test covering all URL/URLSearchParams APIs, legacy url module, and globals.
+- **Issues**: Ada's `host_start` offset points at `@` when credentials exist (not the first host char). Fixed by checking for `@` in host/hostname getters, matching Node's approach. Ada was already linked as PRIVATE dep of hermesNodeBindings (from encoding binding's IDNA usage).
 
 ### Step N5.4: Integrate simdutf into buffer/encoding
 - **Files**: modified `lib/bindings/node_buffer.cpp`, `test/test-buffer.js`, `test/test-encoding.js`.

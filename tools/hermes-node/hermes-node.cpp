@@ -31,6 +31,7 @@
 #include <hermes/node-compat/bindings/node_timers.h>
 #include <hermes/node-compat/bindings/node_trace_events.h>
 #include <hermes/node-compat/bindings/node_types.h>
+#include <hermes/node-compat/bindings/node_url.h>
 #include <hermes/node-compat/bindings/node_util.h>
 #include <hermes/node-compat/bindings/node_uv.h>
 #include <hermes/node-compat/event-loop/uv_event_loop.h>
@@ -477,6 +478,8 @@ static int runBootstrap(
   registry.registerBinding("timers", initTimersBinding);
   registry.registerBinding("trace_events", initTraceEventsBinding);
   registry.registerBinding("types", initTypesBinding);
+  registry.registerBinding("url", initUrlBinding);
+  registry.registerBinding("url_pattern", initUrlPatternBinding);
   registry.registerBinding("util", initUtilBinding);
   registry.registerBinding("uv", initUvBinding);
   registry.attach(env);
@@ -774,6 +777,22 @@ static int runBootstrap(
       napi_value bufferCtor;
       napi_get_named_property(env, bufferModule, "Buffer", &bufferCtor);
       napi_set_named_property(env, global, "Buffer", bufferCtor);
+    }
+  }
+
+  // 11a3. Set globalThis.URL and globalThis.URLSearchParams.
+  // Loading internal/url also sets these globals, but we do it explicitly
+  // during bootstrap so they are available before any user code runs.
+  if (exitCode == 0) {
+    napi_value urlModule;
+    if (loader.require(env, "internal/url", &urlModule) == napi_ok) {
+      napi_value urlCtor;
+      napi_get_named_property(env, urlModule, "URL", &urlCtor);
+      napi_set_named_property(env, global, "URL", urlCtor);
+
+      napi_value urlSPCtor;
+      napi_get_named_property(env, urlModule, "URLSearchParams", &urlSPCtor);
+      napi_set_named_property(env, global, "URLSearchParams", urlSPCtor);
     }
   }
 
