@@ -166,11 +166,19 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - GC finalizer: uses `napi_wrap` directly in constructor (not via HandleWrapBase::init). If state is kClosed (never spawned), just deletes. If initialized, calls doClose().
 - OnExit callback: `onexit(exitStatus, signalName)`. exitStatus as double (int64_t range), signal as string ("SIGTERM" etc.) via `signoString()`.
 - ParseStdioOptions: handles ignore/pipe/overlapped/wrap/fd. For pipe: extracts `uv_stream_t*` from JS handle via `HandleWrapBase::unwrap() -> handle()`.
-- `spawn_sync` stub binding: throws "not implemented". Needed so `internal/child_process.js` can load (imports `spawn_sync` at module load time).
+## Spawn Sync Binding
+- `SyncProcessRunner` in `node_spawn_sync.cpp`: creates temp `uv_loop_t`, spawns child, runs loop until exit, collects output. Stack-allocated runner, loop destroyed after use.
+- `StdioPipe`: internal `uv_pipe_t` on temp loop. For sync spawn, JS does NOT create PipeWrap handles -- C++ creates pipes internally.
+- OutputBuffer: linked list of 64KB chunks for capturing pipe output.
+- Timeout: `uv_timer_t` on temp loop (unref'd). On timeout, kills child with configured signal, closes all pipes, sets UV_ETIMEDOUT error.
+- maxBuffer: tracks total buffered output, kills child on overflow (UV_ENOBUFS).
+- **CRITICAL**: Do NOT call `napi_call_function` (re-enter JS) from inside a NAPI callback to wrap buffers. Causes ASAN stack-use-after-return crash due to interpreter GCScope lifetime on fake stack. Do buffer wrapping in JS instead.
+- Output Buffer wrapping: done in `internal/child_process.js` spawnSync() -- wraps Uint8Array outputs with `Buffer.from()`.
 
 ## Child Process Module
-- `require('child_process')` loads and works for async operations (spawn, exec, execFile, kill).
-- spawnSync/execSync/execFileSync require N5.18 (real spawn_sync implementation).
+- `require('child_process')` loads and works for both async and sync operations.
+- Async: spawn, exec, execFile, kill all work.
+- Sync: spawnSync, execSync, execFileSync all work. Supports stdin input, timeout, maxBuffer, cwd, env.
 - `cluster.js` shim still needed (breaks `child_process` -> `dgram` -> `udp_wrap` chain at load time).
 
 ## Unverified

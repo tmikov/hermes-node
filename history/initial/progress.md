@@ -59,7 +59,7 @@ be omitted):
 | N5.15 | Port `http_parser` binding | N5.6, N5.14 | done | |
 | N5.16 | Verify HTTP works | N5.12, N5.15 | done | |
 | N5.17 | Port `process_wrap` binding | N5.6, N5.11 | done | Also added spawn_sync stub |
-| N5.18 | Port `spawn_sync` binding | N5.17 | | |
+| N5.18 | Port `spawn_sync` binding | N5.17 | done | |
 | N5.19 | Verify `child_process` module works | N5.17, N5.18 | | |
 | N5.20 | Implement `process.stdin` | N5.3, N5.6 | | |
 | N5.21 | Add missing `os` constants | N5.1 | | |
@@ -238,3 +238,16 @@ be omitted):
 -- Created `spawn_sync` stub binding so `internal/child_process.js` can load (it imports `spawn_sync` at module load time). The stub throws "not implemented" when called.
 - **What was done**: Full `process_wrap` binding with Process constructor, spawn(options) method (parses file/args/cwd/envPairs/stdio/uid/gid/detached/windowsHide/windowsVerbatimArguments), kill(signal) method. OnExit callback with exit code and signal name. HandleWrap methods (ref/unref/hasRef/close/getAsyncId) inherited. Stub `spawn_sync` binding. Test covers: binding exports, Process constructor methods, spawn+stdout capture via pipe, spawn+kill with SIGTERM signal verification. Verified child_process module loads and spawn/exec/kill work end-to-end through the JS API.
 - **Notes for next step**: N5.18 (spawn_sync) needs to replace the stub with a real implementation. N5.19 (verify child_process) is partially unblocked -- async spawn/exec/execFile/kill all work, but spawnSync/execSync/execFileSync require N5.18. The `cluster.js` shim from N5.10 is still needed since child_process is now loadable.
+
+### Step N5.18: Port `spawn_sync` binding
+- **Files**: modified `lib/bindings/node_spawn_sync.cpp`, `include/hermes/node-compat/bindings/node_spawn_sync.h`, `libjs-node/internal/child_process.js`. Created `test/test-spawn-sync.js`.
+- **Decisions**:
+-- SyncProcessRunner creates a temporary `uv_loop_t`, spawns the child on it, runs the loop until exit, then collects output. Temp loop is destroyed after use.
+-- StdioPipe class manages internal `uv_pipe_t` handles on the temp loop (unlike async spawn where JS creates PipeWrap objects). Each pipe handles read capture (child stdout/stderr) and write (child stdin input).
+-- OutputBuffer linked list captures pipe output in 64KB chunks, matching Node's SyncProcessOutputBuffer approach.
+-- Timeout uses `uv_timer_t` on the temp loop (unref'd so it doesn't keep loop alive alone). On timeout, kills child with configured killSignal and closes all pipes.
+-- maxBuffer overflow detection: increments total buffered output, kills child on overflow (UV_ENOBUFS).
+-- Buffer wrapping done in JS (modified `internal/child_process.js` spawnSync function) rather than C++ because calling `Buffer.from()` via `napi_call_function` from inside a NAPI callback causes ASAN stack-use-after-return issues due to GCScope lifetime.
+- **What was done**: Full `spawn_sync` binding replacing the stub. SyncProcessRunner with option parsing (file, args, cwd, envPairs, uid, gid, detached, timeout, maxBuffer, killSignal, stdio), StdioPipe with input writing and output capture, timeout handling, kill logic. Result object with pid, status, signal, output array, error code. Test covers: spawnSync basic, stderr capture, non-zero exit, stdin input, timeout, execSync, execFileSync, encoding option, execSync throw on error, cwd option, env option, invalid command error, maxBuffer overflow.
+- **Issues**: `napi_call_function` for `Buffer.from()` from inside a NAPI callback causes ASAN crash (stack-use-after-return for interpreter GCScope). Fixed by doing Buffer wrapping in JS instead of native code.
+- **Notes for next step**: N5.19 (verify child_process) is fully unblocked -- both async and sync child process APIs now work. `napi_create_buffer_copy` returns plain Uint8Array in Hermes NAPI, so any sync binding returning buffers needs JS-side `Buffer.from()` wrapping.

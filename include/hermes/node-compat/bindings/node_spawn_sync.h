@@ -14,7 +14,7 @@ namespace hermes {
 namespace node_compat {
 
 /// Init function for the 'spawn_sync' binding.
-/// Stub: exports a spawn() function that throws "not implemented".
+/// Exports spawn(options) for synchronous child process execution.
 napi_value initSpawnSyncBinding(napi_env env, napi_value exports);
 
 } // namespace node_compat

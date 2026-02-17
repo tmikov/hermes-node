@@ -1105,6 +1105,15 @@ function maybeClose(subprocess) {
 function spawnSync(options) {
   const result = spawn_sync.spawn(options);
 
+  // [hermes-node] napi_create_buffer_copy returns plain Uint8Array in Hermes
+  // NAPI. Wrap output buffers with Buffer.from() for proper toString(encoding).
+  if (result.output) {
+    for (let i = 0; i < result.output.length; i++) {
+      if (result.output[i] && !(result.output[i] instanceof Buffer))
+        result.output[i] = Buffer.from(result.output[i]);
+    }
+  }
+
   if (result.output && options.encoding && options.encoding !== 'buffer') {
     for (let i = 0; i < result.output.length; i++) {
       if (!result.output[i])
