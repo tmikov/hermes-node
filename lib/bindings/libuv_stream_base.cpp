@@ -98,7 +98,8 @@ napi_value LibuvStreamBase::readStart(napi_env env, napi_callback_info info) {
   napi_value thisObj;
   napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
 
-  auto *wrap = static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
+  auto *wrap =
+      static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
   if (!wrap || wrap->state() != kInitialized) {
     napi_value result;
     napi_create_int32(env, UV_EINVAL, &result);
@@ -106,9 +107,7 @@ napi_value LibuvStreamBase::readStart(napi_env env, napi_callback_info info) {
   }
 
   int err = uv_read_start(
-      wrap->stream_,
-      LibuvStreamBase::onAlloc,
-      LibuvStreamBase::onRead);
+      wrap->stream_, LibuvStreamBase::onAlloc, LibuvStreamBase::onRead);
 
   napi_value result;
   napi_create_int32(env, err, &result);
@@ -119,7 +118,8 @@ napi_value LibuvStreamBase::readStop(napi_env env, napi_callback_info info) {
   napi_value thisObj;
   napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
 
-  auto *wrap = static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
+  auto *wrap =
+      static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
   if (!wrap || wrap->state() != kInitialized) {
     napi_value result;
     napi_create_int32(env, UV_EINVAL, &result);
@@ -180,6 +180,11 @@ void LibuvStreamBase::emitRead(ssize_t nread, const uv_buf_t *buf) {
     return;
   }
 
+  // Track total bytes read.
+  if (nread > 0) {
+    bytesRead_ += static_cast<uint64_t>(nread);
+  }
+
   // Set streamBaseState fields for the JS callback.
   if (s_streamBaseState) {
     s_streamBaseState[kReadBytesOrError] = static_cast<int32_t>(nread);
@@ -229,10 +234,7 @@ void LibuvStreamBase::emitRead(ssize_t nread, const uv_buf_t *buf) {
 // Write operations
 // ---------------------------------------------------------------------------
 
-int LibuvStreamBase::doWrite(
-    napi_value reqObj,
-    uv_buf_t *bufs,
-    size_t count) {
+int LibuvStreamBase::doWrite(napi_value reqObj, uv_buf_t *bufs, size_t count) {
   napi_env env = this->env();
 
   auto *reqData = new WriteReqData();
@@ -259,6 +261,8 @@ int LibuvStreamBase::doWrite(
   size_t totalBytes = 0;
   for (size_t i = 0; i < count; ++i)
     totalBytes += bufs[i].len;
+
+  bytesWritten_ += totalBytes;
 
   if (s_streamBaseState) {
     s_streamBaseState[kLastWriteWasAsync] = 1;
@@ -313,14 +317,13 @@ void LibuvStreamBase::afterWrite(uv_write_t *req, int status) {
 // writeBuffer(req, buffer)
 // ---------------------------------------------------------------------------
 
-napi_value LibuvStreamBase::writeBuffer(
-    napi_env env,
-    napi_callback_info info) {
+napi_value LibuvStreamBase::writeBuffer(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2], thisObj;
   napi_get_cb_info(env, info, &argc, argv, &thisObj, nullptr);
 
-  auto *wrap = static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
+  auto *wrap =
+      static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
   if (!wrap || wrap->state() != kInitialized) {
     napi_value result;
     napi_create_int32(env, UV_EINVAL, &result);
@@ -354,7 +357,8 @@ napi_value LibuvStreamBase::writeUtf8String(
   napi_value argv[2], thisObj;
   napi_get_cb_info(env, info, &argc, argv, &thisObj, nullptr);
 
-  auto *wrap = static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
+  auto *wrap =
+      static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
   if (!wrap || wrap->state() != kInitialized) {
     napi_value result;
     napi_create_int32(env, UV_EINVAL, &result);
@@ -369,7 +373,8 @@ napi_value LibuvStreamBase::writeUtf8String(
   auto *reqData = new WriteReqData();
   reqData->storage = static_cast<char *>(malloc(strLen + 1));
   reqData->storageLen = strLen;
-  napi_get_value_string_utf8(env, argv[1], reqData->storage, strLen + 1, &strLen);
+  napi_get_value_string_utf8(
+      env, argv[1], reqData->storage, strLen + 1, &strLen);
 
   reqData->wrap = wrap;
   reqData->env = env;
@@ -387,6 +392,7 @@ napi_value LibuvStreamBase::writeUtf8String(
       s_streamBaseState[kBytesWritten] = 0;
     }
   } else {
+    wrap->bytesWritten_ += strLen;
     if (s_streamBaseState) {
       s_streamBaseState[kLastWriteWasAsync] = 1;
       s_streamBaseState[kBytesWritten] = static_cast<int32_t>(strLen);
@@ -409,7 +415,8 @@ napi_value LibuvStreamBase::writeLatin1String(
   napi_value argv[2], thisObj;
   napi_get_cb_info(env, info, &argc, argv, &thisObj, nullptr);
 
-  auto *wrap = static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
+  auto *wrap =
+      static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
   if (!wrap || wrap->state() != kInitialized) {
     napi_value result;
     napi_create_int32(env, UV_EINVAL, &result);
@@ -444,6 +451,7 @@ napi_value LibuvStreamBase::writeLatin1String(
       s_streamBaseState[kBytesWritten] = 0;
     }
   } else {
+    wrap->bytesWritten_ += strLen;
     if (s_streamBaseState) {
       s_streamBaseState[kLastWriteWasAsync] = 1;
       s_streamBaseState[kBytesWritten] = static_cast<int32_t>(strLen);
@@ -477,7 +485,8 @@ napi_value LibuvStreamBase::writeUcs2String(
   napi_value argv[2], thisObj;
   napi_get_cb_info(env, info, &argc, argv, &thisObj, nullptr);
 
-  auto *wrap = static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
+  auto *wrap =
+      static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
   if (!wrap || wrap->state() != kInitialized) {
     napi_value result;
     napi_create_int32(env, UV_EINVAL, &result);
@@ -516,6 +525,7 @@ napi_value LibuvStreamBase::writeUcs2String(
       s_streamBaseState[kBytesWritten] = 0;
     }
   } else {
+    wrap->bytesWritten_ += strLen * 2;
     if (s_streamBaseState) {
       s_streamBaseState[kLastWriteWasAsync] = 1;
       s_streamBaseState[kBytesWritten] = static_cast<int32_t>(strLen * 2);
@@ -536,7 +546,8 @@ napi_value LibuvStreamBase::writev(napi_env env, napi_callback_info info) {
   napi_value argv[3], thisObj;
   napi_get_cb_info(env, info, &argc, argv, &thisObj, nullptr);
 
-  auto *wrap = static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
+  auto *wrap =
+      static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
   if (!wrap || wrap->state() != kInitialized) {
     napi_value result;
     napi_create_int32(env, UV_EINVAL, &result);
@@ -609,11 +620,7 @@ napi_value LibuvStreamBase::writev(napi_env env, napi_callback_info info) {
   }
 
   int err = uv_write(
-      &reqData->req,
-      wrap->stream_,
-      reqData->bufs.data(),
-      count,
-      afterWrite);
+      &reqData->req, wrap->stream_, reqData->bufs.data(), count, afterWrite);
 
   if (err != 0) {
     napi_delete_reference(env, reqData->reqRef);
@@ -623,6 +630,7 @@ napi_value LibuvStreamBase::writev(napi_env env, napi_callback_info info) {
       s_streamBaseState[kBytesWritten] = 0;
     }
   } else {
+    wrap->bytesWritten_ += totalBytes;
     if (s_streamBaseState) {
       s_streamBaseState[kLastWriteWasAsync] = 1;
       s_streamBaseState[kBytesWritten] = static_cast<int32_t>(totalBytes);
@@ -682,7 +690,8 @@ napi_value LibuvStreamBase::shutdown(napi_env env, napi_callback_info info) {
   napi_value argv[1], thisObj;
   napi_get_cb_info(env, info, &argc, argv, &thisObj, nullptr);
 
-  auto *wrap = static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
+  auto *wrap =
+      static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
   if (!wrap || wrap->state() != kInitialized) {
     napi_value result;
     napi_create_int32(env, UV_EINVAL, &result);
@@ -717,7 +726,8 @@ napi_value LibuvStreamBase::getWriteQueueSize(
   napi_value thisObj;
   napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
 
-  auto *wrap = static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
+  auto *wrap =
+      static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
   uint32_t size = 0;
   if (wrap && wrap->stream_) {
     size = wrap->stream_->write_queue_size;
@@ -728,14 +738,13 @@ napi_value LibuvStreamBase::getWriteQueueSize(
   return result;
 }
 
-napi_value LibuvStreamBase::setBlocking(
-    napi_env env,
-    napi_callback_info info) {
+napi_value LibuvStreamBase::setBlocking(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1], thisObj;
   napi_get_cb_info(env, info, &argc, argv, &thisObj, nullptr);
 
-  auto *wrap = static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
+  auto *wrap =
+      static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
   if (!wrap || wrap->state() != kInitialized) {
     napi_value result;
     napi_create_int32(env, UV_EINVAL, &result);
@@ -749,6 +758,46 @@ napi_value LibuvStreamBase::setBlocking(
 
   napi_value result;
   napi_create_int32(env, err, &result);
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// getBytesRead / getBytesWritten
+// ---------------------------------------------------------------------------
+
+napi_value LibuvStreamBase::getBytesRead(
+    napi_env env,
+    napi_callback_info info) {
+  napi_value thisObj;
+  napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
+
+  auto *wrap =
+      static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
+  double value = 0;
+  if (wrap) {
+    value = static_cast<double>(wrap->bytesRead_);
+  }
+
+  napi_value result;
+  napi_create_double(env, value, &result);
+  return result;
+}
+
+napi_value LibuvStreamBase::getBytesWritten(
+    napi_env env,
+    napi_callback_info info) {
+  napi_value thisObj;
+  napi_get_cb_info(env, info, nullptr, nullptr, &thisObj, nullptr);
+
+  auto *wrap =
+      static_cast<LibuvStreamBase *>(HandleWrapBase::unwrap(env, thisObj));
+  double value = 0;
+  if (wrap) {
+    value = static_cast<double>(wrap->bytesWritten_);
+  }
+
+  napi_value result;
+  napi_create_double(env, value, &result);
   return result;
 }
 
@@ -797,12 +846,7 @@ void LibuvStreamBase::addStreamMethods(napi_env env, napi_value prototype) {
   napi_set_named_property(env, prototype, "writeAsciiString", fn);
 
   napi_create_function(
-      env,
-      "writeUcs2String",
-      NAPI_AUTO_LENGTH,
-      writeUcs2String,
-      nullptr,
-      &fn);
+      env, "writeUcs2String", NAPI_AUTO_LENGTH, writeUcs2String, nullptr, &fn);
   napi_set_named_property(env, prototype, "writeUcs2String", fn);
 
   napi_create_function(env, "writev", NAPI_AUTO_LENGTH, writev, nullptr, &fn);
@@ -824,6 +868,31 @@ void LibuvStreamBase::addStreamMethods(napi_env env, napi_value prototype) {
   napi_create_function(
       env, "setBlocking", NAPI_AUTO_LENGTH, setBlocking, nullptr, &fn);
   napi_set_named_property(env, prototype, "setBlocking", fn);
+
+  // bytesRead getter (Node exposes this as a property on the handle).
+  // napi_property_descriptor getter field must be napi_callback (fn ptr).
+  napi_property_descriptor bytesReadDesc = {
+      "bytesRead",
+      nullptr,
+      nullptr,
+      getBytesRead,
+      nullptr,
+      nullptr,
+      napi_enumerable,
+      nullptr};
+  napi_define_properties(env, prototype, 1, &bytesReadDesc);
+
+  // bytesWritten getter.
+  napi_property_descriptor bytesWrittenDesc = {
+      "bytesWritten",
+      nullptr,
+      nullptr,
+      getBytesWritten,
+      nullptr,
+      nullptr,
+      napi_enumerable,
+      nullptr};
+  napi_define_properties(env, prototype, 1, &bytesWrittenDesc);
 
   // isStreamBase marker.
   napi_value trueVal;

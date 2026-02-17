@@ -28,6 +28,10 @@ uv_loop_t *getHandleWrapEventLoop() {
   return s_handleWrapLoop;
 }
 
+void clearHandleWrapEventLoop() {
+  s_handleWrapLoop = nullptr;
+}
+
 // ---------------------------------------------------------------------------
 // HandleWrapBase
 // ---------------------------------------------------------------------------
@@ -145,27 +149,38 @@ void HandleWrapBase::invokeCloseCallback() {
 }
 
 void HandleWrapBase::pointerCb(napi_env, void *data, void *) {
-  // GC finalizer: if the handle is still active, async-close it.
+  // GC finalizer: clean up the HandleWrapBase.
   auto *wrap = static_cast<HandleWrapBase *>(data);
-  if (wrap->state_ == kInitialized && wrap->handle_ &&
-      !uv_is_closing(wrap->handle_)) {
-    wrap->state_ = kClosing;
-    uv_close(wrap->handle_, [](uv_handle_t *h) {
-      auto *w = static_cast<HandleWrapBase *>(h->data);
-      w->state_ = kClosed;
-      w->onClose();
-      if (w->selfRef_) {
-        napi_delete_reference(w->env_, w->selfRef_);
-        w->selfRef_ = nullptr;
-      }
-      if (w->closeCbRef_) {
-        napi_delete_reference(w->env_, w->closeCbRef_);
-        w->closeCbRef_ = nullptr;
-      }
-      delete w;
-    });
+
+  if (wrap->state_ == kInitialized && wrap->handle_) {
+    if (!uv_is_closing(wrap->handle_) && s_handleWrapLoop) {
+      // Handle is still active and loop is alive — async-close it.
+      wrap->state_ = kClosing;
+      uv_close(wrap->handle_, [](uv_handle_t *h) {
+        auto *w = static_cast<HandleWrapBase *>(h->data);
+        w->state_ = kClosed;
+        w->onClose();
+        if (w->selfRef_) {
+          napi_delete_reference(w->env_, w->selfRef_);
+          w->selfRef_ = nullptr;
+        }
+        if (w->closeCbRef_) {
+          napi_delete_reference(w->env_, w->closeCbRef_);
+          w->closeCbRef_ = nullptr;
+        }
+        delete w;
+      });
+      return;
+    }
+    // Handle was force-closed during shutdown (via uv_walk in
+    // UvEventLoop::close) or the loop is already destroyed.
+    // The NAPI env is being torn down so references will be cleaned up
+    // automatically — just delete the wrap.
+    wrap->state_ = kClosed;
+    delete wrap;
     return;
   }
+
   if (wrap->state_ == kClosed) {
     delete wrap;
   }

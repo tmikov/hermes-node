@@ -240,6 +240,20 @@ int UvEventLoop::close() {
   // Drain any remaining tasks that arrived after the loop stopped.
   impl_->drainTasks();
 
+  // Force-close any remaining handles. This mirrors Node's
+  // Environment::CleanupHandles() which walks handle_wrap_queue_ and closes
+  // everything. We use uv_walk() since we don't maintain a separate registry.
+  uv_walk(
+      &impl_->loop,
+      [](uv_handle_t *handle, void *) {
+        if (!uv_is_closing(handle)) {
+          uv_close(handle, nullptr);
+        }
+      },
+      nullptr);
+  // Run the loop until all close callbacks have been processed.
+  uv_run(&impl_->loop, UV_RUN_DEFAULT);
+
   uv_mutex_destroy(&impl_->taskMutex);
   int rc = uv_loop_close(&impl_->loop);
 

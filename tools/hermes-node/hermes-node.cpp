@@ -843,6 +843,10 @@ static int runBootstrap(
   // complete pending async fs operations, so NAPI env must still be valid.
   eventLoop.close();
 
+  // Clear the event loop pointer so GC finalizers won't try to uv_close
+  // handles after the loop is destroyed.
+  clearHandleWrapEventLoop();
+
   if (tickCallbackRef) {
     napi_delete_reference(env, tickCallbackRef);
   }

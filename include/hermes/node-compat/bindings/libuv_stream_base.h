@@ -10,8 +10,8 @@
 
 #include <hermes/node-compat/bindings/handle_wrap_base.h>
 
-#include <cstdint>
 #include <sys/types.h> // ssize_t
+#include <cstdint>
 
 struct uv_stream_s;
 typedef struct uv_stream_s uv_stream_t;
@@ -50,10 +50,7 @@ class LibuvStreamBase : public HandleWrapBase {
   }
 
   /// Initialize the stream wrap. Call after uv_*_init().
-  void initStream(
-      napi_env env,
-      napi_value jsObj,
-      uv_stream_t *stream);
+  void initStream(napi_env env, napi_value jsObj, uv_stream_t *stream);
 
   /// Add stream methods (readStart, readStop, write*, shutdown, etc.)
   /// to a JS prototype. Also adds HandleWrap methods.
@@ -74,27 +71,26 @@ class LibuvStreamBase : public HandleWrapBase {
   static napi_value shutdown(napi_env env, napi_callback_info info);
   static napi_value getWriteQueueSize(napi_env env, napi_callback_info info);
   static napi_value setBlocking(napi_env env, napi_callback_info info);
+  static napi_value getBytesRead(napi_env env, napi_callback_info info);
+  static napi_value getBytesWritten(napi_env env, napi_callback_info info);
 
  private:
   // libuv callbacks
-  static void onAlloc(
-      uv_handle_t *handle,
-      size_t suggested_size,
-      uv_buf_t *buf);
+  static void
+  onAlloc(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf);
   static void onRead(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf);
   static void afterWrite(uv_write_t *req, int status);
   static void afterShutdown(uv_shutdown_t *req, int status);
 
   // Internal write helper
-  int doWrite(
-      napi_value reqObj,
-      uv_buf_t *bufs,
-      size_t count);
+  int doWrite(napi_value reqObj, uv_buf_t *bufs, size_t count);
 
   // Fire the onread callback on the JS handle object.
   void emitRead(ssize_t nread, const uv_buf_t *buf);
 
   uv_stream_t *stream_ = nullptr;
+  uint64_t bytesRead_ = 0;
+  uint64_t bytesWritten_ = 0;
 };
 
 } // namespace node_compat

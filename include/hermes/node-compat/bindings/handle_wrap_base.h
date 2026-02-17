@@ -25,6 +25,10 @@ void setHandleWrapEventLoop(uv_loop_t *loop);
 /// Get the event loop for HandleWrapBase operations.
 uv_loop_t *getHandleWrapEventLoop();
 
+/// Clear the event loop pointer. Must be called before the event loop is
+/// destroyed. GC finalizers that fire after this will skip uv_close.
+void clearHandleWrapEventLoop();
+
 /// Base class for all libuv handle wraps (TCP, Pipe, TTY, UDP, etc.).
 /// Provides ref/unref/hasRef/close lifecycle management.
 ///
@@ -93,8 +97,8 @@ class HandleWrapBase {
 
   uv_handle_t *handle_ = nullptr;
   napi_env env_ = nullptr;
-  napi_ref selfRef_ = nullptr;      // prevent-GC reference
-  napi_ref closeCbRef_ = nullptr;    // optional close callback
+  napi_ref selfRef_ = nullptr; // prevent-GC reference
+  napi_ref closeCbRef_ = nullptr; // optional close callback
   State state_ = kClosed;
 };
 
