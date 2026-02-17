@@ -53,13 +53,11 @@ function randomPipePath() {
     .listen({ path: handlePath }, closeServer());
 }
 
-// Test pipe chmod -- skipped: readableAll/writableAll requires fchmod
-// which may not change mode on all platforms/configurations.
-// {
-//   var handlePath = randomPipePath();
-//   var server = net.createServer()
-//     .listen({ path: handlePath, readableAll: true, writableAll: true }, ...);
-// }
+// Test pipe chmod -- skipped: libuv's uv_pipe_chmod first tries fchmod() which
+// silently succeeds on some Linux kernels without actually changing the mode on
+// Unix sockets. The chmod() fallback is never reached. This is a libuv issue
+// (https://github.com/libuv/libuv/issues), not a hermes-node issue.
+// Node itself passes because it tests on kernels where fchmod works on sockets.
 
 // Test should emit "error" events when listening fails.
 {
