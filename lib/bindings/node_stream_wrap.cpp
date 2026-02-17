@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <hermes/node-compat/bindings/libuv_stream_base.h>
 #include <hermes/node-compat/bindings/node_stream_wrap.h>
 #include <node_api.h>
 
@@ -32,17 +33,16 @@ enum StreamBaseStateFields {
   kNumStreamBaseStateFields,
 };
 
-// Stub constructor for WriteWrap — creates a plain JS object.
-// In Node, WriteWrap inherits from AsyncWrap and wraps a uv_write_t.
-// For the stub, it's just a callable constructor.
+// WriteWrap constructor — creates a plain JS object.
+// The JS side sets .handle, .oncomplete, .callback, etc.
+// The native stream methods create their own uv_write_t internally.
 static napi_value writeWrapConstructor(napi_env env, napi_callback_info info) {
   napi_value thisArg;
   napi_get_cb_info(env, info, nullptr, nullptr, &thisArg, nullptr);
-  // nothing to do — the JS side sets .handle, .oncomplete, etc.
   return thisArg;
 }
 
-// Stub constructor for ShutdownWrap — creates a plain JS object.
+// ShutdownWrap constructor — creates a plain JS object.
 static napi_value shutdownWrapConstructor(
     napi_env env,
     napi_callback_info info) {
@@ -104,6 +104,10 @@ napi_value initStreamWrapBinding(napi_env env, napi_value exports) {
     NAPI_CALL(napi_create_typedarray(
         env, napi_int32_array, kNumStreamBaseStateFields, ab, 0, &arr));
     NAPI_CALL(napi_set_named_property(env, exports, "streamBaseState", arr));
+
+    // Share the state array pointer with LibuvStreamBase so native stream
+    // methods can update it directly.
+    LibuvStreamBase::setStreamBaseState(static_cast<int32_t *>(data));
   }
 
   return exports;

@@ -39,7 +39,8 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `internal/event_target.js`: exports `kWeakHandler`/`kResistStopPropagation` symbols only
 - `internal/readline/interface.js`: stub (original chain: readline -> repl/history -> os -> credentials)
 - `internal/worker/js_transferable.js`: stub (original needs internalBinding('messaging'))
-- `internal/blob.js`, `internal/url.js`, `internal/process/permission.js`: stubs
+- `internal/blob.js`, `internal/process/permission.js`: stubs
+- `internal/url.js`: comprehensive Ada-backed URL shim (not a stub)
 
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h): post_work, cancel_work, post_task
@@ -62,6 +63,17 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `utf8WriteStaticCb` uses `simdutf::trim_partial_utf8()` for boundary truncation.
 - Hex codec and substring search remain hand-rolled (simdutf doesn't support these).
 - UCS2 slice/write use NAPI UTF-16 functions directly (no manual transcoding).
+
+## HandleWrap + LibuvStreamBase
+- `HandleWrapBase` (`handle_wrap_base.h/cpp`): base class for all uv handle wraps. Manages ref/unref/hasRef/close lifecycle with GC-safe finalizer. Uses `napi_wrap` + prevent-GC ref.
+- `LibuvStreamBase` (`libuv_stream_base.h/cpp`): extends HandleWrapBase for stream I/O. Provides readStart/readStop/write*/writev/shutdown/getWriteQueueSize/setBlocking.
+- **Usage pattern**: subclass constructors call `initStream(env, jsObj, stream)` after `uv_*_init()`. Call `addStreamMethods(env, prototype)` on the constructor's prototype.
+- **JS callback flow**: read data arrives via `handle.onread(arrayBuffer)` with `streamBaseState[kReadBytesOrError]` set. Write completion calls `reqObj.oncomplete(status)`. Both are set by JS (stream_base_commons.js).
+- **streamBaseState sharing**: `initStreamWrapBinding` creates the Int32Array and passes the pointer to `LibuvStreamBase::setStreamBaseState()`.
+- **Event loop**: `setHandleWrapEventLoop(loop)` must be called in hermes-node.cpp before any handle wraps are created.
+- **GC safety**: `napi_remove_wrap` in doClose() transfers ownership from GC finalizer to uv_close callback, preventing double-free.
+- **getJsObject()**: public method on HandleWrapBase to get JS object from prevent-GC ref. Needed by libuv callbacks to call JS methods on the handle.
+- **Latin1 write limitation**: `writeLatin1String` uses UTF-8 extraction (no `napi_get_value_string_latin1` in NAPI). Acceptable for networking text but won't preserve exact byte values for chars > 127.
 
 ## Hermes VM Bugs (not fixable in NAPI layer)
 - `_decodeUTF8SlowPath` OOB read: `napi_create_string_utf8` with truncated multi-byte UTF-8 (e.g. `[0xc3]` — lead byte with no continuation) reads past buffer. Avoid passing truncated multi-byte sequences to `napi_create_string_utf8`.

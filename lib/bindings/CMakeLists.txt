@@ -4,6 +4,8 @@
 # LICENSE file in the root directory of this source tree.
 
 add_hermes_library(hermesNodeBindings STATIC
+  handle_wrap_base.cpp
+  libuv_stream_base.cpp
   node_async_context_frame.cpp
   node_async_wrap.cpp
   node_buffer.cpp

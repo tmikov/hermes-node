@@ -11,6 +11,7 @@
 #include "hermes/VM/Runtime.h"
 
 #include <hermes/node-compat/binding-registry/binding_registry.h>
+#include <hermes/node-compat/bindings/handle_wrap_base.h>
 #include <hermes/node-compat/bindings/node_async_context_frame.h>
 #include <hermes/node-compat/bindings/node_async_wrap.h>
 #include <hermes/node-compat/bindings/node_buffer.h>
@@ -456,6 +457,7 @@ static int runBootstrap(
   setFsEventLoop(eventLoop.getLoop());
   setFsDirEventLoop(eventLoop.getLoop());
   setFsEventWrapEventLoop(eventLoop.getLoop());
+  setHandleWrapEventLoop(eventLoop.getLoop());
 
   BindingRegistry registry;
   registry.registerBinding("async_context_frame", initAsyncContextFrameBinding);

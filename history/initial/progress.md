@@ -47,7 +47,7 @@ be omitted):
 | N5.3 | Port `tty_wrap` binding | N5.6 | | |
 | N5.4 | Integrate simdutf into buffer/encoding | — | done | Already mostly integrated; replaced last hand-rolled UTF-8 trim |
 | N5.5 | Integrate Ada into url binding | — | done | Native binding + comprehensive URL shim |
-| N5.6 | Implement HandleWrap + LibuvStreamBase | — | | |
+| N5.6 | Implement HandleWrap + LibuvStreamBase | — | done | Base classes for all native stream types |
 | N5.7 | Vendor c-ares | — | | |
 | N5.8 | Implement `dns.lookup()` via libuv | N5.7 | | |
 | N5.9 | Implement c-ares DNS queries | N5.7, N5.8 | | |
@@ -99,4 +99,16 @@ be omitted):
 -- Hex codec and substring search remain hand-rolled (simdutf has no support for these).
 -- UCS2 slice/write use NAPI UTF-16 functions directly (no transcoding needed).
 - **Issues**: Hermes `_decodeUTF8SlowPath` has an OOB read when `napi_create_string_utf8` is called with truncated multi-byte UTF-8 (e.g. buffer = `[0xc3]`). This is a VM-internal bug, not fixable in the NAPI layer. Worked around by testing only full-length invalid sequences (e.g. `[0xc3, 0x00]`) in fatal mode and skipping non-fatal truncated sequence tests.
+
+### Step N5.6: Implement HandleWrap + LibuvStreamBase
+- **Files**: created `include/hermes/node-compat/bindings/handle_wrap_base.h`, `lib/bindings/handle_wrap_base.cpp`, `include/hermes/node-compat/bindings/libuv_stream_base.h`, `lib/bindings/libuv_stream_base.cpp`. Modified `lib/bindings/node_stream_wrap.cpp`, `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`.
+- **Decisions**:
+-- Implemented as reusable C++ base classes using NAPI rather than inheritance through V8's template system. HandleWrapBase manages uv_handle_t lifecycle (ref/unref/hasRef/close). LibuvStreamBase extends it with stream I/O (readStart/readStop/write*/shutdown).
+-- WriteWrap/ShutdownWrap remain plain JS objects (constructors in stream_wrap binding). Native stream methods create their own uv_write_t/uv_shutdown_t internally via WriteReqData/ShutdownReqData structs. The oncomplete callback is invoked on the JS request object after async completion.
+-- The shared streamBaseState Int32Array pointer is passed from initStreamWrapBinding to LibuvStreamBase::setStreamBaseState() so native methods can update it directly.
+-- Read callback fires handle.onread(arrayBuffer) with streamBaseState[kReadBytesOrError] set to nread and kArrayBufferOffset set to 0. Data is copied into a new ArrayBuffer.
+-- GC finalizer on HandleWrapBase async-closes the handle if JS object is collected before close() is called. Uses napi_remove_wrap to transfer ownership to uv_close callback.
+-- getJsObject() method on HandleWrapBase provides access to the JS object from the prevent-GC reference, needed by libuv callbacks to call JS methods.
+- **What was done**: Full HandleWrapBase with ref/unref/hasRef/close/getAsyncId and GC-safe lifecycle. Full LibuvStreamBase with readStart/readStop, writeBuffer/writeUtf8String/writeLatin1String/writeAsciiString/writeUcs2String/writev, shutdown, getWriteQueueSize, setBlocking. Enhanced stream_wrap binding to share streamBaseState pointer. All 39 existing tests pass.
+- **Notes for next step**: TCP/Pipe/TTY wraps should inherit LibuvStreamBase and call addStreamMethods() on their prototypes. The `onread` property is set by JS (net.js sets handle.onread = onStreamRead from stream_base_commons.js). The `owner_symbol` linking is also done in JS. String write methods use UTF-8 extraction for latin1/ascii (acceptable for networking; exact latin1 byte preservation would need napi_get_value_string_latin1 which doesn't exist in NAPI).
 
