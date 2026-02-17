@@ -151,5 +151,14 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - No `Symbol.asyncDispose`/`Symbol.dispose` -- polyfilled in primordials.js
 - No `Array.prototype.toSorted()` -- patched `http.js` to use `.slice().sort()`
 
+## HTTP Module (verified)
+- `require('http')` loads and works for both server and client
+- GET, POST with body, chunked transfer encoding, keep-alive, headers, status codes, streaming, timeouts, DNS hostname resolution all verified
+- 4 Node.js tests ported and passing: request-end, status-code, client-get-url, date-header
+- `test/node-tests/common/countdown.js` helper added for tests needing sequential request counting
+- HTTP Agent keep-alive works (multiple requests on same connection)
+- 204 No Content correctly omits body
+- Client `timeout` option works (fires 'timeout' event, then destroy to abort)
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

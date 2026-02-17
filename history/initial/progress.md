@@ -57,7 +57,7 @@ be omitted):
 | N5.13 | Port `udp_wrap` binding | N5.6 | done | |
 | N5.14 | Vendor llhttp | — | done | |
 | N5.15 | Port `http_parser` binding | N5.6, N5.14 | done | |
-| N5.16 | Verify HTTP works | N5.12, N5.15 | | |
+| N5.16 | Verify HTTP works | N5.12, N5.15 | done | |
 | N5.17 | Port `process_wrap` binding | N5.6, N5.11 | | |
 | N5.18 | Port `spawn_sync` binding | N5.17 | | |
 | N5.19 | Verify `child_process` module works | N5.17, N5.18 | | |
@@ -221,3 +221,8 @@ be omitted):
 -- `maxHttpHeaderSize` of 0 caused HPE_HEADER_OVERFLOW on all responses -- fixed to treat 0 as default.
 -- Parser/ConnectionsList destructor ASAN crash: `napi_delete_reference` called after env destroyed during GC finalization -- fixed by removing ref cleanup from destructors.
 - **Notes for next step**: N5.16 (verify HTTP) is unblocked. The consume/unconsume optimization is deferred (data flows through JS). HTTP server and client work end-to-end including request/response with body, headers, status codes.
+
+### Step N5.16: Verify HTTP works
+- **Files**: created `test/test-http.js`, `test/node-tests/common/countdown.js`, `test/node-tests/parallel/test-http-request-end.js`, `test/node-tests/parallel/test-http-status-code.js`, `test/node-tests/parallel/test-http-client-get-url.js`, `test/node-tests/parallel/test-http-date-header.js`.
+- **What was done**: Comprehensive HTTP module verification with 11 tests: simple GET request+response, POST with request body, chunked transfer encoding (multiple writes), HTTP keep-alive (multiple requests on same connection via Agent), request headers received correctly, response headers set correctly, HTTP status codes (200/201/204/301/404/500), large response body streaming (50KB), client timeout, server close while connections active, hostname resolution via dns.lookup. Ported 4 Node.js tests: http-request-end (POST body + req.end return value), http-status-code (sequential status code verification with Countdown), http-client-get-url (URL string/parsed/URL constructor variants), http-date-header (Date header present in response, absent in request). Created Countdown helper for test harness.
+- **Notes for next step**: N5.23 (run Node.js http test subset) is unblocked. HTTP module fully verified working for GET/POST, chunked encoding, keep-alive, headers, status codes, streaming, timeouts, DNS integration. All 56 tests pass.
