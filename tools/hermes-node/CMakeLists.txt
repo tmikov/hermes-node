@@ -6,6 +6,7 @@
 add_hermes_tool(hermes-node
   hermes-node.cpp
   LINK_LIBS
+    hermesNodeEmbeddedModules
     hermesNodeEventLoop
     hermesNodeBindingRegistry
     hermesNodeBindings

@@ -43,6 +43,7 @@
 #include <hermes/node-compat/bindings/node_url.h>
 #include <hermes/node-compat/bindings/node_util.h>
 #include <hermes/node-compat/bindings/node_uv.h>
+#include <hermes/node-compat/embedded-modules/embedded_modules.h>
 #include <hermes/node-compat/event-loop/uv_event_loop.h>
 #include <hermes/node-compat/module-loader/module_loader.h>
 #include <hermes/node-compat/process/node_process.h>
@@ -61,25 +62,6 @@ using namespace hermes::node_compat;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Read a file into a string. Returns empty string on failure.
-static std::string readFile(const char *path) {
-  FILE *f = std::fopen(path, "rb");
-  if (!f)
-    return "";
-  std::fseek(f, 0, SEEK_END);
-  long size = std::ftell(f);
-  if (size < 0) {
-    std::fclose(f);
-    return "";
-  }
-  std::rewind(f);
-  std::string content(static_cast<size_t>(size), '\0');
-  size_t nread = std::fread(&content[0], 1, static_cast<size_t>(size), f);
-  std::fclose(f);
-  content.resize(nread);
-  return content;
-}
 
 /// Print a JS exception to stderr and clear it.
 static void printAndClearException(napi_env env) {
@@ -238,12 +220,7 @@ static void onCheckDrainTicks(uv_check_t *handle) {
 // ---------------------------------------------------------------------------
 
 /// Run the bootstrap sequence and user script. Returns the exit code.
-static int runBootstrap(
-    int argc,
-    char **argv,
-    const char *scriptPath,
-    const std::string &libJsPath,
-    const std::string &libJsNodePath) {
+static int runBootstrap(int argc, char **argv, const char *scriptPath) {
   // 1. Create Hermes runtime with microtask queue enabled.
   auto config = hermes::vm::RuntimeConfig::Builder()
                     .withMicrotaskQueue(true)
@@ -325,27 +302,14 @@ static int runBootstrap(
   registry.registerBinding("uv", initUvBinding);
   registry.attach(env);
 
-  // 6. Load and execute primordials.js.
+  // 6. Load and execute primordials from embedded bytecode.
   if (exitCode == 0) {
-    std::string primordialsPath = libJsPath + "primordials.js";
-    std::string source = readFile(primordialsPath.c_str());
-    if (source.empty()) {
-      std::fprintf(
-          stderr,
-          "Error: failed to read primordials from '%s'\n",
-          primordialsPath.c_str());
+    napi_value result;
+    napi_status st = runEmbeddedModule(env, "primordials", &result);
+    if (st != napi_ok) {
+      std::fprintf(stderr, "Error: failed to execute primordials\n");
+      printAndClearException(env);
       exitCode = 1;
-    } else {
-      source += "\n//# sourceURL=" + primordialsPath + "\n";
-
-      napi_value scriptStr;
-      napi_create_string_utf8(env, source.c_str(), source.size(), &scriptStr);
-      napi_value result;
-      if (napi_run_script(env, scriptStr, &result) != napi_ok) {
-        std::fprintf(stderr, "Error: failed to execute primordials.js\n");
-        printAndClearException(env);
-        exitCode = 1;
-      }
     }
   }
 
@@ -457,8 +421,6 @@ static int runBootstrap(
 
   // 9. Initialize the module loader.
   ModuleLoader loader;
-  loader.setLibJsPath(libJsPath);
-  loader.setLibJsNodePath(libJsNodePath);
 
   if (exitCode == 0) {
     if (loader.init(env, primordials, internalBindingFn) != napi_ok) {
@@ -660,25 +622,12 @@ static int runBootstrap(
   // process object. The streams are created on first access using TTY,
   // Pipe, SyncWriteStream, or fs.ReadStream depending on uv_guess_handle.
   if (exitCode == 0) {
-    std::string setupStdioPath = libJsPath + "setup-stdio.js";
-    std::string setupStdioSource = readFile(setupStdioPath.c_str());
-    if (setupStdioSource.empty()) {
-      std::fprintf(
-          stderr,
-          "Error: failed to read setup-stdio.js from '%s'\n",
-          setupStdioPath.c_str());
+    napi_value result;
+    napi_status st = runEmbeddedModule(env, "setup-stdio", &result);
+    if (st != napi_ok) {
+      std::fprintf(stderr, "Error: failed to execute setup-stdio\n");
+      printAndClearException(env);
       exitCode = 1;
-    } else {
-      setupStdioSource += "\n//# sourceURL=" + setupStdioPath + "\n";
-      napi_value scriptStr;
-      napi_create_string_utf8(
-          env, setupStdioSource.c_str(), setupStdioSource.size(), &scriptStr);
-      napi_value result;
-      if (napi_run_script(env, scriptStr, &result) != napi_ok) {
-        std::fprintf(stderr, "Error: failed to execute setup-stdio.js\n");
-        printAndClearException(env);
-        exitCode = 1;
-      }
     }
   }
 
@@ -867,28 +816,14 @@ static int runBootstrap(
 // ---------------------------------------------------------------------------
 
 static void printUsage(const char *argv0) {
-  std::fprintf(
-      stderr,
-      "Usage: %s [options] <script.js>\n"
-      "\nOptions:\n"
-      "  --node-lib-path <dir>  Path to the project root containing libjs/"
-      " and libjs-node/\n",
-      argv0);
+  std::fprintf(stderr, "Usage: %s [options] <script.js>\n", argv0);
 }
 
 int main(int argc, char **argv) {
   const char *scriptPath = nullptr;
-  const char *nodeLibPath = nullptr;
 
   for (int i = 1; i < argc; ++i) {
-    if (std::strcmp(argv[i], "--node-lib-path") == 0) {
-      if (i + 1 >= argc) {
-        std::fprintf(stderr, "Error: --node-lib-path requires an argument\n");
-        return 1;
-      }
-      nodeLibPath = argv[++i];
-    } else if (
-        std::strcmp(argv[i], "--help") == 0 ||
+    if (std::strcmp(argv[i], "--help") == 0 ||
         std::strcmp(argv[i], "-h") == 0) {
       printUsage(argv[0]);
       return 0;
@@ -906,58 +841,5 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // Resolve paths to libjs/ and libjs-node/.
-  std::string libJsPath;
-  std::string libJsNodePath;
-
-  if (nodeLibPath) {
-    // --node-lib-path points to the project root.
-    libJsPath = std::string(nodeLibPath) + "/libjs/";
-    libJsNodePath = std::string(nodeLibPath) + "/libjs-node/";
-  } else {
-    // Default: look relative to the executable (bin/../libjs/).
-    char execBuf[4096];
-    size_t execSize = sizeof(execBuf);
-    std::string execDir;
-    if (uv_exepath(execBuf, &execSize) == 0) {
-      std::string execStr(execBuf, execSize);
-      auto slash = execStr.rfind('/');
-      if (slash != std::string::npos)
-        execDir = execStr.substr(0, slash);
-    }
-    if (execDir.empty())
-      execDir = ".";
-
-    // Go up from bin/ to the project root.
-    auto slash = execDir.rfind('/');
-    std::string rootDir;
-    if (slash != std::string::npos)
-      rootDir = execDir.substr(0, slash);
-    else
-      rootDir = ".";
-
-    libJsPath = rootDir + "/libjs/";
-    libJsNodePath = rootDir + "/libjs-node/";
-  }
-
-  // Build a filtered argc/argv for the runtime: [argv[0], scriptPath, user
-  // args...], omitting hermes-node-specific flags like --node-lib-path.
-  std::vector<char *> filteredArgv;
-  filteredArgv.push_back(argv[0]);
-  // Find scriptPath in argv to get the index of user args.
-  for (int i = 1; i < argc; ++i) {
-    if (argv[i] == scriptPath) {
-      // scriptPath and everything after it are user-visible.
-      for (int j = i; j < argc; ++j)
-        filteredArgv.push_back(argv[j]);
-      break;
-    }
-  }
-
-  return runBootstrap(
-      static_cast<int>(filteredArgv.size()),
-      filteredArgv.data(),
-      scriptPath,
-      libJsPath,
-      libJsNodePath);
+  return runBootstrap(argc, argv, scriptPath);
 }

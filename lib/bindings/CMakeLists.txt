@@ -41,9 +41,9 @@ add_hermes_library(hermesNodeBindings STATIC
 
 target_include_directories(hermesNodeBindings
   PUBLIC
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
   PRIVATE
-    ${CMAKE_SOURCE_DIR}/hermes/include/hermes/napi
+    ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi
 )
 
 target_link_libraries(hermesNodeBindings

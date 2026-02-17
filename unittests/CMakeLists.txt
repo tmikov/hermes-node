@@ -12,8 +12,8 @@ function(add_node_compat_unittest test_dirname)
   # gtest headers reference llvh, which is only in scope inside the hermes
   # subdirectory.  Propagate the necessary include paths here.
   target_include_directories(${test_dirname} PRIVATE
-    ${CMAKE_SOURCE_DIR}/hermes/external/llvh/include
-    ${CMAKE_SOURCE_DIR}/hermes/external/llvh/gen/include
+    ${PROJECT_SOURCE_DIR}/hermes/external/llvh/include
+    ${PROJECT_SOURCE_DIR}/hermes/external/llvh/gen/include
     ${CMAKE_BINARY_DIR}/hermes/external/llvh/include
   )
 endfunction()
@@ -33,14 +33,11 @@ target_link_libraries(BindingRegistryTest
 
 add_node_compat_unittest(ModuleLoaderTest ModuleLoaderTest.cpp)
 target_link_libraries(ModuleLoaderTest
+  hermesNodeEmbeddedModules
   hermesNodeModuleLoader
   hermesNodeBindingRegistry
   hermesNapi
   hermesvm_a
-)
-target_compile_definitions(ModuleLoaderTest PRIVATE
-  LIBJS_PATH="${CMAKE_SOURCE_DIR}/libjs/"
-  TEST_DATA_PATH="${CMAKE_SOURCE_DIR}/unittests/module-loader-testdata/"
 )
 
 add_node_compat_unittest(NodeProcessTest NodeProcessTest.cpp)

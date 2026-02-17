@@ -9,7 +9,7 @@ add_hermes_library(hermesNodeModuleLoader STATIC
 
 target_include_directories(hermesNodeModuleLoader PUBLIC
   # Our own public headers.
-  ${CMAKE_SOURCE_DIR}/include
+  ${PROJECT_SOURCE_DIR}/include
   # Hermes public NAPI headers (js_native_api.h, node_api_types.h, etc.).
-  ${CMAKE_SOURCE_DIR}/hermes/include/hermes/napi
+  ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi
 )

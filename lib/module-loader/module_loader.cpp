@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <hermes/node-compat/embedded-modules/embedded_modules.h>
 #include <hermes/node-compat/module-loader/module_loader.h>
 
 #include <js_native_api.h>
@@ -23,51 +24,8 @@ ModuleLoader::ModuleLoader() = default;
 
 ModuleLoader::~ModuleLoader() = default;
 
-void ModuleLoader::setLibJsPath(const std::string &path) {
-  libJsPath_ = path;
-  // Ensure trailing slash.
-  if (!libJsPath_.empty() && libJsPath_.back() != '/')
-    libJsPath_ += '/';
-}
-
-void ModuleLoader::setLibJsNodePath(const std::string &path) {
-  libJsNodePath_ = path;
-  // Ensure trailing slash.
-  if (!libJsNodePath_.empty() && libJsNodePath_.back() != '/')
-    libJsNodePath_ += '/';
-}
-
-/// Read an entire file into a string. Returns true on success.
-static bool readFile(const std::string &path, std::string &out) {
-  FILE *f = std::fopen(path.c_str(), "rb");
-  if (!f)
-    return false;
-
-  // Get file size.
-  if (std::fseek(f, 0, SEEK_END) != 0) {
-    std::fclose(f);
-    return false;
-  }
-  long size = std::ftell(f);
-  if (size < 0) {
-    std::fclose(f);
-    return false;
-  }
-  std::rewind(f);
-
-  out.resize(static_cast<size_t>(size));
-  size_t read = std::fread(&out[0], 1, static_cast<size_t>(size), f);
-  std::fclose(f);
-
-  if (read != static_cast<size_t>(size)) {
-    out.clear();
-    return false;
-  }
-  return true;
-}
-
 /// Native callback for readFileSync(path) -> string.
-/// Used by the JS loader to read module source files from disk.
+/// Used by the JS loader to read user script source files from disk.
 static napi_value readFileSyncCallback(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1];
@@ -92,14 +50,37 @@ static napi_value readFileSyncCallback(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
-  std::string content;
-  if (!readFile(pathBuf, content)) {
+  FILE *f = std::fopen(pathBuf, "rb");
+  if (!f) {
     std::string msg = "Cannot read file: ";
     msg += pathBuf;
     msg += " (";
     msg += std::strerror(errno);
     msg += ")";
     napi_throw_error(env, "ERR_MODULE_NOT_FOUND", msg.c_str());
+    return nullptr;
+  }
+
+  // Get file size.
+  if (std::fseek(f, 0, SEEK_END) != 0) {
+    std::fclose(f);
+    napi_throw_error(env, nullptr, "readFileSync: fseek failed");
+    return nullptr;
+  }
+  long size = std::ftell(f);
+  if (size < 0) {
+    std::fclose(f);
+    napi_throw_error(env, nullptr, "readFileSync: ftell failed");
+    return nullptr;
+  }
+  std::rewind(f);
+
+  std::string content(static_cast<size_t>(size), '\0');
+  size_t nread = std::fread(&content[0], 1, static_cast<size_t>(size), f);
+  std::fclose(f);
+
+  if (nread != static_cast<size_t>(size)) {
+    napi_throw_error(env, nullptr, "readFileSync: short read");
     return nullptr;
   }
 
@@ -116,39 +97,17 @@ napi_status ModuleLoader::init(
     napi_env env,
     napi_value primordials,
     napi_value internalBindingFn) {
-  assert(!libJsPath_.empty() && "libJsPath must be set before init");
-  assert(!libJsNodePath_.empty() && "libJsNodePath must be set before init");
-
-  // Read the loader JS source.
-  std::string loaderPath = libJsPath_ + "loader.js";
-  std::string loaderSrc;
-  if (!readFile(loaderPath, loaderSrc)) {
-    std::string msg = "Cannot read loader: ";
-    msg += loaderPath;
-    napi_throw_error(env, "ERR_MODULE_NOT_FOUND", msg.c_str());
-    return napi_pending_exception;
-  }
-
-  // Wrap the loader in an IIFE that returns the setup function.
-  // The loader.js file should export a setup function by assigning to
-  // the last expression value (IIFE returning setup).
-  // We add sourceURL for better error messages.
-  std::string wrappedSrc = loaderSrc;
-  wrappedSrc += "\n//# sourceURL=";
-  wrappedSrc += loaderPath;
-  wrappedSrc += "\n";
-
-  // Evaluate the loader to get the setup function.
-  napi_value scriptStr;
-  napi_status status = napi_create_string_utf8(
-      env, wrappedSrc.c_str(), wrappedSrc.size(), &scriptStr);
-  if (status != napi_ok)
-    return status;
-
+  // Execute the loader from embedded bytecode.
   napi_value setupFn;
-  status = napi_run_script(env, scriptStr, &setupFn);
-  if (status != napi_ok)
+  napi_status status = runEmbeddedModule(env, "loader", &setupFn);
+  if (status != napi_ok) {
+    if (status == napi_generic_failure) {
+      napi_throw_error(
+          env, nullptr, "loader module not found in embedded bytecode");
+      return napi_pending_exception;
+    }
     return status;
+  }
 
   // Verify it's a function.
   napi_valuetype setupType;
@@ -160,7 +119,19 @@ napi_status ModuleLoader::init(
     return napi_pending_exception;
   }
 
-  // Create the readFileSync native function.
+  // Create the loadBytecodeModule native function.
+  napi_value loadBytecodeFn;
+  status = napi_create_function(
+      env,
+      "loadBytecodeModule",
+      NAPI_AUTO_LENGTH,
+      loadBytecodeModuleCallback,
+      nullptr,
+      &loadBytecodeFn);
+  if (status != napi_ok)
+    return status;
+
+  // Create the readFileSync native function (for user scripts).
   napi_value readFileSyncFn;
   status = napi_create_function(
       env,
@@ -172,21 +143,7 @@ napi_status ModuleLoader::init(
   if (status != napi_ok)
     return status;
 
-  // Create path strings for the JS loader.
-  napi_value libJsPathVal;
-  status = napi_create_string_utf8(
-      env, libJsPath_.c_str(), libJsPath_.size(), &libJsPathVal);
-  if (status != napi_ok)
-    return status;
-
-  napi_value libJsNodePathVal;
-  status = napi_create_string_utf8(
-      env, libJsNodePath_.c_str(), libJsNodePath_.size(), &libJsNodePathVal);
-  if (status != napi_ok)
-    return status;
-
-  // Call setup(readFileSync, libJsPath, libJsNodePath, primordials,
-  //            internalBinding)
+  // Call setup(loadBytecodeModule, readFileSync, primordials, internalBinding)
   // Returns the require function.
   napi_value global;
   status = napi_get_global(env, &global);
@@ -194,14 +151,10 @@ napi_status ModuleLoader::init(
     return status;
 
   napi_value args[] = {
-      readFileSyncFn,
-      libJsPathVal,
-      libJsNodePathVal,
-      primordials,
-      internalBindingFn};
+      loadBytecodeFn, readFileSyncFn, primordials, internalBindingFn};
 
   napi_value requireFn;
-  status = napi_call_function(env, global, setupFn, 5, args, &requireFn);
+  status = napi_call_function(env, global, setupFn, 4, args, &requireFn);
   if (status != napi_ok)
     return status;
 

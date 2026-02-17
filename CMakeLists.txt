@@ -24,6 +24,10 @@ if (HERMES_ENABLE_ADDRESS_SANITIZER)
   add_link_options(-fsanitize=address)
 endif()
 
+# Python is needed by embedded-modules build pipeline and hermes-lit.
+# (Hermes's find_package is subdirectory-scoped, so we need our own.)
+find_package(Python COMPONENTS Interpreter)
+
 # Vendored external dependencies
 add_subdirectory(external/libuv)
 add_subdirectory(external/simdutf)
@@ -32,6 +36,7 @@ add_subdirectory(external/cares)
 add_subdirectory(external/llhttp)
 
 # Our C++ libraries
+add_subdirectory(lib/embedded-modules)
 add_subdirectory(lib/event-loop)
 add_subdirectory(lib/binding-registry)
 add_subdirectory(lib/module-loader)
@@ -45,8 +50,6 @@ add_subdirectory(tools/hermes-node)
 add_subdirectory(unittests)
 
 # JS tests (Lit-based)
-# Python is needed by hermes-lit (Hermes's find_package is subdirectory-scoped).
-find_package(Python COMPONENTS Interpreter)
 set(LLVH_LIT_ARGS "-sv")
 set(HERMES_NODE_LIT_PARAMS
   hermes_node=${HERMES_TOOLS_OUTPUT_DIR}/hermes-node

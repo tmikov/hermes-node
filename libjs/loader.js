@@ -18,53 +18,38 @@
   'use strict';
 
   // The setup function receives:
-  //   readFileSync(path) -> string  (native: reads file from disk)
-  //   libJsPath          -> string  (path to libjs/ directory, trailing /)
-  //   libJsNodePath      -> string  (path to libjs-node/ directory, trailing /)
+  //   loadBytecodeModule(id) -> function|undefined  (native: load pre-compiled bytecode)
+  //   readFileSync(path) -> string  (native: reads file from disk, for user scripts)
   //   primordials         -> object  (the primordials object)
   //   internalBinding     -> function (the internalBinding function)
-  return function setup(readFileSync, libJsPath, libJsNodePath, primordials, internalBinding) {
+  return function setup(loadBytecodeModule, readFileSync, primordials, internalBinding) {
     // Module cache: moduleId -> { exports, loaded }
     var cache = Object.create(null);
-
-    // Resolve a module name to a filesystem path and a module ID.
-    // Returns { id: string, filepath: string } or null if not found.
-    function resolve(name) {
-      // Check for shim overrides first: libjs/shims/<name>.js
-      // e.g. 'internal/options' -> libjs/shims/internal/options.js
-      var shimPath = libJsPath + 'shims/' + name + '.js';
-      try {
-        readFileSync(shimPath);
-        return { id: name, filepath: shimPath };
-      } catch (e) {
-        // No shim, fall through.
-      }
-
-      // Standard resolution: libjs-node/<name>.js
-      var nodePath = libJsNodePath + name + '.js';
-      return { id: name, filepath: nodePath };
-    }
 
     // The module wrapper template. Node uses:
     // (function(exports, require, module, __filename, __dirname) { ... })
     // We add primordials and internalBinding as closure variables rather than
-    // wrapper parameters, matching how Node's internal loader works — modules
+    // wrapper parameters, matching how Node's internal loader works -- modules
     // access them as free variables from the compilation scope.
 
     function loadModule(id, filepath) {
-      // Read the module source.
-      var source = readFileSync(filepath);
+      // Try embedded bytecode first.
+      var compiledFn = loadBytecodeModule(id);
+      if (!compiledFn) {
+        // Disk fallback for user scripts.
+        var source = readFileSync(filepath);
 
-      // Wrap in the Node module function wrapper.
-      var wrapped =
-        '(function(exports, require, module, __filename, __dirname) {\n' +
-        source +
-        '\n});\n//# sourceURL=' + filepath + '\n';
+        // Wrap in the Node module function wrapper.
+        var wrapped =
+          '(function(exports, require, module, __filename, __dirname) {' +
+          source +
+          '\n});\n//# sourceURL=' + filepath + '\n';
 
-      // Compile the wrapper. This gives us a function.
-      // We use an indirect eval via (0, eval) to get global scope eval in
-      // strict mode contexts.
-      var compiledFn = (0, eval)(wrapped);
+        // Compile the wrapper. This gives us a function.
+        // We use an indirect eval via (0, eval) to get global scope eval in
+        // strict mode contexts.
+        compiledFn = (0, eval)(wrapped);
+      }
 
       // Create the module object.
       var mod = {
@@ -113,8 +98,7 @@
         if (name.charAt(0) === '.') {
           return resolveRelative(fromDir, name);
         }
-        var resolved = resolve(name);
-        return resolved.filepath;
+        return name;
       };
       return require;
     }
@@ -168,19 +152,10 @@
         return cache[name].exports;
       }
 
-      // Resolve the module.
-      var resolved = resolve(name);
-      if (!resolved) {
-        throw new Error("Cannot find module '" + name + "'");
-      }
-
-      // Also check cache by resolved ID (handles aliasing).
-      if (cache[resolved.id]) {
-        return cache[resolved.id].exports;
-      }
-
-      // Load and execute the module.
-      var mod = loadModule(resolved.id, resolved.filepath);
+      // Load and execute the module. For internal modules the ID is used
+      // as both the module ID and filepath (bytecode is looked up by ID,
+      // filepath only matters for user scripts).
+      var mod = loadModule(name, name);
       return mod.exports;
     }
 
