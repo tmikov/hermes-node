@@ -56,7 +56,7 @@ be omitted):
 | N5.12 | Verify `net` module works | N5.8, N5.10, N5.11 | done | |
 | N5.13 | Port `udp_wrap` binding | N5.6 | done | |
 | N5.14 | Vendor llhttp | — | done | |
-| N5.15 | Port `http_parser` binding | N5.6, N5.14 | | |
+| N5.15 | Port `http_parser` binding | N5.6, N5.14 | done | |
 | N5.16 | Verify HTTP works | N5.12, N5.15 | | |
 | N5.17 | Port `process_wrap` binding | N5.6, N5.11 | | |
 | N5.18 | Port `spawn_sync` binding | N5.17 | | |
@@ -205,3 +205,19 @@ be omitted):
 -- Named target `llhttp_a` for consistency with `uv_a` and `cares_a` naming convention.
 - **What was done**: Vendored llhttp 9.3.0 from Node.js v24.13.0 `deps/llhttp/`. Wrapper CMake builds static `llhttp_a` target. GTest with 3 tests: parse GET request (verifies method, URL, headers, completion), parse HTTP response (verifies status code), and version check.
 - **Notes for next step**: Link against `llhttp_a` for the http_parser binding (N5.15). llhttp API: `llhttp_init(parser, type, settings)`, `llhttp_execute(parser, data, len)`. Callbacks via `llhttp_settings_t` function pointers. Parser state accessible via `parser->method`, `parser->status_code`, `parser->http_major/minor`, etc.
+
+### Step N5.15: Port `http_parser` binding
+- **Files**: created `include/hermes/node-compat/bindings/node_http_parser.h`, `lib/bindings/node_http_parser.cpp`, `test/test-http-parser.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`, `libjs/primordials.js`, `libjs-node/http.js`.
+- **Decisions**:
+-- Parser uses `std::string` for header field/value accumulation (simpler than Node's zero-copy StringPtr, acceptable performance for initial port).
+-- `consume()`/`unconsume()` store a reference and set state flags, but don't intercept at the C++ stream level. Data still flows through JS `onread` -> `socketOnData` -> `parser.execute()`. The `kOnExecute` callback path is unused.
+-- ConnectionsList simplified: tracks parsers in a vector, `expired()` returns empty array (timeout tracking deferred).
+-- `maxHttpHeaderSize` of 0 treated as "use default" (80KB) since Node's JS passes `req.maxHeaderSize || 0`.
+-- Parser/ConnectionsList destructors do NOT call `napi_delete_reference` (called from GC finalizer, env may be destroyed).
+- **What was done**: Full `http_parser` binding with HTTPParser constructor (initialize, execute, finish, close, free, remove, pause, resume, consume, unconsume, getCurrentBuffer), ConnectionsList constructor (all, idle, active, expired), `methods` array (34 HTTP methods), `allMethods` array (47 including RTSP), and all constants (REQUEST, RESPONSE, kOn*, kLenient*). Callback mechanism: parser[kOn*] indexed properties for kOnMessageBegin/kOnHeaders/kOnHeadersComplete/kOnBody/kOnMessageComplete. Header accumulation with flush at 32 pairs via kOnHeaders. Header overflow tracking. Parse error returns Error object with code/reason/bytesParsed. Test covers: binding exports, constants, methods arrays, request parsing (GET with headers), response parsing (200 OK with body), POST with body, parser reinitialization (keep-alive), invalid input error, pause/resume, ConnectionsList API, `require('http')` module load, and end-to-end HTTP server+client.
+- **Issues**:
+-- Hermes lacks `Symbol.asyncDispose`/`Symbol.dispose` -- polyfilled in primordials.js.
+-- Hermes lacks `Array.prototype.toSorted()` -- patched `http.js` to use `.slice().sort()`.
+-- `maxHttpHeaderSize` of 0 caused HPE_HEADER_OVERFLOW on all responses -- fixed to treat 0 as default.
+-- Parser/ConnectionsList destructor ASAN crash: `napi_delete_reference` called after env destroyed during GC finalization -- fixed by removing ref cleanup from destructors.
+- **Notes for next step**: N5.16 (verify HTTP) is unblocked. The consume/unconsume optimization is deferred (data flows through JS). HTTP server and client work end-to-end including request/response with body, headers, status codes.

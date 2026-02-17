@@ -136,5 +136,20 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - API: `llhttp_init(parser, type, settings)`, `llhttp_execute(parser, data, len)`. Callbacks via `llhttp_settings_t` function pointers.
 - Parser state: `parser->method`, `parser->status_code`, `parser->http_major/minor`, `parser->upgrade`, `parser->content_length`
 
+## HTTP Parser Binding
+- `initHttpParserBinding` in `node_http_parser.cpp`: HTTPParser constructor, ConnectionsList, methods/allMethods arrays, constants
+- HTTPParser wraps `llhttp_t`. Callbacks via indexed properties: `parser[kOnMessageBegin]`, `parser[kOnHeadersComplete]`, etc.
+- Header accumulation: 32-pair buffer, flushed via `kOnHeaders` callback. Flat array `[name, value, name, value, ...]`.
+- `kOnHeadersComplete` returns: 0=continue, 1=skip body, 2=pause for upgrade
+- `execute(buffer)` returns byte count on success, Error object with code/reason/bytesParsed on failure
+- `consume()`/`unconsume()`: state tracking only (no C++ stream interception). Data flows JS-side via `socketOnData` -> `parser.execute()`.
+- `maxHttpHeaderSize`: 0 = use default (80KB). Node JS passes `req.maxHeaderSize || 0`.
+- Parser/ConnectionsList destructors must NOT call `napi_delete_reference` (GC finalizer runs after env destroy).
+- `llhttp_a` linked via PRIVATE in CMakeLists.txt.
+
+## Hermes JS Limitations (additions)
+- No `Symbol.asyncDispose`/`Symbol.dispose` -- polyfilled in primordials.js
+- No `Array.prototype.toSorted()` -- patched `http.js` to use `.slice().sort()`
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

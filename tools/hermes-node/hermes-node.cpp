@@ -24,6 +24,7 @@
 #include <hermes/node-compat/bindings/node_file.h>
 #include <hermes/node-compat/bindings/node_file_dir.h>
 #include <hermes/node-compat/bindings/node_fs_event_wrap.h>
+#include <hermes/node-compat/bindings/node_http_parser.h>
 #include <hermes/node-compat/bindings/node_os.h>
 #include <hermes/node-compat/bindings/node_pipe_wrap.h>
 #include <hermes/node-compat/bindings/node_stdio.h>
@@ -478,6 +479,7 @@ static int runBootstrap(
   registry.registerBinding("fs", initFsBinding);
   registry.registerBinding("fs_dir", initFsDirBinding);
   registry.registerBinding("fs_event_wrap", initFsEventWrapBinding);
+  registry.registerBinding("http_parser", initHttpParserBinding);
   registry.registerBinding("os", initOsBinding);
   registry.registerBinding("pipe_wrap", initPipeWrapBinding);
   registry.registerBinding("stdio", initStdioBinding);

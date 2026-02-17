@@ -125,7 +125,7 @@ function lazyUndici() {
 
 module.exports = {
   _connectionListener,
-  METHODS: methods.toSorted(),
+  METHODS: methods.slice().sort(),
   STATUS_CODES,
   Agent: httpAgent.Agent,
   ClientRequest,

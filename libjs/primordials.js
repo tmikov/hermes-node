@@ -268,6 +268,13 @@ var intrinsicNames = [
 if (typeof FinalizationRegistry !== 'undefined')
   intrinsicNames.push('FinalizationRegistry');
 
+// Polyfill Symbol.dispose / Symbol.asyncDispose if not present (Hermes).
+// These are TC39 Stage 3 symbols used by Node's HTTP and other modules.
+if (typeof Symbol.dispose === 'undefined')
+  Symbol.dispose = Symbol('Symbol.dispose');
+if (typeof Symbol.asyncDispose === 'undefined')
+  Symbol.asyncDispose = Symbol('Symbol.asyncDispose');
+
 intrinsicNames.forEach(function(name) {
   var original = globalThis[name];
   if (typeof original === 'undefined') return; // skip missing
