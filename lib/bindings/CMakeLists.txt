@@ -9,10 +9,12 @@ add_hermes_library(hermesNodeBindings STATIC
   node_buffer.cpp
   node_config.cpp
   node_constants.cpp
+  node_credentials.cpp
   node_encoding.cpp
   node_errors.cpp
   node_file.cpp
   node_file_dir.cpp
+  node_os.cpp
   node_fs_event_wrap.cpp
   node_stdio.cpp
   node_stream_wrap.cpp

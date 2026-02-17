@@ -48,5 +48,14 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `napi_run_script` does global eval with `compileFlags.strict = false`
 - Hermes supports `//# sourceURL=` for custom filenames in stack traces
 
+## OS Binding
+- `os.js` depends on `internalBinding('credentials')` at load time (for `getTempDir`) -- both bindings must exist.
+- Error reporting: ctx-object pattern. Set errno/message/syscall/code on ctx, return undefined. JS side uses `getCheckedFunction()` to throw `ERR_SYSTEM_ERROR`.
+- `getInterfaceAddresses` returns flat array [name, addr, netmask, family, mac, internal, scopeid, ...] -- 7 fields per interface. JS reassembles into nested object.
+- `getCPUs` returns flat array [model, speed, user, nice, sys, idle, irq, ...] -- 7 fields per CPU. JS reassembles.
+- `getOSInformation` returns [sysname, version, release, machine]. Called once at module load; type/version/release/machine are cached as module-level constants.
+- `getUserInfo` takes (options, ctx) -- options may be null/object. Returns {uid, gid, username, homedir, shell}.
+- `credentials` binding: `getTempDir()` checks TMPDIR/TMP/TEMP env vars; `safeGetenv(key)` is simplified getenv.
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

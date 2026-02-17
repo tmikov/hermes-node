@@ -16,11 +16,13 @@
 #include <hermes/node-compat/bindings/node_buffer.h>
 #include <hermes/node-compat/bindings/node_config.h>
 #include <hermes/node-compat/bindings/node_constants.h>
+#include <hermes/node-compat/bindings/node_credentials.h>
 #include <hermes/node-compat/bindings/node_encoding.h>
 #include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_file.h>
 #include <hermes/node-compat/bindings/node_file_dir.h>
 #include <hermes/node-compat/bindings/node_fs_event_wrap.h>
+#include <hermes/node-compat/bindings/node_os.h>
 #include <hermes/node-compat/bindings/node_stdio.h>
 #include <hermes/node-compat/bindings/node_stream_wrap.h>
 #include <hermes/node-compat/bindings/node_string_decoder.h>
@@ -460,11 +462,13 @@ static int runBootstrap(
   registry.registerBinding("buffer", initBufferBinding);
   registry.registerBinding("config", initConfigBinding);
   registry.registerBinding("constants", initConstantsBinding);
+  registry.registerBinding("credentials", initCredentialsBinding);
   registry.registerBinding("encoding_binding", initEncodingBinding);
   registry.registerBinding("errors", initErrorsBinding);
   registry.registerBinding("fs", initFsBinding);
   registry.registerBinding("fs_dir", initFsDirBinding);
   registry.registerBinding("fs_event_wrap", initFsEventWrapBinding);
+  registry.registerBinding("os", initOsBinding);
   registry.registerBinding("stdio", initStdioBinding);
   registry.registerBinding("stream_wrap", initStreamWrapBinding);
   registry.registerBinding("string_decoder", initStringDecoderBinding);

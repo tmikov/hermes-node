@@ -42,8 +42,8 @@ be omitted):
 
 | Step | Description | Depends On | Status | Brief Note (optional) |
 |------|-------------|------------|--------|-----------------------|
-| N5.1 | Port `os` binding | — | | |
-| N5.2 | Port `credentials` binding | — | | |
+| N5.1 | Port `os` binding | — | done | Also added credentials binding |
+| N5.2 | Port `credentials` binding | — | done | Done as part of N5.1 |
 | N5.3 | Port `tty_wrap` binding | N5.6 | | |
 | N5.4 | Integrate simdutf into buffer/encoding | — | | |
 | N5.5 | Integrate Ada into url binding | — | | |
@@ -68,4 +68,16 @@ be omitted):
 | N5.24 | Run Node.js child_process test subset | N5.19 | | |
 
 ## Context Notes
+
+### Step N5.1: Port `os` binding
+- **Files**: created `include/hermes/node-compat/bindings/node_os.h`, `lib/bindings/node_os.cpp`, `include/hermes/node-compat/bindings/node_credentials.h`, `lib/bindings/node_credentials.cpp`, `test/test-os.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`.
+- **Decisions**:
+-- Implemented credentials binding (N5.2) alongside os binding because `libjs-node/os.js` imports `getTempDir` from `internalBinding('credentials')` at load time -- os module cannot load without it.
+-- credentials binding includes POSIX credential functions (getuid/geteuid/getgid/getegid/getgroups) in addition to getTempDir/safeGetenv.
+-- Error reporting uses the ctx-object pattern matching Node's `getCheckedFunction` in os.js: set errno/message/syscall/code on ctx object, return undefined on error.
+- **What was done**: Full `os` binding with 13 functions (getHostname, getOSInformation, getLoadAvg, getUptime, getCPUs, getFreeMem, getTotalMem, getHomeDirectory, getUserInfo, getInterfaceAddresses, setPriority, getPriority, getAvailableParallelism) + isBigEndian property. Full `credentials` binding with getTempDir, safeGetenv, and POSIX credentials. JS test covering all os module APIs.
+- **Notes for next step**: N5.2 is already done. Constants (priority, dlopen, signals, errno) were already in node_constants.cpp from earlier phases.
+
+### Step N5.2: Port `credentials` binding
+- Done as part of N5.1 (see above).
 
