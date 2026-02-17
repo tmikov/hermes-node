@@ -798,12 +798,14 @@ class SyncProcessRunner {
         if (pipe && pipe->writable()) {
           size_t len = pipe->outputLength();
           // Collect output into a temp buffer, then create a Buffer.
-          std::vector<char> tmp(len);
+          // Always pass a valid (non-null) pointer to napi_create_buffer_copy
+          // even for empty output, because Hermes NAPI may misbehave with
+          // nullptr data.
+          std::vector<char> tmp(len > 0 ? len : 1);
           if (len > 0)
             pipe->copyOutput(tmp.data());
           void *bufCopy = nullptr;
-          napi_create_buffer_copy(
-              env_, len, len > 0 ? tmp.data() : nullptr, &bufCopy, &item);
+          napi_create_buffer_copy(env_, len, tmp.data(), &bufCopy, &item);
         } else {
           napi_get_null(env_, &item);
         }

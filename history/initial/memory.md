@@ -108,6 +108,7 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 
 ## Hermes VM Bugs (not fixable in NAPI layer)
 - `_decodeUTF8SlowPath` OOB read: `napi_create_string_utf8` with truncated multi-byte UTF-8 (e.g. `[0xc3]` — lead byte with no continuation) reads past buffer. Avoid passing truncated multi-byte sequences to `napi_create_string_utf8`.
+- `napi_create_buffer_copy` with `len=0` and `data=nullptr`: returns a Uint8Array aliasing the previous buffer instead of an empty one. Always pass a valid non-null pointer, even for zero-length buffers.
 
 ## TCP Wrap
 - `TCPWrap` inherits `LibuvStreamBase`, wraps `uv_tcp_t`. Constructor: `TCP(type)` where type is SOCKET(0) or SERVER(1).

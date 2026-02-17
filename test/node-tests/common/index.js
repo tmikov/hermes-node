@@ -242,6 +242,51 @@ function canCreateSymLink() {
   return !isWindows;
 }
 
+// --- pwdCommand ---
+var pwdCommand = isWindows ?
+  ['cmd.exe', ['/d', '/c', 'cd']] :
+  ['pwd', []];
+
+// --- escapePOSIXShell ---
+function escapePOSIXShell(cmdParts) {
+  var args = [];
+  for (var i = 1; i < arguments.length; i++) {
+    args.push(arguments[i]);
+  }
+  // On POSIX shells, pass values via env to avoid shell escaping issues.
+  var env = {};
+  var keys = Object.keys(process.env);
+  for (var k = 0; k < keys.length; k++) {
+    env[keys[k]] = process.env[keys[k]];
+  }
+  var cmd = cmdParts[0];
+  for (var i = 0; i < args.length; i++) {
+    var envVarName = 'ESCAPED_' + i;
+    env[envVarName] = args[i];
+    cmd += '${' + envVarName + '}' + cmdParts[i + 1];
+  }
+  return [cmd, { env: env }];
+}
+
+// --- getArrayBufferViews ---
+function getArrayBufferViews(buf) {
+  var start = buf.byteOffset;
+  var end = buf.byteOffset + buf.byteLength;
+  var ab = buf.buffer;
+  return [
+    new Int8Array(ab, start, end - start),
+    new Uint8Array(ab, start, end - start),
+    new Uint8ClampedArray(ab, start, end - start),
+    new Int16Array(ab, start, (end - start) / 2),
+    new Uint16Array(ab, start, (end - start) / 2),
+    new Int32Array(ab, start, (end - start) / 4),
+    new Uint32Array(ab, start, (end - start) / 4),
+    new Float32Array(ab, start, (end - start) / 4),
+    new Float64Array(ab, start, (end - start) / 8),
+    new DataView(ab, start, end - start),
+  ];
+}
+
 // --- localhostIPv4 ---
 var localhostIPv4 = '127.0.0.1';
 
@@ -256,8 +301,10 @@ var PIPE = (function() {
 var common = {
   allowGlobals: allowGlobals,
   canCreateSymLink: canCreateSymLink,
+  escapePOSIXShell: escapePOSIXShell,
   expectsError: expectsError,
   expectWarning: expectWarning,
+  getArrayBufferViews: getArrayBufferViews,
   invalidArgTypeHelper: invalidArgTypeHelper,
   isLinux: isLinux,
   isMacOS: isMacOS,
@@ -271,6 +318,7 @@ var common = {
   PIPE: PIPE,
   platformTimeout: platformTimeout,
   printSkipMessage: printSkipMessage,
+  pwdCommand: pwdCommand,
   runWithInvalidFD: runWithInvalidFD,
   skip: skip,
 

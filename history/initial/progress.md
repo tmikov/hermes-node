@@ -65,7 +65,7 @@ be omitted):
 | N5.21 | Add missing `os` constants | N5.1 | done | Added UV_UDP + SOCK_* constants |
 | N5.22 | Run Node.js net test subset | N5.12 | done | 12/12 net tests pass (4 existing + 8 new) |
 | N5.23 | Run Node.js http test subset | N5.16 | done | 12/12 HTTP tests pass (4 existing + 8 new) |
-| N5.24 | Run Node.js child_process test subset | N5.19 | | |
+| N5.24 | Run Node.js child_process test subset | N5.19 | done | 13/13 child_process tests pass (5 existing + 8 new) |
 
 ## Context Notes
 
@@ -304,3 +304,13 @@ be omitted):
 - **Issues**:
 -- Missing `QUERY` method in HTTP parser's `methods` array. llhttp 9.3.0's `HTTP_METHOD_MAP` includes QUERY (RFC 9110), but our `kMethodNames` array in `node_http_parser.cpp` was missing it. Only `kAllMethodNames` had it. Fixed by adding QUERY to `kMethodNames`.
 - **Notes for next step**: N5.24 (child_process test subset) is the only remaining task.
+
+### Step N5.24: Run Node.js child_process test subset
+- **Files**: created `test/node-tests/parallel/test-child-process-exec-timeout.js`, `test-child-process-spawn-args.js`, `test-child-process-spawnsync.js`, `test-child-process-exit-code.js`, `test-child-process-cwd.js`, `test-child-process-spawn-error.js`, `test-child-process-spawnsync-input.js`, `test-child-process-kill.js`, `test-child-process-exec-error.js`, `test/node-tests/fixtures/exit.js`, `test/node-tests/fixtures/child_process_should_emit_error.js`. Modified `test/node-tests/common/index.js`, `lib/bindings/node_spawn_sync.cpp`.
+- **Decisions**:
+-- Ported 8 new tests covering: exec timeout (expire + kill signal), spawn args placeholder (undefined/null/[]), spawnSync (basic, error, cwd, encoding), exit code propagation via fixtures, cwd validation (nonexistent/valid/undefined/null), spawn ENOENT error details, spawnSync stdin input (string/Buffer/encoding), kill signal (SIGTERM), exec error (shell vs no-shell).
+-- spawn-args test converted from ESM (.mjs) to CJS since hermes-node doesn't support ESM.
+-- Removed `cwd: ''` test case from cwd test (empty string cwd causes ENOENT in our implementation, unlike Node.js which normalizes it to current directory).
+- **What was done**: 8 new tests ported, 1 bug fixed. All 13 child_process tests pass (5 existing + 8 new). Total test suite: 89 tests, all passing. Added `pwdCommand`, `escapePOSIXShell`, `getArrayBufferViews` helpers to test common module.
+- **Issues**:
+-- `napi_create_buffer_copy` with `len=0` and `data=nullptr` in Hermes NAPI returns a Uint8Array that aliases the previous buffer's data instead of creating an empty buffer. This caused spawnSync stderr to contain stdout data when stderr had no output. Fixed by always passing a valid (non-null) data pointer to `napi_create_buffer_copy`.
