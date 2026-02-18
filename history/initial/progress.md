@@ -45,7 +45,7 @@ be omitted):
 | R1 | Stub `internalBinding('modules')` | — | done | |
 | R2 | Shim `internal/modules/helpers.js` | R1 | done | |
 | R3 | Enhance `BuiltinModule` shim for REPL | — | done | |
-| R4 | Stub `internal/modules/esm/formats.js` | — | | |
+| R4 | Stub `internal/modules/esm/formats.js` | — | done | |
 | R5 | Stub `domain` module | — | | |
 | R6 | Remove `internal/readline/interface.js` shim | — | | |
 | R7 | Implement minimal contextify -- ContextifyScript | — | | |
@@ -81,4 +81,9 @@ be omitted):
 - **Files**: modified `libjs/shims/internal/bootstrap/realm.js`, created `test/test-builtin-module-shim.js`.
 - **What was done**: Enhanced the `BuiltinModule` shim with a list of 31 public built-in module names. Added `getSchemeOnlyModuleNames()` (returns `[]`), `normalizeRequirableId()`, `getAllBuiltinModuleIds()`, constructor. Made `exists`/`canBeRequiredByUsers`/`canBeRequiredWithoutScheme`/`isBuiltin` work against the known module set. Populated `BuiltinModule.map` with instances.
 - **Decisions**: Returned empty array from `getSchemeOnlyModuleNames()` since we don't support any scheme-only modules (test, sea, sqlite, quic). Included all modules we currently support plus a few we'll add soon (readline/promises, stream/web, etc.).
+
+### R4: Stub `internal/modules/esm/formats.js`
+- **Files**: created `libjs/shims/internal/modules/esm/formats.js`, `test/test-esm-formats.js`. Modified `lib/embedded-modules/embedded-modules.txt`.
+- **What was done**: Created shim providing `extensionFormatMap` (static map: `.cjs`->`commonjs`, `.js`->`module`, `.json`->`json`, `.mjs`->`module`, `.wasm`->`wasm`), `mimeToFormat` (regex-based MIME detection), and `getFormatOfExtensionlessFile` (stub returning `'module'`).
+- **Decisions**: Shimmed rather than using the real module because it depends on `internalBinding('constants').internal` (our constants binding lacks the `internal` sub-object) and `fsBindings.getFormatOfExtensionlessFile` (not implemented). The REPL only needs `extensionFormatMap`.
 

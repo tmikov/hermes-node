@@ -132,3 +132,4 @@ internal/process/signal
 
 # REPL support
 internal/modules/helpers
+internal/modules/esm/formats

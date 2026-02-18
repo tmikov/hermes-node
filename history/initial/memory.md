@@ -210,6 +210,11 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - Also exports stubs for `constants`, `compileCacheStatus`, `stripBOM`, `enableCompileCache`, etc.
 - 14 modules in libjs-node import `internal/modules/helpers` -- the shim covers all their needs
 
+## ESM Formats Shim (REPL prereq)
+- `libjs/shims/internal/modules/esm/formats.js`: static `extensionFormatMap`, `mimeToFormat`, stub `getFormatOfExtensionlessFile`
+- Real module needs `internalBinding('constants').internal` (not in our constants binding) and `fsBindings.getFormatOfExtensionlessFile` (not implemented)
+- REPL only uses `extensionFormatMap`
+
 ## Embedded Module Build Gotchas
 - Shim resolution (`libjs/shims/` vs `libjs-node/`) uses CMake `EXISTS` check at configure time. Adding a new shim file requires `cmake` reconfigure before `cmake --build`.
 
