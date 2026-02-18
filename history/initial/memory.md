@@ -250,7 +250,9 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `runInContext(sandbox, timeout, displayErrors, breakOnSigint, breakFirstLine)`: evaluates via `napi_run_script`. Both null sandbox (runInThisContext) and object sandbox evaluate in global context (no real sandboxing).
 - `compileFunction`: creates wrapper `(function(params) { code })` via eval, returns `{function, cachedDataProduced: false}`
 - `makeContext`: sets `contextify_context_private_symbol` on sandbox (lazy-cached via `napi_ref`), returns sandbox. No real sandboxing.
-- `startSigintWatchdog`/`stopSigintWatchdog`: stubs returning true/false. R19 will add real signal handling.
+- `startSigintWatchdog`/`stopSigintWatchdog`: real implementation (R19). Uses POSIX `sigaction` for SIGINT handler + Hermes async break to interrupt eval. `contextifyScriptRunInContext` converts uncatchable Hermes timeout error to catchable `ERR_SCRIPT_EXECUTION_INTERRUPTED`.
+- **SIGINT watchdog architecture**: callback pattern (`TriggerAsyncBreakFn`) avoids Hermes VM header dependency in bindings lib. `hermes-node.cpp` provides lambda wrapping `triggerTimeoutAsyncBreak()`.
+- **Hermes async break**: `triggerTimeoutAsyncBreak()` is thread-safe (atomic flag). Interpreter checks at `AsyncBreakCheck` instruction, calls `notifyTimeout()` which raises **uncatchable** `TimeoutError`. Must intercept at NAPI boundary and rethrow as catchable error.
 - `vm.js` destructures `ContextifyScript`, `makeContext`, `constants`, `measureMemory` at top level
 - `internal/vm.js` destructures `ContextifyScript`, `compileFunction` at top level
 - `internal/vm.js` `isContext()`: checks `object[contextify_context_private_symbol] !== undefined`

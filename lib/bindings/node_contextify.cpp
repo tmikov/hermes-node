@@ -8,6 +8,8 @@
 #include <hermes/node-compat/bindings/node_contextify.h>
 #include <node_api.h>
 
+#include <atomic>
+#include <csignal>
 #include <cstring>
 #include <string>
 
@@ -27,6 +29,39 @@ namespace node_compat {
 /// internalBinding('util').privateSymbols. Lazily initialized on first
 /// makeContext call.
 static napi_ref s_contextPrivateSymbolRef = nullptr;
+
+// ---------------------------------------------------------------------------
+// SIGINT watchdog state
+// ---------------------------------------------------------------------------
+
+/// Callback to trigger an async break in the JS engine.
+static TriggerAsyncBreakFn s_triggerAsyncBreak = nullptr;
+static void *s_triggerAsyncBreakData = nullptr;
+
+/// Whether the SIGINT watchdog is currently active.
+static std::atomic<bool> s_sigintWatching{false};
+
+/// Whether a SIGINT was received while the watchdog was active.
+static std::atomic<bool> s_sigintReceived{false};
+
+/// Previous SIGINT handler, restored when the watchdog stops.
+static struct sigaction s_previousSigaction;
+
+/// SIGINT signal handler. Called from the signal handler context.
+/// Must be async-signal-safe: only sets atomic flags and calls
+/// the async break callback (which is documented as safe from any thread
+/// or signal handler).
+static void sigintHandler(int /*signo*/) {
+  s_sigintReceived.store(true, std::memory_order_relaxed);
+  if (s_triggerAsyncBreak) {
+    s_triggerAsyncBreak(s_triggerAsyncBreakData);
+  }
+}
+
+void setContextifyAsyncBreak(TriggerAsyncBreakFn fn, void *data) {
+  s_triggerAsyncBreak = fn;
+  s_triggerAsyncBreakData = data;
+}
 
 // ---------------------------------------------------------------------------
 // Helper: get a std::string from a napi_value string argument.
@@ -132,6 +167,10 @@ static napi_value contextifyScriptNew(napi_env env, napi_callback_info info) {
 /// When sandbox is null/undefined, evaluates in the current (global) context
 /// (the runInThisContext path). When sandbox is an object, we also evaluate
 /// in the global context since we don't support real sandboxing.
+///
+/// If the SIGINT watchdog is active and a timeout exception occurs due to
+/// SIGINT, this function converts the uncatchable timeout error into a
+/// catchable Error so the REPL can recover.
 static napi_value contextifyScriptRunInContext(
     napi_env env,
     napi_callback_info info) {
@@ -162,12 +201,26 @@ static napi_value contextifyScriptRunInContext(
   napi_value result;
   napi_status st = napi_run_script(env, sourceVal, &result);
 
-  napi_close_handle_scope(env, scope);
-
   if (st != napi_ok) {
-    // napi_run_script already threw a JS exception on failure.
+    // Check if this failure was caused by a SIGINT-triggered async break.
+    // If so, convert the uncatchable timeout error into a catchable Error
+    // so the REPL's try/catch can handle it gracefully.
+    if (s_sigintReceived.load(std::memory_order_relaxed)) {
+      // Clear the uncatchable pending exception.
+      napi_value exc;
+      napi_get_and_clear_last_exception(env, &exc);
+      // Throw a catchable error instead.
+      napi_throw_error(
+          env,
+          "ERR_SCRIPT_EXECUTION_INTERRUPTED",
+          "Script execution was interrupted by `SIGINT`");
+    }
+    // If not SIGINT-related, the original exception is already pending.
+    napi_close_handle_scope(env, scope);
     return nullptr;
   }
+
+  napi_close_handle_scope(env, scope);
   return result;
 }
 
@@ -261,32 +314,68 @@ static napi_value measureMemoryCb(napi_env env, napi_callback_info /*info*/) {
   return undef;
 }
 
-/// startSigintWatchdog() -> true (stub)
-/// Real implementation in R19.
+/// startSigintWatchdog() -> bool
+///
+/// Installs a SIGINT signal handler that triggers an async break in
+/// the Hermes runtime when Ctrl+C is pressed. Returns true on success.
 static napi_value startSigintWatchdogCb(
     napi_env env,
     napi_callback_info /*info*/) {
+  bool success = false;
+
+  if (s_triggerAsyncBreak &&
+      !s_sigintWatching.load(std::memory_order_relaxed)) {
+    s_sigintReceived.store(false, std::memory_order_relaxed);
+
+    struct sigaction sa;
+    std::memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigintHandler;
+    sa.sa_flags = 0;
+    sigemptyset(&sa.sa_mask);
+
+    if (sigaction(SIGINT, &sa, &s_previousSigaction) == 0) {
+      s_sigintWatching.store(true, std::memory_order_relaxed);
+      success = true;
+    }
+  }
+
   napi_value result;
-  napi_get_boolean(env, true, &result);
+  napi_get_boolean(env, success, &result);
   return result;
 }
 
-/// stopSigintWatchdog() -> false (stub, no pending SIGINT)
-/// Real implementation in R19.
+/// stopSigintWatchdog() -> bool
+///
+/// Restores the previous SIGINT handler and returns true if a SIGINT
+/// was received since startSigintWatchdog() was called.
 static napi_value stopSigintWatchdogCb(
     napi_env env,
     napi_callback_info /*info*/) {
+  bool hadPendingSigint = false;
+
+  if (s_sigintWatching.load(std::memory_order_relaxed)) {
+    // Restore the previous handler.
+    sigaction(SIGINT, &s_previousSigaction, nullptr);
+    s_sigintWatching.store(false, std::memory_order_relaxed);
+
+    hadPendingSigint = s_sigintReceived.load(std::memory_order_relaxed);
+    s_sigintReceived.store(false, std::memory_order_relaxed);
+  }
+
   napi_value result;
-  napi_get_boolean(env, false, &result);
+  napi_get_boolean(env, hadPendingSigint, &result);
   return result;
 }
 
-/// watchdogHasPendingSigint() -> false (stub)
+/// watchdogHasPendingSigint() -> bool
+///
+/// Returns true if a SIGINT was received since startSigintWatchdog().
 static napi_value watchdogHasPendingSigintCb(
     napi_env env,
     napi_callback_info /*info*/) {
+  bool pending = s_sigintReceived.load(std::memory_order_relaxed);
   napi_value result;
-  napi_get_boolean(env, false, &result);
+  napi_get_boolean(env, pending, &result);
   return result;
 }
 

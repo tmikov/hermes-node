@@ -268,6 +268,11 @@ static int runBootstrap(int argc, char **argv, const char *scriptPath) {
   setFsEventWrapEventLoop(eventLoop.getLoop());
   setHandleWrapEventLoop(eventLoop.getLoop());
   setCaresWrapEventLoop(eventLoop.getLoop());
+  setContextifyAsyncBreak(
+      [](void *data) {
+        static_cast<hermes::vm::Runtime *>(data)->triggerTimeoutAsyncBreak();
+      },
+      runtime.get());
 
   BindingRegistry registry;
   registry.registerBinding("async_context_frame", initAsyncContextFrameBinding);
@@ -718,7 +723,11 @@ static int runBootstrap(int argc, char **argv, const char *scriptPath) {
     } else {
       // No script path -- start the REPL.
       const char *replCode =
-          "require('repl').start({ useGlobal: true, prompt: '> ' });\n"
+          "require('repl').start({"
+          "  useGlobal: true,"
+          "  prompt: '> ',"
+          "  breakEvalOnSigint: true"
+          "});\n"
           "//# sourceURL=hermes-node:repl-start\n";
       napi_value replScript, replResult;
       napi_create_string_utf8(env, replCode, NAPI_AUTO_LENGTH, &replScript);

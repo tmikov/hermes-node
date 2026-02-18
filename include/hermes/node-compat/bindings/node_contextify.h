@@ -13,6 +13,14 @@
 namespace hermes {
 namespace node_compat {
 
+/// Callback type for triggering an async break in the JS engine.
+/// Called from a signal handler, so must be async-signal-safe.
+using TriggerAsyncBreakFn = void (*)(void *data);
+
+/// Set the callback that triggers an async break for the SIGINT watchdog.
+/// Must be called before using startSigintWatchdog/stopSigintWatchdog.
+void setContextifyAsyncBreak(TriggerAsyncBreakFn fn, void *data);
+
 /// Init function for the 'contextify' binding.
 /// Follows the napi_addon_register_func signature.
 napi_value initContextifyBinding(napi_env env, napi_value exports);
