@@ -721,12 +721,20 @@ static int runBootstrap(int argc, char **argv, const char *scriptPath) {
         exitCode = 1;
       }
     } else {
-      // No script path -- start the REPL.
+      // No script path -- start the REPL via internal/repl which handles
+      // NODE_REPL_HISTORY, NODE_REPL_HISTORY_SIZE, NODE_REPL_MODE, and
+      // NODE_NO_READLINE env vars, plus history file persistence.
       const char *replCode =
-          "require('repl').start({"
-          "  useGlobal: true,"
-          "  prompt: '> ',"
-          "  breakEvalOnSigint: true"
+          "var cliRepl = require('internal/repl');\n"
+          "cliRepl.createInternalRepl(process.env, function(err, repl) {\n"
+          "  if (err) throw err;\n"
+          "  repl.on('exit', function() {\n"
+          "    if (repl.historyManager.isFlushing) {\n"
+          "      repl.once('flushHistory', function() { process.exit(); });\n"
+          "      return;\n"
+          "    }\n"
+          "    process.exit();\n"
+          "  });\n"
           "});\n"
           "//# sourceURL=hermes-node:repl-start\n";
       napi_value replScript, replResult;

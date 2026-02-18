@@ -747,6 +747,18 @@ napi_status NodeProcess::create(napi_env env, napi_value *result) {
     NAPI_RETURN_IF_NOT_OK(setProp(env, process, "versions", versions));
   }
 
+  // process.features
+  {
+    napi_value features;
+    NAPI_RETURN_IF_NOT_OK(napi_create_object(env, &features));
+    napi_value falseVal;
+    NAPI_RETURN_IF_NOT_OK(napi_get_boolean(env, false, &falseVal));
+    NAPI_RETURN_IF_NOT_OK(setProp(env, features, "inspector", falseVal));
+    NAPI_RETURN_IF_NOT_OK(setProp(env, features, "tls", falseVal));
+    NAPI_RETURN_IF_NOT_OK(setProp(env, features, "ipv6", falseVal));
+    NAPI_RETURN_IF_NOT_OK(setProp(env, process, "features", features));
+  }
+
   // process.argv
   {
     napi_value argvArray;

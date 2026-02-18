@@ -259,7 +259,9 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - **Cross-binding symbol access**: contextify gets the private symbol from util binding by calling `globalThis.internalBinding('util')` from native code, then caches via `napi_ref`.
 
 ## REPL Entry Point
-- `hermes-node` with no args starts the REPL via `require('repl').start({ useGlobal: true, prompt: '> ' })`
+- `hermes-node` with no args starts the REPL via `require('internal/repl').createInternalRepl(process.env, cb)`. This handles `NODE_REPL_HISTORY`, `NODE_REPL_HISTORY_SIZE`, `NODE_REPL_MODE`, `NODE_NO_READLINE` env vars and calls `setupHistory()` for file persistence.
+- Exit handler waits for history flushing: `repl.historyManager.isFlushing` -> wait for `flushHistory` event before `process.exit()`.
+- `process.features` object added: `{inspector: false, tls: false, ipv6: false}`. Required by `internal/repl/utils.js` which checks `process.features.inspector` for terminal preview features.
 - Process event emitter extended with: `prependListener`, `prependOnceListener`, `addListener` (alias for `on`), `rawListeners`, `removeAllListeners`, `newListener` event emission. REPL needs `prependListener('newListener', ...)` for domain error isolation.
 - Acorn parser vendored in `libjs-node/internal/deps/acorn/` (acorn.js 6262 lines, walk.js 455 lines). Required by REPL for syntax checking and recovery (isRecoverableError).
 - `internal/vm/module` shim: passthrough `importModuleDynamicallyWrap` (real module needs `internalBinding('module_wrap')`). Called when REPL eval registers dynamic import callback.
@@ -268,12 +270,22 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `let`/`const` don't persist across REPL lines (Hermes eval limitation -- each `napi_run_script` is a separate script context). `var` works.
 - `repl.js` line 216 `vm.runInNewContext('Object.getOwnPropertyNames(globalThis)')` runs at load time. Returns main context globals (no sandboxing) -- acceptable for tab-completion filtering.
 
+## REPL History Persistence
+- History only works with `terminal: true`. In non-terminal mode, `[kNormalWrite]` -> `[kOnLine]` directly (emits `line` event) but never calls `[kLine]` -> `[kAddHistory]`, so history array stays empty. Matches Node's behavior.
+- `ReplHistory` in `internal/repl/history.js`: opens file async, reads existing entries, truncates, flushes on `line` event (15ms debounce).
+- `setupHistory({filePath, size, onHistoryFileLoaded})`: creates `ReplHistory`, calls `initialize()` which does the async file open. `onHistoryFileLoaded` callback fires when ready.
+- Default history file: `~/.node_repl_history`. Set `NODE_REPL_HISTORY` env var to override. Empty string disables.
+- `REPLServer.close()` waits for flush only when `terminal: true`.
+- Testing: must use `terminal: true` + `r.write('...\n')` for history to work in programmatic tests.
+
 ## REPL Testing
 - `test-repl-entry.js`: 10 pipe-mode tests via `execSync` (spawn hermes-node with printf input). Pattern: `replExec(input)` with `JSON.stringify` for shell escaping.
 - `test-repl-features.js`: 10 programmatic tests via Readable/Writable streams. Covers: multi-line input (continuation prompt), .help/.break commands, error recovery, require(), var persistence, util.inspect output, function definition, exception handling.
 - `test-repl-basic.js`: 5 programmatic tests (arithmetic, strings, var, error recovery, require).
+- `test-repl-history.js`: 5 tests for history persistence (write, load, append, disable, createInternalRepl + NODE_REPL_HISTORY). Uses `terminal: true` with programmatic streams.
 - Multi-line input works: incomplete expressions like `(1 +` get `... ` continuation prompt, completing with `)` evaluates correctly.
 - `.break` command cancels multi-line input and returns to normal prompt.
+- **Known issue**: `test-repl-features.js` tests 1-2 (multi-line) silently fail -- assertion error in async REPL exit handler, process exits 0, lit reports PASS. Pre-existing from R20.
 
 ## Test Infrastructure Gotchas
 - `test-child-process-exec-timeout.js` is flaky -- intermittently freezes. May need to be excluded or given special handling.
