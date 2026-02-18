@@ -56,7 +56,7 @@ be omitted):
 | R12 | Verify `readline` module loads | R6 | done | Test already exists from R6 |
 | R13 | Verify `domain` module loads | R5 | done | Test already exists from R5 |
 | R14 | Shim CJS loader `Module` class for REPL | R2 | done | |
-| R15 | Wire REPL entry point in `hermes-node.cpp` | R7, R11 | | |
+| R15 | Wire REPL entry point in `hermes-node.cpp` | R7, R11 | done | |
 | R16 | Handle `repl.js` line 216 -- `vm.runInNewContext` | R9 | | |
 | R17 | Integration test -- REPL loads | R1-R6, R7-R9, R14-R16 | | |
 | R18 | REPL entry point test (pipe mode) | R15, R17 | | |
@@ -134,3 +134,13 @@ be omitted):
 - **Decisions**: Shimmed rather than using real `internal/modules/cjs/loader.js` because the original (2000+ lines) has deep dependencies on `internal/modules/package_json_reader`, `internal/assert`, `internal/source_map`, V8-specific APIs, and the full CJS resolution algorithm. Our shim is ~130 lines providing just what the REPL needs. `Module.prototype.require` delegates to `globalThis.require` (our loader). `_resolveFilename` returns the request as-is for non-builtins since our loader handles resolution.
 - **Notes for next step**: The `_nodeModulePaths` implementation skips segments named `node_modules` (matching Node behavior). `_resolveLookupPaths` handles built-in (returns null), non-relative (uses parent paths + globalPaths), relative with no parent (returns `['.']`), and relative with parent filename (returns parent dir). This is sufficient for REPL tab-completion which uses `_extensions`, `_resolveLookupPaths`, and `globalPaths`.
 
+### R15: Wire REPL entry point in `hermes-node.cpp`
+- **Files**: modified `tools/hermes-node/hermes-node.cpp`, `lib/embedded-modules/embedded-modules.txt`, `libjs/shims/internal/modules/cjs/loader.js`. Created `libjs-node/internal/deps/acorn/acorn/dist/acorn.js`, `libjs-node/internal/deps/acorn/acorn-walk/dist/walk.js`, `libjs/shims/internal/vm/module.js`, `libjs/shims/internal/modules/esm/utils.js`, `test/test-repl-entry.js`.
+- **What was done**: When hermes-node is invoked with no script argument, it now starts the Node.js REPL via `require('repl').start({ useGlobal: true, prompt: '> ' })`. Added all REPL dependencies to embedded-modules.txt (repl, internal/repl, internal/repl/utils, internal/repl/await, internal/util/inspector, acorn, acorn-walk, internal/vm/module, internal/modules/esm/utils). Created shims for internal/vm/module (passthrough importModuleDynamicallyWrap) and internal/modules/esm/utils (no-op registerModule). Vendored acorn 8.x and acorn-walk from Node's deps/. Enhanced process event emitter with prependListener, prependOnceListener, addListener, rawListeners, removeAllListeners, and newListener event emission.
+- **Decisions**:
+-- Vendored acorn into libjs-node/internal/deps/ (require path matches Node's internal/deps/acorn/...).
+-- Created minimal shims for internal/vm/module and internal/modules/esm/utils rather than using the real files (both depend on internalBinding('module_wrap') and full ESM loader).
+-- Fixed circular require in Module.prototype.require: captured _loaderRequire = globalThis.require at shim load time, since the REPL overwrites globalThis.require with makeRequireFunction wrapper that calls Module.prototype.require.
+-- `let`/`const` declarations don't persist across REPL lines (each eval is a separate script context in Hermes). `var` works correctly.
+- **Issues**: `let`/`const` not persisting is a known Hermes eval limitation. Node handles this with special wrapping but our contextify implementation evaluates each line as a separate script.
+- **Notes for next step**: R16 (vm.runInNewContext at repl load) should already work since R9 implemented makeContext. R17 can build on test-repl-entry.js for integration testing. R18 is essentially done (test-repl-entry.js covers pipe mode).

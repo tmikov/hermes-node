@@ -148,3 +148,12 @@ domain
 internal/modules/cjs/loader
 internal/modules/helpers
 internal/modules/esm/formats
+repl
+internal/repl
+internal/repl/utils
+internal/repl/await
+internal/util/inspector
+internal/deps/acorn/acorn/dist/acorn
+internal/deps/acorn/acorn-walk/dist/walk
+internal/vm/module
+internal/modules/esm/utils

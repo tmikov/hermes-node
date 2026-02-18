@@ -231,7 +231,7 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `libjs/shims/internal/modules/cjs/loader.js`: minimal `Module` class for REPL and helpers.js
 - REPL uses: `builtinModules`, `_nodeModulePaths`, `_resolveLookupPaths`, `_resolveFilename`, `_extensions`, `_cache`, `globalPaths`, constructor, `require()`
 - `Module.builtinModules` derived from `BuiltinModule.getAllBuiltinModuleIds()` (frozen)
-- `Module.prototype.require` delegates to `globalThis.require` (our loader)
+- **CRITICAL**: `Module.prototype.require` uses `_loaderRequire` (captured at shim load time), NOT `globalThis.require`. The REPL overwrites `globalThis.require` with `makeRequireFunction` wrapper that calls `Module.prototype.require`, creating a circular loop if we use `globalThis.require`.
 - `_resolveFilename` returns request as-is for non-builtins (our loader handles resolution)
 - Real `internal/modules/cjs/loader.js` (2000+ lines) is too complex to use directly
 - **BuiltinModule shim** now includes `domain` and `vm` (33 modules total)
@@ -255,6 +255,15 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `internal/vm.js` destructures `ContextifyScript`, `compileFunction` at top level
 - `internal/vm.js` `isContext()`: checks `object[contextify_context_private_symbol] !== undefined`
 - **Cross-binding symbol access**: contextify gets the private symbol from util binding by calling `globalThis.internalBinding('util')` from native code, then caches via `napi_ref`.
+
+## REPL Entry Point
+- `hermes-node` with no args starts the REPL via `require('repl').start({ useGlobal: true, prompt: '> ' })`
+- Process event emitter extended with: `prependListener`, `prependOnceListener`, `addListener` (alias for `on`), `rawListeners`, `removeAllListeners`, `newListener` event emission. REPL needs `prependListener('newListener', ...)` for domain error isolation.
+- Acorn parser vendored in `libjs-node/internal/deps/acorn/` (acorn.js 6262 lines, walk.js 455 lines). Required by REPL for syntax checking and recovery (isRecoverableError).
+- `internal/vm/module` shim: passthrough `importModuleDynamicallyWrap` (real module needs `internalBinding('module_wrap')`). Called when REPL eval registers dynamic import callback.
+- `internal/modules/esm/utils` shim: no-op `registerModule` (real module needs full ESM loader).
+- `internal/util/inspector.js` uses the real Node file (loads fine since `internalBinding('config').hasInspector === false` causes `sendInspectorCommand` to always call onError callback).
+- `let`/`const` don't persist across REPL lines (Hermes eval limitation -- each `napi_run_script` is a separate script context). `var` works.
 
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

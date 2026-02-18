@@ -29,6 +29,12 @@ var {
 var path = require('path');
 var { BuiltinModule } = require('internal/bootstrap/realm');
 
+// Capture the original require function from the module loader.
+// The REPL overwrites globalThis.require with a wrapper that calls
+// Module.prototype.require. Module.prototype.require must NOT call back into
+// globalThis.require (circular). We stash the real loader require here.
+var _loaderRequire = globalThis.require;
+
 function Module(id, parent) {
   this.id = id || '';
   this.path = path.dirname(id);
@@ -40,7 +46,7 @@ function Module(id, parent) {
 }
 
 Module.prototype.require = function(id) {
-  return globalThis.require(id);
+  return _loaderRequire(id);
 };
 
 // Static properties.

@@ -359,10 +359,24 @@ static int runBootstrap(int argc, char **argv, const char *scriptPath) {
       const char *processEventEmitterCode =
           "(function(process) {\n"
           "  var handlers = {};\n"
-          "  process.on = function(event, fn) {\n"
+          "  process.on = process.addListener = function(event, fn) {\n"
           "    if (!handlers[event]) handlers[event] = [];\n"
+          "    if (event !== 'newListener') process.emit('newListener', event, fn);\n"
           "    handlers[event].push(fn);\n"
           "    return process;\n"
+          "  };\n"
+          "  process.prependListener = function(event, fn) {\n"
+          "    if (!handlers[event]) handlers[event] = [];\n"
+          "    if (event !== 'newListener') process.emit('newListener', event, fn);\n"
+          "    handlers[event].unshift(fn);\n"
+          "    return process;\n"
+          "  };\n"
+          "  process.prependOnceListener = function(event, fn) {\n"
+          "    function wrapper() {\n"
+          "      process.off(event, wrapper);\n"
+          "      fn.apply(this, arguments);\n"
+          "    }\n"
+          "    return process.prependListener(event, wrapper);\n"
           "  };\n"
           "  process.off = process.removeListener = function(event, fn) {\n"
           "    var list = handlers[event];\n"
@@ -394,6 +408,14 @@ static int runBootstrap(int argc, char **argv, const char *scriptPath) {
           "  };\n"
           "  process.listenerCount = function(event) {\n"
           "    return (handlers[event] || []).length;\n"
+          "  };\n"
+          "  process.rawListeners = function(event) {\n"
+          "    return (handlers[event] || []).slice();\n"
+          "  };\n"
+          "  process.removeAllListeners = function(event) {\n"
+          "    if (event !== undefined) { delete handlers[event]; }\n"
+          "    else { handlers = {}; }\n"
+          "    return process;\n"
           "  };\n"
           "  process.emitWarning = function(warning, type, code) {\n"
           "    if (typeof type === 'object' && type !== null) {\n"
@@ -672,23 +694,38 @@ static int runBootstrap(int argc, char **argv, const char *scriptPath) {
     checkHandleActive = true;
   }
 
-  // 12. Load and execute the user script.
-  // Use the module loader's __loadUserScript() so the script gets a
-  // path-aware require() that supports relative imports (e.g.
-  // require('../foo')).
+  // 12. Load and execute the user script, or start the REPL.
   if (exitCode == 0) {
-    napi_value loadUserScriptFn;
-    napi_get_named_property(env, global, "__loadUserScript", &loadUserScriptFn);
+    if (scriptPath) {
+      // Use the module loader's __loadUserScript() so the script gets a
+      // path-aware require() that supports relative imports (e.g.
+      // require('../foo')).
+      napi_value loadUserScriptFn;
+      napi_get_named_property(
+          env, global, "__loadUserScript", &loadUserScriptFn);
 
-    napi_value scriptPathStr;
-    napi_create_string_utf8(env, scriptPath, NAPI_AUTO_LENGTH, &scriptPathStr);
+      napi_value scriptPathStr;
+      napi_create_string_utf8(
+          env, scriptPath, NAPI_AUTO_LENGTH, &scriptPathStr);
 
-    napi_value result;
-    if (napi_call_function(
-            env, global, loadUserScriptFn, 1, &scriptPathStr, &result) !=
-        napi_ok) {
-      printAndClearException(env);
-      exitCode = 1;
+      napi_value result;
+      if (napi_call_function(
+              env, global, loadUserScriptFn, 1, &scriptPathStr, &result) !=
+          napi_ok) {
+        printAndClearException(env);
+        exitCode = 1;
+      }
+    } else {
+      // No script path -- start the REPL.
+      const char *replCode =
+          "require('repl').start({ useGlobal: true, prompt: '> ' });\n"
+          "//# sourceURL=hermes-node:repl-start\n";
+      napi_value replScript, replResult;
+      napi_create_string_utf8(env, replCode, NAPI_AUTO_LENGTH, &replScript);
+      if (napi_run_script(env, replScript, &replResult) != napi_ok) {
+        printAndClearException(env);
+        exitCode = 1;
+      }
     }
   }
 
@@ -820,7 +857,7 @@ static int runBootstrap(int argc, char **argv, const char *scriptPath) {
 // ---------------------------------------------------------------------------
 
 static void printUsage(const char *argv0) {
-  std::fprintf(stderr, "Usage: %s [options] <script.js>\n", argv0);
+  std::fprintf(stderr, "Usage: %s [options] [script.js]\n", argv0);
 }
 
 int main(int argc, char **argv) {
@@ -840,10 +877,6 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (!scriptPath) {
-    printUsage(argv[0]);
-    return 1;
-  }
-
+  // If no script path is provided, start the REPL.
   return runBootstrap(argc, argv, scriptPath);
 }
