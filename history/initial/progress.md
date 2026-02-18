@@ -58,7 +58,7 @@ be omitted):
 | R14 | Shim CJS loader `Module` class for REPL | R2 | done | |
 | R15 | Wire REPL entry point in `hermes-node.cpp` | R7, R11 | done | |
 | R16 | Handle `repl.js` line 216 -- `vm.runInNewContext` | R9 | done | |
-| R17 | Integration test -- REPL loads | R1-R6, R7-R9, R14-R16 | | |
+| R17 | Integration test -- REPL loads | R1-R6, R7-R9, R14-R16 | done | |
 | R18 | REPL entry point test (pipe mode) | R15, R17 | | |
 | R19 | Implement SIGINT watchdog | R7, R8 | | |
 | R20 | Verify REPL features | R17, R18 | | |
@@ -149,3 +149,8 @@ be omitted):
 - **Files**: created `test/test-repl-runInNewContext.js`.
 - **What was done**: Verified that `repl.js` line 216 (`new SafeSet(vm.runInNewContext('Object.getOwnPropertyNames(globalThis)'))`) works at module load time. Our `makeContext` (R9) marks the sandbox and `runInContext` evals in the main context, so `Object.getOwnPropertyNames(globalThis)` returns the main context's global names. This is acceptable for the REPL's tab-completion filtering use case. Test verifies: (1) `vm.runInNewContext` returns an array of global property names including `Object`/`Array`/`String`, (2) `require('repl')` loads without error, (3) REPL can be started with programmatic streams and eval produces correct output.
 - **Notes for next step**: R17 (integration test) is now unblocked -- all R1-R16 dependencies are satisfied. The existing `test-repl-entry.js` (from R15) already covers pipe-mode REPL behavior, and `test-repl-runInNewContext.js` covers programmatic REPL startup.
+
+### R17: Integration test -- REPL loads
+- **Files**: created `test/test-repl-basic.js`.
+- **What was done**: Created comprehensive integration test verifying the REPL loads and works with programmatic streams. Test covers 6 scenarios: (1) `require('repl')` loads with correct exports, (2) basic arithmetic eval (`1+2` -> `3`), (3) string eval with inspect output, (4) `var` declarations persist within a session, (5) error recovery (syntax errors don't crash REPL, subsequent eval works), (6) `require()` works inside REPL (`path.basename`). Uses `useGlobal: false` to avoid polluting global scope across concurrent REPL instances. All tests use async exit callbacks with a counter to verify all 5 REPL sessions complete.
+- **Notes for next step**: R18 (REPL entry point test) is already largely covered by `test-repl-entry.js` (from R15) which tests piped input via child_process. R20 (REPL features) can extend this test with more advanced scenarios.

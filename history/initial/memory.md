@@ -266,5 +266,9 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `let`/`const` don't persist across REPL lines (Hermes eval limitation -- each `napi_run_script` is a separate script context). `var` works.
 - `repl.js` line 216 `vm.runInNewContext('Object.getOwnPropertyNames(globalThis)')` runs at load time. Returns main context globals (no sandboxing) -- acceptable for tab-completion filtering.
 
+## Test Infrastructure Gotchas
+- `test-child-process-exec-timeout.js` is flaky -- intermittently freezes. May need to be excluded or given special handling.
+- **Test timeout rule**: `check-hermes-node` should complete in under 3 minutes. If tests take longer, they have locked up. Use `timeout 180` or equivalent when running the test target.
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues
