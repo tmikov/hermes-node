@@ -47,7 +47,7 @@ be omitted):
 | R3 | Enhance `BuiltinModule` shim for REPL | — | done | |
 | R4 | Stub `internal/modules/esm/formats.js` | — | done | |
 | R5 | Stub `domain` module | — | done | |
-| R6 | Remove `internal/readline/interface.js` shim | — | | |
+| R6 | Remove `internal/readline/interface.js` shim | — | done | |
 | R7 | Implement minimal contextify -- ContextifyScript | — | | |
 | R8 | Stub `startSigintWatchdog` / `stopSigintWatchdog` | R7 | | |
 | R9 | Stub `makeContext` and `compileFunction` | R7 | | |
@@ -91,4 +91,9 @@ be omitted):
 - **Files**: created `libjs/shims/domain.js`, `test/test-domain-basic.js`. Modified `lib/embedded-modules/embedded-modules.txt`.
 - **What was done**: Created minimal domain shim with Domain class extending EventEmitter, providing `enter`, `exit`, `run`, `bind`, `intercept`, `add`, `remove`, `_errorHandler` methods. Exports `create()`, `createDomain()`, `Domain`, `active: null`. Sets `process.domain` as getter/setter. Test covers all exported functionality.
 - **Decisions**: Shimmed rather than using the real `domain.js` because it depends on `async_hooks` -> `internal/async_hooks` -> `internalBinding('async_context_frame')` (not implemented) and `internal/util.WeakReference`. Also calls `process.hasUncaughtExceptionCaptureCallback()` at load time (not on our process object). The REPL uses domain only for error isolation (`_domain.bind(eval_)` and `_domain.on('error', ...)`), so a minimal shim suffices.
+
+### R6: Remove `internal/readline/interface.js` shim
+- **Files**: deleted `libjs/shims/internal/readline/interface.js`, created `test/test-readline-basic.js`. Modified `lib/embedded-modules/embedded-modules.txt`, `libjs/primordials.js`.
+- **What was done**: Removed the stub shim that threw on construction, allowing the real Node `internal/readline/interface.js` to be used. Added all readline-related modules to the embedded modules list: `readline`, `readline/promises`, `internal/readline/callbacks`, `internal/readline/emitKeypressEvents`, `internal/readline/promises`, `internal/readline/utils`, `internal/repl/history`. Added `Array.prototype.toSorted` polyfill to primordials (Hermes lacks it; readline/utils.js uses `ArrayPrototypeToSorted` for tab-completion prefix matching). Test verifies `readline.createInterface` works with programmatic input, fires 'line' events, and emits 'close'.
+- **Decisions**: Polyfilled `toSorted` in primordials (same pattern as `Symbol.dispose`/`FinalizationRegistry`) rather than patching `internal/readline/utils.js`, keeping Node source unmodified.
 

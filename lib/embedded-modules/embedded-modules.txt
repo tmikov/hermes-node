@@ -130,6 +130,15 @@ internal/fs/sync_write_stream
 internal/fs/streams
 internal/process/signal
 
+# readline support
+readline
+readline/promises
+internal/readline/callbacks
+internal/readline/emitKeypressEvents
+internal/readline/promises
+internal/readline/utils
+internal/repl/history
+
 # REPL support
 domain
 internal/modules/helpers

@@ -156,7 +156,13 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 
 ## Hermes JS Limitations (additions)
 - No `Symbol.asyncDispose`/`Symbol.dispose` -- polyfilled in primordials.js
-- No `Array.prototype.toSorted()` -- patched `http.js` to use `.slice().sort()`
+- No `Array.prototype.toSorted()` -- polyfilled in primordials.js (was patched in `http.js` to use `.slice().sort()`, now globally available)
+
+## Readline Module
+- `require('readline')` loads and works with the real Node implementation (no shim needed)
+- Dependency chain: `readline` -> `internal/readline/{interface,callbacks,emitKeypressEvents,utils,promises}`, `readline/promises`, `internal/repl/history`, `string_decoder`
+- All deps must be in `embedded-modules.txt` (module loader can only load embedded or disk files)
+- `internal/readline/utils.js` uses `ArrayPrototypeToSorted` -- requires the `toSorted` polyfill
 
 ## HTTP Module (verified)
 - `require('http')` loads and works for both server and client

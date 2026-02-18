@@ -268,6 +268,14 @@ var intrinsicNames = [
 if (typeof FinalizationRegistry !== 'undefined')
   intrinsicNames.push('FinalizationRegistry');
 
+// Polyfill Array.prototype.toSorted if not present (Hermes).
+// Used by internal/readline/utils.js for tab-completion prefix matching.
+if (typeof Array.prototype.toSorted === 'undefined') {
+  Array.prototype.toSorted = function(compareFn) {
+    return Array.prototype.slice.call(this).sort(compareFn);
+  };
+}
+
 // Polyfill Symbol.dispose / Symbol.asyncDispose if not present (Hermes).
 // These are TC39 Stage 3 symbols used by Node's HTTP and other modules.
 if (typeof Symbol.dispose === 'undefined')
