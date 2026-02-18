@@ -51,7 +51,7 @@ be omitted):
 | R7 | Implement minimal contextify -- ContextifyScript | — | done | |
 | R8 | Stub `startSigintWatchdog` / `stopSigintWatchdog` | R7 | done | Already implemented in R7 |
 | R9 | Stub `makeContext` and `compileFunction` | R7 | done | |
-| R10 | Stub `internal/modules/esm/utils.js` if needed | — | | |
+| R10 | Stub `internal/modules/esm/utils.js` if needed | — | done | Not needed -- lazy loaded |
 | R11 | Verify `vm` module loads | R7, R8, R9 | | |
 | R12 | Verify `readline` module loads | R6 | | |
 | R13 | Verify `domain` module loads | R5 | | |
@@ -110,4 +110,8 @@ be omitted):
 - **Files**: modified `lib/bindings/node_contextify.cpp`, `test/test-vm-basic.js`.
 - **What was done**: Enhanced `makeContext` to set the `contextify_context_private_symbol` on the sandbox object, making `isContext()` (in `internal/vm.js`) return `true` for contextified objects. The private symbol is obtained lazily from `internalBinding('util').privateSymbols` on first call and cached as a `napi_ref`. `compileFunction`, `constants`, and `measureMemory` were already functional from R7.
 - **Decisions**: Used lazy initialization via `napi_ref` cache for the private symbol rather than passing it during binding init. This avoids coupling between contextify and util binding initialization order. The symbol is retrieved by calling `globalThis.internalBinding('util')` from native code on first `makeContext` call.
+
+### R10: Stub `internal/modules/esm/utils.js` if needed
+- **What was done**: Investigation only -- no code changes needed. The `require('internal/modules/esm/utils')` in `internal/vm.js` line 106 is inside the `registerImportModuleDynamically` function body (lazy-loaded), and only executes when `importModuleDynamically` is a non-undefined, non-symbol value. The REPL doesn't use ESM dynamic imports, so `importModuleDynamically` is always undefined and the function returns early at line 100-103 without requiring the module. Neither `vm` nor `internal/vm` are in the embedded modules list yet (will be added in R11).
+- **Decisions**: No shim needed for `internal/modules/esm/utils.js`.
 
