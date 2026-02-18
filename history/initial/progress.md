@@ -59,7 +59,7 @@ be omitted):
 | R15 | Wire REPL entry point in `hermes-node.cpp` | R7, R11 | done | |
 | R16 | Handle `repl.js` line 216 -- `vm.runInNewContext` | R9 | done | |
 | R17 | Integration test -- REPL loads | R1-R6, R7-R9, R14-R16 | done | |
-| R18 | REPL entry point test (pipe mode) | R15, R17 | | |
+| R18 | REPL entry point test (pipe mode) | R15, R17 | done | |
 | R19 | Implement SIGINT watchdog | R7, R8 | | |
 | R20 | Verify REPL features | R17, R18 | | |
 | R21 | REPL history persistence | R6, R17 | | |
@@ -154,3 +154,9 @@ be omitted):
 - **Files**: created `test/test-repl-basic.js`.
 - **What was done**: Created comprehensive integration test verifying the REPL loads and works with programmatic streams. Test covers 6 scenarios: (1) `require('repl')` loads with correct exports, (2) basic arithmetic eval (`1+2` -> `3`), (3) string eval with inspect output, (4) `var` declarations persist within a session, (5) error recovery (syntax errors don't crash REPL, subsequent eval works), (6) `require()` works inside REPL (`path.basename`). Uses `useGlobal: false` to avoid polluting global scope across concurrent REPL instances. All tests use async exit callbacks with a counter to verify all 5 REPL sessions complete.
 - **Notes for next step**: R18 (REPL entry point test) is already largely covered by `test-repl-entry.js` (from R15) which tests piped input via child_process. R20 (REPL features) can extend this test with more advanced scenarios.
+
+### R18: REPL entry point test (pipe mode)
+- **Files**: modified `test/test-repl-entry.js`.
+- **What was done**: Expanded the existing `test-repl-entry.js` (from R15) from 4 to 10 test cases covering comprehensive pipe-mode REPL behavior. Added a `replExec()` helper using `JSON.stringify` for safe shell escaping. New tests: (5) `var` declarations persist across lines, (6) error recovery after syntax error, (7) `undefined` output for var declarations, (8) `.help` command output, (9) object inspection, (10) multi-expression session with accumulated state.
+- **Decisions**: Kept the `execSync`-based approach (spawning hermes-node as child process with piped input) rather than using direct `echo | %hermes-node | %FileCheck` pipe in RUN line, to avoid the FileCheck pipe hazard with async cleanup.
+- **Notes for next step**: R20 (REPL features) can test additional advanced scenarios like multi-line input (continuation prompts), but the core pipe-mode entry point is thoroughly verified.

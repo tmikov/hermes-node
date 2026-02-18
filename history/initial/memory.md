@@ -266,6 +266,11 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `let`/`const` don't persist across REPL lines (Hermes eval limitation -- each `napi_run_script` is a separate script context). `var` works.
 - `repl.js` line 216 `vm.runInNewContext('Object.getOwnPropertyNames(globalThis)')` runs at load time. Returns main context globals (no sandboxing) -- acceptable for tab-completion filtering.
 
+## REPL Pipe-Mode Testing
+- `test-repl-entry.js`: 10 test cases using `execSync` to spawn hermes-node with piped printf input. Covers: arithmetic, strings, require, .exit, var persistence, error recovery, undefined output, .help, object inspection, multi-expression sessions.
+- Pattern: `replExec(input)` helper using `JSON.stringify` for safe shell escaping of printf arguments.
+- Uses `execSync` (not direct `echo | %hermes-node | FileCheck`) to avoid FileCheck pipe hazard.
+
 ## Test Infrastructure Gotchas
 - `test-child-process-exec-timeout.js` is flaky -- intermittently freezes. May need to be excluded or given special handling.
 - **Test timeout rule**: `check-hermes-node` should complete in under 3 minutes. If tests take longer, they have locked up. Use `timeout 180` or equivalent when running the test target.
