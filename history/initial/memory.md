@@ -197,5 +197,11 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - **Shutdown**: must close native `_handle.close()` on stdio streams BEFORE event loop destroy. Otherwise GC finalizer triggers UAF.
 - `internal/process/signal.js` shimmed (no-op). No `signal_wrap` binding yet.
 
+## Modules Binding (REPL prereq)
+- `initModulesBinding` in `node_modules.cpp`: stub binding for compile cache and package.json reader functions.
+- Exports: `enableCompileCache`, `getCompileCacheDir`, `flushCompileCache`, `readPackageJSON`, `getPackageScopeConfig`, `getPackageType`, `getNearestParentPackageJSONType`, `setLazyPathHelpers`, `compileCacheStatus` (array).
+- `compileCacheStatus` is `["FAILED", "ENABLED", "ALREADY_ENABLED", "DISABLED"]` — JS builds name->index map from it.
+- All functions are no-op stubs. `readPackageJSON`/`getPackageScopeConfig`/`getPackageType` return `undefined`.
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

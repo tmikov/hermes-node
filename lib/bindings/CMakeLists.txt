@@ -17,6 +17,7 @@ add_hermes_library(hermesNodeBindings STATIC
   node_errors.cpp
   node_file.cpp
   node_http_parser.cpp
+  node_modules.cpp
   node_file_dir.cpp
   node_os.cpp
   node_pipe_wrap.cpp

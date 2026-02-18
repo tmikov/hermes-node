@@ -42,7 +42,7 @@ be omitted):
 
 | Step | Description | Depends On | Status | Brief Note (optional) |
 |------|-------------|------------|--------|-----------------------|
-| R1 | Stub `internalBinding('modules')` | — | | |
+| R1 | Stub `internalBinding('modules')` | — | done | |
 | R2 | Shim `internal/modules/helpers.js` | R1 | | |
 | R3 | Enhance `BuiltinModule` shim for REPL | — | | |
 | R4 | Stub `internal/modules/esm/formats.js` | — | | |
@@ -65,4 +65,9 @@ be omitted):
 | R21 | REPL history persistence | R6, R17 | | |
 
 ## Context Notes
+
+### R1: Stub `internalBinding('modules')`
+- **Files**: created `lib/bindings/node_modules.cpp`, `include/hermes/node-compat/bindings/node_modules.h`, `test/test-modules-binding.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`.
+- **What was done**: Created stub `modules` binding with no-op functions: `enableCompileCache`, `getCompileCacheDir`, `flushCompileCache`, `readPackageJSON`, `getPackageScopeConfig`, `getPackageType`, `getNearestParentPackageJSONType`, `setLazyPathHelpers`. Also exports `compileCacheStatus` array `["FAILED", "ENABLED", "ALREADY_ENABLED", "DISABLED"]` (consumed by `helpers.js` to build name->index map).
+- **Decisions**: Included stubs for `readPackageJSON`/`getPackageScopeConfig`/`getPackageType`/`getNearestParentPackageJSONType`/`setLazyPathHelpers` beyond what `helpers.js` needs, since `package_json_reader.js`, `run_main.js`, and `esm/initialize_import_meta.js` also destructure from this binding.
 
