@@ -139,6 +139,10 @@ internal/readline/promises
 internal/readline/utils
 internal/repl/history
 
+# vm module support
+vm
+internal/vm
+
 # REPL support
 domain
 internal/modules/helpers

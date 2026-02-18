@@ -230,6 +230,11 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 ## Embedded Module Build Gotchas
 - Shim resolution (`libjs/shims/` vs `libjs-node/`) uses CMake `EXISTS` check at configure time. Adding a new shim file requires `cmake` reconfigure before `cmake --build`.
 
+## VM Module
+- `require('vm')` works: `runInThisContext`, `Script`, `createContext`/`isContext`, `runInNewContext`, `compileFunction` all functional
+- `vm.js` also needs `internalBinding('symbols')` for `vm_dynamic_import_main_context_default`, `vm_context_no_contextify` etc. -- already present in our symbols binding
+- `vm.runInNewContext` evaluates in global context (no sandboxing) -- acceptable for REPL
+
 ## Contextify Binding (vm module prereq)
 - `initContextifyBinding` in `node_contextify.cpp`: ContextifyScript class + all functions
 - ContextifyScript stores source (with `//# sourceURL=`) as `__contextifySource` property on JS object

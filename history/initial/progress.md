@@ -52,7 +52,7 @@ be omitted):
 | R8 | Stub `startSigintWatchdog` / `stopSigintWatchdog` | R7 | done | Already implemented in R7 |
 | R9 | Stub `makeContext` and `compileFunction` | R7 | done | |
 | R10 | Stub `internal/modules/esm/utils.js` if needed | — | done | Not needed -- lazy loaded |
-| R11 | Verify `vm` module loads | R7, R8, R9 | | |
+| R11 | Verify `vm` module loads | R7, R8, R9 | done | |
 | R12 | Verify `readline` module loads | R6 | | |
 | R13 | Verify `domain` module loads | R5 | | |
 | R14 | Shim CJS loader `Module` class for REPL | R2 | | |
@@ -114,4 +114,9 @@ be omitted):
 ### R10: Stub `internal/modules/esm/utils.js` if needed
 - **What was done**: Investigation only -- no code changes needed. The `require('internal/modules/esm/utils')` in `internal/vm.js` line 106 is inside the `registerImportModuleDynamically` function body (lazy-loaded), and only executes when `importModuleDynamically` is a non-undefined, non-symbol value. The REPL doesn't use ESM dynamic imports, so `importModuleDynamically` is always undefined and the function returns early at line 100-103 without requiring the module. Neither `vm` nor `internal/vm` are in the embedded modules list yet (will be added in R11).
 - **Decisions**: No shim needed for `internal/modules/esm/utils.js`.
+
+### R11: Verify `vm` module loads
+- **Files**: created `test/test-vm-module.js`. Modified `lib/embedded-modules/embedded-modules.txt`.
+- **What was done**: Added `vm` and `internal/vm` to the embedded modules list. Created test exercising the full `require('vm')` public API: `runInThisContext`, `Script` constructor with `runInThisContext`, `createContext`/`isContext`, `runInNewContext`, and `compileFunction`. All work correctly. CMake reconfigure was required since embedded module resolution uses `EXISTS` at configure time.
+- **Notes for next step**: `vm.runInNewContext` evaluates in the global context (no real sandboxing) per our design. This is sufficient for the REPL's use on line 216 (`Object.getOwnPropertyNames(globalThis)`).
 
