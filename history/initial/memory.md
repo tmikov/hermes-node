@@ -203,5 +203,14 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `compileCacheStatus` is `["FAILED", "ENABLED", "ALREADY_ENABLED", "DISABLED"]` — JS builds name->index map from it.
 - All functions are no-op stubs. `readPackageJSON`/`getPackageScopeConfig`/`getPackageType` return `undefined`.
 
+## Modules Helpers Shim (REPL prereq)
+- `libjs/shims/internal/modules/helpers.js`: provides `makeRequireFunction` and `addBuiltinLibsToObject` for the REPL
+- Both functions lazily load `Module` from `internal/modules/cjs/loader` (R14 provides this)
+- Also exports stubs for `constants`, `compileCacheStatus`, `stripBOM`, `enableCompileCache`, etc.
+- 14 modules in libjs-node import `internal/modules/helpers` -- the shim covers all their needs
+
+## Embedded Module Build Gotchas
+- Shim resolution (`libjs/shims/` vs `libjs-node/`) uses CMake `EXISTS` check at configure time. Adding a new shim file requires `cmake` reconfigure before `cmake --build`.
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

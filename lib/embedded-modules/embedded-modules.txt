@@ -129,3 +129,6 @@ internal/tty
 internal/fs/sync_write_stream
 internal/fs/streams
 internal/process/signal
+
+# REPL support
+internal/modules/helpers

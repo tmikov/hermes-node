@@ -43,7 +43,7 @@ be omitted):
 | Step | Description | Depends On | Status | Brief Note (optional) |
 |------|-------------|------------|--------|-----------------------|
 | R1 | Stub `internalBinding('modules')` | — | done | |
-| R2 | Shim `internal/modules/helpers.js` | R1 | | |
+| R2 | Shim `internal/modules/helpers.js` | R1 | done | |
 | R3 | Enhance `BuiltinModule` shim for REPL | — | | |
 | R4 | Stub `internal/modules/esm/formats.js` | — | | |
 | R5 | Stub `domain` module | — | | |
@@ -70,4 +70,10 @@ be omitted):
 - **Files**: created `lib/bindings/node_modules.cpp`, `include/hermes/node-compat/bindings/node_modules.h`, `test/test-modules-binding.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`.
 - **What was done**: Created stub `modules` binding with no-op functions: `enableCompileCache`, `getCompileCacheDir`, `flushCompileCache`, `readPackageJSON`, `getPackageScopeConfig`, `getPackageType`, `getNearestParentPackageJSONType`, `setLazyPathHelpers`. Also exports `compileCacheStatus` array `["FAILED", "ENABLED", "ALREADY_ENABLED", "DISABLED"]` (consumed by `helpers.js` to build name->index map).
 - **Decisions**: Included stubs for `readPackageJSON`/`getPackageScopeConfig`/`getPackageType`/`getNearestParentPackageJSONType`/`setLazyPathHelpers` beyond what `helpers.js` needs, since `package_json_reader.js`, `run_main.js`, and `esm/initialize_import_meta.js` also destructure from this binding.
+
+### R2: Shim `internal/modules/helpers.js`
+- **Files**: created `libjs/shims/internal/modules/helpers.js`, `test/test-modules-helpers.js`. Modified `lib/embedded-modules/embedded-modules.txt`.
+- **What was done**: Created shim providing `makeRequireFunction` and `addBuiltinLibsToObject` for the REPL, plus all other exports from Node's original as stubs. Both key functions lazily load `Module` from `internal/modules/cjs/loader` (will be provided by R14). Also exports `constants`, `compileCacheStatus`, `stripBOM`, `enableCompileCache`, `getCjsConditions`, etc. as stubs.
+- **Decisions**: Shimmed rather than using the real `helpers.js` because the original has heavy dependencies (`internal/fs/utils`, `internal/assert`, `internal/url`, `internalBinding('url')`, `internal/modules/package_json_reader.js`, debuglog). Our shim is self-contained, depending only on primordials, `internal/validators`, `internal/util`, and `internalBinding('modules')`.
+- **Notes for next step**: `makeRequireFunction` and `addBuiltinLibsToObject` cannot be called until R14 provides the `Module` class via `internal/modules/cjs/loader` shim. The test verifies exports exist and stubs work, but does not exercise the lazy Module loading path. CMake reconfigure required when adding new shim files (build uses `EXISTS` check at configure time).
 
