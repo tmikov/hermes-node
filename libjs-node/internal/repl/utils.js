@@ -365,8 +365,7 @@ function setupPreview(repl, contextSymbol, bufferSymbol, active) {
     // Prevent duplicated previews after a refresh or in a multiline command.
     if (inputPreview !== null ||
         repl[kIsMultiline] ||
-        !repl.isCompletionEnabled ||
-        !process.features.inspector) {
+        !repl.isCompletionEnabled) {
       return;
     }
 
@@ -383,6 +382,12 @@ function setupPreview(repl, contextSymbol, bufferSymbol, active) {
     if (showCompletion) {
       const insertPreview = false;
       showCompletionPreview(repl.line, insertPreview);
+    }
+
+    // Input preview requires the inspector (Runtime.evaluate with
+    // throwOnSideEffect). Skip the rest if it's not available.
+    if (!process.features.inspector) {
+      return;
     }
 
     // Do not preview if the command is buffered.
