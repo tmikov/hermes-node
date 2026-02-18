@@ -49,8 +49,8 @@ be omitted):
 | R5 | Stub `domain` module | — | done | |
 | R6 | Remove `internal/readline/interface.js` shim | — | done | |
 | R7 | Implement minimal contextify -- ContextifyScript | — | done | |
-| R8 | Stub `startSigintWatchdog` / `stopSigintWatchdog` | R7 | | |
-| R9 | Stub `makeContext` and `compileFunction` | R7 | | |
+| R8 | Stub `startSigintWatchdog` / `stopSigintWatchdog` | R7 | done | Already implemented in R7 |
+| R9 | Stub `makeContext` and `compileFunction` | R7 | done | |
 | R10 | Stub `internal/modules/esm/utils.js` if needed | — | | |
 | R11 | Verify `vm` module loads | R7, R8, R9 | | |
 | R12 | Verify `readline` module loads | R6 | | |
@@ -102,4 +102,12 @@ be omitted):
 - **What was done**: Created the `contextify` binding with `ContextifyScript` class (constructor + `runInContext` + `createCachedData`), plus stub exports for all other functions needed by `vm.js` and `internal/vm.js` to load: `makeContext`, `compileFunction`, `startSigintWatchdog`, `stopSigintWatchdog`, `watchdogHasPendingSigint`, `measureMemory`, `compileFunctionForCJSLoader`, `containsModuleSyntax`, `constants`. ContextifyScript stores source code with `//# sourceURL=filename` on the JS object and evaluates via `napi_run_script` in `runInContext`. Both `runInThisContext` (sandbox=null) and `runInContext` (sandbox=object) evaluate in the global context since we don't support real sandboxing. `compileFunction` creates a function wrapper via eval.
 - **Decisions**: Stored source as a non-enumerable property (`__contextifySource`) on the JS script object rather than using `napi_wrap` data, keeping it simpler. Included all binding exports (including R8/R9 stubs) in this step because `vm.js` destructures `makeContext`/`constants`/`measureMemory` and `internal/vm.js` destructures `compileFunction` at the top level -- they'd fail to load without these exports.
 - **Notes for next step**: R8 (SIGINT stubs) and R9 (makeContext + compileFunction) are already stubbed in the binding. R8/R9 can focus on enhancing the stubs (e.g., makeContext setting the private symbol for isContext(), compileFunction parameter handling). The `__contextifySource` property key is a plain string, not a symbol -- collision risk is negligible in our controlled environment.
+
+### R8: Stub `startSigintWatchdog` / `stopSigintWatchdog`
+- **What was done**: Already fully implemented as part of R7. `startSigintWatchdog` returns `true`, `stopSigintWatchdog` returns `false`, `watchdogHasPendingSigint` returns `false`. Test coverage included in `test-vm-basic.js`.
+
+### R9: Stub `makeContext` and `compileFunction`
+- **Files**: modified `lib/bindings/node_contextify.cpp`, `test/test-vm-basic.js`.
+- **What was done**: Enhanced `makeContext` to set the `contextify_context_private_symbol` on the sandbox object, making `isContext()` (in `internal/vm.js`) return `true` for contextified objects. The private symbol is obtained lazily from `internalBinding('util').privateSymbols` on first call and cached as a `napi_ref`. `compileFunction`, `constants`, and `measureMemory` were already functional from R7.
+- **Decisions**: Used lazy initialization via `napi_ref` cache for the private symbol rather than passing it during binding init. This avoids coupling between contextify and util binding initialization order. The symbol is retrieved by calling `globalThis.internalBinding('util')` from native code on first `makeContext` call.
 

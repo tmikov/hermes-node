@@ -23,6 +23,11 @@ namespace node_compat {
     }                                                               \
   } while (0)
 
+/// Cached reference to the contextify_context_private_symbol from
+/// internalBinding('util').privateSymbols. Lazily initialized on first
+/// makeContext call.
+static napi_ref s_contextPrivateSymbolRef = nullptr;
+
 // ---------------------------------------------------------------------------
 // Helper: get a std::string from a napi_value string argument.
 // Returns empty string if the value is not a string.
@@ -58,9 +63,7 @@ static std::string napiGetString(napi_env env, napi_value value) {
 ///
 /// For our implementation we only use code and filename.
 /// We store them as properties on the JS object using internal keys.
-static napi_value contextifyScriptNew(
-    napi_env env,
-    napi_callback_info info) {
+static napi_value contextifyScriptNew(napi_env env, napi_callback_info info) {
   napi_handle_scope scope;
   napi_open_handle_scope(env, &scope);
 
@@ -108,14 +111,14 @@ static napi_value contextifyScriptNew(
       env, fullSource.c_str(), fullSource.size(), &sourceVal);
 
   napi_property_descriptor sourceProp = {
-      nullptr,     // utf8name (we use name)
-      sourceKey,   // name
-      nullptr,     // method
-      nullptr,     // getter
-      nullptr,     // setter
-      sourceVal,   // value
+      nullptr, // utf8name (we use name)
+      sourceKey, // name
+      nullptr, // method
+      nullptr, // getter
+      nullptr, // setter
+      sourceVal, // value
       napi_default, // attributes (non-enumerable, non-configurable)
-      nullptr,     // data
+      nullptr, // data
   };
   napi_define_properties(env, thisObj, 1, &sourceProp);
 
@@ -182,20 +185,73 @@ static napi_value contextifyScriptCreateCachedData(
 // Standalone functions exported on the binding
 // ---------------------------------------------------------------------------
 
-/// makeContext(sandbox, ...) -- stub: just returns the sandbox.
-/// Real implementation in R9.
+/// Get the cached contextify_context_private_symbol.
+/// On first call, retrieves it from
+/// globalThis.internalBinding('util').privateSymbols and caches it.
+static napi_value getContextPrivateSymbol(napi_env env) {
+  if (s_contextPrivateSymbolRef) {
+    napi_value sym;
+    napi_get_reference_value(env, s_contextPrivateSymbolRef, &sym);
+    return sym;
+  }
+
+  // Get globalThis.internalBinding('util').privateSymbols
+  //                                .contextify_context_private_symbol
+  napi_value global;
+  napi_get_global(env, &global);
+
+  napi_value internalBindingFn;
+  napi_get_named_property(env, global, "internalBinding", &internalBindingFn);
+
+  napi_value utilStr;
+  napi_create_string_utf8(env, "util", NAPI_AUTO_LENGTH, &utilStr);
+
+  napi_value utilBinding;
+  napi_status st = napi_call_function(
+      env, global, internalBindingFn, 1, &utilStr, &utilBinding);
+  if (st != napi_ok)
+    return nullptr;
+
+  napi_value privateSymbols;
+  napi_get_named_property(env, utilBinding, "privateSymbols", &privateSymbols);
+
+  napi_value sym;
+  napi_get_named_property(
+      env, privateSymbols, "contextify_context_private_symbol", &sym);
+
+  // Cache it as a strong reference.
+  napi_create_reference(env, sym, 1, &s_contextPrivateSymbolRef);
+  return sym;
+}
+
+/// makeContext(sandbox, name, origin, strings, wasm, microtaskQueue,
+///             hostDefinedOptionId)
+///
+/// Marks the sandbox object as a "context" by setting the private symbol
+/// so that isContext() returns true. Does not create real V8 sandboxing.
 static napi_value makeContextCb(napi_env env, napi_callback_info info) {
   size_t argc = 7;
   napi_value argv[7];
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
-  // Return the sandbox object as-is.
-  if (argc > 0)
-    return argv[0];
+  if (argc == 0) {
+    napi_value undef;
+    napi_get_undefined(env, &undef);
+    return undef;
+  }
 
-  napi_value undef;
-  napi_get_undefined(env, &undef);
-  return undef;
+  napi_value sandbox = argv[0];
+
+  // Set the contextify_context_private_symbol on the sandbox so
+  // isContext() returns true.
+  napi_value sym = getContextPrivateSymbol(env);
+  if (sym) {
+    napi_value trueVal;
+    napi_get_boolean(env, true, &trueVal);
+    napi_set_property(env, sandbox, sym, trueVal);
+  }
+
+  return sandbox;
 }
 
 /// measureMemory() -> undefined (stub)
@@ -207,8 +263,9 @@ static napi_value measureMemoryCb(napi_env env, napi_callback_info /*info*/) {
 
 /// startSigintWatchdog() -> true (stub)
 /// Real implementation in R19.
-static napi_value
-startSigintWatchdogCb(napi_env env, napi_callback_info /*info*/) {
+static napi_value startSigintWatchdogCb(
+    napi_env env,
+    napi_callback_info /*info*/) {
   napi_value result;
   napi_get_boolean(env, true, &result);
   return result;
@@ -216,16 +273,18 @@ startSigintWatchdogCb(napi_env env, napi_callback_info /*info*/) {
 
 /// stopSigintWatchdog() -> false (stub, no pending SIGINT)
 /// Real implementation in R19.
-static napi_value
-stopSigintWatchdogCb(napi_env env, napi_callback_info /*info*/) {
+static napi_value stopSigintWatchdogCb(
+    napi_env env,
+    napi_callback_info /*info*/) {
   napi_value result;
   napi_get_boolean(env, false, &result);
   return result;
 }
 
 /// watchdogHasPendingSigint() -> false (stub)
-static napi_value
-watchdogHasPendingSigintCb(napi_env env, napi_callback_info /*info*/) {
+static napi_value watchdogHasPendingSigintCb(
+    napi_env env,
+    napi_callback_info /*info*/) {
   napi_value result;
   napi_get_boolean(env, false, &result);
   return result;
@@ -236,8 +295,8 @@ watchdogHasPendingSigintCb(napi_env env, napi_callback_info /*info*/) {
 ///                 params, hostDefinedOptionId)
 /// -> { function: fn, cachedDataProduced: false }
 ///
-/// Stub: creates a function from code with the given parameter names.
-/// Real implementation in R9.
+/// Creates a function from code with the given parameter names.
+/// No real sandboxing -- parsingContext and contextExtensions are ignored.
 static napi_value compileFunctionCb(napi_env env, napi_callback_info info) {
   napi_handle_scope scope;
   napi_open_handle_scope(env, &scope);
@@ -332,16 +391,18 @@ static napi_value compileFunctionCb(napi_env env, napi_callback_info info) {
 }
 
 /// compileFunctionForCJSLoader(...) -> undefined (stub)
-static napi_value
-compileFunctionForCJSLoaderCb(napi_env env, napi_callback_info /*info*/) {
+static napi_value compileFunctionForCJSLoaderCb(
+    napi_env env,
+    napi_callback_info /*info*/) {
   napi_value undef;
   napi_get_undefined(env, &undef);
   return undef;
 }
 
 /// containsModuleSyntax(...) -> false (stub)
-static napi_value
-containsModuleSyntaxCb(napi_env env, napi_callback_info /*info*/) {
+static napi_value containsModuleSyntaxCb(
+    napi_env env,
+    napi_callback_info /*info*/) {
   napi_value result;
   napi_get_boolean(env, false, &result);
   return result;

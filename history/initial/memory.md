@@ -231,15 +231,16 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - Shim resolution (`libjs/shims/` vs `libjs-node/`) uses CMake `EXISTS` check at configure time. Adding a new shim file requires `cmake` reconfigure before `cmake --build`.
 
 ## Contextify Binding (vm module prereq)
-- `initContextifyBinding` in `node_contextify.cpp`: ContextifyScript class + stubs for all functions
+- `initContextifyBinding` in `node_contextify.cpp`: ContextifyScript class + all functions
 - ContextifyScript stores source (with `//# sourceURL=`) as `__contextifySource` property on JS object
 - `runInContext(sandbox, timeout, displayErrors, breakOnSigint, breakFirstLine)`: evaluates via `napi_run_script`. Both null sandbox (runInThisContext) and object sandbox evaluate in global context (no real sandboxing).
 - `compileFunction`: creates wrapper `(function(params) { code })` via eval, returns `{function, cachedDataProduced: false}`
-- `makeContext`: returns sandbox as-is (stub). R9 will add private symbol marking.
+- `makeContext`: sets `contextify_context_private_symbol` on sandbox (lazy-cached via `napi_ref`), returns sandbox. No real sandboxing.
 - `startSigintWatchdog`/`stopSigintWatchdog`: stubs returning true/false. R19 will add real signal handling.
 - `vm.js` destructures `ContextifyScript`, `makeContext`, `constants`, `measureMemory` at top level
 - `internal/vm.js` destructures `ContextifyScript`, `compileFunction` at top level
-- `internal/vm.js` uses `contextify_context_private_symbol` from `internalBinding('util').privateSymbols` for `isContext()` check
+- `internal/vm.js` `isContext()`: checks `object[contextify_context_private_symbol] !== undefined`
+- **Cross-binding symbol access**: contextify gets the private symbol from util binding by calling `globalThis.internalBinding('util')` from native code, then caches via `napi_ref`.
 
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

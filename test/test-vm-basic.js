@@ -61,5 +61,30 @@ console.log(typeof result.function);
 console.log(result.function(10, 20));
 // CHECK: 30
 
+// Test makeContext sets the private symbol for isContext().
+var utilBinding = internalBinding('util');
+var ctxSym = utilBinding.privateSymbols.contextify_context_private_symbol;
+
+// Before makeContext, object should not have the private symbol.
+var sandbox = { x: 10 };
+console.log(sandbox[ctxSym] !== undefined);
+// CHECK: false
+
+// After makeContext, object should have the private symbol.
+var ctx = binding.makeContext(sandbox, 'TestContext');
+console.log(ctx === sandbox);
+// CHECK: true
+console.log(ctx[ctxSym] !== undefined);
+// CHECK: true
+
+// isContext check pattern (same as internal/vm.js uses).
+console.log(sandbox[ctxSym] !== undefined);
+// CHECK: true
+
+// A plain object should NOT be a context.
+var plain = {};
+console.log(plain[ctxSym] !== undefined);
+// CHECK: false
+
 console.log('PASS');
 // CHECK: PASS
