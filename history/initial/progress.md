@@ -61,7 +61,7 @@ be omitted):
 | R17 | Integration test -- REPL loads | R1-R6, R7-R9, R14-R16 | done | |
 | R18 | REPL entry point test (pipe mode) | R15, R17 | done | |
 | R19 | Implement SIGINT watchdog | R7, R8 | done | |
-| R20 | Verify REPL features | R17, R18 | | |
+| R20 | Verify REPL features | R17, R18 | done | |
 | R21 | REPL history persistence | R6, R17 | | |
 
 ## Context Notes
@@ -168,3 +168,9 @@ be omitted):
 - **Key insight**: Hermes's `raiseTimeoutError()` creates an uncatchable error (it bypasses JS try/catch). Node solves the same problem in V8 by converting `TerminateExecution()` to a catchable error in `ContextifyScript::EvalMachine`. Our approach mirrors this: intercept at the NAPI boundary, clear the uncatchable exception, throw a catchable one.
 - **Test**: 4 tests -- (1) binding API start/stop/hasPending, (2) self-signal SIGINT detection via `process.kill(pid, SIGINT)`, (3) SIGINT interrupts `vm.runInThisContext` (timing-dependent), (4) end-to-end REPL infinite loop interrupt via child_process (timing-dependent). Tests 3-4 are timing-tolerant -- they pass even if the async break doesn't fire in time.
 - **Notes for next step**: R20 (Verify REPL features) and R21 (REPL history persistence) are now unblocked.
+
+### R20: Verify REPL features
+- **Files**: created `test/test-repl-features.js`.
+- **What was done**: Created comprehensive REPL feature test with 10 test cases using programmatic streams (Readable/Writable). Tests cover: (1) multi-line input with continuation prompt `...`, (2) multi-line object literal, (3) `.help` command output (verifies `.break`/`.clear`/`.exit`/`.help` mentioned), (4) `.break` command cancels multi-line input, (5) error recovery after multiple syntax errors, (6) `require()` works for `path` and `os` modules, (7) `var` declarations persist across lines, (8) `util.inspect` output for objects/arrays/null/undefined, (9) function definition and invocation, (10) exception handling (thrown errors display, REPL continues).
+- **Decisions**: Used programmatic stream approach (like test-repl-basic.js) with `useGlobal: false` for all tests. Did not test `let`/`const` persistence since it's a known Hermes limitation (each `napi_run_script` is a separate script context). Skipped arrow key/history tests since those require TTY.
+- **Notes for next step**: R21 (REPL history persistence) is the last remaining task.

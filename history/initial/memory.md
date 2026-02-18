@@ -268,10 +268,12 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `let`/`const` don't persist across REPL lines (Hermes eval limitation -- each `napi_run_script` is a separate script context). `var` works.
 - `repl.js` line 216 `vm.runInNewContext('Object.getOwnPropertyNames(globalThis)')` runs at load time. Returns main context globals (no sandboxing) -- acceptable for tab-completion filtering.
 
-## REPL Pipe-Mode Testing
-- `test-repl-entry.js`: 10 test cases using `execSync` to spawn hermes-node with piped printf input. Covers: arithmetic, strings, require, .exit, var persistence, error recovery, undefined output, .help, object inspection, multi-expression sessions.
-- Pattern: `replExec(input)` helper using `JSON.stringify` for safe shell escaping of printf arguments.
-- Uses `execSync` (not direct `echo | %hermes-node | FileCheck`) to avoid FileCheck pipe hazard.
+## REPL Testing
+- `test-repl-entry.js`: 10 pipe-mode tests via `execSync` (spawn hermes-node with printf input). Pattern: `replExec(input)` with `JSON.stringify` for shell escaping.
+- `test-repl-features.js`: 10 programmatic tests via Readable/Writable streams. Covers: multi-line input (continuation prompt), .help/.break commands, error recovery, require(), var persistence, util.inspect output, function definition, exception handling.
+- `test-repl-basic.js`: 5 programmatic tests (arithmetic, strings, var, error recovery, require).
+- Multi-line input works: incomplete expressions like `(1 +` get `... ` continuation prompt, completing with `)` evaluates correctly.
+- `.break` command cancels multi-line input and returns to normal prompt.
 
 ## Test Infrastructure Gotchas
 - `test-child-process-exec-timeout.js` is flaky -- intermittently freezes. May need to be excluded or given special handling.
