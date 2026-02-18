@@ -12,6 +12,7 @@ add_hermes_library(hermesNodeBindings STATIC
   node_cares_wrap.cpp
   node_config.cpp
   node_constants.cpp
+  node_contextify.cpp
   node_credentials.cpp
   node_encoding.cpp
   node_errors.cpp

@@ -48,7 +48,7 @@ be omitted):
 | R4 | Stub `internal/modules/esm/formats.js` | — | done | |
 | R5 | Stub `domain` module | — | done | |
 | R6 | Remove `internal/readline/interface.js` shim | — | done | |
-| R7 | Implement minimal contextify -- ContextifyScript | — | | |
+| R7 | Implement minimal contextify -- ContextifyScript | — | done | |
 | R8 | Stub `startSigintWatchdog` / `stopSigintWatchdog` | R7 | | |
 | R9 | Stub `makeContext` and `compileFunction` | R7 | | |
 | R10 | Stub `internal/modules/esm/utils.js` if needed | — | | |
@@ -96,4 +96,10 @@ be omitted):
 - **Files**: deleted `libjs/shims/internal/readline/interface.js`, created `test/test-readline-basic.js`. Modified `lib/embedded-modules/embedded-modules.txt`, `libjs/primordials.js`.
 - **What was done**: Removed the stub shim that threw on construction, allowing the real Node `internal/readline/interface.js` to be used. Added all readline-related modules to the embedded modules list: `readline`, `readline/promises`, `internal/readline/callbacks`, `internal/readline/emitKeypressEvents`, `internal/readline/promises`, `internal/readline/utils`, `internal/repl/history`. Added `Array.prototype.toSorted` polyfill to primordials (Hermes lacks it; readline/utils.js uses `ArrayPrototypeToSorted` for tab-completion prefix matching). Test verifies `readline.createInterface` works with programmatic input, fires 'line' events, and emits 'close'.
 - **Decisions**: Polyfilled `toSorted` in primordials (same pattern as `Symbol.dispose`/`FinalizationRegistry`) rather than patching `internal/readline/utils.js`, keeping Node source unmodified.
+
+### R7: Implement minimal contextify -- ContextifyScript
+- **Files**: created `lib/bindings/node_contextify.cpp`, `include/hermes/node-compat/bindings/node_contextify.h`, `test/test-vm-basic.js`. Modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`.
+- **What was done**: Created the `contextify` binding with `ContextifyScript` class (constructor + `runInContext` + `createCachedData`), plus stub exports for all other functions needed by `vm.js` and `internal/vm.js` to load: `makeContext`, `compileFunction`, `startSigintWatchdog`, `stopSigintWatchdog`, `watchdogHasPendingSigint`, `measureMemory`, `compileFunctionForCJSLoader`, `containsModuleSyntax`, `constants`. ContextifyScript stores source code with `//# sourceURL=filename` on the JS object and evaluates via `napi_run_script` in `runInContext`. Both `runInThisContext` (sandbox=null) and `runInContext` (sandbox=object) evaluate in the global context since we don't support real sandboxing. `compileFunction` creates a function wrapper via eval.
+- **Decisions**: Stored source as a non-enumerable property (`__contextifySource`) on the JS script object rather than using `napi_wrap` data, keeping it simpler. Included all binding exports (including R8/R9 stubs) in this step because `vm.js` destructures `makeContext`/`constants`/`measureMemory` and `internal/vm.js` destructures `compileFunction` at the top level -- they'd fail to load without these exports.
+- **Notes for next step**: R8 (SIGINT stubs) and R9 (makeContext + compileFunction) are already stubbed in the binding. R8/R9 can focus on enhancing the stubs (e.g., makeContext setting the private symbol for isContext(), compileFunction parameter handling). The `__contextifySource` property key is a plain string, not a symbol -- collision risk is negligible in our controlled environment.
 

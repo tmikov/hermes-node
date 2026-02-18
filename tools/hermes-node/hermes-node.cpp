@@ -18,6 +18,7 @@
 #include <hermes/node-compat/bindings/node_cares_wrap.h>
 #include <hermes/node-compat/bindings/node_config.h>
 #include <hermes/node-compat/bindings/node_constants.h>
+#include <hermes/node-compat/bindings/node_contextify.h>
 #include <hermes/node-compat/bindings/node_credentials.h>
 #include <hermes/node-compat/bindings/node_encoding.h>
 #include <hermes/node-compat/bindings/node_errors.h>
@@ -275,6 +276,7 @@ static int runBootstrap(int argc, char **argv, const char *scriptPath) {
   registry.registerBinding("cares_wrap", initCaresWrapBinding);
   registry.registerBinding("config", initConfigBinding);
   registry.registerBinding("constants", initConstantsBinding);
+  registry.registerBinding("contextify", initContextifyBinding);
   registry.registerBinding("credentials", initCredentialsBinding);
   registry.registerBinding("encoding_binding", initEncodingBinding);
   registry.registerBinding("errors", initErrorsBinding);
