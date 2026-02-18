@@ -287,8 +287,12 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `.break` command cancels multi-line input and returns to normal prompt.
 - **Known issue**: `test-repl-features.js` tests 1-2 (multi-line) silently fail -- assertion error in async REPL exit handler, process exits 0, lit reports PASS. Pre-existing from R20.
 
+## Event Loop Tick Draining
+- **Critical**: `process.nextTick` callbacks are drained by both a `uv_prepare_t` (before poll) and `uv_check_t` (after poll) handle. Without the prepare handle, ticks scheduled during native callbacks (pending I/O callbacks phase) would be stuck until the poll phase times out — which can be minutes with long timeouts.
+- Node.js uses `InternalCallbackScope`/`MakeCallback` to drain ticks after every native callback. We approximate this with the two-handle approach.
+- Root cause of the fixed `test-child-process-exec-timeout.js` flakiness: `uv_shutdown` callback called `process.nextTick(finish)`, but poll blocked for the full 2M ms timeout.
+
 ## Test Infrastructure Gotchas
-- `test-child-process-exec-timeout.js` is flaky -- intermittently freezes. May need to be excluded or given special handling.
 - **Test timeout rule**: `check-hermes-node` should complete in under 3 minutes. If tests take longer, they have locked up. Use `timeout 180` or equivalent when running the test target.
 
 ## Unverified

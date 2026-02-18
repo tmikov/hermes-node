@@ -182,11 +182,9 @@ struct TickDrainData {
   napi_ref tickCallbackRef;
 };
 
-/// Called on each event loop iteration (after I/O polling). Drains the
-/// microtask queue and then calls the JS tick callback (runNextTicks).
-static void onCheckDrainTicks(uv_check_t *handle) {
-  auto *data = static_cast<TickDrainData *>(handle->data);
-
+/// Drain the microtask queue and call the JS tick callback (runNextTicks).
+/// Used by both the check and prepare handles.
+static void drainTicksImpl(TickDrainData *data) {
   // Open a handle scope for NAPI calls.
   napi_handle_scope scope;
   napi_open_handle_scope(data->env, &scope);
@@ -215,6 +213,21 @@ static void onCheckDrainTicks(uv_check_t *handle) {
   }
 
   napi_close_handle_scope(data->env, scope);
+}
+
+/// Called on each event loop iteration (after I/O polling). Drains the
+/// microtask queue and then calls the JS tick callback (runNextTicks).
+static void onCheckDrainTicks(uv_check_t *handle) {
+  drainTicksImpl(static_cast<TickDrainData *>(handle->data));
+}
+
+/// Called on each event loop iteration (before I/O polling). Ensures that
+/// process.nextTick callbacks scheduled during the timers or pending callbacks
+/// phases are drained before the poll phase blocks. Without this, the poll
+/// phase would block until the nearest timer fires, leaving nextTick work
+/// stuck in the queue.
+static void onPrepareDrainTicks(uv_prepare_t *handle) {
+  drainTicksImpl(static_cast<TickDrainData *>(handle->data));
 }
 
 // ---------------------------------------------------------------------------
@@ -685,18 +698,37 @@ static int runBootstrap(int argc, char **argv, const char *scriptPath) {
     }
   }
 
-  // 12. Set up the event loop check handle for tick draining.
+  // 12. Set up the event loop check and prepare handles for tick draining.
+  //
+  // We use TWO drain points per loop iteration:
+  //   - uv_prepare_t: fires BEFORE the poll phase. This ensures that
+  //     process.nextTick callbacks scheduled during the timers or pending
+  //     callbacks phases (e.g. uv_shutdown completion) are drained before
+  //     the poll phase blocks waiting for I/O.
+  //   - uv_check_t: fires AFTER the poll phase. This drains nextTick
+  //     callbacks scheduled by I/O callbacks during the poll phase.
+  //
+  // Without the prepare handle, process.nextTick work scheduled from
+  // native callbacks (like stream shutdown completion) would be stuck
+  // until the poll phase times out — which can be minutes if the only
+  // active timer has a long timeout.
   uv_check_t checkHandle;
+  uv_prepare_t prepareHandle;
   TickDrainData tickDrainData{env, runtime.get(), tickCallbackRef};
-  bool checkHandleActive = false;
+  bool tickHandlesActive = false;
 
   if (exitCode == 0 && tickCallbackRef) {
     uv_check_init(eventLoop.getLoop(), &checkHandle);
     checkHandle.data = &tickDrainData;
     uv_check_start(&checkHandle, onCheckDrainTicks);
-    // Unref so the check handle alone doesn't keep the loop alive.
     uv_unref(reinterpret_cast<uv_handle_t *>(&checkHandle));
-    checkHandleActive = true;
+
+    uv_prepare_init(eventLoop.getLoop(), &prepareHandle);
+    prepareHandle.data = &tickDrainData;
+    uv_prepare_start(&prepareHandle, onPrepareDrainTicks);
+    uv_unref(reinterpret_cast<uv_handle_t *>(&prepareHandle));
+
+    tickHandlesActive = true;
   }
 
   // 12. Load and execute the user script, or start the REPL.
@@ -835,9 +867,11 @@ static int runBootstrap(int argc, char **argv, const char *scriptPath) {
   closeTimersHandles();
   closeFsEventWrapHandles();
 
-  if (checkHandleActive) {
+  if (tickHandlesActive) {
     uv_check_stop(&checkHandle);
     uv_close(reinterpret_cast<uv_handle_t *>(&checkHandle), nullptr);
+    uv_prepare_stop(&prepareHandle);
+    uv_close(reinterpret_cast<uv_handle_t *>(&prepareHandle), nullptr);
   }
 
   // Run the loop once more to process close callbacks.
