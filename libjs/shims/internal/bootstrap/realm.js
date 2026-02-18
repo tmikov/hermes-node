@@ -7,12 +7,12 @@
 // Public built-in module names that can be required without the 'node:' prefix.
 var builtinIds = [
   'assert', 'assert/strict', 'buffer', 'child_process', 'console',
-  'constants', 'dgram', 'dns', 'dns/promises', 'events', 'fs',
+  'constants', 'dgram', 'dns', 'dns/promises', 'domain', 'events', 'fs',
   'fs/promises', 'http', 'net', 'os', 'path', 'path/posix', 'path/win32',
   'process', 'querystring', 'readline', 'readline/promises',
   'stream', 'stream/consumers', 'stream/promises', 'stream/web',
   'string_decoder', 'timers', 'timers/promises', 'tty', 'url', 'util',
-  'util/types',
+  'util/types', 'vm',
 ];
 
 var builtinSet = new Set(builtinIds);

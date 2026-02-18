@@ -227,6 +227,15 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - REPL uses domain for: `_domain.bind(eval_)`, `_domain.on('error', ...)`, `process.domain` check
 - Shim provides: `create`, `createDomain`, `Domain`, `active`, `enter/exit/run/bind/intercept/add/remove/_errorHandler`
 
+## CJS Loader Module Shim (REPL prereq)
+- `libjs/shims/internal/modules/cjs/loader.js`: minimal `Module` class for REPL and helpers.js
+- REPL uses: `builtinModules`, `_nodeModulePaths`, `_resolveLookupPaths`, `_resolveFilename`, `_extensions`, `_cache`, `globalPaths`, constructor, `require()`
+- `Module.builtinModules` derived from `BuiltinModule.getAllBuiltinModuleIds()` (frozen)
+- `Module.prototype.require` delegates to `globalThis.require` (our loader)
+- `_resolveFilename` returns request as-is for non-builtins (our loader handles resolution)
+- Real `internal/modules/cjs/loader.js` (2000+ lines) is too complex to use directly
+- **BuiltinModule shim** now includes `domain` and `vm` (33 modules total)
+
 ## Embedded Module Build Gotchas
 - Shim resolution (`libjs/shims/` vs `libjs-node/`) uses CMake `EXISTS` check at configure time. Adding a new shim file requires `cmake` reconfigure before `cmake --build`.
 

@@ -55,7 +55,7 @@ be omitted):
 | R11 | Verify `vm` module loads | R7, R8, R9 | done | |
 | R12 | Verify `readline` module loads | R6 | done | Test already exists from R6 |
 | R13 | Verify `domain` module loads | R5 | done | Test already exists from R5 |
-| R14 | Shim CJS loader `Module` class for REPL | R2 | | |
+| R14 | Shim CJS loader `Module` class for REPL | R2 | done | |
 | R15 | Wire REPL entry point in `hermes-node.cpp` | R7, R11 | | |
 | R16 | Handle `repl.js` line 216 -- `vm.runInNewContext` | R9 | | |
 | R17 | Integration test -- REPL loads | R1-R6, R7-R9, R14-R16 | | |
@@ -127,4 +127,10 @@ be omitted):
 ### R13: Verify `domain` module loads
 - **What was done**: Verified that the existing `test/test-domain-basic.js` (created in R5) passes. The test covers `require('domain')`, `create()`, `enter`/`exit`, `run`, `bind`, `add`/`remove`, error handling, and `intercept`. All 97 JS tests pass.
 - **Notes for next step**: No new files needed. R5 already created a comprehensive test.
+
+### R14: Shim CJS loader `Module` class for REPL
+- **Files**: created `libjs/shims/internal/modules/cjs/loader.js`, `test/test-cjs-loader-module.js`. Modified `lib/embedded-modules/embedded-modules.txt`, `libjs/shims/internal/bootstrap/realm.js`.
+- **What was done**: Created shim providing `Module` class with all properties/methods the REPL needs: `builtinModules` (from BuiltinModule), `_nodeModulePaths` (POSIX node_modules path generation), `_resolveLookupPaths`, `_resolveFilename`, `_extensions`, `_cache`, `globalPaths`, and constructor with `require()` method delegating to `globalThis.require`. Also added `domain` and `vm` to the BuiltinModule shim's known module list (now 33 modules). Test verifies all Module class features plus integration with `makeRequireFunction` and `addBuiltinLibsToObject` from the helpers shim.
+- **Decisions**: Shimmed rather than using real `internal/modules/cjs/loader.js` because the original (2000+ lines) has deep dependencies on `internal/modules/package_json_reader`, `internal/assert`, `internal/source_map`, V8-specific APIs, and the full CJS resolution algorithm. Our shim is ~130 lines providing just what the REPL needs. `Module.prototype.require` delegates to `globalThis.require` (our loader). `_resolveFilename` returns the request as-is for non-builtins since our loader handles resolution.
+- **Notes for next step**: The `_nodeModulePaths` implementation skips segments named `node_modules` (matching Node behavior). `_resolveLookupPaths` handles built-in (returns null), non-relative (uses parent paths + globalPaths), relative with no parent (returns `['.']`), and relative with parent filename (returns parent dir). This is sufficient for REPL tab-completion which uses `_extensions`, `_resolveLookupPaths`, and `globalPaths`.
 

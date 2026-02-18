@@ -145,5 +145,6 @@ internal/vm
 
 # REPL support
 domain
+internal/modules/cjs/loader
 internal/modules/helpers
 internal/modules/esm/formats
