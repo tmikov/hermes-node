@@ -46,7 +46,7 @@ be omitted):
 | R2 | Shim `internal/modules/helpers.js` | R1 | done | |
 | R3 | Enhance `BuiltinModule` shim for REPL | — | done | |
 | R4 | Stub `internal/modules/esm/formats.js` | — | done | |
-| R5 | Stub `domain` module | — | | |
+| R5 | Stub `domain` module | — | done | |
 | R6 | Remove `internal/readline/interface.js` shim | — | | |
 | R7 | Implement minimal contextify -- ContextifyScript | — | | |
 | R8 | Stub `startSigintWatchdog` / `stopSigintWatchdog` | R7 | | |
@@ -86,4 +86,9 @@ be omitted):
 - **Files**: created `libjs/shims/internal/modules/esm/formats.js`, `test/test-esm-formats.js`. Modified `lib/embedded-modules/embedded-modules.txt`.
 - **What was done**: Created shim providing `extensionFormatMap` (static map: `.cjs`->`commonjs`, `.js`->`module`, `.json`->`json`, `.mjs`->`module`, `.wasm`->`wasm`), `mimeToFormat` (regex-based MIME detection), and `getFormatOfExtensionlessFile` (stub returning `'module'`).
 - **Decisions**: Shimmed rather than using the real module because it depends on `internalBinding('constants').internal` (our constants binding lacks the `internal` sub-object) and `fsBindings.getFormatOfExtensionlessFile` (not implemented). The REPL only needs `extensionFormatMap`.
+
+### R5: Stub `domain` module
+- **Files**: created `libjs/shims/domain.js`, `test/test-domain-basic.js`. Modified `lib/embedded-modules/embedded-modules.txt`.
+- **What was done**: Created minimal domain shim with Domain class extending EventEmitter, providing `enter`, `exit`, `run`, `bind`, `intercept`, `add`, `remove`, `_errorHandler` methods. Exports `create()`, `createDomain()`, `Domain`, `active: null`. Sets `process.domain` as getter/setter. Test covers all exported functionality.
+- **Decisions**: Shimmed rather than using the real `domain.js` because it depends on `async_hooks` -> `internal/async_hooks` -> `internalBinding('async_context_frame')` (not implemented) and `internal/util.WeakReference`. Also calls `process.hasUncaughtExceptionCaptureCallback()` at load time (not on our process object). The REPL uses domain only for error isolation (`_domain.bind(eval_)` and `_domain.on('error', ...)`), so a minimal shim suffices.
 

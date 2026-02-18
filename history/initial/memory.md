@@ -215,6 +215,12 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - Real module needs `internalBinding('constants').internal` (not in our constants binding) and `fsBindings.getFormatOfExtensionlessFile` (not implemented)
 - REPL only uses `extensionFormatMap`
 
+## Domain Shim (REPL prereq)
+- `libjs/shims/domain.js`: minimal Domain class extending EventEmitter
+- Real `domain.js` blocked by: `async_hooks` -> `internal/async_hooks` -> `internalBinding('async_context_frame')` (missing), `internal/util.WeakReference`, `process.hasUncaughtExceptionCaptureCallback()` (not on our process)
+- REPL uses domain for: `_domain.bind(eval_)`, `_domain.on('error', ...)`, `process.domain` check
+- Shim provides: `create`, `createDomain`, `Domain`, `active`, `enter/exit/run/bind/intercept/add/remove/_errorHandler`
+
 ## Embedded Module Build Gotchas
 - Shim resolution (`libjs/shims/` vs `libjs-node/`) uses CMake `EXISTS` check at configure time. Adding a new shim file requires `cmake` reconfigure before `cmake --build`.
 

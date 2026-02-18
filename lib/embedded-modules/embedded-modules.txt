@@ -131,5 +131,6 @@ internal/fs/streams
 internal/process/signal
 
 # REPL support
+domain
 internal/modules/helpers
 internal/modules/esm/formats
