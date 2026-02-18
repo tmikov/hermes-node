@@ -44,7 +44,7 @@ be omitted):
 |------|-------------|------------|--------|-----------------------|
 | R1 | Stub `internalBinding('modules')` | — | done | |
 | R2 | Shim `internal/modules/helpers.js` | R1 | done | |
-| R3 | Enhance `BuiltinModule` shim for REPL | — | | |
+| R3 | Enhance `BuiltinModule` shim for REPL | — | done | |
 | R4 | Stub `internal/modules/esm/formats.js` | — | | |
 | R5 | Stub `domain` module | — | | |
 | R6 | Remove `internal/readline/interface.js` shim | — | | |
@@ -76,4 +76,9 @@ be omitted):
 - **What was done**: Created shim providing `makeRequireFunction` and `addBuiltinLibsToObject` for the REPL, plus all other exports from Node's original as stubs. Both key functions lazily load `Module` from `internal/modules/cjs/loader` (will be provided by R14). Also exports `constants`, `compileCacheStatus`, `stripBOM`, `enableCompileCache`, `getCjsConditions`, etc. as stubs.
 - **Decisions**: Shimmed rather than using the real `helpers.js` because the original has heavy dependencies (`internal/fs/utils`, `internal/assert`, `internal/url`, `internalBinding('url')`, `internal/modules/package_json_reader.js`, debuglog). Our shim is self-contained, depending only on primordials, `internal/validators`, `internal/util`, and `internalBinding('modules')`.
 - **Notes for next step**: `makeRequireFunction` and `addBuiltinLibsToObject` cannot be called until R14 provides the `Module` class via `internal/modules/cjs/loader` shim. The test verifies exports exist and stubs work, but does not exercise the lazy Module loading path. CMake reconfigure required when adding new shim files (build uses `EXISTS` check at configure time).
+
+### R3: Enhance `BuiltinModule` shim for REPL
+- **Files**: modified `libjs/shims/internal/bootstrap/realm.js`, created `test/test-builtin-module-shim.js`.
+- **What was done**: Enhanced the `BuiltinModule` shim with a list of 31 public built-in module names. Added `getSchemeOnlyModuleNames()` (returns `[]`), `normalizeRequirableId()`, `getAllBuiltinModuleIds()`, constructor. Made `exists`/`canBeRequiredByUsers`/`canBeRequiredWithoutScheme`/`isBuiltin` work against the known module set. Populated `BuiltinModule.map` with instances.
+- **Decisions**: Returned empty array from `getSchemeOnlyModuleNames()` since we don't support any scheme-only modules (test, sea, sqlite, quic). Included all modules we currently support plus a few we'll add soon (readline/promises, stream/web, etc.).
 

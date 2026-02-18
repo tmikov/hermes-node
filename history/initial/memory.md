@@ -37,6 +37,7 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 ## Key Shims
 - `internal/abort_controller.js`: minimal AbortController/AbortSignal using EventEmitter (original depends on `event_target` -> `internalBinding('performance')`)
 - `internal/event_target.js`: exports `kWeakHandler`/`kResistStopPropagation` symbols only
+- `internal/bootstrap/realm.js`: `BuiltinModule` class with 31 public module names. `getSchemeOnlyModuleNames()` returns `[]`. `exists`/`isBuiltin`/`normalizeRequirableId` work against known set. `map` populated with instances.
 - `internal/readline/interface.js`: stub (original chain: readline -> repl/history -> os -> credentials)
 - `internal/worker/js_transferable.js`: stub (original needs internalBinding('messaging'))
 - `internal/blob.js`, `internal/process/permission.js`: stubs
