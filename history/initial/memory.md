@@ -264,6 +264,7 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `internal/modules/esm/utils` shim: no-op `registerModule` (real module needs full ESM loader).
 - `internal/util/inspector.js` uses the real Node file (loads fine since `internalBinding('config').hasInspector === false` causes `sendInspectorCommand` to always call onError callback).
 - `let`/`const` don't persist across REPL lines (Hermes eval limitation -- each `napi_run_script` is a separate script context). `var` works.
+- `repl.js` line 216 `vm.runInNewContext('Object.getOwnPropertyNames(globalThis)')` runs at load time. Returns main context globals (no sandboxing) -- acceptable for tab-completion filtering.
 
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

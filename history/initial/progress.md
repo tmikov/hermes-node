@@ -57,7 +57,7 @@ be omitted):
 | R13 | Verify `domain` module loads | R5 | done | Test already exists from R5 |
 | R14 | Shim CJS loader `Module` class for REPL | R2 | done | |
 | R15 | Wire REPL entry point in `hermes-node.cpp` | R7, R11 | done | |
-| R16 | Handle `repl.js` line 216 -- `vm.runInNewContext` | R9 | | |
+| R16 | Handle `repl.js` line 216 -- `vm.runInNewContext` | R9 | done | |
 | R17 | Integration test -- REPL loads | R1-R6, R7-R9, R14-R16 | | |
 | R18 | REPL entry point test (pipe mode) | R15, R17 | | |
 | R19 | Implement SIGINT watchdog | R7, R8 | | |
@@ -144,3 +144,8 @@ be omitted):
 -- `let`/`const` declarations don't persist across REPL lines (each eval is a separate script context in Hermes). `var` works correctly.
 - **Issues**: `let`/`const` not persisting is a known Hermes eval limitation. Node handles this with special wrapping but our contextify implementation evaluates each line as a separate script.
 - **Notes for next step**: R16 (vm.runInNewContext at repl load) should already work since R9 implemented makeContext. R17 can build on test-repl-entry.js for integration testing. R18 is essentially done (test-repl-entry.js covers pipe mode).
+
+### R16: Handle `repl.js` line 216 -- `vm.runInNewContext`
+- **Files**: created `test/test-repl-runInNewContext.js`.
+- **What was done**: Verified that `repl.js` line 216 (`new SafeSet(vm.runInNewContext('Object.getOwnPropertyNames(globalThis)'))`) works at module load time. Our `makeContext` (R9) marks the sandbox and `runInContext` evals in the main context, so `Object.getOwnPropertyNames(globalThis)` returns the main context's global names. This is acceptable for the REPL's tab-completion filtering use case. Test verifies: (1) `vm.runInNewContext` returns an array of global property names including `Object`/`Array`/`String`, (2) `require('repl')` loads without error, (3) REPL can be started with programmatic streams and eval produces correct output.
+- **Notes for next step**: R17 (integration test) is now unblocked -- all R1-R16 dependencies are satisfied. The existing `test-repl-entry.js` (from R15) already covers pipe-mode REPL behavior, and `test-repl-runInNewContext.js` covers programmatic REPL startup.
