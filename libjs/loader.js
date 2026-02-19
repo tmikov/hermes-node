@@ -20,9 +20,10 @@
   // The setup function receives:
   //   loadBytecodeModule(id) -> function|undefined  (native: load pre-compiled bytecode)
   //   readFileSync(path) -> string  (native: reads file from disk, for user scripts)
+  //   evalTS(source, sourceUrl) -> value  (native: compile+run with TypeScript enabled)
   //   primordials         -> object  (the primordials object)
   //   internalBinding     -> function (the internalBinding function)
-  return function setup(loadBytecodeModule, readFileSync, primordials, internalBinding) {
+  return function setup(loadBytecodeModule, readFileSync, evalTS, primordials, internalBinding) {
     // Module cache: moduleId -> { exports, loaded }
     var cache = Object.create(null);
 
@@ -45,10 +46,16 @@
           source +
           '\n});\n//# sourceURL=' + filepath + '\n';
 
-        // Compile the wrapper. This gives us a function.
-        // We use an indirect eval via (0, eval) to get global scope eval in
-        // strict mode contexts.
-        compiledFn = (0, eval)(wrapped);
+        // Compile the wrapper. For .ts files, use the native TypeScript
+        // parser; for .js files, use standard eval.
+        if (filepath.length > 3 &&
+            filepath.substring(filepath.length - 3) === '.ts') {
+          compiledFn = evalTS(wrapped, filepath);
+        } else {
+          // We use an indirect eval via (0, eval) to get global scope eval in
+          // strict mode contexts.
+          compiledFn = (0, eval)(wrapped);
+        }
       }
 
       // Create the module object.
@@ -104,12 +111,16 @@
     }
 
     // Resolve a relative require to a file path, trying CJS conventions:
-    // 1. exact path, 2. path + .js, 3. path/index.js
+    // 1. exact path, 2. path + .js, 3. path + .ts,
+    // 4. path/index.js, 5. path/index.ts
     function resolveRelative(fromDir, name) {
       var base = resolvePath(fromDir, name);
-      // If already ends in .js, use as-is.
-      if (base.length > 3 && base.substring(base.length - 3) === '.js') {
-        return base;
+      // If already ends in .js or .ts, use as-is.
+      if (base.length > 3) {
+        var ext = base.substring(base.length - 3);
+        if (ext === '.js' || ext === '.ts') {
+          return base;
+        }
       }
       // Try base.js first.
       var withJs = base + '.js';
@@ -119,11 +130,27 @@
       } catch (e) {
         // fall through
       }
+      // Try base.ts.
+      var withTs = base + '.ts';
+      try {
+        readFileSync(withTs);
+        return withTs;
+      } catch (e) {
+        // fall through
+      }
       // Try base/index.js (directory with index).
       var indexJs = base + '/index.js';
       try {
         readFileSync(indexJs);
         return indexJs;
+      } catch (e) {
+        // fall through
+      }
+      // Try base/index.ts.
+      var indexTs = base + '/index.ts';
+      try {
+        readFileSync(indexTs);
+        return indexTs;
       } catch (e) {
         // fall through
       }

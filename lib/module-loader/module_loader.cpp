@@ -8,6 +8,8 @@
 #include <hermes/node-compat/embedded-modules/embedded_modules.h>
 #include <hermes/node-compat/module-loader/module_loader.h>
 
+#include "napi/hermes_napi.h"
+
 #include <js_native_api.h>
 #include <node_api.h>
 
@@ -93,6 +95,71 @@ static napi_value readFileSyncCallback(napi_env env, napi_callback_info info) {
   return result;
 }
 
+/// Native callback for __evalTS(source, sourceUrl) -> value.
+/// Compiles and runs a source string with TypeScript parsing enabled.
+/// Used by the JS loader to execute .ts module source.
+static napi_value evalTSCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_status status =
+      napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (status != napi_ok)
+    return nullptr;
+
+  if (argc < 2) {
+    napi_throw_type_error(
+        env, nullptr, "__evalTS requires (source, sourceUrl) arguments");
+    return nullptr;
+  }
+
+  // Get the source string length.
+  size_t sourceLen = 0;
+  status = napi_get_value_string_utf8(env, argv[0], nullptr, 0, &sourceLen);
+  if (status != napi_ok) {
+    napi_throw_type_error(env, nullptr, "__evalTS: source must be a string");
+    return nullptr;
+  }
+
+  // Allocate buffer for source + null terminator.
+  // hermes_run_script uses zero-copy when the last byte is '\0'.
+  std::string source(sourceLen, '\0');
+  size_t copied = 0;
+  status = napi_get_value_string_utf8(
+      env, argv[0], &source[0], sourceLen + 1, &copied);
+  if (status != napi_ok)
+    return nullptr;
+
+  // Get the sourceUrl string.
+  char urlBuf[4096];
+  size_t urlLen = 0;
+  status =
+      napi_get_value_string_utf8(env, argv[1], urlBuf, sizeof(urlBuf), &urlLen);
+  if (status != napi_ok) {
+    napi_throw_type_error(env, nullptr, "__evalTS: sourceUrl must be a string");
+    return nullptr;
+  }
+
+  // Compile and run with TypeScript support enabled.
+  hermes_run_script_flags flags{};
+  flags.struct_size = sizeof(flags);
+  flags.enable_ts = true;
+
+  napi_value result;
+  status = hermes_run_script(
+      env,
+      reinterpret_cast<const uint8_t *>(source.c_str()),
+      sourceLen + 1, // includes trailing '\0' for zero-copy
+      nullptr,
+      nullptr,
+      urlBuf,
+      &flags,
+      &result);
+  if (status != napi_ok)
+    return nullptr;
+
+  return result;
+}
+
 napi_status ModuleLoader::init(
     napi_env env,
     napi_value primordials,
@@ -143,18 +210,25 @@ napi_status ModuleLoader::init(
   if (status != napi_ok)
     return status;
 
-  // Call setup(loadBytecodeModule, readFileSync, primordials, internalBinding)
-  // Returns the require function.
+  // Create the __evalTS native function (for TypeScript modules).
+  napi_value evalTSFn;
+  status = napi_create_function(
+      env, "__evalTS", NAPI_AUTO_LENGTH, evalTSCallback, nullptr, &evalTSFn);
+  if (status != napi_ok)
+    return status;
+
+  // Call setup(loadBytecodeModule, readFileSync, evalTS, primordials,
+  // internalBinding). Returns the require function.
   napi_value global;
   status = napi_get_global(env, &global);
   if (status != napi_ok)
     return status;
 
   napi_value args[] = {
-      loadBytecodeFn, readFileSyncFn, primordials, internalBindingFn};
+      loadBytecodeFn, readFileSyncFn, evalTSFn, primordials, internalBindingFn};
 
   napi_value requireFn;
-  status = napi_call_function(env, global, setupFn, 4, args, &requireFn);
+  status = napi_call_function(env, global, setupFn, 5, args, &requireFn);
   if (status != napi_ok)
     return status;
 
