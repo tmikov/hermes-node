@@ -7,7 +7,8 @@
 // Require with explicit .ts extension.
 const mod = require('./test-typescript-module.ts');
 if (mod.VERSION !== 1) throw new Error('VERSION');
-if (mod.greet('World') !== 'Hello, World!') throw new Error('greet');
+const g = mod.greet('World');
+if (g.message !== 'Hello, World!') throw new Error('greet');
 
 // Require without extension (auto-resolve should find .ts).
 const mod2 = require('./test-typescript-module');

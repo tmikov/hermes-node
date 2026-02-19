@@ -8,6 +8,18 @@
 const x: number = 42;
 const s: string = 'hello';
 
+// Interface.
+interface Point {
+  x: number;
+  y: number;
+}
+
+const p: Point = { x: 1, y: 2 };
+
+// Type alias.
+type StringOrNumber = string | number;
+const v: StringOrNumber = 123;
+
 // Function with typed parameters and return type.
 function add(a: number, b: number): number {
   return a + b;
@@ -32,6 +44,8 @@ class Greeter {
 // Verify values are correct at runtime.
 if (x !== 42) throw new Error('x');
 if (s !== 'hello') throw new Error('s');
+if (p.x !== 1 || p.y !== 2) throw new Error('p');
+if (v !== 123) throw new Error('v');
 if (add(3, 4) !== 7) throw new Error('add');
 if (identity(99) !== 99) throw new Error('identity');
 

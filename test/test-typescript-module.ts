@@ -1,8 +1,12 @@
 // Copyright (c) Tzvetan Mikov.
 // A TypeScript module used by test-typescript-require.js.
 
-function greet(name: string): string {
-  return 'Hello, ' + name + '!';
+interface Greeting {
+  message: string;
+}
+
+function greet(name: string): Greeting {
+  return { message: 'Hello, ' + name + '!' };
 }
 
 const VERSION: number = 1;
