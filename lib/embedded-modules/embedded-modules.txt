@@ -33,6 +33,7 @@ internal/async_hooks
 internal/blob
 internal/bootstrap/realm
 internal/buffer
+internal/cli_table
 internal/console/constructor
 internal/console/global
 internal/constants
