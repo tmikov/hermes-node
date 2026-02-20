@@ -66,10 +66,10 @@ Hermes sets `-fsanitize=address` via `CMAKE_CXX_FLAGS` inside its subdirectory s
 Hermes uses `add_definitions(-DHERMESVM_GC_${HERMESVM_GCKIND})` scoped to its subdirectory. Our targets that include Hermes VM headers need this define.
 - **Fix:** `target_compile_definitions(... PRIVATE HERMESVM_GC_${HERMESVM_GCKIND})` on each target.
 
-### `hermes_napi.h` Is Heavyweight
-Including `hermes_napi.h` pulls in `hermes/VM/Runtime.h` and all VM internals, requiring LLVH includes and `libhermesvm-config.h`.
-- **Workaround:** Created standalone `hermes_napi_event_loop.h` that duplicates the `hermes_napi_event_loop` struct definition. Bindings library avoids `hermes_napi.h` by using host-provided callbacks (`setTaskQueueDrainMicrotasks`, `setTimersEventLoop`, `setFsEventLoop`, `setFsDirEventLoop`, `setFsEventWrapEventLoop`).
-- **Include order constraint:** When both headers are needed, `hermes_napi.h` must come before `uv_event_loop.h` to avoid struct redefinition.
+### Hermes NAPI Header Organization
+The public Hermes NAPI headers (`hermes_napi.h`, `hermes_napi_compile.h` in `hermes/API/napi/`) are lightweight C headers that only depend on `node_api.h`. The heavyweight internal headers (`hermes_napi_internal.h`, `hermes_napi_impl.h`) are separate and not needed by bindings code.
+- **Include path:** Add `${PROJECT_SOURCE_DIR}/hermes/API/napi` to `target_include_directories` for access to compile/run APIs.
+- **Event loop plumbing:** Bindings library uses host-provided callbacks (`setTaskQueueDrainMicrotasks`, `setTimersEventLoop`, `setFsEventLoop`, etc.) set up in `hermes-node.cpp`.
 
 ### Event Loop Cleanup Order
 `eventLoop.close()` must be called BEFORE `hermes_napi_destroy_env`. Otherwise, async callbacks from in-flight libuv operations fire on a destroyed NAPI environment, causing use-after-free.
