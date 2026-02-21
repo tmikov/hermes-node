@@ -334,5 +334,11 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - **Built-in resolution path**: `require('fs')` -> `Module._resolveFilename` -> `BuiltinModule.normalizeRequirableId` -> `loadBuiltinWithHooks` -> `loadBuiltinModule` -> `BuiltinModule.compileForPublicLoader()` -> bootstrap `requireModule('fs')`.
 - **User script resolution**: `require('./foo')` -> `Module._resolveFilename` -> `_findPath(request, [parentDir])` -> `path.resolve(parentDir, request)` -> try extensions -> `fs.readFileSync` -> `compileFunctionForCJSLoader` -> execute.
 
+## CJS Test Pattern (S8-S14)
+- node_modules tests need scripts in fixture dirs (resolution starts from requiring file's dir)
+- Lit test file in `test/` has RUN/CHECK directives; actual test logic in `test/fixtures/<name>/main.js`
+- Pattern: `// RUN: %hermes-node %source_dir/test/fixtures/<name>/main.js | %FileCheck %s`
+- `fixtures` already excluded in lit.cfg, so .js files in fixture dirs aren't picked up as tests
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

@@ -49,7 +49,7 @@ be omitted):
 | S5 | Embed required modules | S1, S2 | done | |
 | S6 | Create/update shims for newly embedded modules | S5 | done | |
 | S7 | Integrate Node's CJS loader with bootstrap | S3, S6 | done | |
-| S8 | Test: basic node_modules resolution | S7 | | |
+| S8 | Test: basic node_modules resolution | S7 | done | |
 | S9 | Test: package.json "main" field | S7 | | |
 | S10 | Test: package.json "exports" field | S7 | | |
 | S11 | Test: .json file loading | S7 | | |
@@ -126,4 +126,11 @@ be omitted):
 -- Updated test-modules-helpers.js: `hasStartedUserCJSExecution()` now returns `true` because user test scripts go through `Module._compile` which sets the flag.
 - **What was done**: Wired `__loadUserScript()` to use Node's `Module._load()` instead of bootstrap loader's `loadModule()`. User scripts now get full CJS module resolution: `node_modules/` lookup, `package.json` main/exports, `.json` loading, `require.resolve()`, `Module._cache`, `process.mainModule`, and `module.filename`/`__dirname`. Built-in modules resolve via `BuiltinModule.compileForPublicLoader()` -> bootstrap require. Internal/embedded modules resolve via fallback in wrapped `Module._load`. TypeScript files handled via custom `.ts` extension handler using Hermes's native TS compilation. All 111 tests pass (110 existing + 1 new integration test).
 - **Notes for next step**: S8-S14 are test steps that create fixture directories with `node_modules/` structures to verify the full resolution algorithm. The infrastructure is now in place. Key code paths exercised: `Module._resolveFilename` -> `_findPath` -> `resolveExports` for exports field, `Module._nodeModulePaths` for directory traversal, `Module._extensions['.json']` for JSON loading.
+
+### Step S8: Test basic node_modules resolution
+- **Files**: created `test/test-cjs-node-modules-basic.js`, `test/fixtures/node-modules-basic/main.js`, `test/fixtures/node-modules-basic/node_modules/my-package/index.js`.
+- **What was done**: Created fixture directory with `node_modules/my-package/` containing a simple package (`{hello: 'world', version: '1.0.0'}`). Test script (`main.js`) verifies: require('my-package') resolves from node_modules, module caching works (second require returns same instance), module.filename/__dirname are set, require.resolve returns correct path, and Module._cache contains the resolved module. Lit test file runs main.js via `%hermes-node %source_dir/...` pattern. All 112 tests pass (111 existing + 1 new).
+- **Decisions**:
+-- Test script lives in fixtures dir (not test/) because node_modules resolution starts from the requiring file's directory. Lit test file in test/ just has the RUN/CHECK directives.
+- **Notes for next step**: S9-S14 follow the same pattern: fixture dir with node_modules structure + main.js + lit test wrapper in test/.
 
