@@ -204,6 +204,11 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - **Shutdown**: must close native `_handle.close()` on stdio streams BEFORE event loop destroy. Otherwise GC finalizer triggers UAF.
 - `internal/process/signal.js` shimmed (no-op). No `signal_wrap` binding yet.
 
+## Module Wrap Binding (CJS loader prereq)
+- `initModuleWrapBinding` in `node_module_wrap.cpp`: stub for ESM module wrapping
+- Exports: `kEvaluated` (int 4), `createRequiredModuleFacade` (throws ERR_REQUIRE_ESM)
+- CJS loader destructures both at top level: `const { kEvaluated, createRequiredModuleFacade } = internalBinding('module_wrap')`
+
 ## Modules Binding (REPL prereq)
 - `initModulesBinding` in `node_modules.cpp`: stub binding for compile cache and package.json reader functions.
 - Exports: `enableCompileCache`, `getCompileCacheDir`, `flushCompileCache`, `readPackageJSON`, `getPackageScopeConfig`, `getPackageType`, `getNearestParentPackageJSONType`, `setLazyPathHelpers`, `compileCacheStatus` (array).

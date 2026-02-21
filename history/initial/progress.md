@@ -42,7 +42,7 @@ be omitted):
 
 | Step | Description | Depends On | Status | Brief Note (optional) |
 |------|-------------|------------|--------|-----------------------|
-| S1 | Add module_wrap binding stub | — | | |
+| S1 | Add module_wrap binding stub | — | done | |
 | S2 | Implement real readPackageJSON in modules binding | — | | |
 | S3 | Implement real compileFunctionForCJSLoader in contextify binding | — | | |
 | S4 | Add legacyMainResolve to fs binding | — | | |
@@ -59,4 +59,8 @@ be omitted):
 | S15 | Test: real npm package | S8–S14 | | |
 
 ## Context Notes
+
+### Step S1: Add module_wrap binding stub
+- **Files**: created `lib/bindings/node_module_wrap.cpp`, `include/hermes/node-compat/bindings/node_module_wrap.h`; modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`.
+- **What was done**: New `module_wrap` native binding exporting `kEvaluated = 4` (integer constant) and `createRequiredModuleFacade` (function that throws `ERR_REQUIRE_ESM`). Registered in hermes-node.cpp, added to CMake build. All 107 existing tests pass.
 
