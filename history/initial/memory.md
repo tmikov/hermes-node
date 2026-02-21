@@ -354,5 +354,10 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - Non-exported subpaths throw `ERR_PACKAGE_PATH_NOT_EXPORTED` as expected
 - ESM resolver (`internal/modules/esm/resolve.js`) handles all these cases via `packageExportsResolve`
 
+## CJS Circular Dependencies (verified S13)
+- Circular `require()` across node_modules works correctly via Node's partial exports mechanism
+- When A requires B and B requires A: B sees only exports set before the `require('pkg-b')` call in A
+- The exports object is shared by reference, so late additions to A's exports are visible through the reference after resolution completes
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

@@ -54,7 +54,7 @@ be omitted):
 | S10 | Test: package.json "exports" field | S7 | done | |
 | S11 | Test: .json file loading | S7 | done | |
 | S12 | Test: nested node_modules | S7 | done | |
-| S13 | Test: circular deps across node_modules | S7 | | |
+| S13 | Test: circular deps across node_modules | S7 | done | |
 | S14 | Test: require.resolve | S7 | | |
 | S15 | Test: real npm package | S8–S14 | | |
 
@@ -150,4 +150,8 @@ be omitted):
 ### Step S12: Test nested node_modules
 - **Files**: created `test/test-cjs-node-modules-nested.js`, `test/fixtures/node-modules-nested/main.js`, `test/fixtures/node-modules-nested/node_modules/pkg-a/index.js`, `test/fixtures/node-modules-nested/node_modules/pkg-a/node_modules/pkg-b/index.js`, `test/fixtures/node-modules-nested/node_modules/pkg-c/index.js`, `test/fixtures/node-modules-nested/node_modules/pkg-b-hoisted/index.js`.
 - **What was done**: Created fixture directory with 2 levels of node_modules nesting. Structure: top-level has `pkg-a`, `pkg-c`, `pkg-b-hoisted`; `pkg-a` has nested `pkg-b` in its own `node_modules/`. Test verifies 7 cases: (1) `pkg-a` loads from top-level node_modules, (2) `pkg-a`'s nested `pkg-b` loads from `pkg-a/node_modules/pkg-b/`, (3) nested `pkg-b` finds top-level `pkg-c` by walking up the directory tree, (4) `pkg-a` finds hoisted `pkg-b-hoisted` from top-level, (5) `require('pkg-b')` from top level throws MODULE_NOT_FOUND (not visible at top level), (6) `require.resolve('pkg-a')` returns correct path, (7) caching across nesting levels works (same `pkg-c` instance). All 116 tests pass (115 existing + 1 new).
+
+### Step S13: Test circular deps across node_modules
+- **Files**: created `test/test-cjs-node-modules-circular.js`, `test/fixtures/node-modules-circular/main.js`, `test/fixtures/node-modules-circular/node_modules/pkg-a/index.js`, `test/fixtures/node-modules-circular/node_modules/pkg-b/index.js`.
+- **What was done**: Created fixture directory with two mutually-dependent packages: `pkg-a` sets early exports then requires `pkg-b`; `pkg-b` requires `pkg-a` (circular) and captures what's visible. Test verifies 8 cases: (1) no infinite loop, (2) pkg-b loaded by pkg-a, (3) pkg-b saw pkg-a's early exports (name, early value), (4) pkg-b did NOT see pkg-a's late exports at require time (undefined), (5) late export visible via shared exports reference after resolution, (6) pkg-a's late export directly accessible, (7) module caching (same pkg-a instance), (8) cached pkg-b instance matches. All 117 tests pass (116 existing + 1 new).
 
