@@ -359,5 +359,15 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - When A requires B and B requires A: B sees only exports set before the `require('pkg-b')` call in A
 - The exports object is shared by reference, so late additions to A's exports are visible through the reference after resolution completes
 
+## require.resolve API (verified S14)
+- `require.resolve('pkg')` returns absolute path to resolved entry point (respects "main"/"exports")
+- `require.resolve('./relative')` returns absolute path for relative modules
+- `require.resolve('fs')` returns `'fs'` for builtin modules (just the name)
+- `require.resolve.paths('pkg')` returns array of `node_modules/` search directories
+- `require.resolve.paths('fs')` returns `null` for builtin modules
+- `require.resolve('pkg', { paths: [...] })` restricts search to custom paths
+- Non-existent modules throw with `code === 'MODULE_NOT_FOUND'`
+- Implementation: `makeRequireFunction` in `helpers.js` wraps `Module._resolveFilename` / `Module._resolveLookupPaths`
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

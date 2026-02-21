@@ -55,7 +55,7 @@ be omitted):
 | S11 | Test: .json file loading | S7 | done | |
 | S12 | Test: nested node_modules | S7 | done | |
 | S13 | Test: circular deps across node_modules | S7 | done | |
-| S14 | Test: require.resolve | S7 | | |
+| S14 | Test: require.resolve | S7 | done | |
 | S15 | Test: real npm package | S8–S14 | | |
 
 ## Context Notes
@@ -154,4 +154,8 @@ be omitted):
 ### Step S13: Test circular deps across node_modules
 - **Files**: created `test/test-cjs-node-modules-circular.js`, `test/fixtures/node-modules-circular/main.js`, `test/fixtures/node-modules-circular/node_modules/pkg-a/index.js`, `test/fixtures/node-modules-circular/node_modules/pkg-b/index.js`.
 - **What was done**: Created fixture directory with two mutually-dependent packages: `pkg-a` sets early exports then requires `pkg-b`; `pkg-b` requires `pkg-a` (circular) and captures what's visible. Test verifies 8 cases: (1) no infinite loop, (2) pkg-b loaded by pkg-a, (3) pkg-b saw pkg-a's early exports (name, early value), (4) pkg-b did NOT see pkg-a's late exports at require time (undefined), (5) late export visible via shared exports reference after resolution, (6) pkg-a's late export directly accessible, (7) module caching (same pkg-a instance), (8) cached pkg-b instance matches. All 117 tests pass (116 existing + 1 new).
+
+### Step S14: Test require.resolve
+- **Files**: created `test/test-cjs-require-resolve.js`, `test/fixtures/require-resolve/main.js`, `test/fixtures/require-resolve/local-module.js`, `test/fixtures/require-resolve/node_modules/resolve-pkg/package.json`, `test/fixtures/require-resolve/node_modules/resolve-pkg/lib/entry.js`, `test/fixtures/require-resolve/node_modules/resolve-pkg/index.js`.
+- **What was done**: Created fixture directory with `node_modules/resolve-pkg/` (has `"main": "lib/entry.js"` and decoy `index.js`) and a local module. Test verifies 10 cases: (1) `require.resolve('resolve-pkg')` returns absolute path respecting "main" field, (2) `require.resolve('./local-module')` returns absolute path for relative modules, (3) resolving with/without `.js` extension gives same result, (4) `require.resolve` is consistent with what `require()` loads, (5) `require.resolve.paths('resolve-pkg')` returns array of search paths including local `node_modules/`, (6) `require.resolve.paths('fs')` returns null for builtins, (7) `require.resolve('fs')` returns `'fs'` for builtins, (8) `require.resolve` for non-existent package throws MODULE_NOT_FOUND, (9) `require.resolve` with `{ paths: [...] }` option works, (10) `require.resolve` with `{ paths: [] }` throws for non-builtins. All 118 tests pass (117 existing + 1 new).
 
