@@ -20,10 +20,10 @@
   // The setup function receives:
   //   loadBytecodeModule(id) -> function|undefined  (native: load pre-compiled bytecode)
   //   readFileSync(path) -> string  (native: reads file from disk, for user scripts)
-  //   evalTS(source, sourceUrl) -> value  (native: compile+run with TypeScript enabled)
+  //   compileAndRun(source, sourceUrl, enableTS) -> value  (native: compile+run)
   //   primordials         -> object  (the primordials object)
   //   internalBinding     -> function (the internalBinding function)
-  return function setup(loadBytecodeModule, readFileSync, evalTS, primordials, internalBinding) {
+  return function setup(loadBytecodeModule, readFileSync, compileAndRun, primordials, internalBinding) {
     // Module cache: moduleId -> { exports, loaded }
     var cache = Object.create(null);
 
@@ -46,16 +46,10 @@
           source +
           '\n});\n//# sourceURL=' + filepath + '\n';
 
-        // Compile the wrapper. For .ts files, use the native TypeScript
-        // parser; for .js files, use standard eval.
-        if (filepath.length > 3 &&
-            filepath.substring(filepath.length - 3) === '.ts') {
-          compiledFn = evalTS(wrapped, filepath);
-        } else {
-          // We use an indirect eval via (0, eval) to get global scope eval in
-          // strict mode contexts.
-          compiledFn = (0, eval)(wrapped);
-        }
+        // Compile via native hermes_run_script (persistent bytecode).
+        var isTS = filepath.length > 3 &&
+            filepath.substring(filepath.length - 3) === '.ts';
+        compiledFn = compileAndRun(wrapped, filepath, isTS);
       }
 
       // Create the module object.

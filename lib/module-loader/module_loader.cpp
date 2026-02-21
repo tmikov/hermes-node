@@ -95,12 +95,13 @@ static napi_value readFileSyncCallback(napi_env env, napi_callback_info info) {
   return result;
 }
 
-/// Native callback for __evalTS(source, sourceUrl) -> value.
-/// Compiles and runs a source string with TypeScript parsing enabled.
-/// Used by the JS loader to execute .ts module source.
-static napi_value evalTSCallback(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
+/// Native callback for compileAndRun(source, sourceUrl, enableTS) -> value.
+/// Compiles and runs a source string via hermes_run_script with
+/// persistent=true (CJS modules live for the lifetime of the process).
+/// If enableTS is true (must be a boolean), TypeScript parsing is enabled.
+static napi_value compileAndRunCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3];
   napi_status status =
       napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
   if (status != napi_ok)
@@ -108,7 +109,9 @@ static napi_value evalTSCallback(napi_env env, napi_callback_info info) {
 
   if (argc < 2) {
     napi_throw_type_error(
-        env, nullptr, "__evalTS requires (source, sourceUrl) arguments");
+        env,
+        nullptr,
+        "compileAndRun requires (source, sourceUrl[, enableTS]) arguments");
     return nullptr;
   }
 
@@ -116,7 +119,8 @@ static napi_value evalTSCallback(napi_env env, napi_callback_info info) {
   size_t sourceLen = 0;
   status = napi_get_value_string_utf8(env, argv[0], nullptr, 0, &sourceLen);
   if (status != napi_ok) {
-    napi_throw_type_error(env, nullptr, "__evalTS: source must be a string");
+    napi_throw_type_error(
+        env, nullptr, "compileAndRun: source must be a string");
     return nullptr;
   }
 
@@ -135,15 +139,26 @@ static napi_value evalTSCallback(napi_env env, napi_callback_info info) {
   status =
       napi_get_value_string_utf8(env, argv[1], urlBuf, sizeof(urlBuf), &urlLen);
   if (status != napi_ok) {
-    napi_throw_type_error(env, nullptr, "__evalTS: sourceUrl must be a string");
+    napi_throw_type_error(
+        env, nullptr, "compileAndRun: sourceUrl must be a string");
     return nullptr;
   }
 
-  // Compile and run with TypeScript support enabled.
+  // Check optional enableTS flag (must be a boolean if provided).
+  bool enableTS = false;
+  if (argc > 2) {
+    status = napi_get_value_bool(env, argv[2], &enableTS);
+    if (status != napi_ok) {
+      napi_throw_type_error(
+          env, nullptr, "compileAndRun: enableTS must be a boolean");
+      return nullptr;
+    }
+  }
+
   // Persistent: CJS modules live for the lifetime of the process.
   hermes_run_script_flags flags{};
   flags.struct_size = sizeof(flags);
-  flags.enable_ts = true;
+  flags.enable_ts = enableTS;
   flags.persistent = true;
 
   napi_value result;
@@ -212,14 +227,19 @@ napi_status ModuleLoader::init(
   if (status != napi_ok)
     return status;
 
-  // Create the __evalTS native function (for TypeScript modules).
-  napi_value evalTSFn;
+  // Create the compileAndRun native function (for disk modules).
+  napi_value compileAndRunFn;
   status = napi_create_function(
-      env, "__evalTS", NAPI_AUTO_LENGTH, evalTSCallback, nullptr, &evalTSFn);
+      env,
+      "compileAndRun",
+      NAPI_AUTO_LENGTH,
+      compileAndRunCallback,
+      nullptr,
+      &compileAndRunFn);
   if (status != napi_ok)
     return status;
 
-  // Call setup(loadBytecodeModule, readFileSync, evalTS, primordials,
+  // Call setup(loadBytecodeModule, readFileSync, compileAndRun, primordials,
   // internalBinding). Returns the require function.
   napi_value global;
   status = napi_get_global(env, &global);
@@ -227,7 +247,11 @@ napi_status ModuleLoader::init(
     return status;
 
   napi_value args[] = {
-      loadBytecodeFn, readFileSyncFn, evalTSFn, primordials, internalBindingFn};
+      loadBytecodeFn,
+      readFileSyncFn,
+      compileAndRunFn,
+      primordials,
+      internalBindingFn};
 
   napi_value requireFn;
   status = napi_call_function(env, global, setupFn, 5, args, &requireFn);
