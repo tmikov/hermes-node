@@ -1,0 +1,4 @@
+{
+  "name": "string-exports-pkg",
+  "exports": "./main.js"
+}

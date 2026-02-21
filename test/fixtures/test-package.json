@@ -1,0 +1,16 @@
+{
+  "name": "my-test-package",
+  "version": "1.0.0",
+  "main": "lib/index.js",
+  "type": "module",
+  "exports": {
+    ".": {
+      "require": "./cjs.js",
+      "import": "./esm.js"
+    },
+    "./utils": "./utils.js"
+  },
+  "imports": {
+    "#internal": "./src/internal.js"
+  }
+}

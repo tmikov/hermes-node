@@ -1,0 +1,5 @@
+{
+  "name": "cjs-package",
+  "main": "index.js",
+  "type": "commonjs"
+}

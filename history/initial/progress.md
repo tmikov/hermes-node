@@ -43,7 +43,7 @@ be omitted):
 | Step | Description | Depends On | Status | Brief Note (optional) |
 |------|-------------|------------|--------|-----------------------|
 | S1 | Add module_wrap binding stub | — | done | |
-| S2 | Implement real readPackageJSON in modules binding | — | | |
+| S2 | Implement real readPackageJSON in modules binding | — | done | |
 | S3 | Implement real compileFunctionForCJSLoader in contextify binding | — | | |
 | S4 | Add legacyMainResolve to fs binding | — | | |
 | S5 | Embed required modules | S1, S2 | | |
@@ -63,4 +63,15 @@ be omitted):
 ### Step S1: Add module_wrap binding stub
 - **Files**: created `lib/bindings/node_module_wrap.cpp`, `include/hermes/node-compat/bindings/node_module_wrap.h`; modified `lib/bindings/CMakeLists.txt`, `tools/hermes-node/hermes-node.cpp`.
 - **What was done**: New `module_wrap` native binding exporting `kEvaluated = 4` (integer constant) and `createRequiredModuleFacade` (function that throws `ERR_REQUIRE_ESM`). Registered in hermes-node.cpp, added to CMake build. All 107 existing tests pass.
+
+### Step S2: Implement real readPackageJSON in modules binding
+- **Files**: modified `lib/bindings/node_modules.cpp`; created `test/test-read-package-json.js`, `test/fixtures/test-package.json`, `test/fixtures/test-package-cjs.json`, `test/fixtures/test-package-minimal.json`, `test/fixtures/test-package-string-exports.json`, `test/fixtures/test-package-bad-type.json`.
+- **Decisions**:
+-- Used libuv sync fs + JSON.parse/JSON.stringify via NAPI (no simdjson) -- simpler, reuses existing JSON parser.
+-- For imports/exports fields: stringify objects/arrays back to JSON strings (lazy parsing in JS), pass strings as-is, undefined for missing/other types.
+-- Type field normalized to "commonjs", "module", or "none" (matching Node behavior).
+-- BOM stripping added for robustness (JSON.parse doesn't handle BOM).
+-- Other stubs (getPackageScopeConfig, getPackageType, getNearestParentPackageJSONType) left as-is for now -- they return undefined which JS side handles gracefully.
+- **What was done**: Replaced `readPackageJSONCb` stub with full implementation. Reads file via libuv sync API, parses JSON, extracts name/main/type/imports/exports/file_path into 6-element array matching Node's native API contract. Added 6-case test covering: full package.json, CJS type, minimal fields, non-existent file, string exports, invalid type normalization. All 108 tests pass.
+- **Notes for next step**: S5 (embed modules) depends on this. The `getPackageScopeConfig` native function may need real implementation for ESM resolver modules (S5/S6); currently stub returns undefined which JS wraps as `{pjsonPath: undefined, exists: false, type: 'none'}`.
 

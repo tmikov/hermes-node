@@ -209,11 +209,12 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - Exports: `kEvaluated` (int 4), `createRequiredModuleFacade` (throws ERR_REQUIRE_ESM)
 - CJS loader destructures both at top level: `const { kEvaluated, createRequiredModuleFacade } = internalBinding('module_wrap')`
 
-## Modules Binding (REPL prereq)
-- `initModulesBinding` in `node_modules.cpp`: stub binding for compile cache and package.json reader functions.
+## Modules Binding (REPL prereq + CJS loader prereq)
+- `initModulesBinding` in `node_modules.cpp`: compile cache stubs + real `readPackageJSON`.
 - Exports: `enableCompileCache`, `getCompileCacheDir`, `flushCompileCache`, `readPackageJSON`, `getPackageScopeConfig`, `getPackageType`, `getNearestParentPackageJSONType`, `setLazyPathHelpers`, `compileCacheStatus` (array).
-- `compileCacheStatus` is `["FAILED", "ENABLED", "ALREADY_ENABLED", "DISABLED"]` — JS builds name->index map from it.
-- All functions are no-op stubs. `readPackageJSON`/`getPackageScopeConfig`/`getPackageType` return `undefined`.
+- `compileCacheStatus` is `["FAILED", "ENABLED", "ALREADY_ENABLED", "DISABLED"]` -- JS builds name->index map.
+- `readPackageJSON(path, isESM, base, specifier)`: reads file via libuv sync, parses with JSON.parse, returns 6-element array `[name, main, type, imports, exports, file_path]` or undefined. Type normalized to "commonjs"/"module"/"none". Imports/exports stringified for objects/arrays (JS lazily re-parses).
+- Other functions still stubs: `getPackageScopeConfig`/`getPackageType`/`getNearestParentPackageJSONType` return `undefined`. JS `package_json_reader.js` handles undefined gracefully (exists=false, type='none').
 
 ## Modules Helpers Shim (REPL prereq)
 - `libjs/shims/internal/modules/helpers.js`: provides `makeRequireFunction` and `addBuiltinLibsToObject` for the REPL
