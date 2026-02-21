@@ -56,7 +56,7 @@ be omitted):
 | S12 | Test: nested node_modules | S7 | done | |
 | S13 | Test: circular deps across node_modules | S7 | done | |
 | S14 | Test: require.resolve | S7 | done | |
-| S15 | Test: real npm package | S8–S14 | | |
+| S15 | Test: real npm package | S8–S14 | done | |
 
 ## Context Notes
 
@@ -158,4 +158,12 @@ be omitted):
 ### Step S14: Test require.resolve
 - **Files**: created `test/test-cjs-require-resolve.js`, `test/fixtures/require-resolve/main.js`, `test/fixtures/require-resolve/local-module.js`, `test/fixtures/require-resolve/node_modules/resolve-pkg/package.json`, `test/fixtures/require-resolve/node_modules/resolve-pkg/lib/entry.js`, `test/fixtures/require-resolve/node_modules/resolve-pkg/index.js`.
 - **What was done**: Created fixture directory with `node_modules/resolve-pkg/` (has `"main": "lib/entry.js"` and decoy `index.js`) and a local module. Test verifies 10 cases: (1) `require.resolve('resolve-pkg')` returns absolute path respecting "main" field, (2) `require.resolve('./local-module')` returns absolute path for relative modules, (3) resolving with/without `.js` extension gives same result, (4) `require.resolve` is consistent with what `require()` loads, (5) `require.resolve.paths('resolve-pkg')` returns array of search paths including local `node_modules/`, (6) `require.resolve.paths('fs')` returns null for builtins, (7) `require.resolve('fs')` returns `'fs'` for builtins, (8) `require.resolve` for non-existent package throws MODULE_NOT_FOUND, (9) `require.resolve` with `{ paths: [...] }` option works, (10) `require.resolve` with `{ paths: [] }` throws for non-builtins. All 118 tests pass (117 existing + 1 new).
+
+### Step S15: Test real npm package
+- **Files**: created `test/test-cjs-real-npm-package.js`, `test/fixtures/real-npm-package/main.js`, `test/fixtures/real-npm-package/package.json`, `test/fixtures/real-npm-package/package-lock.json`, `test/fixtures/real-npm-package/node_modules/minimist/` (full npm install).
+- **What was done**: Installed `minimist@1.2.8` via `npm install` in a fixture directory. Created test script verifying 9 cases: (1) `require('minimist')` loads the real npm package (returns a function), (2) basic argument parsing (--name, --count, positionals), (3) boolean/string options and grouped short flags (-abc, --beep=boop), (4) default values, (5) alias option (-v -> verbose), (6) `--` stops parsing, (7) module caching (same reference), (8) require.resolve returns correct path, (9) loading package.json via require to verify metadata. All 119 tests pass (118 existing + 1 new).
+- **Decisions**:
+-- Chose `minimist` (1.2.8): zero dependencies, single file (~260 lines), widely-used, exercises multiple JS features (object manipulation, type coercion, array handling).
+-- Committed full `node_modules/minimist/` directory as test fixture (136KB, 24 files). Acceptable size for integration test.
+-- Kept npm-generated `package.json` and `package-lock.json` in fixture dir (realistic npm project structure).
 

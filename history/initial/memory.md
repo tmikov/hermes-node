@@ -369,5 +369,9 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - Non-existent modules throw with `code === 'MODULE_NOT_FOUND'`
 - Implementation: `makeRequireFunction` in `helpers.js` wraps `Module._resolveFilename` / `Module._resolveLookupPaths`
 
+## Real npm Package Loading (verified S15)
+- `npm install minimist` in a fixture dir + `require('minimist')` works end-to-end
+- Full CJS module resolution plan (S1-S15) is complete: node_modules traversal, package.json main/exports, JSON loading, nested deps, circular deps, require.resolve, and real npm packages all work
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues
