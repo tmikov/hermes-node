@@ -340,6 +340,12 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - Pattern: `// RUN: %hermes-node %source_dir/test/fixtures/<name>/main.js | %FileCheck %s`
 - `fixtures` already excluded in lit.cfg, so .js files in fixture dirs aren't picked up as tests
 
+## CJS JSON Loading (verified S11)
+- `require('./data.json')` works via `Module._extensions['.json']` (reads file, strips BOM, JSON.parse)
+- JSON from node_modules via `index.json` works (e.g. `require('json-pkg')` finds `index.json`)
+- Package with `"main"` pointing to `.json` file works (e.g. `"main": "config.json"`)
+- JSON modules are cached (same reference on repeated require)
+
 ## CJS Exports Resolution (verified S10)
 - Conditional exports (`"require"` vs `"import"` conditions) work correctly -- `require()` picks the `"require"` condition
 - Subpath exports (`"./utils": "./utils.js"`) resolve correctly

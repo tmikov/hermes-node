@@ -52,7 +52,7 @@ be omitted):
 | S8 | Test: basic node_modules resolution | S7 | done | |
 | S9 | Test: package.json "main" field | S7 | done | |
 | S10 | Test: package.json "exports" field | S7 | done | |
-| S11 | Test: .json file loading | S7 | | |
+| S11 | Test: .json file loading | S7 | done | |
 | S12 | Test: nested node_modules | S7 | | |
 | S13 | Test: circular deps across node_modules | S7 | | |
 | S14 | Test: require.resolve | S7 | | |
@@ -141,4 +141,9 @@ be omitted):
 ### Step S10: Test package.json "exports" field
 - **Files**: created `test/test-cjs-node-modules-exports.js`, `test/fixtures/node-modules-exports/main.js`, `test/fixtures/node-modules-exports/node_modules/my-package/` (package.json + cjs.js + utils.js + lib/helper.js + index.js decoy + esm.mjs decoy), `test/fixtures/node-modules-exports/node_modules/simple-exports/` (package.json + main.js + index.js decoy).
 - **What was done**: Created two fixture packages: `my-package` with conditional exports (`"require"` vs `"import"` conditions), subpath exports (`"./utils"`), and wildcard pattern exports (`"./lib/*"`); `simple-exports` with string exports (`"exports": "./main.js"`). Test verifies 7 cases: (1) conditional exports pick "require" condition over "import", (2) require.resolve respects exports field, (3) subpath export `./utils` resolves correctly, (4) wildcard export `./lib/*` resolves `lib/helper.js`, (5) simple string exports loads correct entry, (6) require.resolve for string exports works, (7) non-exported subpath throws ERR_PACKAGE_PATH_NOT_EXPORTED. All 114 tests pass (113 existing + 1 new).
+
+### Step S11: Test .json file loading
+- **Files**: created `test/test-cjs-require-json.js`, `test/fixtures/require-json/main.js`, `test/fixtures/require-json/data.json`, `test/fixtures/data.json`, `test/fixtures/require-json/node_modules/json-pkg/index.json`, `test/fixtures/require-json/node_modules/json-main-pkg/package.json`, `test/fixtures/require-json/node_modules/json-main-pkg/config.json`.
+- **What was done**: Created fixture directory with JSON data file and two node_modules packages. Test verifies 6 cases: (1) `require('./data.json')` loads and parses JSON correctly (string, number, nested object/array, null fields), (2) nested objects and arrays are preserved, (3) second require returns same cached reference, (4) `require.resolve('./data.json')` returns absolute path, (5) JSON from node_modules via `index.json` works (`require('json-pkg')`), (6) package with `"main"` pointing to a `.json` file works (`require('json-main-pkg')` loads `config.json`). All 115 tests pass (114 existing + 1 new).
+- **Notes for next step**: JSON loading uses `Module._extensions['.json']` from Node's real CJS loader (reads file, strips BOM, calls `JSON.parse`). No special handling needed on our side -- it just works.
 

@@ -1,0 +1,9 @@
+{
+  "key": "value",
+  "number": 42,
+  "nested": {
+    "array": [1, 2, 3],
+    "bool": true
+  },
+  "empty": null
+}
