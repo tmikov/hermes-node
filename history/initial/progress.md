@@ -53,7 +53,7 @@ be omitted):
 | S9 | Test: package.json "main" field | S7 | done | |
 | S10 | Test: package.json "exports" field | S7 | done | |
 | S11 | Test: .json file loading | S7 | done | |
-| S12 | Test: nested node_modules | S7 | | |
+| S12 | Test: nested node_modules | S7 | done | |
 | S13 | Test: circular deps across node_modules | S7 | | |
 | S14 | Test: require.resolve | S7 | | |
 | S15 | Test: real npm package | S8–S14 | | |
@@ -146,4 +146,8 @@ be omitted):
 - **Files**: created `test/test-cjs-require-json.js`, `test/fixtures/require-json/main.js`, `test/fixtures/require-json/data.json`, `test/fixtures/data.json`, `test/fixtures/require-json/node_modules/json-pkg/index.json`, `test/fixtures/require-json/node_modules/json-main-pkg/package.json`, `test/fixtures/require-json/node_modules/json-main-pkg/config.json`.
 - **What was done**: Created fixture directory with JSON data file and two node_modules packages. Test verifies 6 cases: (1) `require('./data.json')` loads and parses JSON correctly (string, number, nested object/array, null fields), (2) nested objects and arrays are preserved, (3) second require returns same cached reference, (4) `require.resolve('./data.json')` returns absolute path, (5) JSON from node_modules via `index.json` works (`require('json-pkg')`), (6) package with `"main"` pointing to a `.json` file works (`require('json-main-pkg')` loads `config.json`). All 115 tests pass (114 existing + 1 new).
 - **Notes for next step**: JSON loading uses `Module._extensions['.json']` from Node's real CJS loader (reads file, strips BOM, calls `JSON.parse`). No special handling needed on our side -- it just works.
+
+### Step S12: Test nested node_modules
+- **Files**: created `test/test-cjs-node-modules-nested.js`, `test/fixtures/node-modules-nested/main.js`, `test/fixtures/node-modules-nested/node_modules/pkg-a/index.js`, `test/fixtures/node-modules-nested/node_modules/pkg-a/node_modules/pkg-b/index.js`, `test/fixtures/node-modules-nested/node_modules/pkg-c/index.js`, `test/fixtures/node-modules-nested/node_modules/pkg-b-hoisted/index.js`.
+- **What was done**: Created fixture directory with 2 levels of node_modules nesting. Structure: top-level has `pkg-a`, `pkg-c`, `pkg-b-hoisted`; `pkg-a` has nested `pkg-b` in its own `node_modules/`. Test verifies 7 cases: (1) `pkg-a` loads from top-level node_modules, (2) `pkg-a`'s nested `pkg-b` loads from `pkg-a/node_modules/pkg-b/`, (3) nested `pkg-b` finds top-level `pkg-c` by walking up the directory tree, (4) `pkg-a` finds hoisted `pkg-b-hoisted` from top-level, (5) `require('pkg-b')` from top level throws MODULE_NOT_FOUND (not visible at top level), (6) `require.resolve('pkg-a')` returns correct path, (7) caching across nesting levels works (same `pkg-c` instance). All 116 tests pass (115 existing + 1 new).
 
