@@ -6,6 +6,8 @@
  */
 
 #include <hermes/node-compat/bindings/node_contextify.h>
+#include <napi/hermes_napi.h>
+#include <napi/hermes_napi_compile.h>
 #include <node_api.h>
 
 #include <atomic>
@@ -81,13 +83,27 @@ static std::string napiGetString(napi_env env, napi_value value) {
 }
 
 // ---------------------------------------------------------------------------
-// ContextifyScript -- wraps compiled script source for evaluation.
+// ContextifyScript -- compiles source to bytecode in constructor, caches it,
+// and executes via hermes_run_bytecode in runInContext.
 //
-// In Node, this compiles the script into V8's internal representation and
-// caches it. Since Hermes does not expose a compile-without-execute API
-// through NAPI, we store the source string and evaluate it on each
-// runInContext call via napi_run_script.
+// Compiling in the constructor throws SyntaxError immediately on parse
+// failure, which the REPL depends on for multi-line input detection.
 // ---------------------------------------------------------------------------
+
+/// Cached compiled bytecode, attached to the JS object via
+/// napi_create_external.
+struct CompiledScript {
+  uint8_t *bytecode;
+  size_t bytecodeSize;
+  ~CompiledScript() {
+    hermes_free_bytecode(bytecode);
+  }
+};
+
+static void
+compiledScriptDestroy(napi_env /*env*/, void *data, void * /*hint*/) {
+  delete static_cast<CompiledScript *>(data);
+}
 
 /// ContextifyScript constructor callback.
 ///
@@ -96,8 +112,8 @@ static std::string napiGetString(napi_env env, napi_value value) {
 ///                        cachedData, produceCachedData, parsingContext,
 ///                        hostDefinedOptionId)
 ///
-/// For our implementation we only use code and filename.
-/// We store them as properties on the JS object using internal keys.
+/// Compiles source to bytecode and caches it. Throws SyntaxError on
+/// parse failure.
 static napi_value contextifyScriptNew(napi_env env, napi_callback_info info) {
   napi_handle_scope scope;
   napi_open_handle_scope(env, &scope);
@@ -109,26 +125,17 @@ static napi_value contextifyScriptNew(napi_env env, napi_callback_info info) {
 
   // argv[0] = code (string)
   // argv[1] = filename (string)
-  // argv[2] = lineOffset (int32) -- ignored
-  // argv[3] = columnOffset (int32) -- ignored
-  // argv[4] = cachedData (ArrayBufferView or undefined) -- ignored
-  // argv[5] = produceCachedData (bool) -- ignored
-  // argv[6] = parsingContext (object or undefined) -- ignored
-  // argv[7] = hostDefinedOptionId (symbol) -- ignored
+  // argv[2..7] ignored
 
-  // Get the code string.
   std::string code;
-  if (argc > 0) {
+  if (argc > 0)
     code = napiGetString(env, argv[0]);
-  }
 
-  // Get the filename string (for sourceURL in stack traces).
   std::string filename;
-  if (argc > 1) {
+  if (argc > 1)
     filename = napiGetString(env, argv[1]);
-  }
 
-  // Build the full source: append sourceURL directive for stack traces.
+  // Append sourceURL directive for stack traces.
   std::string fullSource = code;
   if (!filename.empty()) {
     fullSource += "\n//# sourceURL=";
@@ -136,26 +143,37 @@ static napi_value contextifyScriptNew(napi_env env, napi_callback_info info) {
     fullSource += "\n";
   }
 
-  // Store the full source on the object as a non-enumerable property
-  // using a unique key that JS code won't collide with.
-  napi_value sourceKey;
-  napi_create_string_utf8(
-      env, "__contextifySource", NAPI_AUTO_LENGTH, &sourceKey);
-  napi_value sourceVal;
-  napi_create_string_utf8(
-      env, fullSource.c_str(), fullSource.size(), &sourceVal);
+  // Compile to bytecode. Throws SyntaxError on parse failure.
+  hermes_compile_flags cflags{};
+  cflags.struct_size = sizeof(cflags);
+  cflags.strict = false;
+  cflags.emit_async_break_check = true;
+  uint8_t *bytecodeData = nullptr;
+  size_t bytecodeSize = 0;
+  napi_status compileStatus = hermes_compile_to_bytecode(
+      env,
+      reinterpret_cast<const uint8_t *>(fullSource.c_str()),
+      fullSource.size(),
+      filename.empty() ? nullptr : filename.c_str(),
+      &cflags,
+      &bytecodeData,
+      &bytecodeSize);
+  if (compileStatus != napi_ok) {
+    napi_close_handle_scope(env, scope);
+    return nullptr;
+  }
 
-  napi_property_descriptor sourceProp = {
-      nullptr, // utf8name (we use name)
-      sourceKey, // name
-      nullptr, // method
-      nullptr, // getter
-      nullptr, // setter
-      sourceVal, // value
-      napi_default, // attributes (non-enumerable, non-configurable)
-      nullptr, // data
-  };
-  napi_define_properties(env, thisObj, 1, &sourceProp);
+  // Store compiled bytecode on the script object.
+  auto *compiled = new CompiledScript{bytecodeData, bytecodeSize};
+  napi_value external;
+  if (napi_create_external(
+          env, compiled, compiledScriptDestroy, nullptr, &external) !=
+      napi_ok) {
+    delete compiled;
+    napi_close_handle_scope(env, scope);
+    return nullptr;
+  }
+  napi_set_named_property(env, thisObj, "__compiledBytecode", external);
 
   napi_close_handle_scope(env, scope);
   return thisObj;
@@ -182,40 +200,45 @@ static napi_value contextifyScriptRunInContext(
   napi_value thisObj;
   napi_get_cb_info(env, info, &argc, argv, &thisObj, nullptr);
 
-  // Retrieve the stored source code.
-  napi_value sourceKey;
-  napi_create_string_utf8(
-      env, "__contextifySource", NAPI_AUTO_LENGTH, &sourceKey);
-  napi_value sourceVal;
-  bool hasSource = false;
-  napi_has_property(env, thisObj, sourceKey, &hasSource);
-  if (!hasSource) {
+  // Retrieve the cached compiled bytecode.
+  napi_value external;
+  napi_get_named_property(env, thisObj, "__compiledBytecode", &external);
+
+  napi_valuetype extType;
+  napi_typeof(env, external, &extType);
+  if (extType != napi_external) {
     napi_throw_error(
-        env, nullptr, "Script has no source (was it constructed properly?)");
+        env, nullptr, "Script has no bytecode (was it constructed properly?)");
     napi_close_handle_scope(env, scope);
     return nullptr;
   }
-  napi_get_property(env, thisObj, sourceKey, &sourceVal);
 
-  // Evaluate the script via napi_run_script (global context, non-strict).
+  void *data;
+  napi_get_value_external(env, external, &data);
+  auto *compiled = static_cast<CompiledScript *>(data);
+
+  // Execute the cached bytecode.
   napi_value result;
-  napi_status st = napi_run_script(env, sourceVal, &result);
+  napi_status st = hermes_run_bytecode(
+      env,
+      compiled->bytecode,
+      compiled->bytecodeSize,
+      nullptr, // finalize_cb: we own the buffer
+      nullptr, // finalize_hint
+      nullptr, // source_url: already in bytecode
+      nullptr, // flags: defaults
+      &result);
 
   if (st != napi_ok) {
     // Check if this failure was caused by a SIGINT-triggered async break.
-    // If so, convert the uncatchable timeout error into a catchable Error
-    // so the REPL's try/catch can handle it gracefully.
     if (s_sigintReceived.load(std::memory_order_relaxed)) {
-      // Clear the uncatchable pending exception.
       napi_value exc;
       napi_get_and_clear_last_exception(env, &exc);
-      // Throw a catchable error instead.
       napi_throw_error(
           env,
           "ERR_SCRIPT_EXECUTION_INTERRUPTED",
           "Script execution was interrupted by `SIGINT`");
     }
-    // If not SIGINT-related, the original exception is already pending.
     napi_close_handle_scope(env, scope);
     return nullptr;
   }

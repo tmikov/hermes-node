@@ -46,6 +46,8 @@ target_include_directories(hermesNodeBindings
     ${PROJECT_SOURCE_DIR}/include
   PRIVATE
     ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi
+    ${PROJECT_SOURCE_DIR}/hermes/include
+    ${PROJECT_SOURCE_DIR}/hermes/API
 )
 
 target_link_libraries(hermesNodeBindings

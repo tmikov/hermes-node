@@ -12,6 +12,7 @@ add_hermes_tool(hermes-node
     hermesNodeBindings
     hermesNodeModuleLoader
     hermesNodeProcess
+    hermesNapiCompile
     hermesvm_a
 )
 
