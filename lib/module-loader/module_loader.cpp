@@ -140,9 +140,11 @@ static napi_value evalTSCallback(napi_env env, napi_callback_info info) {
   }
 
   // Compile and run with TypeScript support enabled.
+  // Persistent: CJS modules live for the lifetime of the process.
   hermes_run_script_flags flags{};
   flags.struct_size = sizeof(flags);
   flags.enable_ts = true;
+  flags.persistent = true;
 
   napi_value result;
   status = hermes_run_script(

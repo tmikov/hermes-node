@@ -22,8 +22,12 @@ runEmbeddedModule(napi_env env, const char *id, napi_value *result) {
   }
 
   // Static data embedded in the binary -- no finalize callback needed.
+  // Persistent: internal modules live for the lifetime of the process.
+  hermes_bytecode_flags flags{};
+  flags.struct_size = sizeof(flags);
+  flags.persistent = true;
   return hermes_run_bytecode(
-      env, mod->data, mod->size, nullptr, nullptr, id, nullptr, result);
+      env, mod->data, mod->size, nullptr, nullptr, id, &flags, result);
 }
 
 napi_value loadBytecodeModuleCallback(napi_env env, napi_callback_info info) {
@@ -59,9 +63,13 @@ napi_value loadBytecodeModuleCallback(napi_env env, napi_callback_info info) {
 
   // Run the bytecode. For CJS modules this returns the wrapper function.
   // For bootstrap modules it returns the evaluation result.
+  // Persistent: internal modules live for the lifetime of the process.
+  hermes_bytecode_flags flags{};
+  flags.struct_size = sizeof(flags);
+  flags.persistent = true;
   napi_value result;
   status = hermes_run_bytecode(
-      env, mod->data, mod->size, nullptr, nullptr, idBuf, nullptr, &result);
+      env, mod->data, mod->size, nullptr, nullptr, idBuf, &flags, &result);
   if (status != napi_ok) {
     // Exception is pending; return nullptr to propagate it.
     return nullptr;
