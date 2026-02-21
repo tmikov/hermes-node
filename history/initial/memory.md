@@ -307,5 +307,12 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 ## Test Infrastructure Gotchas
 - **Test timeout rule**: `check-hermes-node` should complete in under 3 minutes. If tests take longer, they have locked up. Use `timeout 180` or equivalent when running the test target.
 
+## CJS Module Resolution -- Embedded Modules (S5)
+- 17 new modules embedded for CJS loader: `package_json_reader`, `customization_hooks`, `typescript`, `run_main` + 13 ESM resolver modules (`resolve`, `assert`, `get_format`, `load`, `loader`, `hooks`, `module_map`, `module_job`, `translators`, `create_dynamic_module`, `initialize_import_meta`, `shared_constants`, `worker`)
+- All compiled to Hermes bytecode successfully (no syntax issues)
+- Existing shims (`cjs/loader`, `helpers`, `esm/formats`, `esm/utils`) still take precedence via shim-first resolution
+- Missing transitive dep: `internal/deps/cjs-module-lexer/lexer` not in libjs-node tree (WASM-based in Node). Needs shim in S6.
+- Other runtime deps not yet embedded: `internal/encoding`, `internal/data_url`, `internal/process/execution`, `internal/error_serdes`, `internal/worker`, `internal/worker/io`. May need shims in S6.
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

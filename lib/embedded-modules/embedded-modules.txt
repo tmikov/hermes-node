@@ -144,11 +144,33 @@ internal/repl/history
 vm
 internal/vm
 
-# REPL support
-domain
+# CJS module resolution support
 internal/modules/cjs/loader
 internal/modules/helpers
+internal/modules/package_json_reader
+internal/modules/customization_hooks
+internal/modules/typescript
+internal/modules/run_main
+
+# ESM resolver (needed by CJS loader for "exports" field resolution)
 internal/modules/esm/formats
+internal/modules/esm/utils
+internal/modules/esm/resolve
+internal/modules/esm/assert
+internal/modules/esm/get_format
+internal/modules/esm/load
+internal/modules/esm/loader
+internal/modules/esm/hooks
+internal/modules/esm/module_map
+internal/modules/esm/module_job
+internal/modules/esm/translators
+internal/modules/esm/create_dynamic_module
+internal/modules/esm/initialize_import_meta
+internal/modules/esm/shared_constants
+internal/modules/esm/worker
+
+# REPL support
+domain
 repl
 internal/repl
 internal/repl/utils
@@ -157,4 +179,3 @@ internal/util/inspector
 internal/deps/acorn/acorn/dist/acorn
 internal/deps/acorn/acorn-walk/dist/walk
 internal/vm/module
-internal/modules/esm/utils

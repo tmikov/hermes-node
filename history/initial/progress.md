@@ -46,7 +46,7 @@ be omitted):
 | S2 | Implement real readPackageJSON in modules binding | — | done | |
 | S3 | Implement real compileFunctionForCJSLoader in contextify binding | — | done | |
 | S4 | Add legacyMainResolve to fs binding | — | done | |
-| S5 | Embed required modules | S1, S2 | | |
+| S5 | Embed required modules | S1, S2 | done | |
 | S6 | Create/update shims for newly embedded modules | S5 | | |
 | S7 | Integrate Node's CJS loader with bootstrap | S3, S6 | | |
 | S8 | Test: basic node_modules resolution | S7 | | |
@@ -93,4 +93,12 @@ be omitted):
 -- No permission checks (we don't have Node's permission model).
 - **What was done**: Added `fsLegacyMainResolve` function and helper `filePathIsFile`. Tries extensions 0-6 for `pkgPath/main`, then 7-9 for `pkgPath/index`. Returns integer index. Added 8-case test covering: exact main match, main+.js, main+/index.js, main+.json, fallback index.js, fallback after main miss, throw on no match with base arg, throw on empty package. Also added `fixtures` to lit.cfg excludes to prevent fixture .js files from being picked up as tests. All 110 tests pass.
 - **Notes for next step**: S5 (embed modules) is now fully unblocked. The ESM resolver (`resolve.js`) calls `FSLegacyMainResolve` via `internalBinding('fs').legacyMainResolve`.
+
+### Step S5: Embed required modules
+- **Files**: modified `lib/embedded-modules/embedded-modules.txt`.
+- **What was done**: Added 17 new modules to the embedded module manifest: 4 CJS loader direct dependencies (`package_json_reader`, `customization_hooks`, `typescript`, `run_main`) and 13 ESM resolver modules (`resolve`, `assert`, `get_format`, `load`, `loader`, `hooks`, `module_map`, `module_job`, `translators`, `create_dynamic_module`, `initialize_import_meta`, `shared_constants`, `worker`). Reorganized the manifest sections: CJS module resolution support, ESM resolver, REPL support. All 17 modules compiled to bytecode successfully on first try with no syntax issues. All 110 existing tests pass.
+- **Decisions**:
+-- Added only the modules specified in the plan. Transitive runtime dependencies (e.g. `internal/encoding`, `internal/deps/cjs-module-lexer/lexer`) will be handled in S6 (shims) or S7 (integration) as needed at runtime.
+-- Existing shims for `internal/modules/cjs/loader`, `internal/modules/helpers`, `internal/modules/esm/formats`, `internal/modules/esm/utils` remain in place (the build system's shim-first resolution picks them up over the libjs-node originals).
+- **Notes for next step**: S6 (create/update shims) is now unblocked. Key concern: many of these modules have runtime dependencies on bindings or features we don't have (e.g. `module_wrap` full API, `inspector`, `worker_threads`). S6 will need to create shims for modules that fail to load at runtime. The `cjs-module-lexer` vendored dep is missing from our tree -- S6 will need a shim for it.
 
