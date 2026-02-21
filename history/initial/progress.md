@@ -51,7 +51,7 @@ be omitted):
 | S7 | Integrate Node's CJS loader with bootstrap | S3, S6 | done | |
 | S8 | Test: basic node_modules resolution | S7 | done | |
 | S9 | Test: package.json "main" field | S7 | done | |
-| S10 | Test: package.json "exports" field | S7 | | |
+| S10 | Test: package.json "exports" field | S7 | done | |
 | S11 | Test: .json file loading | S7 | | |
 | S12 | Test: nested node_modules | S7 | | |
 | S13 | Test: circular deps across node_modules | S7 | | |
@@ -137,4 +137,8 @@ be omitted):
 ### Step S9: Test package.json "main" field
 - **Files**: created `test/test-cjs-node-modules-main.js`, `test/fixtures/node-modules-main/main.js`, `test/fixtures/node-modules-main/node_modules/my-package/` (package.json + lib/entry.js + index.js decoy), `test/fixtures/node-modules-main/node_modules/no-ext-package/` (package.json + src/index.js).
 - **What was done**: Created two fixture packages: `my-package` with `"main": "lib/entry.js"` (explicit .js extension) and `no-ext-package` with `"main": "src/index"` (extensionless). `my-package` also has an `index.js` decoy to verify it's NOT loaded when "main" is set. Test verifies: (1) require loads from "main" path not index.js, (2) require.resolve returns path to "main" entry, (3) extensionless "main" resolves by appending .js, (4) require.resolve for extensionless also works. All 113 tests pass (112 existing + 1 new).
+
+### Step S10: Test package.json "exports" field
+- **Files**: created `test/test-cjs-node-modules-exports.js`, `test/fixtures/node-modules-exports/main.js`, `test/fixtures/node-modules-exports/node_modules/my-package/` (package.json + cjs.js + utils.js + lib/helper.js + index.js decoy + esm.mjs decoy), `test/fixtures/node-modules-exports/node_modules/simple-exports/` (package.json + main.js + index.js decoy).
+- **What was done**: Created two fixture packages: `my-package` with conditional exports (`"require"` vs `"import"` conditions), subpath exports (`"./utils"`), and wildcard pattern exports (`"./lib/*"`); `simple-exports` with string exports (`"exports": "./main.js"`). Test verifies 7 cases: (1) conditional exports pick "require" condition over "import", (2) require.resolve respects exports field, (3) subpath export `./utils` resolves correctly, (4) wildcard export `./lib/*` resolves `lib/helper.js`, (5) simple string exports loads correct entry, (6) require.resolve for string exports works, (7) non-exported subpath throws ERR_PACKAGE_PATH_NOT_EXPORTED. All 114 tests pass (113 existing + 1 new).
 

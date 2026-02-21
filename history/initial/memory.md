@@ -340,5 +340,13 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - Pattern: `// RUN: %hermes-node %source_dir/test/fixtures/<name>/main.js | %FileCheck %s`
 - `fixtures` already excluded in lit.cfg, so .js files in fixture dirs aren't picked up as tests
 
+## CJS Exports Resolution (verified S10)
+- Conditional exports (`"require"` vs `"import"` conditions) work correctly -- `require()` picks the `"require"` condition
+- Subpath exports (`"./utils": "./utils.js"`) resolve correctly
+- Wildcard/pattern exports (`"./lib/*": "./lib/*.js"`) resolve correctly
+- Simple string exports (`"exports": "./main.js"`) work -- bypasses index.js
+- Non-exported subpaths throw `ERR_PACKAGE_PATH_NOT_EXPORTED` as expected
+- ESM resolver (`internal/modules/esm/resolve.js`) handles all these cases via `packageExportsResolve`
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues
