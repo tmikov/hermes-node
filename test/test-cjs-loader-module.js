@@ -1,5 +1,5 @@
 // Copyright (c) Tzvetan Mikov.
-// Test the internal/modules/cjs/loader shim Module class.
+// Test Node's CJS loader Module class loaded in hermes-node.
 //
 // RUN: %hermes-node %s | %FileCheck %s
 
@@ -74,8 +74,10 @@ console.log(mod.loaded);
 // CHECK: false
 console.log(typeof mod.exports);
 // CHECK: object
-console.log(Array.isArray(mod.paths));
-// CHECK: true
+// Note: the real CJS loader doesn't set mod.paths in the constructor.
+// It's set during Module.prototype.load(). For a fresh module, it's undefined.
+console.log(mod.paths);
+// CHECK: undefined
 
 // Module.require works (loads a built-in).
 console.log(typeof mod.require('path'));

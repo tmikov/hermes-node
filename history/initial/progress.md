@@ -47,7 +47,7 @@ be omitted):
 | S3 | Implement real compileFunctionForCJSLoader in contextify binding | — | done | |
 | S4 | Add legacyMainResolve to fs binding | — | done | |
 | S5 | Embed required modules | S1, S2 | done | |
-| S6 | Create/update shims for newly embedded modules | S5 | | |
+| S6 | Create/update shims for newly embedded modules | S5 | done | |
 | S7 | Integrate Node's CJS loader with bootstrap | S3, S6 | | |
 | S8 | Test: basic node_modules resolution | S7 | | |
 | S9 | Test: package.json "main" field | S7 | | |
@@ -101,4 +101,18 @@ be omitted):
 -- Added only the modules specified in the plan. Transitive runtime dependencies (e.g. `internal/encoding`, `internal/deps/cjs-module-lexer/lexer`) will be handled in S6 (shims) or S7 (integration) as needed at runtime.
 -- Existing shims for `internal/modules/cjs/loader`, `internal/modules/helpers`, `internal/modules/esm/formats`, `internal/modules/esm/utils` remain in place (the build system's shim-first resolution picks them up over the libjs-node originals).
 - **Notes for next step**: S6 (create/update shims) is now unblocked. Key concern: many of these modules have runtime dependencies on bindings or features we don't have (e.g. `module_wrap` full API, `inspector`, `worker_threads`). S6 will need to create shims for modules that fail to load at runtime. The `cjs-module-lexer` vendored dep is missing from our tree -- S6 will need a shim for it.
+
+### Step S6: Create/update shims for newly embedded modules
+- **Files**: created `libjs/shims/internal/modules/typescript.js`, `libjs/shims/internal/modules/run_main.js`; modified `libjs/shims/internal/modules/esm/utils.js`, `libjs/shims/internal/modules/helpers.js`, `libjs/shims/internal/bootstrap/realm.js`, `libjs/loader.js`, `tools/hermes-node/hermes-node.cpp`; removed `libjs/shims/internal/modules/cjs/loader.js`; modified tests `test/test-cjs-loader-module.js`, `test/test-modules-helpers.js`.
+- **Decisions**:
+-- Removed CJS loader shim: real Node `internal/modules/cjs/loader.js` (2074 lines) now loads successfully with all key methods (`_resolveFilename`, `_findPath`, `_load`, `_compile`, `_nodeModulePaths`, `_extensions`, `load`, `require`).
+-- Kept helpers shim: real `internal/modules/helpers.js` needs `_enableCompileCache` to return an array (our binding returns object), and `stringify()` lazily needs `internal/encoding` (not embedded). Shim updated with real `loadBuiltinModule`, `getCjsConditions`, `normalizeReferrerURL`, `urlToFilename`, `getBuiltinModule`.
+-- Kept ESM formats shim: real module needs `internalBinding('constants').internal` (not in our constants binding).
+-- Created typescript shim: stubs `stripTypeScriptModuleTypes` (real module needs `internal/deps/amaro` WASM-based parser and compile cache bindings).
+-- Created run_main shim: stubs `executeUserEntryPoint` (real module needs `internal/process/execution` and `internalBinding('errors').triggerUncaughtException`).
+-- Updated ESM utils shim: added `getConditionsSet`, `getDefaultConditions`, `getDefaultConditionsSet`, `initializeDefaultConditions`, `initializeESM`, `requestTypes`, `compileSourceTextModule`. The ESM resolver uses `getConditionsSet` for package.json exports resolution.
+-- Updated realm.js shim: added `compileForPublicLoader()` to BuiltinModule. Loads modules via captured bootstrap `require` and caches `.exports`.
+-- Added CJS init step (11e) to bootstrap in hermes-node.cpp: calls `initializeCJS()` which sets `Module.builtinModules`, initializes CJS conditions, sets up global paths, and assigns `Module.runMain`.
+- **What was done**: Made Node's real CJS loader (`internal/modules/cjs/loader.js`) loadable and initialized. The real loader, ESM resolver, customization_hooks, and package_json_reader all load successfully at runtime. `Module.builtinModules` is populated (35 modules). `loadBuiltinModule` and `getBuiltinModule` actually load modules via bootstrap require. All 110 existing tests pass.
+- **Notes for next step**: S7 (bootstrap integration) needs to wire `__loadUserScript()` to use `Module._load()` instead of the bootstrap loader's `loadModule()`. `initializeCJS()` is already called during bootstrap. `BuiltinModule.compileForPublicLoader()` is available for the helpers `loadBuiltinModule`.
 

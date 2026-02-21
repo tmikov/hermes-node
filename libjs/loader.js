@@ -195,6 +195,15 @@
       globalThis.__loadUserScript = function(filepath) {
         loadModule(filepath, filepath);
       };
+
+      // Initialize Node's CJS loader so Module.builtinModules and other
+      // static properties are available before the REPL or user code runs.
+      globalThis.__initCJS = function() {
+        var cjs = requireModule('internal/modules/cjs/loader');
+        if (cjs.initializeCJS) {
+          cjs.initializeCJS();
+        }
+      };
     }
 
     // Return the require function.

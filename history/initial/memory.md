@@ -308,11 +308,22 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - **Test timeout rule**: `check-hermes-node` should complete in under 3 minutes. If tests take longer, they have locked up. Use `timeout 180` or equivalent when running the test target.
 
 ## CJS Module Resolution -- Embedded Modules (S5)
-- 17 new modules embedded for CJS loader: `package_json_reader`, `customization_hooks`, `typescript`, `run_main` + 13 ESM resolver modules (`resolve`, `assert`, `get_format`, `load`, `loader`, `hooks`, `module_map`, `module_job`, `translators`, `create_dynamic_module`, `initialize_import_meta`, `shared_constants`, `worker`)
+- 17 new modules embedded for CJS loader: `package_json_reader`, `customization_hooks`, `typescript`, `run_main` + 13 ESM resolver modules
 - All compiled to Hermes bytecode successfully (no syntax issues)
-- Existing shims (`cjs/loader`, `helpers`, `esm/formats`, `esm/utils`) still take precedence via shim-first resolution
-- Missing transitive dep: `internal/deps/cjs-module-lexer/lexer` not in libjs-node tree (WASM-based in Node). Needs shim in S6.
-- Other runtime deps not yet embedded: `internal/encoding`, `internal/data_url`, `internal/process/execution`, `internal/error_serdes`, `internal/worker`, `internal/worker/io`. May need shims in S6.
+
+## CJS Module Resolution -- Shims (S6)
+- **Real CJS loader**: `internal/modules/cjs/loader.js` loads successfully (shim removed). All key methods work: `_resolveFilename`, `_findPath`, `_load`, `_compile`, `_nodeModulePaths`.
+- **Shims still needed** (real modules have missing deps):
+  - `helpers.js`: real needs `_enableCompileCache` returning array (ours returns object), `stringify()` needs `internal/encoding`
+  - `esm/formats.js`: real needs `internalBinding('constants').internal`
+  - `esm/utils.js`: real needs `ModuleWrap`, `setImportModuleDynamicallyCallback` from `module_wrap`
+  - `typescript.js`: real needs `internal/deps/amaro` (WASM parser), compile cache bindings
+  - `run_main.js`: real needs `internal/process/execution`, `internalBinding('errors').triggerUncaughtException`
+- **`initializeCJS()`**: called during bootstrap step 11e. Sets `Module.builtinModules`, initializes CJS conditions, sets up global paths. MUST be called before REPL or user code.
+- **`BuiltinModule.compileForPublicLoader()`**: loads module via captured bootstrap `require`, caches `.exports`. Called by `loadBuiltinModule()` in helpers.
+- **Module constructor**: real loader does NOT set `this.paths` in constructor (unlike old shim). Paths are set during `Module.prototype.load()`.
+- **ESM resolver works**: `internal/modules/esm/resolve.js` loads lazily. `packageExportsResolve` and `packageImportsResolve` available. Used by CJS loader for `"exports"` field resolution.
+- Missing runtime deps not yet shimmed/embedded: `internal/encoding`, `internal/process/execution`, `internal/deps/cjs-module-lexer/lexer`. Will surface when those code paths are hit.
 
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

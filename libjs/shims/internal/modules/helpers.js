@@ -15,11 +15,19 @@ var {
   ObjectDefineProperty,
   ObjectFreeze,
   ObjectPrototypeHasOwnProperty,
+  SafeSet,
+  StringPrototypeCharCodeAt,
   StringPrototypeIncludes,
+  StringPrototypeSlice,
+  StringPrototypeStartsWith,
 } = primordials;
 
 var { validateString } = require('internal/validators');
 var { setOwnProperty } = require('internal/util');
+var { BuiltinModule } = require('internal/bootstrap/realm');
+var { pathToFileURL, fileURLToPath, URL } = require('internal/url');
+var { canParse: URLCanParse } = internalBinding('url');
+var path = require('path');
 
 var $Module = null;
 function lazyModule() {
@@ -140,40 +148,112 @@ function getCompileCacheDir() {
 }
 
 function stripBOM(content) {
-  if (content.charCodeAt(0) === 0xFEFF) {
-    content = content.slice(1);
+  if (StringPrototypeCharCodeAt(content, 0) === 0xFEFF) {
+    content = StringPrototypeSlice(content, 1);
   }
   return content;
 }
 
-function loadBuiltinModule() {
+// CJS conditions for package.json "exports" resolution.
+var _cjsConditions;
+var _cjsConditionsArray;
+
+function initializeCjsConditions() {
+  _cjsConditionsArray = ObjectFreeze(['require', 'node']);
+  _cjsConditions = new SafeSet(_cjsConditionsArray);
+}
+
+function getCjsConditions() {
+  if (_cjsConditions === undefined) {
+    initializeCjsConditions();
+  }
+  return _cjsConditions;
+}
+
+function getCjsConditionsArray() {
+  if (_cjsConditionsArray === undefined) {
+    initializeCjsConditions();
+  }
+  return _cjsConditionsArray;
+}
+
+function normalizeReferrerURL(referrerName) {
+  if (referrerName === null || referrerName === undefined) {
+    return undefined;
+  }
+  if (typeof referrerName === 'string') {
+    if (path.isAbsolute(referrerName)) {
+      return pathToFileURL(referrerName).href;
+    }
+    if (StringPrototypeStartsWith(referrerName, 'file://') ||
+        URLCanParse(referrerName)) {
+      return referrerName;
+    }
+    return undefined;
+  }
   return undefined;
+}
+
+function urlToFilename(url) {
+  if (url && StringPrototypeStartsWith(url, 'file://')) {
+    try {
+      return fileURLToPath(new URL(url));
+    } catch (e) {
+      // Not a proper file URL, return as-is.
+    }
+  }
+  return url;
+}
+
+function getBuiltinModule(id) {
+  validateString(id, 'id');
+  var normalizedId = BuiltinModule.normalizeRequirableId(id);
+  return normalizedId ? _loaderRequire(normalizedId) : undefined;
+}
+
+// Capture bootstrap loader require before REPL overwrites globalThis.require.
+var _loaderRequire = globalThis.require;
+
+function loadBuiltinModule(id) {
+  if (!BuiltinModule.canBeRequiredByUsers(id)) {
+    return undefined;
+  }
+  var mod = BuiltinModule.map.get(id);
+  if (!mod) {
+    return undefined;
+  }
+  // Use compileForPublicLoader to load the module via bootstrap require.
+  mod.compileForPublicLoader();
+  return mod;
 }
 
 function toRealPath(requestPath) {
   return require('fs').realpathSync(requestPath);
 }
 
+var _hasStartedUserCJSExecution = false;
+var _hasStartedUserESMExecution = false;
+
 module.exports = {
   addBuiltinLibsToObject: addBuiltinLibsToObject,
+  assertBufferSource: function() {},
   constants: constants,
   enableCompileCache: enableCompileCache,
   flushCompileCache: flushCompileCache,
+  getBuiltinModule: getBuiltinModule,
+  getCjsConditions: getCjsConditions,
+  getCjsConditionsArray: getCjsConditionsArray,
   getCompileCacheDir: getCompileCacheDir,
+  initializeCjsConditions: initializeCjsConditions,
   loadBuiltinModule: loadBuiltinModule,
   makeRequireFunction: makeRequireFunction,
+  normalizeReferrerURL: normalizeReferrerURL,
+  stringify: function(body) { return typeof body === 'string' ? body : String(body); },
   stripBOM: stripBOM,
   toRealPath: toRealPath,
-  hasStartedUserCJSExecution: function() { return false; },
-  setHasStartedUserCJSExecution: function() {},
-  hasStartedUserESMExecution: function() { return false; },
-  setHasStartedUserESMExecution: function() {},
-  getCjsConditions: function() { return new Set(['require', 'node']); },
-  getCjsConditionsArray: function() { return ['require', 'node']; },
-  initializeCjsConditions: function() {},
-  normalizeReferrerURL: function() { return undefined; },
-  stringify: function(body) { return typeof body === 'string' ? body : String(body); },
-  assertBufferSource: function() {},
-  getBuiltinModule: function() { return undefined; },
-  urlToFilename: function(url) { return url; },
+  urlToFilename: urlToFilename,
+  hasStartedUserCJSExecution: function() { return _hasStartedUserCJSExecution; },
+  setHasStartedUserCJSExecution: function() { _hasStartedUserCJSExecution = true; },
+  hasStartedUserESMExecution: function() { return _hasStartedUserESMExecution; },
+  setHasStartedUserESMExecution: function() { _hasStartedUserESMExecution = true; },
 };

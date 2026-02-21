@@ -17,12 +17,26 @@ var builtinIds = [
 
 var builtinSet = new Set(builtinIds);
 
+// Capture bootstrap loader require for compileForPublicLoader.
+var _bootstrapRequire = globalThis.require;
+
 var BuiltinModule = class BuiltinModule {
   constructor(id) {
     this.id = id;
     this.loaded = false;
     this.loading = false;
     this.exports = {};
+  }
+
+  // Load the module via the bootstrap loader and cache its exports.
+  compileForPublicLoader() {
+    if (!this.loaded) {
+      this.loading = true;
+      this.exports = _bootstrapRequire(this.id);
+      this.loaded = true;
+      this.loading = false;
+    }
+    return this;
   }
 
   static exists(id) {

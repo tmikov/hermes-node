@@ -700,6 +700,20 @@ static int runBootstrap(int argc, char **argv, const char *scriptPath) {
     }
   }
 
+  // 11e. Initialize Node's CJS module loader.
+  // This sets Module.builtinModules and other static properties that the
+  // REPL and user code expect to be available.
+  if (exitCode == 0) {
+    napi_value initCJSFn;
+    napi_get_named_property(env, global, "__initCJS", &initCJSFn);
+    napi_value initResult;
+    if (napi_call_function(env, global, initCJSFn, 0, nullptr, &initResult) !=
+        napi_ok) {
+      // Non-fatal: CJS loader init failed but basic loading still works.
+      printAndClearException(env);
+    }
+  }
+
   // 12. Set up the event loop check and prepare handles for tick draining.
   //
   // We use TWO drain points per loop iteration:
