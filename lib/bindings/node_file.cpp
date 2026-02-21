@@ -2317,6 +2317,104 @@ static napi_value fsInternalModuleStat(napi_env env, napi_callback_info info) {
   return jsResult;
 }
 
+// ---------------------------------------------------------------------------
+// legacyMainResolve -- used by the ESM resolver for package.json "main" field.
+// ---------------------------------------------------------------------------
+
+/// Check if a path is a file (not a directory). Returns true if file exists
+/// and is not a directory.
+static bool filePathIsFile(const std::string &filePath) {
+  uv_fs_t req;
+  int rc = uv_fs_stat(nullptr, &req, filePath.c_str(), nullptr);
+  if (rc == 0) {
+    rc = S_ISDIR(req.statbuf.st_mode);
+  }
+  uv_fs_req_cleanup(&req);
+  // rc == 0 means: stat succeeded AND path is NOT a directory.
+  return rc == 0;
+}
+
+// Extensions tried when packageConfig.main is defined (indices 0-6),
+// then fallback to ./index (indices 7-9).
+static constexpr const char *kLegacyMainExtensions[] = {
+    "", // 0: main as-is
+    ".js", // 1: main + .js
+    ".json", // 2: main + .json
+    ".node", // 3: main + .node
+    "/index.js", // 4: main + /index.js
+    "/index.json", // 5: main + /index.json
+    "/index.node", // 6: main + /index.node
+    ".js", // 7: ./index.js
+    ".json", // 8: ./index.json
+    ".node", // 9: ./index.node
+};
+static constexpr int kLegacyMainWithMainEnd = 7;
+static constexpr int kLegacyMainFallbackEnd = 10;
+
+// binding.legacyMainResolve(packagePath, main?, base?)
+// Returns integer index (0-9) into the extensions table, or throws
+// ERR_MODULE_NOT_FOUND if no file is found.
+static napi_value fsLegacyMainResolve(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  std::string pkgPath = getStringArg(env, argv[0]);
+  namespace fs = std::filesystem;
+
+  std::string packageInitialFile;
+
+  // Phase 1: If main is provided, try pkgPath/main + extensions[0..6].
+  if (argc >= 2) {
+    napi_valuetype vt;
+    napi_typeof(env, argv[1], &vt);
+    if (vt == napi_string) {
+      std::string main = getStringArg(env, argv[1]);
+      std::string basePath =
+          fs::path(pkgPath).append(main).lexically_normal().string();
+      packageInitialFile = basePath;
+
+      for (int i = 0; i < kLegacyMainWithMainEnd; i++) {
+        std::string filePath = basePath + kLegacyMainExtensions[i];
+        if (filePathIsFile(filePath)) {
+          napi_value result;
+          napi_create_int32(env, i, &result);
+          return result;
+        }
+      }
+    }
+  }
+
+  // Phase 2: Fallback to pkgPath/index + extensions[7..9].
+  std::string indexPath =
+      fs::path(pkgPath).append("index").lexically_normal().string();
+
+  for (int i = kLegacyMainWithMainEnd; i < kLegacyMainFallbackEnd; i++) {
+    std::string filePath = indexPath + kLegacyMainExtensions[i];
+    if (filePathIsFile(filePath)) {
+      napi_value result;
+      napi_create_int32(env, i, &result);
+      return result;
+    }
+  }
+
+  // No file found — throw ERR_MODULE_NOT_FOUND.
+  if (packageInitialFile.empty())
+    packageInitialFile = indexPath + ".js";
+
+  std::string errMsg = "Cannot find package '" + packageInitialFile + "'";
+  if (argc >= 3) {
+    napi_valuetype vt;
+    napi_typeof(env, argv[2], &vt);
+    if (vt == napi_string) {
+      std::string base = getStringArg(env, argv[2]);
+      errMsg += " imported from " + base;
+    }
+  }
+  napi_throw_error(env, "ERR_MODULE_NOT_FOUND", errMsg.c_str());
+  return nullptr;
+}
+
 // binding.readBuffers(fd, buffers, position, req?)
 static napi_value fsReadBuffers(napi_env env, napi_callback_info info) {
   size_t argc = 4;
@@ -3354,6 +3452,7 @@ napi_value initFsBinding(napi_env env, napi_value exports) {
   SET_FN("readFileUtf8", fsReadFileUtf8);
   SET_FN("writeFileUtf8", fsWriteFileUtf8);
   SET_FN("internalModuleStat", fsInternalModuleStat);
+  SET_FN("legacyMainResolve", fsLegacyMainResolve);
   SET_FN("readBuffers", fsReadBuffers);
   SET_FN("writeBuffers", fsWriteBuffers);
   SET_FN("rmSync", fsRmSync);

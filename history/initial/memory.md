@@ -28,6 +28,10 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - Recursive mkdir: stat after EEXIST to detect file-vs-dir. After loop, stat final path.
 - `readFileUtf8`/`writeFileUtf8`: compound open+read/write+close in C++.
 - `internalModuleStat(path)`: 0=file, 1=directory, negative=error (no throw).
+- `legacyMainResolve(pkgPath, main?, base?)`: returns int index 0-9 into extensions table. Phase 1 (with main): tries `pkgPath/main` + `['', '.js', '.json', '.node', '/index.js', '/index.json', '/index.node']`. Phase 2 (fallback): tries `pkgPath/index` + `['.js', '.json', '.node']`. Throws `ERR_MODULE_NOT_FOUND` if no file found. Used by ESM resolver for package.json "main" field resolution.
+
+## Lit Test Config
+- `test/lit.cfg` `config.excludes` list: add directory names to exclude from test discovery. `fixtures` excluded to prevent fixture .js files from being picked up as tests.
 
 ## V8 API Polyfills
 - `Error.captureStackTrace`: polyfilled in `primordials.js`. Creates Error for stack, sets lazy getter.

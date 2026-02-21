@@ -45,7 +45,7 @@ be omitted):
 | S1 | Add module_wrap binding stub | — | done | |
 | S2 | Implement real readPackageJSON in modules binding | — | done | |
 | S3 | Implement real compileFunctionForCJSLoader in contextify binding | — | done | |
-| S4 | Add legacyMainResolve to fs binding | — | | |
+| S4 | Add legacyMainResolve to fs binding | — | done | |
 | S5 | Embed required modules | S1, S2 | | |
 | S6 | Create/update shims for newly embedded modules | S5 | | |
 | S7 | Integrate Node's CJS loader with bootstrap | S3, S6 | | |
@@ -83,4 +83,14 @@ be omitted):
 -- `canParseAsESM` always false (no ESM detection). `cachedDataRejected` always false (no compile cache). `sourceMapURL`/`sourceURL` always undefined (no source map support yet).
 - **What was done**: Replaced stub (returned undefined) with full implementation. Wraps raw source in CJS parameter function, evaluates via `napi_run_script`, returns result object with `{function, sourceMapURL, sourceURL, cachedDataRejected, canParseAsESM}`. Added 6-case test covering: basic compilation, CJS parameter passing, module.exports assignment, SyntaxError propagation, empty source, require() inside compiled function. All 109 tests pass.
 - **Notes for next step**: S7 (integration) depends on this. The `wrapSafe()` function in Node's loader will call this with raw unwrapped source. Our implementation adds the wrapper, so Node's `Module.wrap()` must NOT be used (only the `patched=false` code path).
+
+### Step S4: Add legacyMainResolve to fs binding
+- **Files**: modified `lib/bindings/node_file.cpp`, `test/lit.cfg`; created `test/test-legacy-main-resolve.js`, `test/fixtures/legacy-main-resolve/` (5 fixture packages).
+- **Decisions**:
+-- Used `std::filesystem::path::append` + `lexically_normal()` for path resolution (already available in the file).
+-- Used `uv_fs_stat` with nullptr loop (synchronous) + `S_ISDIR` check (matches Node's `FilePathIsFile` pattern).
+-- Throws `ERR_MODULE_NOT_FOUND` when no file found (matches Node behavior; JS caller doesn't handle undefined return).
+-- No permission checks (we don't have Node's permission model).
+- **What was done**: Added `fsLegacyMainResolve` function and helper `filePathIsFile`. Tries extensions 0-6 for `pkgPath/main`, then 7-9 for `pkgPath/index`. Returns integer index. Added 8-case test covering: exact main match, main+.js, main+/index.js, main+.json, fallback index.js, fallback after main miss, throw on no match with base arg, throw on empty package. Also added `fixtures` to lit.cfg excludes to prevent fixture .js files from being picked up as tests. All 110 tests pass.
+- **Notes for next step**: S5 (embed modules) is now fully unblocked. The ESM resolver (`resolve.js`) calls `FSLegacyMainResolve` via `internalBinding('fs').legacyMainResolve`.
 
