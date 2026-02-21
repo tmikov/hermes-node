@@ -44,7 +44,7 @@ be omitted):
 |------|-------------|------------|--------|-----------------------|
 | S1 | Add module_wrap binding stub | — | done | |
 | S2 | Implement real readPackageJSON in modules binding | — | done | |
-| S3 | Implement real compileFunctionForCJSLoader in contextify binding | — | | |
+| S3 | Implement real compileFunctionForCJSLoader in contextify binding | — | done | |
 | S4 | Add legacyMainResolve to fs binding | — | | |
 | S5 | Embed required modules | S1, S2 | | |
 | S6 | Create/update shims for newly embedded modules | S5 | | |
@@ -74,4 +74,13 @@ be omitted):
 -- Other stubs (getPackageScopeConfig, getPackageType, getNearestParentPackageJSONType) left as-is for now -- they return undefined which JS side handles gracefully.
 - **What was done**: Replaced `readPackageJSONCb` stub with full implementation. Reads file via libuv sync API, parses JSON, extracts name/main/type/imports/exports/file_path into 6-element array matching Node's native API contract. Added 6-case test covering: full package.json, CJS type, minimal fields, non-existent file, string exports, invalid type normalization. All 108 tests pass.
 - **Notes for next step**: S5 (embed modules) depends on this. The `getPackageScopeConfig` native function may need real implementation for ESM resolver modules (S5/S6); currently stub returns undefined which JS wraps as `{pjsonPath: undefined, exists: false, type: 'none'}`.
+
+### Step S3: Implement real compileFunctionForCJSLoader in contextify binding
+- **Files**: modified `lib/bindings/node_contextify.cpp`; created `test/test-compile-function-cjs.js`.
+- **Decisions**:
+-- Used `napi_run_script` (not `hermes_compile_to_bytecode` + `hermes_run_bytecode`) because the returned function continues to reference bytecode internally. Using `napi_run_script` avoids bytecode buffer lifetime issues (UAF with ASAN).
+-- Wraps source as `(function(exports, require, module, __filename, __dirname) { <source> })` with `//# sourceURL=<filename>` for stack traces. Matches V8's `ScriptCompiler::CompileFunction` with CJS parameters.
+-- `canParseAsESM` always false (no ESM detection). `cachedDataRejected` always false (no compile cache). `sourceMapURL`/`sourceURL` always undefined (no source map support yet).
+- **What was done**: Replaced stub (returned undefined) with full implementation. Wraps raw source in CJS parameter function, evaluates via `napi_run_script`, returns result object with `{function, sourceMapURL, sourceURL, cachedDataRejected, canParseAsESM}`. Added 6-case test covering: basic compilation, CJS parameter passing, module.exports assignment, SyntaxError propagation, empty source, require() inside compiled function. All 109 tests pass.
+- **Notes for next step**: S7 (integration) depends on this. The `wrapSafe()` function in Node's loader will call this with raw unwrapped source. Our implementation adds the wrapper, so Node's `Module.wrap()` must NOT be used (only the `patched=false` code path).
 

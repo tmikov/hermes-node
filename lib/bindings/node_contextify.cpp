@@ -502,13 +502,86 @@ static napi_value compileFunctionCb(napi_env env, napi_callback_info info) {
   return result;
 }
 
-/// compileFunctionForCJSLoader(...) -> undefined (stub)
+/// compileFunctionForCJSLoader(content, filename, is_sea_main,
+///                              should_detect_module)
+/// -> { function, sourceMapURL, sourceURL, cachedDataRejected, canParseAsESM }
+///
+/// Wraps the source in a function with CJS parameters
+/// (exports, require, module, __filename, __dirname), compiles it to
+/// bytecode, and returns a callable wrapper function. This mirrors V8's
+/// ScriptCompiler::CompileFunction with CJS parameters.
 static napi_value compileFunctionForCJSLoaderCb(
     napi_env env,
-    napi_callback_info /*info*/) {
+    napi_callback_info info) {
+  napi_handle_scope scope;
+  napi_open_handle_scope(env, &scope);
+
+  size_t argc = 4;
+  napi_value argv[4];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  // argv[0] = content (string) -- raw unwrapped source
+  // argv[1] = filename (string)
+  // argv[2] = is_sea_main (boolean) -- always false for us
+  // argv[3] = should_detect_module (boolean) -- we always return false
+
+  std::string content;
+  if (argc > 0)
+    content = napiGetString(env, argv[0]);
+
+  std::string filename;
+  if (argc > 1)
+    filename = napiGetString(env, argv[1]);
+
+  // Wrap the source in a function with CJS parameters, matching Node's
+  // GetCJSParameters: exports, require, module, __filename, __dirname.
+  std::string wrappedSource;
+  wrappedSource.reserve(content.size() + filename.size() + 128);
+  wrappedSource +=
+      "(function(exports, require, module, __filename, __dirname) {\n";
+  wrappedSource += content;
+  wrappedSource += "\n})";
+  if (!filename.empty()) {
+    wrappedSource += "\n//# sourceURL=";
+    wrappedSource += filename;
+    wrappedSource += "\n";
+  }
+
+  // Evaluate the wrapper expression to get the function.
+  // Using napi_run_script (which handles buffer lifetime internally)
+  // rather than hermes_compile_to_bytecode + hermes_run_bytecode,
+  // since the returned function continues to reference the bytecode.
+  napi_value sourceStr;
+  napi_create_string_utf8(
+      env, wrappedSource.c_str(), wrappedSource.size(), &sourceStr);
+
+  napi_value fn;
+  napi_status runStatus = napi_run_script(env, sourceStr, &fn);
+  if (runStatus != napi_ok) {
+    // Compilation failed (SyntaxError). The exception is already pending.
+    napi_close_handle_scope(env, scope);
+    return nullptr;
+  }
+
+  // Build result: { function, sourceMapURL, sourceURL,
+  //                 cachedDataRejected, canParseAsESM }
+  napi_value result;
+  napi_create_object(env, &result);
+
+  napi_set_named_property(env, result, "function", fn);
+
   napi_value undef;
   napi_get_undefined(env, &undef);
-  return undef;
+  napi_set_named_property(env, result, "sourceMapURL", undef);
+  napi_set_named_property(env, result, "sourceURL", undef);
+
+  napi_value falseVal;
+  napi_get_boolean(env, false, &falseVal);
+  napi_set_named_property(env, result, "cachedDataRejected", falseVal);
+  napi_set_named_property(env, result, "canParseAsESM", falseVal);
+
+  napi_close_handle_scope(env, scope);
+  return result;
 }
 
 /// containsModuleSyntax(...) -> false (stub)

@@ -263,6 +263,8 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - `internal/vm.js` destructures `ContextifyScript`, `compileFunction` at top level
 - `internal/vm.js` `isContext()`: checks `object[contextify_context_private_symbol] !== undefined`
 - **Cross-binding symbol access**: contextify gets the private symbol from util binding by calling `globalThis.internalBinding('util')` from native code, then caches via `napi_ref`.
+- `compileFunctionForCJSLoader(content, filename, is_sea_main, should_detect_module)`: wraps raw source as `(function(exports, require, module, __filename, __dirname) { <content> })`, evaluates via `napi_run_script`. Returns `{function, sourceMapURL, sourceURL, cachedDataRejected, canParseAsESM}`. Uses `napi_run_script` (not `hermes_compile_to_bytecode`) because the returned function references bytecode internally -- freeing it causes UAF.
+- **CJS loader `wrapSafe()` code path**: when `patched=false` (default), calls `compileFunctionForCJSLoader` directly with raw unwrapped source. The native side adds the CJS wrapper. The `patched=true` path uses `Module.wrap()` + `makeContextifyScript` instead.
 
 ## REPL Entry Point
 - `hermes-node` with no args starts the REPL via `require('internal/repl').createInternalRepl(process.env, cb)`. This handles `NODE_REPL_HISTORY`, `NODE_REPL_HISTORY_SIZE`, `NODE_REPL_MODE`, `NODE_NO_READLINE` env vars and calls `setupHistory()` for file persistence.
