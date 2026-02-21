@@ -325,5 +325,14 @@ module loader, JS limitations, and test infrastructure, see `CLAUDE.md`.
 - **ESM resolver works**: `internal/modules/esm/resolve.js` loads lazily. `packageExportsResolve` and `packageImportsResolve` available. Used by CJS loader for `"exports"` field resolution.
 - Missing runtime deps not yet shimmed/embedded: `internal/encoding`, `internal/process/execution`, `internal/deps/cjs-module-lexer/lexer`. Will surface when those code paths are hit.
 
+## CJS Module Resolution -- Bootstrap Integration (S7)
+- **`__loadUserScript`**: uses `Module._load(path.resolve(filepath), null, true)`. Resolves relative paths to absolute via `path.resolve()` before passing to CJS loader.
+- **Fallback mechanism**: `Module._load` wrapped in `loader.js` to fall back to bootstrap loader on MODULE_NOT_FOUND. Checks bootstrap cache first, then `loadBytecodeModule()`. Allows `require('internal/...')` from user code/tests.
+- **TypeScript**: `.ts` extension handler registered via `Module._extensions['.ts']`. Uses bootstrap's `compileAndRun(wrapped, filename, true)` with `Module.wrap()` for CJS wrapper.
+- **builtinIds**: includes `async_hooks`, `cluster`, `diagnostics_channel`, `repl` (added in S7). Missing from list = MODULE_NOT_FOUND for that module (unless fallback catches it).
+- **`hasStartedUserCJSExecution`**: set to `true` by `Module._compile` during user script loading. Tests that check this flag should expect `true`.
+- **Built-in resolution path**: `require('fs')` -> `Module._resolveFilename` -> `BuiltinModule.normalizeRequirableId` -> `loadBuiltinWithHooks` -> `loadBuiltinModule` -> `BuiltinModule.compileForPublicLoader()` -> bootstrap `requireModule('fs')`.
+- **User script resolution**: `require('./foo')` -> `Module._resolveFilename` -> `_findPath(request, [parentDir])` -> `path.resolve(parentDir, request)` -> try extensions -> `fs.readFileSync` -> `compileFunctionForCJSLoader` -> execute.
+
 ## Unverified
 - `Duplex.from()` (in `duplexify.js`) may still have issues

@@ -191,18 +191,57 @@
       globalThis.require = requireModule;
 
       // Expose loadUserScript for the C++ bootstrap to run user scripts
-      // as CJS modules (with path-aware require for relative imports).
+      // as CJS modules with full Node.js module resolution (node_modules/,
+      // package.json, exports, etc.).
       globalThis.__loadUserScript = function(filepath) {
-        loadModule(filepath, filepath);
+        var CJSModule = requireModule('internal/modules/cjs/loader').Module;
+        var p = requireModule('path');
+        CJSModule._load(p.resolve(filepath), null, true);
       };
 
       // Initialize Node's CJS loader so Module.builtinModules and other
       // static properties are available before the REPL or user code runs.
+      // Also installs fallback resolution and TypeScript support.
       globalThis.__initCJS = function() {
         var cjs = requireModule('internal/modules/cjs/loader');
         if (cjs.initializeCJS) {
           cjs.initializeCJS();
         }
+
+        var CJSModule = cjs.Module;
+
+        // Wrap Module._load to fall back to the bootstrap loader for
+        // embedded modules that aren't public builtins (e.g. internal/*
+        // modules used in tests and during bootstrap).
+        var origLoad = CJSModule._load;
+        CJSModule._load = function(request, parent, isMain) {
+          try {
+            return origLoad(request, parent, isMain);
+          } catch (e) {
+            if (e.code === 'MODULE_NOT_FOUND') {
+              // Check if the bootstrap loader can resolve this module.
+              if (cache[request]) return cache[request].exports;
+              if (loadBytecodeModule(request)) {
+                return requireModule(request);
+              }
+            }
+            throw e;
+          }
+        };
+
+        // Register .ts extension handler. Our compileAndRun native
+        // function supports TypeScript via Hermes's enable_ts flag.
+        var helpers = requireModule('internal/modules/helpers');
+        CJSModule._extensions['.ts'] = function(module, filename) {
+          var fs = requireModule('fs');
+          var p = requireModule('path');
+          var content = fs.readFileSync(filename, 'utf8');
+          var wrapped = CJSModule.wrap(content);
+          var compiledFn = compileAndRun(wrapped, filename, true);
+          var dirname = p.dirname(filename);
+          var req = helpers.makeRequireFunction(module);
+          compiledFn(module.exports, req, module, filename, dirname);
+        };
       };
     }
 

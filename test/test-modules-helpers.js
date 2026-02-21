@@ -50,7 +50,9 @@ assertEqual(helpers.stripBOM('hello'), 'hello', 'stripBOM preserves non-BOM');
 assertEqual(helpers.enableCompileCache().status, 0, 'enableCompileCache returns status 0');
 assertEqual(helpers.getCompileCacheDir(), undefined, 'getCompileCacheDir returns undefined');
 assertEqual(helpers.loadBuiltinModule('nonexistent'), undefined, 'loadBuiltinModule nonexistent returns undefined');
-assertEqual(helpers.hasStartedUserCJSExecution(), false, 'hasStartedUserCJSExecution returns false');
+// hasStartedUserCJSExecution is true because this test file itself is
+// loaded via Module._compile (Node's CJS loader), which sets the flag.
+assertEqual(helpers.hasStartedUserCJSExecution(), true, 'hasStartedUserCJSExecution returns true after CJS load');
 assertEqual(helpers.hasStartedUserESMExecution(), false, 'hasStartedUserESMExecution returns false');
 assertEqual(helpers.getBuiltinModule('nonexistent'), undefined, 'getBuiltinModule nonexistent returns undefined');
 

@@ -48,7 +48,7 @@ be omitted):
 | S4 | Add legacyMainResolve to fs binding | — | done | |
 | S5 | Embed required modules | S1, S2 | done | |
 | S6 | Create/update shims for newly embedded modules | S5 | done | |
-| S7 | Integrate Node's CJS loader with bootstrap | S3, S6 | | |
+| S7 | Integrate Node's CJS loader with bootstrap | S3, S6 | done | |
 | S8 | Test: basic node_modules resolution | S7 | | |
 | S9 | Test: package.json "main" field | S7 | | |
 | S10 | Test: package.json "exports" field | S7 | | |
@@ -115,4 +115,15 @@ be omitted):
 -- Added CJS init step (11e) to bootstrap in hermes-node.cpp: calls `initializeCJS()` which sets `Module.builtinModules`, initializes CJS conditions, sets up global paths, and assigns `Module.runMain`.
 - **What was done**: Made Node's real CJS loader (`internal/modules/cjs/loader.js`) loadable and initialized. The real loader, ESM resolver, customization_hooks, and package_json_reader all load successfully at runtime. `Module.builtinModules` is populated (35 modules). `loadBuiltinModule` and `getBuiltinModule` actually load modules via bootstrap require. All 110 existing tests pass.
 - **Notes for next step**: S7 (bootstrap integration) needs to wire `__loadUserScript()` to use `Module._load()` instead of the bootstrap loader's `loadModule()`. `initializeCJS()` is already called during bootstrap. `BuiltinModule.compileForPublicLoader()` is available for the helpers `loadBuiltinModule`.
+
+### Step S7: Integrate Node's CJS loader with bootstrap
+- **Files**: modified `libjs/loader.js`, `libjs/shims/internal/bootstrap/realm.js`, `test/test-modules-helpers.js`; created `test/test-cjs-loader-integration.js`.
+- **Decisions**:
+-- `__loadUserScript` uses `Module._load(path.resolve(filepath), null, true)`. `path.resolve()` converts relative CLI paths to absolute (CJS loader requires absolute paths for proper resolution).
+-- `Module._load` wrapped with fallback to bootstrap loader: on MODULE_NOT_FOUND, checks bootstrap cache and `loadBytecodeModule()`. This allows `require('internal/...')` in tests and for any embedded module not in the public builtins list.
+-- Registered `.ts` extension handler (`Module._extensions['.ts']`) using bootstrap loader's `compileAndRun` with `enableTS=true`. Uses `Module.wrap()` for CJS wrapper.
+-- Added `async_hooks`, `cluster`, `diagnostics_channel`, `repl` to `builtinIds` in realm.js (were missing; embedded but not listed as public builtins).
+-- Updated test-modules-helpers.js: `hasStartedUserCJSExecution()` now returns `true` because user test scripts go through `Module._compile` which sets the flag.
+- **What was done**: Wired `__loadUserScript()` to use Node's `Module._load()` instead of bootstrap loader's `loadModule()`. User scripts now get full CJS module resolution: `node_modules/` lookup, `package.json` main/exports, `.json` loading, `require.resolve()`, `Module._cache`, `process.mainModule`, and `module.filename`/`__dirname`. Built-in modules resolve via `BuiltinModule.compileForPublicLoader()` -> bootstrap require. Internal/embedded modules resolve via fallback in wrapped `Module._load`. TypeScript files handled via custom `.ts` extension handler using Hermes's native TS compilation. All 111 tests pass (110 existing + 1 new integration test).
+- **Notes for next step**: S8-S14 are test steps that create fixture directories with `node_modules/` structures to verify the full resolution algorithm. The infrastructure is now in place. Key code paths exercised: `Module._resolveFilename` -> `_findPath` -> `resolveExports` for exports field, `Module._nodeModulePaths` for directory traversal, `Module._extensions['.json']` for JSON loading.
 
