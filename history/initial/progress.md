@@ -50,7 +50,7 @@ be omitted):
 | S6 | Create/update shims for newly embedded modules | S5 | done | |
 | S7 | Integrate Node's CJS loader with bootstrap | S3, S6 | done | |
 | S8 | Test: basic node_modules resolution | S7 | done | |
-| S9 | Test: package.json "main" field | S7 | | |
+| S9 | Test: package.json "main" field | S7 | done | |
 | S10 | Test: package.json "exports" field | S7 | | |
 | S11 | Test: .json file loading | S7 | | |
 | S12 | Test: nested node_modules | S7 | | |
@@ -133,4 +133,8 @@ be omitted):
 - **Decisions**:
 -- Test script lives in fixtures dir (not test/) because node_modules resolution starts from the requiring file's directory. Lit test file in test/ just has the RUN/CHECK directives.
 - **Notes for next step**: S9-S14 follow the same pattern: fixture dir with node_modules structure + main.js + lit test wrapper in test/.
+
+### Step S9: Test package.json "main" field
+- **Files**: created `test/test-cjs-node-modules-main.js`, `test/fixtures/node-modules-main/main.js`, `test/fixtures/node-modules-main/node_modules/my-package/` (package.json + lib/entry.js + index.js decoy), `test/fixtures/node-modules-main/node_modules/no-ext-package/` (package.json + src/index.js).
+- **What was done**: Created two fixture packages: `my-package` with `"main": "lib/entry.js"` (explicit .js extension) and `no-ext-package` with `"main": "src/index"` (extensionless). `my-package` also has an `index.js` decoy to verify it's NOT loaded when "main" is set. Test verifies: (1) require loads from "main" path not index.js, (2) require.resolve returns path to "main" entry, (3) extensionless "main" resolves by appending .js, (4) require.resolve for extensionless also works. All 113 tests pass (112 existing + 1 new).
 
