@@ -6,12 +6,10 @@ Node.js API compatibility layer for Hermes. Ports Node's native bindings to Node
 
 ## Key Paths
 
-- Project and plan: `history/initial/project.md`
-- Detailed plan: `history/initial/2026-02-14-hermes-node-compat-detailed-plan.md`
-- Progress: `history/initial/progress.md`
 - Hermes (submodule): `hermes/` — n-api branch, not yet merged to Hermes main
 - Hermes Node-API source (separate checkout): `/home/tmikov/work/hermes-n-api`
 - Node.js source (separate checkout): `/home/tmikov/3rd/node` — v24.13.0
+- Plans and history: `history/`
 
 ## Conventions
 
@@ -79,4 +77,4 @@ JS tests use LLVM Lit (`test/lit.cfg`), run in parallel via `check-hermes-node-j
 
 ## Progress Tracking
 
-Update `history/initial/progress.md` when completing or blocking on steps. Add context notes per the format documented there.
+Each plan has its own progress file. The progress file says which plan it tracks. Update it when completing or blocking on steps. Add context notes per the format documented there.
