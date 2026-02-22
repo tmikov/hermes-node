@@ -11,6 +11,8 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@babel/parser": "^7.29.0"
+    "@babel/core": "^7.29.0",
+    "@babel/parser": "^7.29.0",
+    "@babel/preset-env": "^7.29.0"
   }
 }
