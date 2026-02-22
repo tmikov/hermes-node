@@ -655,6 +655,7 @@ runBootstrap(int argc, char **argv, int scriptArgIndex, const Config &cfg) {
     }
   }
 
+
   // 11b. Initialize debuglog (must happen before any debug() call).
   if (exitCode == 0) {
     napi_value debuglogModule;

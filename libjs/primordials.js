@@ -554,4 +554,7 @@ primordials.SafeArrayPrototypePushApply = function(arr, items) {
 
 globalThis.primordials = primordials;
 
+// Node.js exposes `global` as an alias for `globalThis`.
+globalThis.global = globalThis;
+
 })();
