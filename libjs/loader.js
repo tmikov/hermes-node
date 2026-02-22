@@ -168,6 +168,10 @@
 
     // The main require implementation.
     function requireModule(name) {
+      // Strip 'node:' prefix so require('node:fs') === require('fs').
+      if (name.startsWith('node:'))
+        name = name.slice(5);
+
       // Check cache first.
       if (cache[name]) {
         return cache[name].exports;

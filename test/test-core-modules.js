@@ -155,7 +155,14 @@ assert(typeof promisified === 'function', 'util.promisify');
 
 console.log('util: OK');
 
-// --- 5. Integration: process.nextTick + timers ---
+// --- 5. require('node:...') prefix ---
+assert(require('node:fs') === require('fs'), "require('node:fs') === require('fs')");
+assert(require('node:path') === require('path'), "require('node:path') === require('path')");
+assert(require('node:events') === require('events'), "require('node:events') === require('events')");
+assert(require('node:util') === require('util'), "require('node:util') === require('util')");
+console.log('node: prefix: OK');
+
+// --- 6. Integration: process.nextTick + timers ---
 var ticked = false;
 process.nextTick(function() { ticked = true; });
 
