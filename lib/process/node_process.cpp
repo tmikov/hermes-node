@@ -12,12 +12,15 @@
 
 #include <uv.h>
 
+#include <dlfcn.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <cassert>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+
+#include "napi/hermes_napi.h"
 
 // Helper macros for NAPI error checking.
 #define NAPI_RETURN_IF_NOT_OK(expr) \
@@ -642,6 +645,98 @@ static napi_value processTitleSetter(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
+/// process.dlopen(module, filename[, flags])
+/// Loads a native NAPI addon (.node file) via dlopen and calls its init
+/// function with module.exports.
+static napi_value processDlopen(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  if (argc < 2) {
+    napi_throw_type_error(
+        env, "ERR_MISSING_ARGS", "process.dlopen requires module and filename");
+    return nullptr;
+  }
+
+  // argv[0] = module object, argv[1] = filename string.
+  napi_value moduleObj = argv[0];
+  napi_value filenameVal = argv[1];
+
+  // Get module.exports to pass to the addon's init function.
+  napi_value exports;
+  NAPI_THROW_IF_NOT_OK(
+      env,
+      napi_get_named_property(env, moduleObj, "exports", &exports),
+      "Failed to get module.exports");
+
+  // Extract filename as C string.
+  char filename[4096];
+  size_t filenameLen = 0;
+  napi_status status = napi_get_value_string_utf8(
+      env, filenameVal, filename, sizeof(filename), &filenameLen);
+  if (status != napi_ok) {
+    napi_throw_type_error(
+        env,
+        "ERR_INVALID_ARG_TYPE",
+        "The \"filename\" argument must be of type string");
+    return nullptr;
+  }
+
+  // Open the shared library.
+  void *handle = dlopen(filename, RTLD_NOW | RTLD_LOCAL);
+  if (!handle) {
+    const char *err = dlerror();
+    std::string msg = "Cannot open ";
+    msg += filename;
+    msg += ": ";
+    msg += (err ? err : "unknown error");
+    napi_throw_error(env, "ERR_DLOPEN_FAILED", msg.c_str());
+    return nullptr;
+  }
+
+  // Look up the modern NAPI entry point.
+  using InitFunc = napi_value (*)(napi_env, napi_value);
+  auto initFunc =
+      reinterpret_cast<InitFunc>(dlsym(handle, "napi_register_module_v1"));
+
+  // Fall back to deprecated napi_module_register() path.
+  if (!initFunc) {
+    const napi_module *mod = hermes_napi_get_last_registered_module();
+    if (mod && mod->nm_register_func) {
+      initFunc = mod->nm_register_func;
+    }
+  }
+
+  if (!initFunc) {
+    dlclose(handle);
+    std::string msg = "Module ";
+    msg += filename;
+    msg += " has no 'napi_register_module_v1' export and no registered module";
+    napi_throw_error(env, "ERR_DLOPEN_FAILED", msg.c_str());
+    return nullptr;
+  }
+
+  // Call the addon's init function with module.exports.
+  napi_value initResult = initFunc(env, exports);
+
+  // Check for pending exception from init.
+  bool hasPending = false;
+  napi_is_exception_pending(env, &hasPending);
+  if (hasPending) {
+    return nullptr;
+  }
+
+  // If the init function returned a different object, update module.exports.
+  if (initResult != nullptr && initResult != exports) {
+    napi_set_named_property(env, moduleObj, "exports", initResult);
+  }
+
+  napi_value undef;
+  napi_get_undefined(env, &undef);
+  return undef;
+}
+
 // ============================================================================
 // NodeProcess implementation
 // ============================================================================
@@ -848,6 +943,7 @@ napi_status NodeProcess::create(napi_env env, napi_value *result) {
   NAPI_RETURN_IF_NOT_OK(setMethod(env, process, "exit", processExit));
   NAPI_RETURN_IF_NOT_OK(setMethod(env, process, "abort", processAbort));
   NAPI_RETURN_IF_NOT_OK(setMethod(env, process, "umask", processUmask));
+  NAPI_RETURN_IF_NOT_OK(setMethod(env, process, "dlopen", processDlopen));
 
   // Cache the process object.
   NAPI_RETURN_IF_NOT_OK(napi_create_reference(env, process, 1, &processRef_));

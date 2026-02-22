@@ -30,3 +30,10 @@ else()
     -Wl,--no-whole-archive
   )
 endif()
+
+# Export NAPI symbols so dlopen'd addons can resolve them.
+if(APPLE)
+  target_link_options(hermes-node PRIVATE -Wl,-export_dynamic)
+elseif(UNIX)
+  target_link_options(hermes-node PRIVATE -rdynamic)
+endif()

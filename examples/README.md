@@ -19,3 +19,9 @@ Same thing using async `fs` callbacks and the event loop.
 ## hello-fs-promises.js
 
 Same thing using `fs/promises` and async/await.
+
+## bufferutil-addon/
+
+Loads `bufferutil`, a real npm package with a prebuilt native NAPI addon
+(`.node` shared library). Demonstrates WebSocket frame masking/unmasking.
+Requires `npm install` in the directory first.

@@ -49,6 +49,21 @@ add_subdirectory(tools/hermes-node)
 # Unit tests
 add_subdirectory(unittests)
 
+# Test NAPI addon for process.dlopen / require('.node') tests.
+add_library(hello_addon SHARED
+  test/fixtures/test-addon/hello_addon.c
+)
+target_include_directories(hello_addon PRIVATE
+  ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi
+)
+set_target_properties(hello_addon PROPERTIES
+  PREFIX ""
+  SUFFIX ".node"
+)
+if(APPLE)
+  target_link_options(hello_addon PRIVATE -undefined dynamic_lookup)
+endif()
+
 # JS tests (Lit-based)
 set(LLVH_LIT_ARGS "-sv")
 set(HERMES_NODE_LIT_PARAMS
@@ -57,12 +72,13 @@ set(HERMES_NODE_LIT_PARAMS
   FileCheck=${HERMES_TOOLS_OUTPUT_DIR}/FileCheck
   source_dir=${CMAKE_CURRENT_SOURCE_DIR}
   test_exec_root=${CMAKE_CURRENT_BINARY_DIR}/test
+  hello_addon=$<TARGET_FILE:hello_addon>
 )
 
 add_lit_testsuite(check-hermes-node-js "Running hermes-node JS tests"
   ${CMAKE_CURRENT_SOURCE_DIR}/test
   PARAMS ${HERMES_NODE_LIT_PARAMS}
-  DEPENDS hermes hermes-node
+  DEPENDS hermes hermes-node hello_addon
 )
 
 # check-hermes-node target: run all tests (unit tests + JS tests)

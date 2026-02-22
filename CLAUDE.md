@@ -18,6 +18,7 @@ Node.js API compatibility layer for Hermes. Ports Node's native bindings to Node
 - Vendored unmodified deps: `external/$lib/$lib` (outer dir has README + wrapper CMake, inner dir is upstream source)
 - Vendored Node JS (will be modified): `libjs-node/`
 - Our JS: `libjs/`
+- Examples: `examples/` — each subdirectory has its own `package.json` + `package-lock.json`; `node_modules/` is gitignored (users run `npm install`)
 - Build: CMake + Ninja
 - Tests: GTest (`unittests/`), lit (`test/`)
 - Test target: `check-hermes-node`

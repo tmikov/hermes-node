@@ -12,6 +12,11 @@ target_include_directories(hermesNodeProcess PUBLIC
   ${PROJECT_SOURCE_DIR}/include
   # Hermes public NAPI headers (js_native_api.h, node_api_types.h, etc.).
   ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi
+  # hermes_napi.h (for hermes_napi_load_module / dlopen support).
+  # hermes/include is also needed so hermes_napi.h can resolve
+  # its own #include "hermes/napi/node_api.h".
+  ${PROJECT_SOURCE_DIR}/hermes/API
+  ${PROJECT_SOURCE_DIR}/hermes/include
 )
 
 target_link_libraries(hermesNodeProcess PUBLIC
