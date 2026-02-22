@@ -8,7 +8,7 @@
  */
 
 // Test for the encoding_binding native binding.
-// Run via: hermes-node --node-lib-path <project-root> test-encoding.js
+// Run via: hermes-node test-encoding.js
 
 var assert = globalThis.assert;
 if (!assert) {

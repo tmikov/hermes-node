@@ -107,7 +107,6 @@ test('stdin is a proper Readable stream', function() {
 test('stdin receives piped data in child process', function() {
   // Spawn a child that reads from stdin and echoes it.
   var result = child_process.spawnSync(process.execPath, [
-    '--node-lib-path', path.join(__dirname, '..'),
     '-e', 'not-a-file' // placeholder - we'll use inline script
   ], {
     // We can't use -e easily, so use a script approach
@@ -134,7 +133,6 @@ test('child process stdin piping works', function() {
 
   try {
     var result = child_process.spawnSync(process.execPath, [
-      '--node-lib-path', path.join(__dirname, '..'),
       tmpFile
     ], {
       input: 'hello from stdin',
@@ -165,7 +163,6 @@ test('child stdout and stderr separation', function() {
 
   try {
     var result = child_process.spawnSync(process.execPath, [
-      '--node-lib-path', path.join(__dirname, '..'),
       tmpFile
     ], {
       timeout: 10000,
@@ -196,7 +193,6 @@ test('console.log goes to stdout in child', function() {
 
   try {
     var result = child_process.spawnSync(process.execPath, [
-      '--node-lib-path', path.join(__dirname, '..'),
       tmpFile
     ], {
       timeout: 10000,

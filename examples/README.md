@@ -3,7 +3,7 @@
 Run from the project root:
 
 ```sh
-cmake-build-asan/bin/hermes-node --node-lib-path . examples/hello-fs.js
+cmake-build-asan/bin/hermes-node examples/hello-fs.js
 ```
 
 ## hello-fs.js
