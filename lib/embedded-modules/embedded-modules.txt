@@ -140,6 +140,11 @@ internal/readline/promises
 internal/readline/utils
 internal/repl/history
 
+# module (public builtin)
+module
+internal/source_map/source_map
+internal/source_map/source_map_cache_map
+
 # vm module support
 vm
 internal/vm

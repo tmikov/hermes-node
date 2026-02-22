@@ -11,6 +11,7 @@ var builtinIds = [
   'dns', 'dns/promises', 'domain', 'events', 'fs', 'fs/promises', 'http',
   'net', 'os', 'path', 'path/posix', 'path/win32', 'process',
   'querystring', 'readline', 'readline/promises', 'repl',
+  'module',
   'stream', 'stream/consumers', 'stream/promises', 'stream/web',
   'string_decoder', 'timers', 'timers/promises', 'tty', 'url', 'util',
   'util/types', 'vm',

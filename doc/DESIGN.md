@@ -17,10 +17,11 @@ official Hermes repository does not yet provide Node-API; this project uses the
 `n-api` branch of a [fork](https://github.com/tmikov/hermes/tree/n-api) that
 adds a Node-API implementation.
 
-**Current status:** ~160 embedded modules, ~35 native bindings, covering events,
+**Current status:** ~155 embedded modules, ~35 native bindings, covering events,
 streams, file system, networking (TCP, UDP, Unix sockets, HTTP), DNS, child
-processes, TTY, URL, OS, timers, REPL. TLS/HTTPS, crypto, zlib, and
-worker_threads are not yet implemented.
+processes, TTY, URL, OS, timers, module, REPL. Full CJS module resolution
+(`node_modules/`, `package.json` main/exports/imports) uses Node's real loader.
+TLS/HTTPS, crypto, zlib, and worker_threads are not yet implemented.
 
 ---
 
@@ -98,24 +99,132 @@ and makes our code structure mirror Node's for easier future porting.
 
 ## Component Details
 
-### Module Loader (`lib/module-loader/`, `libjs/loader.js`)
+### Module Loading and Resolution
 
-The module loader implements CommonJS semantics: `require()`, `module.exports`,
-circular dependency support, and relative path resolution (`.js` then
-`/index.js`).
+Module loading has two phases: a **bootstrap loader** for internal modules and
+Node's **real CJS loader** for user code. Understanding how they interact is
+important because the boundary is non-obvious.
 
-**Module resolution order** for `require('internal/foo')`:
+#### Bootstrap Loader (`libjs/loader.js`)
+
+The bootstrap loader is a simple CJS implementation that runs during startup,
+before Node's real CJS loader is available. It loads embedded bytecode modules
+by ID and is the only loader available during the boot sequence.
+
+Resolution order for `require('internal/foo')`:
 
 1. Check cache (already loaded modules are returned immediately)
-2. Check `libjs/shims/internal/foo.js` (our shim override)
-3. Check `libjs-node/internal/foo.js` (vendored Node source)
+2. Try embedded bytecode via `loadBytecodeModule(id)` (compiled at build time)
+3. Fall back to `readFileSync(filepath)` + `compileAndRun()` (disk, for user
+   scripts only)
 
-This shim-first resolution means any Node internal can be replaced without
+The bootstrap loader provides `globalThis.require`, `globalThis.primordials`,
+and `globalThis.internalBinding` -- the three things every Node internal module
+expects in its compilation scope.
+
+#### Node's CJS Loader (`internal/modules/cjs/loader.js`)
+
+After bootstrap completes, user scripts are loaded via Node's real CJS loader
+(2000+ LOC, used unmodified from Node v24.13.0). This provides the full
+resolution algorithm:
+
+- `node_modules/` directory traversal via `Module._nodeModulePaths()`
+- `package.json` `main`, `exports`, and `imports` fields
+- Conditional exports (`require` vs `import` conditions)
+- `.js`, `.json`, `.node` extension trying
+- `require.resolve()` with `paths` option
+- Circular dependency handling
+- `Module._cache`, `module.filename`, `__dirname`
+
+#### How the Two Loaders Interact
+
+The transition from bootstrap to CJS happens during `__initCJS()` (called at
+bootstrap step 15). This function:
+
+1. Calls `initializeCJS()` on the real CJS loader, which populates
+   `Module.builtinModules`, initializes global paths, and sets `Module.runMain`.
+2. **Wraps `Module._load`** with a fallback to the bootstrap loader. When the
+   CJS loader throws `MODULE_NOT_FOUND`, the wrapper checks the bootstrap
+   cache and `loadBytecodeModule()`. This is critical because user code and npm
+   packages may `require()` modules that are embedded but not listed as public
+   builtins (e.g., `require('internal/...')` in tests).
+3. Registers a `.ts` extension handler that compiles TypeScript via Hermes's
+   native TS support.
+
+After init, `__loadUserScript(filepath)` calls
+`Module._load(path.resolve(filepath), null, true)`. From this point on, all
+`require()` calls in user code go through Node's CJS loader, which calls back
+into the bootstrap world only for built-in modules.
+
+#### Built-in Module Resolution
+
+When the CJS loader encounters `require('fs')` or `require('module')`, it
+recognizes it as a built-in and calls `loadBuiltinModule()` (in our
+`internal/modules/helpers` shim). This calls
+`BuiltinModule.compileForPublicLoader()` (in our `internal/bootstrap/realm`
+shim), which loads the module via the bootstrap loader's `require` and caches
+the exports. The `BuiltinModule` class maintains a list of 41 public module
+names that are available to user code.
+
+The `module` built-in is notable: `require('module')` loads Node's real
+`libjs-node/module.js`, which re-exports the `Module` class from the CJS loader
+along with source map APIs, `register()` for ESM hooks, and compile cache
+utilities. This is what tools like Babel use for `Module.createRequire()`.
+
+#### Compilation of User Code
+
+When the CJS loader loads a `.js` file from disk, it calls
+`compileFunctionForCJSLoader()` from the `contextify` native binding. This
+function:
+
+1. Wraps the raw source in a CJS parameter function:
+   `(function(exports, require, module, __filename, __dirname) { ... })`
+2. Appends `//# sourceURL=<filename>` for stack traces
+3. Evaluates via `napi_run_script` to get the wrapper function
+4. Returns `{ function, sourceMapURL, sourceURL, cachedDataRejected: false,
+   canParseAsESM: false }`
+
+The CJS loader then calls the returned function with the module's `exports`,
+`require`, and `module` objects. This is the same flow as in Node, except V8's
+`ScriptCompiler::CompileFunction` is replaced with Hermes's `napi_run_script`.
+
+#### Why ESM Modules Are Embedded
+
+The `embedded-modules.txt` manifest includes ~15 ESM-related modules
+(`internal/modules/esm/resolve`, `loader`, `module_job`, `translators`, etc.)
+even though Hermes does not support ES modules. This is because **the CJS loader
+depends on the ESM resolver for `package.json` `exports` field resolution**.
+
+When `Module._findPath()` encounters a package with an `exports` field, it calls
+`resolveExports()` which requires `packageExportsResolve` from
+`internal/modules/esm/resolve`. The ESM resolver implements the full
+[Node.js package exports algorithm](https://nodejs.org/api/packages.html#exports),
+including conditional exports, subpath patterns, and wildcard expansions.
+
+These ESM modules have their own dependencies that require the `module_wrap`
+native binding to export certain constants. For example,
+`internal/modules/esm/loader.js` destructures `kInstantiated`, `kErrored`,
+`kSourcePhase`, and `throwIfPromiseRejected` at load time. The `module_wrap`
+binding provides stub values for all of these -- the actual `ModuleWrap`
+constructor throws if called, and the constants are only meaningful in ESM code
+paths that we never execute. What matters is that the destructuring at module
+load time succeeds without crashing.
+
+#### Shim-First Resolution
+
+At build time, the embedding pipeline checks `libjs/shims/<id>.js` before
+`libjs-node/<id>.js`. This means any Node internal can be replaced without
 modifying the vendored files. The shim provides the exports the consuming code
 expects with a simpler implementation suitable for Hermes.
 
-**Embedding pipeline:** All ~160 internal modules are compiled to Hermes
-bytecode at build time. The pipeline:
+Several modules that originally required shims now load directly from vendored
+Node source. The most significant example is the CJS loader itself
+(`internal/modules/cjs/loader.js`), which was originally shimmed as a ~130 LOC
+stub but is now used unmodified at its full 2000+ LOC.
+
+#### Embedding Pipeline
+
+All ~155 internal modules are compiled to Hermes bytecode at build time:
 
 1. Reads `embedded-modules.txt` (manifest of module identifiers)
 2. Resolves each ID to a file path (checking shims first)
@@ -123,9 +232,6 @@ bytecode at build time. The pipeline:
    `(function(exports, require, module, process, internalBinding, primordials) { ... })`
 4. Compiles to Hermes bytecode via `hermesc`
 5. Converts to C byte arrays and links into the binary
-
-User scripts are loaded from disk at runtime and receive a path-aware
-`require()` for relative imports.
 
 ### Binding Registry (`lib/binding-registry/`)
 
@@ -210,7 +316,7 @@ on every native callback; the two-handle approach is a simpler approximation.
 
 ### Native Bindings (`lib/bindings/`)
 
-~21,600 lines of C++ across 38 source files. Each binding is an `init` function
+~22,200 lines of C++ across 36 source files. Each binding is an `init` function
 that populates an exports object with functions, constructors, and shared typed
 arrays.
 
@@ -313,12 +419,16 @@ consuming code actually needs. Notable shims:
 | -------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------- |
 | `internal/abort_controller.js`   | Original needs `internalBinding('performance')` + `event_target`         | Minimal AbortController/AbortSignal using EventEmitter               |
 | `internal/url.js`                | Original (1700 LOC) has deep dependency chain                            | Self-contained ~860 LOC URL/URLSearchParams backed by Ada C++ parser |
-| `internal/modules/cjs/loader.js` | Original (2000+ LOC) too complex                                         | ~130 LOC `Module` class for REPL tab-completion                      |
 | `domain.js`                      | Original needs `async_hooks` → `internalBinding('async_context_frame')`  | Minimal Domain class extending EventEmitter for REPL error isolation |
 | `cluster.js`                     | Breaks chain: `net` → `cluster` → `child_process` → `dgram` → `udp_wrap` | `isPrimary: true` (standalone CLI is always the primary)             |
 | `internal/options.js`            | Original needs `internalBinding('options')`                              | Static defaults for ~90 CLI options                                  |
-| `internal/bootstrap/realm.js`    | Original needs full bootstrap infrastructure                             | `BuiltinModule` class with module names for `require()` resolution   |
+| `internal/bootstrap/realm.js`    | Original needs full bootstrap infrastructure                             | `BuiltinModule` class with 41 public module names, `compileForPublicLoader()` |
 | `internal/perf/observe.js`       | Original needs `internalBinding('performance')`                          | No-op `hasObserver`/`startPerf`/`stopPerf`                           |
+
+Note: Node's real `internal/modules/cjs/loader.js` (2000+ LOC) loads
+successfully and is used directly -- no shim needed. The `module_wrap` binding
+provides the constants and stubs that its ESM-related dependencies require at
+load time.
 
 ### Process Object (`lib/process/`, inline JS in `hermes-node.cpp`)
 
@@ -364,16 +474,18 @@ carefully ordered startup:
 12. **`globalThis.Buffer`** from the `buffer` module
 13. **`globalThis.URL`** / **`globalThis.URLSearchParams`** from `internal/url`
 14. **`debuglog`** initialization (`NODE_DEBUG` env var)
-15. **Stdio streams** (`setup-stdio.js` installs lazy getters for
+15. **CJS loader initialization** (`initializeCJS()` → `Module.builtinModules`,
+    global paths, `.ts` extension handler, `Module.runMain`)
+16. **Stdio streams** (`setup-stdio.js` installs lazy getters for
     `process.stdin`/`stdout`/`stderr`)
-16. **Real console** (Node's `console` module with `util.inspect` formatting,
+17. **Real console** (Node's `console` module with `util.inspect` formatting,
     `console.table`, etc.)
-17. **Tick drain handles** (prepare + check) started on the event loop
-18. **User script** via `__loadUserScript(path)`, or **REPL** via
-    `require('internal/repl').createInternalRepl()`
-19. **Event loop** runs until all handles/requests complete
-20. **`process.emit('exit')`** before cleanup
-21. **Cleanup** in strict reverse order (see Event Loop section)
+18. **Tick drain handles** (prepare + check) started on the event loop
+19. **User script** via `__loadUserScript(path)` → `Module._load()`, or **REPL**
+    via `require('internal/repl').createInternalRepl()`
+20. **Event loop** runs until all handles/requests complete
+21. **`process.emit('exit')`** before cleanup
+22. **Cleanup** in strict reverse order (see Event Loop section)
 
 ---
 
@@ -467,7 +579,7 @@ hermes-node-compat/
     bindings/                   Native bindings (~21,600 LOC C++)
     embedded-modules/           JS-to-bytecode build pipeline
     event-loop/                 libuv adapter
-    module-loader/              CJS require() implementation
+    module-loader/              Bootstrap require() for internal modules
     process/                    process global object
   libjs/
     primordials.js              Polyfills + uncurried builtins
@@ -479,6 +591,7 @@ hermes-node-compat/
   tools/hermes-node/            CLI binary entry point
   test/                         JS tests (LLVM Lit)
   unittests/                    C++ unit tests (GTest)
+  examples/                     Example projects (e.g., Babel parser/transform)
 ```
 
 ### Vendored Dependencies Convention
