@@ -40,6 +40,12 @@
         // Disk fallback for user scripts.
         var source = readFileSync(filepath);
 
+        // Strip shebang line — Hermes doesn't handle #! like V8.
+        if (source.length >= 2 && source[0] === '#' && source[1] === '!') {
+          var nl = source.indexOf('\n');
+          source = nl >= 0 ? source.slice(nl) : '';
+        }
+
         // Wrap in the Node module function wrapper.
         var wrapped =
           '(function(exports, require, module, __filename, __dirname) {' +

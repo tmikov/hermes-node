@@ -529,6 +529,15 @@ static napi_value compileFunctionForCJSLoaderCb(
   if (argc > 0)
     content = napiGetString(env, argv[0]);
 
+  // Strip shebang line — Hermes doesn't handle #! like V8 does.
+  if (content.size() >= 2 && content[0] == '#' && content[1] == '!') {
+    auto nl = content.find('\n');
+    if (nl != std::string::npos)
+      content.erase(0, nl); // keep the \n to preserve line numbers
+    else
+      content.clear();
+  }
+
   std::string filename;
   if (argc > 1)
     filename = napiGetString(env, argv[1]);
