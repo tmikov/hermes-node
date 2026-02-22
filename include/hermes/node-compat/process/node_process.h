@@ -43,6 +43,10 @@ class NodeProcess {
   /// Set the executable path. Must be called before create().
   void setExecPath(std::string execPath);
 
+  /// Override the reported process.version string. Must be called before
+  /// create(). If not set, defaults to "v0.1.0-hermes".
+  void setVersion(std::string version);
+
   /// Create the process object and return it.
   /// The object is also cached internally and can be retrieved via get().
   napi_status create(napi_env env, napi_value *result);
@@ -59,6 +63,7 @@ class NodeProcess {
  private:
   std::vector<std::string> argv_;
   std::string execPath_;
+  std::string version_;
   napi_ref processRef_ = nullptr;
   uint64_t startTime_ = 0; // nanoseconds, for uptime()
 };

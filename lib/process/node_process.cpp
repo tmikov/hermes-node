@@ -658,6 +658,10 @@ void NodeProcess::setExecPath(std::string execPath) {
   execPath_ = std::move(execPath);
 }
 
+void NodeProcess::setVersion(std::string version) {
+  version_ = std::move(version);
+}
+
 // Helper: set a named property on an object.
 static napi_status
 setProp(napi_env env, napi_value obj, const char *name, napi_value val) {
@@ -733,8 +737,11 @@ napi_status NodeProcess::create(napi_env env, napi_value *result) {
 #endif
 
   // process.version
-  NAPI_RETURN_IF_NOT_OK(
-      setStringProp(env, process, "version", "v0.1.0-hermes"));
+  NAPI_RETURN_IF_NOT_OK(setStringProp(
+      env,
+      process,
+      "version",
+      version_.empty() ? "v0.1.0-hermes" : version_.c_str()));
 
   // process.versions
   {

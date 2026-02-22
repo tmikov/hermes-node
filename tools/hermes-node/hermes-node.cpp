@@ -232,11 +232,26 @@ static void onPrepareDrainTicks(uv_prepare_t *handle) {
 }
 
 // ---------------------------------------------------------------------------
+// CLI configuration
+// ---------------------------------------------------------------------------
+
+/// Configuration options parsed from command-line flags.
+struct Config {
+  /// Override `process.version`. When nullptr, uses the default
+  /// "v0.1.0-hermes".
+  const char *nodeVersion = nullptr;
+};
+
+// ---------------------------------------------------------------------------
 // Bootstrap
 // ---------------------------------------------------------------------------
 
 /// Run the bootstrap sequence and user script. Returns the exit code.
-static int runBootstrap(int argc, char **argv, const char *scriptPath) {
+/// \p scriptArgIndex is the index in argv where the script path starts
+/// (0 if no script). Everything from scriptArgIndex onward is passed
+/// as process.argv (after the binary name).
+static int
+runBootstrap(int argc, char **argv, int scriptArgIndex, const Config &cfg) {
   // 1. Create Hermes runtime with microtask queue enabled.
   auto config = hermes::vm::RuntimeConfig::Builder()
                     .withMicrotaskQueue(true)
@@ -350,11 +365,15 @@ static int runBootstrap(int argc, char **argv, const char *scriptPath) {
   // 8. Create and set process global.
   NodeProcess proc;
   {
+    // Build process.argv: [binary, script, ...script-args].
+    // Skip hermes-node's own flags (before scriptArgIndex).
     std::vector<std::string> nodeArgv;
-    nodeArgv.reserve(static_cast<size_t>(argc));
-    for (int i = 0; i < argc; ++i)
+    nodeArgv.push_back(argv[0]);
+    for (int i = scriptArgIndex; i < argc; ++i)
       nodeArgv.push_back(argv[i]);
     proc.setArgv(std::move(nodeArgv));
+    if (cfg.nodeVersion)
+      proc.setVersion(cfg.nodeVersion);
 
     char execBuf[4096];
     size_t execSize = sizeof(execBuf);
@@ -748,6 +767,8 @@ static int runBootstrap(int argc, char **argv, const char *scriptPath) {
   }
 
   // 12. Load and execute the user script, or start the REPL.
+  const char *scriptPath =
+      scriptArgIndex < argc ? argv[scriptArgIndex] : nullptr;
   if (exitCode == 0) {
     if (scriptPath) {
       // Use the module loader's __loadUserScript() so the script gets a
@@ -924,26 +945,39 @@ static int runBootstrap(int argc, char **argv, const char *scriptPath) {
 // ---------------------------------------------------------------------------
 
 static void printUsage(const char *argv0) {
-  std::fprintf(stderr, "Usage: %s [options] [script.js]\n", argv0);
+  std::fprintf(
+      stderr,
+      "Usage: %s [options] [script.js] [-- script-args...]\n"
+      "\n"
+      "Options:\n"
+      "  --node-version <version>  Override process.version (e.g. v24.13.0)\n"
+      "  -h, --help                Show this help\n",
+      argv0);
 }
 
 int main(int argc, char **argv) {
-  const char *scriptPath = nullptr;
+  int scriptArgIndex = argc; // no script by default
+  Config cfg;
 
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--help") == 0 ||
         std::strcmp(argv[i], "-h") == 0) {
       printUsage(argv[0]);
       return 0;
+    } else if (std::strcmp(argv[i], "--node-version") == 0) {
+      if (i + 1 >= argc) {
+        std::fprintf(stderr, "Error: --node-version requires a value\n");
+        return 1;
+      }
+      cfg.nodeVersion = argv[++i];
     } else if (argv[i][0] == '-') {
       std::fprintf(stderr, "Error: unknown option '%s'\n", argv[i]);
       return 1;
     } else {
-      scriptPath = argv[i];
+      scriptArgIndex = i;
       break;
     }
   }
 
-  // If no script path is provided, start the REPL.
-  return runBootstrap(argc, argv, scriptPath);
+  return runBootstrap(argc, argv, scriptArgIndex, cfg);
 }
