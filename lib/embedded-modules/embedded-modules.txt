@@ -17,6 +17,7 @@ async_hooks
 buffer
 cluster
 console
+constants
 diagnostics_channel
 dns
 events

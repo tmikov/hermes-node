@@ -121,4 +121,18 @@ if (typeof os.constants.SOCK_STREAM !== 'number')
 if (typeof os.constants.SOCK_DGRAM !== 'number')
   throw new Error('os.constants.SOCK_DGRAM should be a number');
 
+// --- Verify require('constants') public module ---
+var constants = require('constants');
+if (typeof constants.O_RDONLY !== 'number')
+  throw new Error('require constants: O_RDONLY missing');
+if (typeof constants.SIGINT !== 'number')
+  throw new Error('require constants: SIGINT missing');
+if (typeof constants.ENOENT !== 'number')
+  throw new Error('require constants: ENOENT missing');
+
+// require('node:constants') should return the same module.
+var constants2 = require('node:constants');
+if (constants2 !== constants)
+  throw new Error('node:constants !== constants');
+
 console.log('PASS');
