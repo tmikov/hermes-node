@@ -18,6 +18,7 @@ buffer
 cluster
 console
 constants
+crypto
 diagnostics_channel
 dns
 events

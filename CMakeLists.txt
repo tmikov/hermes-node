@@ -34,6 +34,7 @@ add_subdirectory(external/simdutf)
 add_subdirectory(external/ada)
 add_subdirectory(external/cares)
 add_subdirectory(external/llhttp)
+add_subdirectory(external/picohash)
 
 # Our C++ libraries
 add_subdirectory(lib/embedded-modules)

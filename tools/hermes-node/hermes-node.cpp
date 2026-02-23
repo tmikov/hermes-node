@@ -20,6 +20,7 @@
 #include <hermes/node-compat/bindings/node_constants.h>
 #include <hermes/node-compat/bindings/node_contextify.h>
 #include <hermes/node-compat/bindings/node_credentials.h>
+#include <hermes/node-compat/bindings/node_crypto.h>
 #include <hermes/node-compat/bindings/node_encoding.h>
 #include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_file.h>
@@ -312,6 +313,7 @@ runBootstrap(int argc, char **argv, int scriptArgIndex, const Config &cfg) {
   registry.registerBinding("constants", initConstantsBinding);
   registry.registerBinding("contextify", initContextifyBinding);
   registry.registerBinding("credentials", initCredentialsBinding);
+  registry.registerBinding("crypto", initCryptoBinding);
   registry.registerBinding("encoding_binding", initEncodingBinding);
   registry.registerBinding("errors", initErrorsBinding);
   registry.registerBinding("fs", initFsBinding);
@@ -654,7 +656,6 @@ runBootstrap(int argc, char **argv, int scriptArgIndex, const Config &cfg) {
       napi_set_named_property(env, global, "URLSearchParams", urlSPCtor);
     }
   }
-
 
   // 11b. Initialize debuglog (must happen before any debug() call).
   if (exitCode == 0) {

@@ -12,6 +12,7 @@ var builtinIds = [
   'net', 'os', 'path', 'path/posix', 'path/win32', 'process',
   'querystring', 'readline', 'readline/promises', 'repl',
   'module',
+  'crypto',
   'stream', 'stream/consumers', 'stream/promises', 'stream/web',
   'string_decoder', 'timers', 'timers/promises', 'tty', 'url', 'util',
   'util/types', 'vm',

@@ -13,6 +13,7 @@ add_hermes_library(hermesNodeBindings STATIC
   node_config.cpp
   node_constants.cpp
   node_contextify.cpp
+  node_crypto.cpp
   node_credentials.cpp
   node_encoding.cpp
   node_errors.cpp
@@ -59,4 +60,5 @@ target_link_libraries(hermesNodeBindings
     ada
     cares_a
     llhttp_a
+    picohash
 )
