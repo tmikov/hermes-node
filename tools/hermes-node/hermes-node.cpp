@@ -98,6 +98,71 @@ static void printAndClearException(napi_env env) {
 }
 
 // ---------------------------------------------------------------------------
+// Fatal exception handler (napi_fatal_exception callback)
+// ---------------------------------------------------------------------------
+
+/// Called by Hermes NAPI when napi_fatal_exception() is invoked.
+/// Routes to process.emit('uncaughtException', err). If no handler is
+/// installed or the emit fails, prints the error and aborts.
+static void onFatalException(void * /*data*/, napi_env env, napi_value err) {
+  napi_handle_scope scope;
+  napi_open_handle_scope(env, &scope);
+
+  napi_value global;
+  napi_get_global(env, &global);
+
+  napi_value processObj;
+  napi_get_named_property(env, global, "process", &processObj);
+
+  napi_value emitFn;
+  napi_get_named_property(env, processObj, "emit", &emitFn);
+
+  napi_valuetype emitType;
+  napi_typeof(env, emitFn, &emitType);
+
+  bool handled = false;
+  if (emitType == napi_function) {
+    napi_value eventStr;
+    napi_create_string_utf8(
+        env, "uncaughtException", NAPI_AUTO_LENGTH, &eventStr);
+    napi_value emitArgs[2] = {eventStr, err};
+    napi_value emitResult;
+    napi_status st =
+        napi_call_function(env, processObj, emitFn, 2, emitArgs, &emitResult);
+    if (st == napi_ok) {
+      // process.emit returns true if there were listeners.
+      bool result = false;
+      napi_get_value_bool(env, emitResult, &result);
+      handled = result;
+    }
+  }
+
+  if (!handled) {
+    // No listener handled it -- print and abort, matching Node.js behavior
+    // for unhandled uncaughtException.
+    napi_value errStr;
+    napi_coerce_to_string(env, err, &errStr);
+    char buf[4096];
+    size_t len = 0;
+    napi_get_value_string_utf8(env, errStr, buf, sizeof(buf), &len);
+    std::fprintf(stderr, "%.*s\n", static_cast<int>(len), buf);
+
+    // Clear any exception that may have been set during error formatting.
+    bool pending = false;
+    napi_is_exception_pending(env, &pending);
+    if (pending) {
+      napi_value exc;
+      napi_get_and_clear_last_exception(env, &exc);
+    }
+
+    napi_close_handle_scope(env, scope);
+    std::abort();
+  }
+
+  napi_close_handle_scope(env, scope);
+}
+
+// ---------------------------------------------------------------------------
 // Minimal console implementation
 // ---------------------------------------------------------------------------
 
@@ -272,9 +337,12 @@ runBootstrap(int argc, char **argv, int scriptArgIndex, const Config &cfg) {
     return 1;
   }
 
-  // 3. Create napi_env with event loop.
-  napi_env env =
-      hermes_napi_create_env(runtime.get(), eventLoop.getEventLoop());
+  // 3. Create napi_env with host integration.
+  // Set up the fatal_exception handler so napi_fatal_exception() routes
+  // to process.emit('uncaughtException') instead of aborting.
+  eventLoop.getHost()->fatal_exception = onFatalException;
+
+  napi_env env = hermes_napi_create_env(runtime.get(), eventLoop.getHost());
 
   napi_handle_scope scope;
   napi_open_handle_scope(env, &scope);

@@ -13,7 +13,7 @@ namespace hermes {
 namespace node_compat {
 
 /// Internal struct wrapping a uv_work_t request with the callbacks and
-/// data needed by hermes_napi_event_loop::post_work.
+/// data needed by hermes_napi_host::post_work.
 struct WorkRequest {
   uv_work_t req;
   void *work_data;
@@ -35,7 +35,7 @@ struct TaskEntry {
 struct UvEventLoop::Impl {
   uv_loop_t loop{};
   uv_async_t async{};
-  hermes_napi_event_loop eventLoop{};
+  hermes_napi_host host{};
 
   /// Mutex protecting the task queue (accessed from multiple threads).
   uv_mutex_t taskMutex{};
@@ -43,7 +43,7 @@ struct UvEventLoop::Impl {
   TaskEntry *taskHead = nullptr;
 
   //=========================================================================
-  // hermes_napi_event_loop vtable implementations (static)
+  // hermes_napi_host vtable implementations (static)
   //=========================================================================
 
   static void postWork(
@@ -209,11 +209,12 @@ int UvEventLoop::init() {
   // it transiently via uv_async_send.
   uv_unref(reinterpret_cast<uv_handle_t *>(&impl->async));
 
-  // Wire up the hermes_napi_event_loop vtable.
-  impl->eventLoop.post_work = Impl::postWork;
-  impl->eventLoop.cancel_work = Impl::cancelWork;
-  impl->eventLoop.post_task = Impl::postTask;
-  impl->eventLoop.data = impl;
+  // Wire up the hermes_napi_host vtable.
+  impl->host.post_work = Impl::postWork;
+  impl->host.cancel_work = Impl::cancelWork;
+  impl->host.post_task = Impl::postTask;
+  impl->host.data = impl;
+  impl->host.uv_loop = &impl->loop;
 
   impl_ = impl;
   return 0;
@@ -262,9 +263,9 @@ int UvEventLoop::close() {
   return rc;
 }
 
-hermes_napi_event_loop *UvEventLoop::getEventLoop() {
-  assert(impl_ && "UvEventLoop::getEventLoop() called before init()");
-  return &impl_->eventLoop;
+hermes_napi_host *UvEventLoop::getHost() {
+  assert(impl_ && "UvEventLoop::getHost() called before init()");
+  return &impl_->host;
 }
 
 uv_loop_t *UvEventLoop::getLoop() {

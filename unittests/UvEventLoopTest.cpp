@@ -35,15 +35,16 @@ TEST(UvEventLoop, GetLoop) {
   ASSERT_EQ(loop.close(), 0);
 }
 
-TEST(UvEventLoop, GetEventLoop) {
+TEST(UvEventLoop, GetHost) {
   UvEventLoop loop;
   ASSERT_EQ(loop.init(), 0);
-  hermes_napi_event_loop *el = loop.getEventLoop();
+  hermes_napi_host *el = loop.getHost();
   ASSERT_NE(el, nullptr);
   EXPECT_NE(el->post_work, nullptr);
   EXPECT_NE(el->cancel_work, nullptr);
   EXPECT_NE(el->post_task, nullptr);
   EXPECT_NE(el->data, nullptr);
+  EXPECT_NE(el->uv_loop, nullptr);
   ASSERT_EQ(loop.run(), 0);
   ASSERT_EQ(loop.close(), 0);
 }
@@ -82,7 +83,7 @@ TEST(UvEventLoop, PostWorkExecutesAndCompletes) {
   ASSERT_EQ(loop.init(), 0);
 
   WorkTestData td;
-  hermes_napi_event_loop *el = loop.getEventLoop();
+  hermes_napi_host *el = loop.getHost();
   el->post_work(el->data, &td, workExecute, workComplete);
 
   // Run the loop — it will process the work and its completion.
@@ -108,7 +109,7 @@ TEST(UvEventLoop, PostWorkMultiple) {
   constexpr int kCount = 5;
   WorkTestData td[kCount];
 
-  hermes_napi_event_loop *el = loop.getEventLoop();
+  hermes_napi_host *el = loop.getHost();
   for (int i = 0; i < kCount; ++i) {
     el->post_work(el->data, &td[i], workExecute, workComplete);
   }
@@ -133,7 +134,7 @@ TEST(UvEventLoop, CancelWorkReturnsFalse) {
   UvEventLoop loop;
   ASSERT_EQ(loop.init(), 0);
 
-  hermes_napi_event_loop *el = loop.getEventLoop();
+  hermes_napi_host *el = loop.getHost();
 
   // cancel_work with an arbitrary pointer should return false.
   int dummy = 0;
@@ -175,7 +176,7 @@ TEST(UvEventLoop, PostTaskFiresOnMainThread) {
   ASSERT_EQ(loop.init(), 0);
 
   TaskTestData td;
-  hermes_napi_event_loop *el = loop.getEventLoop();
+  hermes_napi_host *el = loop.getHost();
   el->post_task(el->data, &td, taskCallback);
 
   // Run one iteration — the async handle should fire and drain the task.
@@ -192,7 +193,7 @@ TEST(UvEventLoop, PostTaskFromAnotherThread) {
   ASSERT_EQ(loop.init(), 0);
 
   TaskTestData td;
-  hermes_napi_event_loop *el = loop.getEventLoop();
+  hermes_napi_host *el = loop.getHost();
 
   // Use a timer to keep the loop alive while the background thread posts.
   uv_timer_t timer;
@@ -228,7 +229,7 @@ TEST(UvEventLoop, PostTaskMultiple) {
   constexpr int kCount = 5;
   TaskTestData td[kCount];
 
-  hermes_napi_event_loop *el = loop.getEventLoop();
+  hermes_napi_host *el = loop.getHost();
   for (int i = 0; i < kCount; ++i) {
     el->post_task(el->data, &td[i], taskCallback);
   }
@@ -276,7 +277,7 @@ TEST(UvEventLoop, PostWorkAndPostTaskBothFire) {
   ASSERT_EQ(loop.init(), 0);
 
   CombinedTestData td;
-  hermes_napi_event_loop *el = loop.getEventLoop();
+  hermes_napi_host *el = loop.getHost();
 
   el->post_work(el->data, &td, combinedWorkExecute, combinedWorkComplete);
   el->post_task(el->data, &td, combinedTaskCallback);
