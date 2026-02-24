@@ -19,7 +19,7 @@ adds a Node-API implementation.
 
 **Current status:** ~156 embedded modules, ~36 native bindings, covering events,
 streams, file system, networking (TCP, UDP, Unix sockets, HTTP), DNS, child
-processes, TTY, URL, OS, crypto (hashing), timers, module, REPL. Full CJS module
+processes, TTY, URL, OS, crypto (hashing, random bytes), timers, module, REPL. Full CJS module
 resolution (`node_modules/`, `package.json` main/exports/imports) uses Node's
 real loader. TLS/HTTPS, zlib, and worker_threads are not yet implemented.
 
@@ -427,7 +427,7 @@ consuming code actually needs. Notable shims:
 | `internal/options.js`            | Original needs `internalBinding('options')`                              | Static defaults for ~90 CLI options                                  |
 | `internal/bootstrap/realm.js`    | Original needs full bootstrap infrastructure                             | `BuiltinModule` class with 41 public module names, `compileForPublicLoader()` |
 | `internal/perf/observe.js`       | Original needs `internalBinding('performance')`                          | No-op `hasObserver`/`startPerf`/`stopPerf`                           |
-| `crypto.js`                      | Original loads ~15 internal crypto modules needing full OpenSSL binding   | `createHash`/`createHmac` backed by picohash (MD5/SHA1/SHA224/SHA256) |
+| `crypto.js`                      | Original loads ~15 internal crypto modules needing full OpenSSL binding   | `createHash`/`createHmac`/`randomBytes`/`randomFillSync`/`randomInt`; hashing via picohash, CSPRNG via libuv |
 
 Note: Node's real `internal/modules/cjs/loader.js` (2000+ LOC) loads
 successfully and is used directly -- no shim needed. The `module_wrap` binding
@@ -528,10 +528,11 @@ not actually sandboxed.
 
 ### Limited Crypto (No TLS/HTTPS)
 
-The `crypto` module provides hashing only: `createHash` and `createHmac` backed
-by picohash (MD5, SHA1, SHA224, SHA256). Full OpenSSL integration is not
-implemented. `https`, `tls`, ciphers, key generation, and random bytes are not
-available. HTTP works over plaintext only.
+The `crypto` module provides hashing (`createHash`, `createHmac` via picohash:
+MD5, SHA1, SHA224, SHA256), CSPRNG (`randomBytes`, `randomFillSync`, `randomInt`
+via libuv's `uv_random`), and `timingSafeEqual`. Full OpenSSL integration is not
+implemented. `https`, `tls`, ciphers, key generation, signing, and certificate
+operations are not available. HTTP works over plaintext only.
 
 ### No Worker Threads
 

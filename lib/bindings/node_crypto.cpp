@@ -9,6 +9,7 @@
 #include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 #include <picohash_wrapper.h>
+#include <uv.h>
 
 #include <cstring>
 
@@ -350,6 +351,51 @@ static napi_value timingSafeEqual(napi_env env, napi_callback_info info) {
   return ret;
 }
 
+static napi_value randomFillSync(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  if (argc < 3) {
+    napi_throw_error(
+        env, nullptr, "buffer, offset, and size arguments required");
+    return nullptr;
+  }
+
+  // Get typed array data pointer.
+  void *data = nullptr;
+  size_t byteLength = 0;
+  napi_typedarray_type taType;
+  napi_value abuf;
+  size_t taOffset;
+  napi_status st = napi_get_typedarray_info(
+      env, argv[0], &taType, &byteLength, &data, &abuf, &taOffset);
+  if (st != napi_ok || !data) {
+    napi_throw_type_error(
+        env, nullptr, "buffer must be a TypedArray or Buffer");
+    return nullptr;
+  }
+
+  uint32_t offset = 0;
+  napi_get_value_uint32(env, argv[1], &offset);
+
+  uint32_t size = 0;
+  napi_get_value_uint32(env, argv[2], &size);
+
+  uv_loop_t *loop = getRuntimeState(env)->loop;
+  uv_random_t req;
+  int rc =
+      uv_random(loop, &req, static_cast<char *>(data) + offset, size, 0, NULL);
+  if (rc < 0) {
+    napi_throw_error(env, nullptr, uv_strerror(rc));
+    return nullptr;
+  }
+
+  napi_value undef;
+  napi_get_undefined(env, &undef);
+  return undef;
+}
+
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
@@ -435,6 +481,11 @@ napi_value initCryptoBinding(napi_env env, napi_value exports) {
       hmacProtoProps,
       &hmacCtor);
 
+  // Constants needed by Node's internal/crypto/random.js.
+  napi_value kSync, kAsync;
+  napi_create_int32(env, 0, &kSync);
+  napi_create_int32(env, 1, &kAsync);
+
   // clang-format off
   napi_property_descriptor props[] = {
     {"Hash",            nullptr, nullptr,         nullptr, nullptr, hashCtor, napi_enumerable, nullptr},
@@ -443,6 +494,9 @@ napi_value initCryptoBinding(napi_env env, napi_value exports) {
     {"getFipsCrypto",   nullptr, getFipsCrypto,   nullptr, nullptr, nullptr,  napi_enumerable, nullptr},
     {"setFipsCrypto",   nullptr, setFipsCrypto,   nullptr, nullptr, nullptr,  napi_enumerable, nullptr},
     {"timingSafeEqual", nullptr, timingSafeEqual, nullptr, nullptr, nullptr,  napi_enumerable, nullptr},
+    {"randomFillSync",  nullptr, randomFillSync,  nullptr, nullptr, nullptr,  napi_enumerable, nullptr},
+    {"kCryptoJobSync",  nullptr, nullptr,         nullptr, nullptr, kSync,    napi_enumerable, nullptr},
+    {"kCryptoJobAsync", nullptr, nullptr,         nullptr, nullptr, kAsync,   napi_enumerable, nullptr},
   };
   // clang-format on
 

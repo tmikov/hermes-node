@@ -8,6 +8,7 @@ var {
   Hmac: _Hmac,
   getHashes,
   timingSafeEqual,
+  randomFillSync: _randomFillSync,
 } = internalBinding('crypto');
 
 var { Transform } = require('stream');
@@ -124,6 +125,73 @@ function createHmac(algorithm, key, options) {
   return new Hmac(algorithm, key, options);
 }
 
+function randomFillSync(buf, offset, size) {
+  if (typeof buf !== 'object' || buf === null)
+    throw new TypeError('buf must be a Buffer, TypedArray, or DataView');
+  var byteLength = buf.byteLength;
+  if (offset === undefined) offset = 0;
+  if (size === undefined) size = byteLength - offset;
+  if (offset < 0 || offset > byteLength)
+    throw new RangeError('offset is out of range');
+  if (size < 0 || offset + size > byteLength)
+    throw new RangeError('size is out of range');
+  if (size === 0) return buf;
+  // Native expects a TypedArray/Buffer.
+  var target = buf;
+  if (buf instanceof ArrayBuffer)
+    target = new Uint8Array(buf);
+  else if (ArrayBuffer.isView(buf) && !(buf instanceof Uint8Array))
+    target = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  _randomFillSync(target, offset, size);
+  return buf;
+}
+
+function randomBytes(size, callback) {
+  if (typeof size !== 'number' || size < 0 || size !== (size >>> 0))
+    throw new RangeError('size must be a non-negative uint32');
+  var buf = Buffer.alloc(size);
+  if (callback === undefined) {
+    randomFillSync(buf, 0, size);
+    return buf;
+  }
+  if (typeof callback !== 'function')
+    throw new TypeError('callback must be a function');
+  try {
+    randomFillSync(buf, 0, size);
+    process.nextTick(callback, null, buf);
+  } catch (e) {
+    process.nextTick(callback, e);
+  }
+}
+
+function randomInt(min, max, callback) {
+  // Supports randomInt(max), randomInt(min, max), randomInt(min, max, cb).
+  if (max === undefined || typeof max === 'function') {
+    callback = max;
+    max = min;
+    min = 0;
+  }
+  if (!Number.isSafeInteger(min)) throw new TypeError('min must be a safe integer');
+  if (!Number.isSafeInteger(max)) throw new TypeError('max must be a safe integer');
+  if (max <= min) throw new RangeError('max must be greater than min');
+  var range = max - min;
+  if (range > 0xFFFFFFFFFFFF)
+    throw new RangeError('max - min must be <= 2^48 - 1');
+  // Use rejection sampling for uniform distribution.
+  var buf = Buffer.alloc(6);
+  var RAND_MAX = 0xFFFFFFFFFFFF;
+  var randLimit = RAND_MAX - (RAND_MAX % range);
+  while (true) {
+    randomFillSync(buf);
+    var x = buf.readUIntBE(0, 6);
+    if (x < randLimit) {
+      var n = (x % range) + min;
+      if (callback) { process.nextTick(callback, null, n); return; }
+      return n;
+    }
+  }
+}
+
 module.exports = {
   Hash,
   Hmac,
@@ -132,5 +200,8 @@ module.exports = {
   getHashes,
   timingSafeEqual,
   hash,
+  randomBytes,
+  randomFillSync,
+  randomInt,
   constants: {},
 };
