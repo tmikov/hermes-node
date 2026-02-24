@@ -35,6 +35,9 @@ add_subdirectory(external/ada)
 add_subdirectory(external/cares)
 add_subdirectory(external/llhttp)
 add_subdirectory(external/picohash)
+add_subdirectory(external/zlib)
+add_subdirectory(external/brotli)
+add_subdirectory(external/zstd)
 
 # Our C++ libraries
 add_subdirectory(lib/embedded-modules)

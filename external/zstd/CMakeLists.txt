@@ -1,0 +1,7 @@
+file(GLOB ZSTD_COMMON zstd/common/*.c)
+file(GLOB ZSTD_COMPRESS zstd/compress/*.c)
+file(GLOB ZSTD_DECOMPRESS zstd/decompress/*.c)
+list(FILTER ZSTD_DECOMPRESS EXCLUDE REGEX ".*\\.S$")
+add_library(zstd_a STATIC ${ZSTD_COMMON} ${ZSTD_COMPRESS} ${ZSTD_DECOMPRESS})
+target_include_directories(zstd_a PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/zstd)
+target_compile_definitions(zstd_a PRIVATE ZSTD_DISABLE_ASM)

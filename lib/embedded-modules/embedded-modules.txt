@@ -107,6 +107,7 @@ timers
 url
 util
 util/types
+zlib
 
 # child_process support
 child_process

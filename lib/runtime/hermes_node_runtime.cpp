@@ -49,6 +49,7 @@
 #include <hermes/node-compat/bindings/node_url.h>
 #include <hermes/node-compat/bindings/node_util.h>
 #include <hermes/node-compat/bindings/node_uv.h>
+#include <hermes/node-compat/bindings/node_zlib.h>
 #include <hermes/node-compat/embedded-modules/embedded_modules.h>
 #include <hermes/node-compat/event-loop/uv_event_loop.h>
 #include <hermes/node-compat/module-loader/module_loader.h>
@@ -394,6 +395,7 @@ int runHermesNode(const HermesNodeConfig &config) {
   registry.registerBinding("url_pattern", initUrlPatternBinding);
   registry.registerBinding("util", initUtilBinding);
   registry.registerBinding("uv", initUvBinding);
+  registry.registerBinding("zlib", initZlibBinding);
   registry.attach(env);
 
   // 6. Load and execute primordials from embedded bytecode.
@@ -435,8 +437,7 @@ int runHermesNode(const HermesNodeConfig &config) {
     if (uv_exepath(execBuf, &execSize) == 0) {
       proc.setExecPath(std::string(execBuf, execSize));
     } else {
-      proc.setExecPath(
-          config.argv.empty() ? "hermes-node" : config.argv[0]);
+      proc.setExecPath(config.argv.empty() ? "hermes-node" : config.argv[0]);
     }
   }
 

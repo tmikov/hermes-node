@@ -1,0 +1,5 @@
+file(GLOB BROTLI_COMMON brotli/common/*.c)
+file(GLOB BROTLI_ENC brotli/enc/*.c)
+file(GLOB BROTLI_DEC brotli/dec/*.c)
+add_library(brotli_a STATIC ${BROTLI_COMMON} ${BROTLI_ENC} ${BROTLI_DEC})
+target_include_directories(brotli_a PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/brotli/include)

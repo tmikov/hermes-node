@@ -41,6 +41,7 @@ add_hermes_library(hermesNodeBindings STATIC
   node_url.cpp
   node_util.cpp
   node_uv.cpp
+  node_zlib.cpp
 )
 
 target_include_directories(hermesNodeBindings
@@ -61,4 +62,7 @@ target_link_libraries(hermesNodeBindings
     cares_a
     llhttp_a
     picohash
+    zlib_a
+    brotli_a
+    zstd_a
 )

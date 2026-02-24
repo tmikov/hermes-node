@@ -22,6 +22,15 @@
 
 #include <uv.h>
 
+#include <brotli/decode.h>
+#include <brotli/encode.h>
+#include <zlib.h>
+#include <zstd.h>
+#include <zstd_errors.h>
+
+#include <cmath>
+#include <limits>
+
 namespace hermes {
 namespace node_compat {
 
@@ -579,6 +588,232 @@ static void defineDlopenConstants(napi_env env, napi_value target) {
 #endif
 }
 
+static inline napi_status
+setDoubleProp(napi_env env, napi_value obj, const char *name, double val) {
+  napi_value v;
+  napi_status st = napi_create_double(env, val, &v);
+  if (st != napi_ok)
+    return st;
+  return napi_set_named_property(env, obj, name, v);
+}
+
+// Node.js compression mode enum (from node_zlib.cc).
+enum node_zlib_mode {
+  NONE,
+  DEFLATE,
+  INFLATE,
+  GZIP,
+  GUNZIP,
+  DEFLATERAW,
+  INFLATERAW,
+  UNZIP,
+  BROTLI_DECODE,
+  BROTLI_ENCODE,
+  ZSTD_COMPRESS,
+  ZSTD_DECOMPRESS
+};
+
+// Range constants from node_zlib.cc (not in any header).
+#define Z_MIN_CHUNK 64
+#define Z_DEFAULT_CHUNK (16 * 1024)
+#define Z_MIN_MEMLEVEL 1
+#define Z_MAX_MEMLEVEL 9
+#define Z_DEFAULT_MEMLEVEL 8
+#define Z_MIN_LEVEL -1
+#define Z_MAX_LEVEL 9
+#define Z_DEFAULT_LEVEL Z_DEFAULT_COMPRESSION
+#define Z_MIN_WINDOWBITS 8
+#define Z_MAX_WINDOWBITS 15
+#define Z_DEFAULT_WINDOWBITS 15
+
+static void defineZlibConstants(napi_env env, napi_value target) {
+  // Flush levels
+  SET_CONST(target, Z_NO_FLUSH);
+  SET_CONST(target, Z_PARTIAL_FLUSH);
+  SET_CONST(target, Z_SYNC_FLUSH);
+  SET_CONST(target, Z_FULL_FLUSH);
+  SET_CONST(target, Z_FINISH);
+  SET_CONST(target, Z_BLOCK);
+
+  // Return/error codes
+  SET_CONST(target, Z_OK);
+  SET_CONST(target, Z_STREAM_END);
+  SET_CONST(target, Z_NEED_DICT);
+  SET_CONST(target, Z_ERRNO);
+  SET_CONST(target, Z_STREAM_ERROR);
+  SET_CONST(target, Z_DATA_ERROR);
+  SET_CONST(target, Z_MEM_ERROR);
+  SET_CONST(target, Z_BUF_ERROR);
+  SET_CONST(target, Z_VERSION_ERROR);
+
+  // Compression strategy
+  SET_CONST(target, Z_NO_COMPRESSION);
+  SET_CONST(target, Z_BEST_SPEED);
+  SET_CONST(target, Z_BEST_COMPRESSION);
+  SET_CONST(target, Z_DEFAULT_COMPRESSION);
+  SET_CONST(target, Z_FILTERED);
+  SET_CONST(target, Z_HUFFMAN_ONLY);
+  SET_CONST(target, Z_RLE);
+  SET_CONST(target, Z_FIXED);
+  SET_CONST(target, Z_DEFAULT_STRATEGY);
+  SET_CONST(target, ZLIB_VERNUM);
+
+  // Node mode enum
+  SET_CONST(target, DEFLATE);
+  SET_CONST(target, INFLATE);
+  SET_CONST(target, GZIP);
+  SET_CONST(target, GUNZIP);
+  SET_CONST(target, DEFLATERAW);
+  SET_CONST(target, INFLATERAW);
+  SET_CONST(target, UNZIP);
+  SET_CONST(target, BROTLI_DECODE);
+  SET_CONST(target, BROTLI_ENCODE);
+  SET_CONST(target, ZSTD_COMPRESS);
+  SET_CONST(target, ZSTD_DECOMPRESS);
+
+  // Range constants
+  SET_CONST(target, Z_MIN_WINDOWBITS);
+  SET_CONST(target, Z_MAX_WINDOWBITS);
+  SET_CONST(target, Z_DEFAULT_WINDOWBITS);
+  SET_CONST(target, Z_MIN_CHUNK);
+  setDoubleProp(
+      env, target, "Z_MAX_CHUNK", std::numeric_limits<double>::infinity());
+  SET_CONST(target, Z_DEFAULT_CHUNK);
+  SET_CONST(target, Z_MIN_MEMLEVEL);
+  SET_CONST(target, Z_MAX_MEMLEVEL);
+  SET_CONST(target, Z_DEFAULT_MEMLEVEL);
+  SET_CONST(target, Z_MIN_LEVEL);
+  SET_CONST(target, Z_MAX_LEVEL);
+  SET_CONST(target, Z_DEFAULT_LEVEL);
+
+  // Brotli constants
+  SET_CONST(target, BROTLI_OPERATION_PROCESS);
+  SET_CONST(target, BROTLI_OPERATION_FLUSH);
+  SET_CONST(target, BROTLI_OPERATION_FINISH);
+  SET_CONST(target, BROTLI_OPERATION_EMIT_METADATA);
+  SET_CONST(target, BROTLI_PARAM_MODE);
+  SET_CONST(target, BROTLI_MODE_GENERIC);
+  SET_CONST(target, BROTLI_MODE_TEXT);
+  SET_CONST(target, BROTLI_MODE_FONT);
+  SET_CONST(target, BROTLI_DEFAULT_MODE);
+  SET_CONST(target, BROTLI_PARAM_QUALITY);
+  SET_CONST(target, BROTLI_MIN_QUALITY);
+  SET_CONST(target, BROTLI_MAX_QUALITY);
+  SET_CONST(target, BROTLI_DEFAULT_QUALITY);
+  SET_CONST(target, BROTLI_PARAM_LGWIN);
+  SET_CONST(target, BROTLI_MIN_WINDOW_BITS);
+  SET_CONST(target, BROTLI_MAX_WINDOW_BITS);
+  SET_CONST(target, BROTLI_LARGE_MAX_WINDOW_BITS);
+  SET_CONST(target, BROTLI_DEFAULT_WINDOW);
+  SET_CONST(target, BROTLI_PARAM_LGBLOCK);
+  SET_CONST(target, BROTLI_MIN_INPUT_BLOCK_BITS);
+  SET_CONST(target, BROTLI_MAX_INPUT_BLOCK_BITS);
+  SET_CONST(target, BROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING);
+  SET_CONST(target, BROTLI_PARAM_SIZE_HINT);
+  SET_CONST(target, BROTLI_PARAM_LARGE_WINDOW);
+  SET_CONST(target, BROTLI_PARAM_NPOSTFIX);
+  SET_CONST(target, BROTLI_PARAM_NDIRECT);
+  SET_CONST(target, BROTLI_DECODER_RESULT_ERROR);
+  SET_CONST(target, BROTLI_DECODER_RESULT_SUCCESS);
+  SET_CONST(target, BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT);
+  SET_CONST(target, BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT);
+  SET_CONST(target, BROTLI_DECODER_PARAM_DISABLE_RING_BUFFER_REALLOCATION);
+  SET_CONST(target, BROTLI_DECODER_PARAM_LARGE_WINDOW);
+  SET_CONST(target, BROTLI_DECODER_NO_ERROR);
+  SET_CONST(target, BROTLI_DECODER_SUCCESS);
+  SET_CONST(target, BROTLI_DECODER_NEEDS_MORE_INPUT);
+  SET_CONST(target, BROTLI_DECODER_NEEDS_MORE_OUTPUT);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_EXUBERANT_NIBBLE);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_RESERVED);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_EXUBERANT_META_NIBBLE);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_SIMPLE_HUFFMAN_ALPHABET);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_SIMPLE_HUFFMAN_SAME);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_CL_SPACE);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_HUFFMAN_SPACE);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_CONTEXT_MAP_REPEAT);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_BLOCK_LENGTH_1);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_BLOCK_LENGTH_2);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_TRANSFORM);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_DICTIONARY);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_WINDOW_BITS);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_PADDING_1);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_PADDING_2);
+  SET_CONST(target, BROTLI_DECODER_ERROR_FORMAT_DISTANCE);
+  SET_CONST(target, BROTLI_DECODER_ERROR_DICTIONARY_NOT_SET);
+  SET_CONST(target, BROTLI_DECODER_ERROR_INVALID_ARGUMENTS);
+  SET_CONST(target, BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MODES);
+  SET_CONST(target, BROTLI_DECODER_ERROR_ALLOC_TREE_GROUPS);
+  SET_CONST(target, BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MAP);
+  SET_CONST(target, BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_1);
+  SET_CONST(target, BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_2);
+  SET_CONST(target, BROTLI_DECODER_ERROR_ALLOC_BLOCK_TYPE_TREES);
+  SET_CONST(target, BROTLI_DECODER_ERROR_UNREACHABLE);
+
+  // Zstd constants
+  SET_CONST(target, ZSTD_e_continue);
+  SET_CONST(target, ZSTD_e_flush);
+  SET_CONST(target, ZSTD_e_end);
+  SET_CONST(target, ZSTD_fast);
+  SET_CONST(target, ZSTD_dfast);
+  SET_CONST(target, ZSTD_greedy);
+  SET_CONST(target, ZSTD_lazy);
+  SET_CONST(target, ZSTD_lazy2);
+  SET_CONST(target, ZSTD_btlazy2);
+  SET_CONST(target, ZSTD_btopt);
+  SET_CONST(target, ZSTD_btultra);
+  SET_CONST(target, ZSTD_btultra2);
+  SET_CONST(target, ZSTD_c_compressionLevel);
+  SET_CONST(target, ZSTD_c_windowLog);
+  SET_CONST(target, ZSTD_c_hashLog);
+  SET_CONST(target, ZSTD_c_chainLog);
+  SET_CONST(target, ZSTD_c_searchLog);
+  SET_CONST(target, ZSTD_c_minMatch);
+  SET_CONST(target, ZSTD_c_targetLength);
+  SET_CONST(target, ZSTD_c_strategy);
+  SET_CONST(target, ZSTD_c_enableLongDistanceMatching);
+  SET_CONST(target, ZSTD_c_ldmHashLog);
+  SET_CONST(target, ZSTD_c_ldmMinMatch);
+  SET_CONST(target, ZSTD_c_ldmBucketSizeLog);
+  SET_CONST(target, ZSTD_c_ldmHashRateLog);
+  SET_CONST(target, ZSTD_c_contentSizeFlag);
+  SET_CONST(target, ZSTD_c_checksumFlag);
+  SET_CONST(target, ZSTD_c_dictIDFlag);
+  SET_CONST(target, ZSTD_c_nbWorkers);
+  SET_CONST(target, ZSTD_c_jobSize);
+  SET_CONST(target, ZSTD_c_overlapLog);
+  SET_CONST(target, ZSTD_d_windowLogMax);
+  SET_CONST(target, ZSTD_CLEVEL_DEFAULT);
+  // Zstd error codes
+  SET_CONST(target, ZSTD_error_no_error);
+  SET_CONST(target, ZSTD_error_GENERIC);
+  SET_CONST(target, ZSTD_error_prefix_unknown);
+  SET_CONST(target, ZSTD_error_version_unsupported);
+  SET_CONST(target, ZSTD_error_frameParameter_unsupported);
+  SET_CONST(target, ZSTD_error_frameParameter_windowTooLarge);
+  SET_CONST(target, ZSTD_error_corruption_detected);
+  SET_CONST(target, ZSTD_error_checksum_wrong);
+  SET_CONST(target, ZSTD_error_literals_headerWrong);
+  SET_CONST(target, ZSTD_error_dictionary_corrupted);
+  SET_CONST(target, ZSTD_error_dictionary_wrong);
+  SET_CONST(target, ZSTD_error_dictionaryCreation_failed);
+  SET_CONST(target, ZSTD_error_parameter_unsupported);
+  SET_CONST(target, ZSTD_error_parameter_combination_unsupported);
+  SET_CONST(target, ZSTD_error_parameter_outOfBound);
+  SET_CONST(target, ZSTD_error_tableLog_tooLarge);
+  SET_CONST(target, ZSTD_error_maxSymbolValue_tooLarge);
+  SET_CONST(target, ZSTD_error_maxSymbolValue_tooSmall);
+  SET_CONST(target, ZSTD_error_stabilityCondition_notRespected);
+  SET_CONST(target, ZSTD_error_stage_wrong);
+  SET_CONST(target, ZSTD_error_init_missing);
+  SET_CONST(target, ZSTD_error_memory_allocation);
+  SET_CONST(target, ZSTD_error_workSpace_tooSmall);
+  SET_CONST(target, ZSTD_error_dstSize_tooSmall);
+  SET_CONST(target, ZSTD_error_srcSize_wrong);
+  SET_CONST(target, ZSTD_error_dstBuffer_null);
+  SET_CONST(target, ZSTD_error_noForwardProgress_destFull);
+  SET_CONST(target, ZSTD_error_noForwardProgress_inputEmpty);
+}
+
 napi_value initConstantsBinding(napi_env env, napi_value exports) {
   napi_value osObj, errnoObj, signalsObj, priorityObj;
   napi_value fsObj, cryptoObj, zlibObj, traceObj;
@@ -596,7 +831,8 @@ napi_value initConstantsBinding(napi_env env, napi_value exports) {
   defineSignalConstants(env, signalsObj);
   definePriorityConstants(env, priorityObj);
   defineFsConstants(env, fsObj);
-  // crypto, zlib, trace: empty stubs for now.
+  defineZlibConstants(env, zlibObj);
+  // crypto, trace: empty stubs for now.
 
   // dlopen constants go under os.dlopen.
   napi_value dlopenObj;
