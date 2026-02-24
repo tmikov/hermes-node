@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/bindings/node_crypto.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 #include <picohash_wrapper.h>
 
@@ -18,7 +19,12 @@ namespace node_compat {
 // Algorithm helpers
 // ---------------------------------------------------------------------------
 
-enum Algorithm { kMD5 = PH_MD5, kSHA1 = PH_SHA1, kSHA224 = PH_SHA224, kSHA256 = PH_SHA256 };
+enum Algorithm {
+  kMD5 = PH_MD5,
+  kSHA1 = PH_SHA1,
+  kSHA224 = PH_SHA224,
+  kSHA256 = PH_SHA256
+};
 
 static bool parseAlgorithm(const char *name, Algorithm &out) {
   if (std::strcmp(name, "md5") == 0) {
@@ -70,8 +76,6 @@ struct HashContext {
 static void hashContextFinalizer(napi_env, void *data, void *) {
   delete static_cast<HashContext *>(data);
 }
-
-static napi_ref hashConstructorRef = nullptr;
 
 // ---------------------------------------------------------------------------
 // Hash class
@@ -175,7 +179,8 @@ static napi_value hashCopy(napi_env env, napi_callback_info info) {
 
   // Create a new Hash instance via the constructor so it has prototype methods.
   napi_value hashCtorVal;
-  napi_get_reference_value(env, hashConstructorRef, &hashCtorVal);
+  napi_get_reference_value(
+      env, getRuntimeState(env)->hashCtorRef, &hashCtorVal);
 
   const char *algoName = nullptr;
   switch (hctx->algo) {
@@ -352,11 +357,29 @@ static napi_value timingSafeEqual(napi_env env, napi_callback_info info) {
 napi_value initCryptoBinding(napi_env env, napi_value exports) {
   // Define Hash class.
   napi_property_descriptor hashProtoProps[] = {
-      {"update", nullptr, hashUpdate, nullptr, nullptr, nullptr,
-       napi_enumerable, nullptr},
-      {"digest", nullptr, hashDigest, nullptr, nullptr, nullptr,
-       napi_enumerable, nullptr},
-      {"copy", nullptr, hashCopy, nullptr, nullptr, nullptr, napi_enumerable,
+      {"update",
+       nullptr,
+       hashUpdate,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_enumerable,
+       nullptr},
+      {"digest",
+       nullptr,
+       hashDigest,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_enumerable,
+       nullptr},
+      {"copy",
+       nullptr,
+       hashCopy,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_enumerable,
        nullptr},
   };
 
@@ -371,16 +394,34 @@ napi_value initCryptoBinding(napi_env env, napi_value exports) {
       hashProtoProps,
       &hashCtor);
 
-  napi_create_reference(env, hashCtor, 1, &hashConstructorRef);
+  napi_create_reference(env, hashCtor, 1, &getRuntimeState(env)->hashCtorRef);
 
   // Define Hmac class.
   napi_property_descriptor hmacProtoProps[] = {
-      {"init", nullptr, hmacInit, nullptr, nullptr, nullptr, napi_enumerable,
+      {"init",
+       nullptr,
+       hmacInit,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_enumerable,
        nullptr},
-      {"update", nullptr, hmacUpdate, nullptr, nullptr, nullptr,
-       napi_enumerable, nullptr},
-      {"digest", nullptr, hmacDigest, nullptr, nullptr, nullptr,
-       napi_enumerable, nullptr},
+      {"update",
+       nullptr,
+       hmacUpdate,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_enumerable,
+       nullptr},
+      {"digest",
+       nullptr,
+       hmacDigest,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_enumerable,
+       nullptr},
   };
 
   napi_value hmacCtor;
@@ -405,8 +446,7 @@ napi_value initCryptoBinding(napi_env env, napi_value exports) {
   };
   // clang-format on
 
-  napi_define_properties(
-      env, exports, sizeof(props) / sizeof(props[0]), props);
+  napi_define_properties(env, exports, sizeof(props) / sizeof(props[0]), props);
   return exports;
 }
 

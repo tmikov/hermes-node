@@ -5,8 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <hermes/node-compat/bindings/node_udp_wrap.h>
 #include <hermes/node-compat/bindings/handle_wrap_base.h>
+#include <hermes/node-compat/bindings/node_udp_wrap.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 #include <uv.h>
 
@@ -29,7 +30,8 @@ struct SendReqData {
   // Inline storage for buffers. Extra bufs allocated after struct if needed.
   uv_buf_t bufs[1];
 
-  SendReqData() : env(nullptr), reqRef(nullptr), msgSize(0), haveCallback(false) {
+  SendReqData()
+      : env(nullptr), reqRef(nullptr), msgSize(0), haveCallback(false) {
     memset(&req, 0, sizeof(req));
   }
 };
@@ -42,7 +44,7 @@ class UDPWrap : public HandleWrapBase {
  public:
   /// Construct a UDPWrap.
   UDPWrap(napi_env env, napi_value jsObj) : handle_() {
-    int err = uv_udp_init(getHandleWrapEventLoop(), &handle_);
+    int err = uv_udp_init(getRuntimeState(env)->loop, &handle_);
     if (err != 0) {
       return;
     }
@@ -260,10 +262,7 @@ class UDPWrap : public HandleWrapBase {
   }
 
   /// Helper to write sockaddr info into a JS object.
-  static void AddressToJS(
-      napi_env env,
-      const sockaddr *addr,
-      napi_value out) {
+  static void AddressToJS(napi_env env, const sockaddr *addr, napi_value out) {
     char ip[INET6_ADDRSTRLEN];
     int port = 0;
 
@@ -311,9 +310,7 @@ class UDPWrap : public HandleWrapBase {
     sockaddr_storage storage;
     int addrLen = sizeof(storage);
     int err = uv_udp_getsockname(
-        &wrap->handle_,
-        reinterpret_cast<sockaddr *>(&storage),
-        &addrLen);
+        &wrap->handle_, reinterpret_cast<sockaddr *>(&storage), &addrLen);
 
     if (err == 0) {
       AddressToJS(env, reinterpret_cast<const sockaddr *>(&storage), argv[0]);
@@ -341,9 +338,7 @@ class UDPWrap : public HandleWrapBase {
     sockaddr_storage storage;
     int addrLen = sizeof(storage);
     int err = uv_udp_getpeername(
-        &wrap->handle_,
-        reinterpret_cast<sockaddr *>(&storage),
-        &addrLen);
+        &wrap->handle_, reinterpret_cast<sockaddr *>(&storage), &addrLen);
 
     if (err == 0) {
       AddressToJS(env, reinterpret_cast<const sockaddr *>(&storage), argv[0]);
@@ -453,11 +448,9 @@ class UDPWrap : public HandleWrapBase {
     // Try synchronous send first.
     int err;
     if (destAddr != nullptr) {
-      err = uv_udp_try_send(
-          &wrap->handle_, reqData->bufs, count, destAddr);
+      err = uv_udp_try_send(&wrap->handle_, reqData->bufs, count, destAddr);
     } else {
-      err = uv_udp_try_send(
-          &wrap->handle_, reqData->bufs, count, nullptr);
+      err = uv_udp_try_send(&wrap->handle_, reqData->bufs, count, nullptr);
     }
 
     if (err == static_cast<int>(totalSize)) {
@@ -600,10 +593,8 @@ class UDPWrap : public HandleWrapBase {
   }
 
   /// libuv alloc callback.
-  static void AllocCb(
-      uv_handle_t * /*handle*/,
-      size_t suggested_size,
-      uv_buf_t *buf) {
+  static void
+  AllocCb(uv_handle_t * /*handle*/, size_t suggested_size, uv_buf_t *buf) {
     buf->base = static_cast<char *>(malloc(suggested_size));
     buf->len = buf->base ? suggested_size : 0;
   }
@@ -655,11 +646,7 @@ class UDPWrap : public HandleWrapBase {
       void *bufCopy = nullptr;
       napi_value rawBuf;
       napi_create_buffer_copy(
-          env,
-          static_cast<size_t>(nread),
-          buf->base,
-          &bufCopy,
-          &rawBuf);
+          env, static_cast<size_t>(nread), buf->base, &bufCopy, &rawBuf);
       napi_value global, bufferCtor, bufferFrom;
       napi_get_global(env, &global);
       napi_get_named_property(env, global, "Buffer", &bufferCtor);
@@ -982,11 +969,11 @@ class UDPWrap : public HandleWrapBase {
 
     if (err != 0) {
       // Set error on ctx object.
-      const char *syscall = isRecv ? "uv_recv_buffer_size" : "uv_send_buffer_size";
+      const char *syscall =
+          isRecv ? "uv_recv_buffer_size" : "uv_send_buffer_size";
       napi_value errnoVal, msgVal, syscallVal, codeVal;
       napi_create_int32(env, err, &errnoVal);
-      napi_create_string_utf8(
-          env, uv_strerror(err), NAPI_AUTO_LENGTH, &msgVal);
+      napi_create_string_utf8(env, uv_strerror(err), NAPI_AUTO_LENGTH, &msgVal);
       napi_create_string_utf8(env, syscall, NAPI_AUTO_LENGTH, &syscallVal);
       napi_create_string_utf8(
           env, uv_err_name(err), NAPI_AUTO_LENGTH, &codeVal);
@@ -1077,56 +1064,198 @@ napi_value initUdpWrapBinding(napi_env env, napi_value exports) {
 
   // Add UDP-specific methods.
   napi_property_descriptor udpProps[] = {
-      {"open", nullptr, UDPWrap::Open, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"bind", nullptr, UDPWrap::Bind, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"bind6", nullptr, UDPWrap::Bind6, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"connect", nullptr, UDPWrap::Connect, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"connect6", nullptr, UDPWrap::Connect6, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"disconnect", nullptr, UDPWrap::Disconnect, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"send", nullptr, UDPWrap::Send, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"send6", nullptr, UDPWrap::Send6, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"recvStart", nullptr, UDPWrap::RecvStart, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"recvStop", nullptr, UDPWrap::RecvStop, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"getsockname", nullptr, UDPWrap::GetSockName, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"getpeername", nullptr, UDPWrap::GetPeerName, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"addMembership", nullptr, UDPWrap::AddMembership, nullptr, nullptr,
-       nullptr, napi_default, nullptr},
-      {"dropMembership", nullptr, UDPWrap::DropMembership, nullptr, nullptr,
-       nullptr, napi_default, nullptr},
-      {"addSourceSpecificMembership", nullptr,
-       UDPWrap::AddSourceSpecificMembership, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"dropSourceSpecificMembership", nullptr,
-       UDPWrap::DropSourceSpecificMembership, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"setMulticastInterface", nullptr, UDPWrap::SetMulticastInterface,
-       nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"setMulticastTTL", nullptr, UDPWrap::SetMulticastTTL, nullptr, nullptr,
-       nullptr, napi_default, nullptr},
-      {"setMulticastLoopback", nullptr, UDPWrap::SetMulticastLoopback, nullptr,
-       nullptr, nullptr, napi_default, nullptr},
-      {"setBroadcast", nullptr, UDPWrap::SetBroadcast, nullptr, nullptr,
-       nullptr, napi_default, nullptr},
-      {"setTTL", nullptr, UDPWrap::SetTTL, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"bufferSize", nullptr, UDPWrap::BufferSize, nullptr, nullptr, nullptr,
-       napi_default, nullptr},
-      {"getSendQueueSize", nullptr, UDPWrap::GetSendQueueSize, nullptr,
-       nullptr, nullptr, napi_default, nullptr},
-      {"getSendQueueCount", nullptr, UDPWrap::GetSendQueueCount, nullptr,
-       nullptr, nullptr, napi_default, nullptr},
+      {"open",
+       nullptr,
+       UDPWrap::Open,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"bind",
+       nullptr,
+       UDPWrap::Bind,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"bind6",
+       nullptr,
+       UDPWrap::Bind6,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"connect",
+       nullptr,
+       UDPWrap::Connect,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"connect6",
+       nullptr,
+       UDPWrap::Connect6,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"disconnect",
+       nullptr,
+       UDPWrap::Disconnect,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"send",
+       nullptr,
+       UDPWrap::Send,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"send6",
+       nullptr,
+       UDPWrap::Send6,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"recvStart",
+       nullptr,
+       UDPWrap::RecvStart,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"recvStop",
+       nullptr,
+       UDPWrap::RecvStop,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"getsockname",
+       nullptr,
+       UDPWrap::GetSockName,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"getpeername",
+       nullptr,
+       UDPWrap::GetPeerName,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"addMembership",
+       nullptr,
+       UDPWrap::AddMembership,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"dropMembership",
+       nullptr,
+       UDPWrap::DropMembership,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"addSourceSpecificMembership",
+       nullptr,
+       UDPWrap::AddSourceSpecificMembership,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"dropSourceSpecificMembership",
+       nullptr,
+       UDPWrap::DropSourceSpecificMembership,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"setMulticastInterface",
+       nullptr,
+       UDPWrap::SetMulticastInterface,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"setMulticastTTL",
+       nullptr,
+       UDPWrap::SetMulticastTTL,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"setMulticastLoopback",
+       nullptr,
+       UDPWrap::SetMulticastLoopback,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"setBroadcast",
+       nullptr,
+       UDPWrap::SetBroadcast,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"setTTL",
+       nullptr,
+       UDPWrap::SetTTL,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"bufferSize",
+       nullptr,
+       UDPWrap::BufferSize,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"getSendQueueSize",
+       nullptr,
+       UDPWrap::GetSendQueueSize,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
+      {"getSendQueueCount",
+       nullptr,
+       UDPWrap::GetSendQueueCount,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       nullptr},
   };
   napi_define_properties(
       env, prototype, sizeof(udpProps) / sizeof(udpProps[0]), udpProps);

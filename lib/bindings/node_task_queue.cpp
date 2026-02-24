@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/bindings/node_task_queue.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 
 #include <node_api.h>
 
@@ -13,18 +14,6 @@
 
 namespace hermes {
 namespace node_compat {
-
-// ---------------------------------------------------------------------------
-// Drain microtasks callback (set by the host before binding init)
-// ---------------------------------------------------------------------------
-
-static DrainMicrotasksFn s_drainMicrotasksFn = nullptr;
-static void *s_drainMicrotasksData = nullptr;
-
-void setTaskQueueDrainMicrotasks(DrainMicrotasksFn fn, void *data) {
-  s_drainMicrotasksFn = fn;
-  s_drainMicrotasksData = data;
-}
 
 // ---------------------------------------------------------------------------
 // Per-binding state stored as callback data via napi_ref
@@ -50,8 +39,9 @@ static TaskQueueState *getState(napi_env env, napi_callback_info info) {
 // ---------------------------------------------------------------------------
 
 static napi_value runMicrotasks(napi_env env, napi_callback_info /*info*/) {
-  if (s_drainMicrotasksFn)
-    s_drainMicrotasksFn(s_drainMicrotasksData);
+  auto *rtState = getRuntimeState(env);
+  if (rtState && rtState->drainMicrotasksFn)
+    rtState->drainMicrotasksFn(rtState->drainMicrotasksData);
 
   napi_value undef;
   napi_get_undefined(env, &undef);

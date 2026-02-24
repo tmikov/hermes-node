@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/bindings/node_contextify.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 #include <napi/hermes_napi.h>
 #include <napi/hermes_napi_compile.h>
 #include <node_api.h>
@@ -27,17 +28,14 @@ namespace node_compat {
     }                                                               \
   } while (0)
 
-/// Cached reference to the contextify_context_private_symbol from
-/// internalBinding('util').privateSymbols. Lazily initialized on first
-/// makeContext call.
-static napi_ref s_contextPrivateSymbolRef = nullptr;
-
 // ---------------------------------------------------------------------------
 // SIGINT watchdog state
 // ---------------------------------------------------------------------------
 
-/// Callback to trigger an async break in the JS engine.
-static TriggerAsyncBreakFn s_triggerAsyncBreak = nullptr;
+// These must remain process-global (not in RuntimeState) because the SIGINT
+// signal handler has no access to napi_env or RuntimeState.  They are populated
+// from RuntimeState in startSigintWatchdogCb.
+static void (*s_triggerAsyncBreak)(void *) = nullptr;
 static void *s_triggerAsyncBreakData = nullptr;
 
 /// Whether the SIGINT watchdog is currently active.
@@ -58,11 +56,6 @@ static void sigintHandler(int /*signo*/) {
   if (s_triggerAsyncBreak) {
     s_triggerAsyncBreak(s_triggerAsyncBreakData);
   }
-}
-
-void setContextifyAsyncBreak(TriggerAsyncBreakFn fn, void *data) {
-  s_triggerAsyncBreak = fn;
-  s_triggerAsyncBreakData = data;
 }
 
 // ---------------------------------------------------------------------------
@@ -265,9 +258,10 @@ static napi_value contextifyScriptCreateCachedData(
 /// On first call, retrieves it from
 /// globalThis.internalBinding('util').privateSymbols and caches it.
 static napi_value getContextPrivateSymbol(napi_env env) {
-  if (s_contextPrivateSymbolRef) {
+  auto *rtState = getRuntimeState(env);
+  if (rtState->contextifySymbolRef) {
     napi_value sym;
-    napi_get_reference_value(env, s_contextPrivateSymbolRef, &sym);
+    napi_get_reference_value(env, rtState->contextifySymbolRef, &sym);
     return sym;
   }
 
@@ -296,7 +290,7 @@ static napi_value getContextPrivateSymbol(napi_env env) {
       env, privateSymbols, "contextify_context_private_symbol", &sym);
 
   // Cache it as a strong reference.
-  napi_create_reference(env, sym, 1, &s_contextPrivateSymbolRef);
+  napi_create_reference(env, sym, 1, &rtState->contextifySymbolRef);
   return sym;
 }
 
@@ -346,8 +340,22 @@ static napi_value startSigintWatchdogCb(
     napi_callback_info /*info*/) {
   bool success = false;
 
-  if (s_triggerAsyncBreak &&
-      !s_sigintWatching.load(std::memory_order_relaxed)) {
+  if (!s_sigintWatching.load(std::memory_order_relaxed)) {
+    // Populate process-global statics from per-runtime state only when we
+    // actually start watching. This avoids retargeting an already active
+    // watchdog from another runtime.
+    auto *rtState = getRuntimeState(env);
+    if (rtState && rtState->triggerAsyncBreakFn) {
+      s_triggerAsyncBreak = rtState->triggerAsyncBreakFn;
+      s_triggerAsyncBreakData = rtState->triggerAsyncBreakData;
+    }
+
+    if (!s_triggerAsyncBreak) {
+      napi_value result;
+      napi_get_boolean(env, false, &result);
+      return result;
+    }
+
     s_sigintReceived.store(false, std::memory_order_relaxed);
 
     struct sigaction sa;

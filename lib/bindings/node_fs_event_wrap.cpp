@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/bindings/node_fs_event_wrap.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 #include <uv.h>
 
@@ -14,16 +15,6 @@
 
 namespace hermes {
 namespace node_compat {
-
-// ---------------------------------------------------------------------------
-// Module-level state
-// ---------------------------------------------------------------------------
-
-static uv_loop_t *s_fsEventLoop = nullptr;
-
-void setFsEventWrapEventLoop(uv_loop_t *loop) {
-  s_fsEventLoop = loop;
-}
 
 // ---------------------------------------------------------------------------
 // FSEventWrap — native data attached to FSEvent JS objects
@@ -125,7 +116,7 @@ static napi_value fsEventStart(napi_env env, napi_callback_info info) {
   if (recursive)
     flags |= UV_FS_EVENT_RECURSIVE;
 
-  int err = uv_fs_event_init(s_fsEventLoop, &wrap->handle);
+  int err = uv_fs_event_init(getRuntimeState(env)->loop, &wrap->handle);
   if (err != 0) {
     napi_value result;
     napi_create_int32(env, err, &result);
@@ -345,14 +336,6 @@ onFsEvent(uv_fs_event_t *handle, const char *filename, int events, int status) {
   }
 
   napi_close_handle_scope(env, scope);
-}
-
-// ---------------------------------------------------------------------------
-// closeFsEventWrapHandles — no-op; handles close individually via .close()
-// ---------------------------------------------------------------------------
-
-void closeFsEventWrapHandles() {
-  // Individual FSEvent handles are closed via close(). Nothing global needed.
 }
 
 // ---------------------------------------------------------------------------

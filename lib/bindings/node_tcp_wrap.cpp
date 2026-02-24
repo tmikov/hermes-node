@@ -5,9 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <hermes/node-compat/bindings/node_tcp_wrap.h>
 #include <hermes/node-compat/bindings/handle_wrap_base.h>
 #include <hermes/node-compat/bindings/libuv_stream_base.h>
+#include <hermes/node-compat/bindings/node_tcp_wrap.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 #include <uv.h>
 
@@ -16,10 +17,6 @@
 
 namespace hermes {
 namespace node_compat {
-
-// Module-level reference to the TCP constructor. Used by OnConnection
-// to instantiate client TCP objects.
-static napi_ref s_tcpCtorRef = nullptr;
 
 // ---------------------------------------------------------------------------
 // ConnectReqData — native data for uv_connect_t requests
@@ -45,7 +42,7 @@ class TCPWrap : public LibuvStreamBase {
 
   /// Construct a TCPWrap.
   TCPWrap(napi_env env, napi_value jsObj) : handle_() {
-    int err = uv_tcp_init(getHandleWrapEventLoop(), &handle_);
+    int err = uv_tcp_init(getRuntimeState(env)->loop, &handle_);
     if (err != 0) {
       // uv_tcp_init should not fail under normal circumstances.
       // Node also CHECK_EQ(r, 0) here. If it does fail, we don't
@@ -214,9 +211,7 @@ class TCPWrap : public LibuvStreamBase {
     napi_get_value_int32(env, argv[0], &backlog);
 
     int err = uv_listen(
-        reinterpret_cast<uv_stream_t *>(&wrap->handle_),
-        backlog,
-        OnConnection);
+        reinterpret_cast<uv_stream_t *>(&wrap->handle_), backlog, OnConnection);
 
     napi_value result;
     napi_create_int32(env, err, &result);
@@ -243,14 +238,13 @@ class TCPWrap : public LibuvStreamBase {
     if (status == 0) {
       // Instantiate a new TCP object for the client.
       napi_value tcpCtor;
-      napi_get_reference_value(env, s_tcpCtorRef, &tcpCtor);
+      napi_get_reference_value(env, getRuntimeState(env)->tcpCtorRef, &tcpCtor);
 
       napi_value typeArg;
       napi_create_int32(env, SOCKET, &typeArg);
 
       napi_value clientObj;
-      napi_status st =
-          napi_new_instance(env, tcpCtor, 1, &typeArg, &clientObj);
+      napi_status st = napi_new_instance(env, tcpCtor, 1, &typeArg, &clientObj);
       if (st != napi_ok) {
         napi_close_handle_scope(env, scope);
         return;
@@ -265,8 +259,7 @@ class TCPWrap : public LibuvStreamBase {
       }
 
       int acceptErr = uv_accept(
-          handle,
-          reinterpret_cast<uv_stream_t *>(&clientWrap->handle_));
+          handle, reinterpret_cast<uv_stream_t *>(&clientWrap->handle_));
       if (acceptErr != 0) {
         // Accept failed (e.g. connection already closed). Just return.
         napi_close_handle_scope(env, scope);
@@ -463,10 +456,7 @@ class TCPWrap : public LibuvStreamBase {
   }
 
   /// Helper to write sockaddr info into a JS object.
-  static void AddressToJS(
-      napi_env env,
-      const sockaddr *addr,
-      napi_value out) {
+  static void AddressToJS(napi_env env, const sockaddr *addr, napi_value out) {
     char ip[INET6_ADDRSTRLEN];
     int port = 0;
 
@@ -514,9 +504,7 @@ class TCPWrap : public LibuvStreamBase {
     sockaddr_storage storage;
     int addrLen = sizeof(storage);
     int err = uv_tcp_getsockname(
-        &wrap->handle_,
-        reinterpret_cast<sockaddr *>(&storage),
-        &addrLen);
+        &wrap->handle_, reinterpret_cast<sockaddr *>(&storage), &addrLen);
 
     if (err == 0) {
       AddressToJS(env, reinterpret_cast<const sockaddr *>(&storage), argv[0]);
@@ -544,9 +532,7 @@ class TCPWrap : public LibuvStreamBase {
     sockaddr_storage storage;
     int addrLen = sizeof(storage);
     int err = uv_tcp_getpeername(
-        &wrap->handle_,
-        reinterpret_cast<sockaddr *>(&storage),
-        &addrLen);
+        &wrap->handle_, reinterpret_cast<sockaddr *>(&storage), &addrLen);
 
     if (err == 0) {
       AddressToJS(env, reinterpret_cast<const sockaddr *>(&storage), argv[0]);
@@ -769,7 +755,7 @@ napi_value initTcpWrapBinding(napi_env env, napi_value exports) {
   napi_set_named_property(env, exports, "TCP", tcpCtor);
 
   // Store a reference to the constructor for use in OnConnection.
-  napi_create_reference(env, tcpCtor, 1, &s_tcpCtorRef);
+  napi_create_reference(env, tcpCtor, 1, &getRuntimeState(env)->tcpCtorRef);
 
   // --- TCPConnectWrap constructor ---
   // A simple JS constructor for connect request objects.

@@ -12,22 +12,15 @@
 
 struct uv_handle_s;
 typedef struct uv_handle_s uv_handle_t;
-struct uv_loop_s;
-typedef struct uv_loop_s uv_loop_t;
 
 namespace hermes {
 namespace node_compat {
+struct RuntimeState;
+} // namespace node_compat
+} // namespace hermes
 
-/// Set the event loop for HandleWrapBase operations.
-/// Must be called before any HandleWrapBase constructors are invoked.
-void setHandleWrapEventLoop(uv_loop_t *loop);
-
-/// Get the event loop for HandleWrapBase operations.
-uv_loop_t *getHandleWrapEventLoop();
-
-/// Clear the event loop pointer. Must be called before the event loop is
-/// destroyed. GC finalizers that fire after this will skip uv_close.
-void clearHandleWrapEventLoop();
+namespace hermes {
+namespace node_compat {
 
 /// Base class for all libuv handle wraps (TCP, Pipe, TTY, UDP, etc.).
 /// Provides ref/unref/hasRef/close lifecycle management.
@@ -97,6 +90,7 @@ class HandleWrapBase {
 
   uv_handle_t *handle_ = nullptr;
   napi_env env_ = nullptr;
+  RuntimeState *rtState_ = nullptr; // cached for GC finalizer safety
   napi_ref selfRef_ = nullptr; // prevent-GC reference
   napi_ref closeCbRef_ = nullptr; // optional close callback
   State state_ = kClosed;

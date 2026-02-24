@@ -65,10 +65,11 @@ The architecture has four layers, each with a clear responsibility:
    `src/node_*.cc` to use Node-API instead of V8's C++ API. They wrap the same
    underlying C libraries (libuv, llhttp, c-ares, Ada, simdutf) that Node uses.
 
-4. **Infrastructure** (`lib/event-loop/`, `lib/binding-registry/`,
+4. **Infrastructure** (`lib/runtime/`, `lib/event-loop/`, `lib/binding-registry/`,
    `lib/module-loader/`, `lib/process/`, `lib/embedded-modules/`): The glue that
-   wires everything together -- event loop adapter, module loading, process
-   object, and the bytecode embedding pipeline.
+   wires everything together -- the `runHermesNode()` entry point and per-env
+   `RuntimeState`, event loop adapter, module loading, process object, and the
+   bytecode embedding pipeline.
 
 ### Why Reuse Node's Code
 
@@ -235,8 +236,8 @@ All ~155 internal modules are compiled to Hermes bytecode at build time:
 
 ### Binding Registry (`lib/binding-registry/`)
 
-A simple name-to-initializer map. During bootstrap, `hermes-node.cpp` registers
-~35 bindings:
+A simple name-to-initializer map. During bootstrap, `hermes_node_runtime.cpp`
+registers ~35 bindings:
 
 ```cpp
 registry.registerBinding("fs", initFsBinding);
@@ -307,12 +308,14 @@ on every native callback; the two-handle approach is a simpler approximation.
 **Cleanup ordering** is strict and failure to follow it causes use-after-free:
 
 1. Close stdio stream native handles
-2. `caresWrapShutdown()` (close DNS channel handles)
-3. `closeTimersHandles()` / `closeFsEventWrapHandles()`
-4. Stop and close tick-drain handles
+2. `closeTimersHandles(env)`
+3. Stop and close tick-drain handles
+4. `caresWrapShutdown(env)` (close DNS channel handles)
 5. `eventLoop.close()` (force-closes remaining handles via `uv_walk()`)
-6. `clearHandleWrapEventLoop()` (null the loop pointer for GC finalizers)
+6. Null the loop pointer in `RuntimeState` for GC finalizers
 7. `hermes_napi_destroy_env()`
+8. `runtime.reset()` (GC finalizers run here; `RuntimeState` must still be alive)
+9. `delete runtimeState`
 
 ### Native Bindings (`lib/bindings/`)
 
@@ -392,9 +395,9 @@ Two resolution paths:
   NAPTR, SOA, CAA, reverse).
 
 `ChannelWrap` wraps `ares_channel_t` with per-socket `uv_poll_t` handles and a
-`uv_timer_t` for timeout processing. A static set tracks all live instances for
-clean shutdown. The prevent-GC reference pattern prevents the GC from collecting
-a ChannelWrap while its embedded libuv handles are still open.
+`uv_timer_t` for timeout processing. A per-env set in `RuntimeState` tracks all
+live instances for clean shutdown. The prevent-GC reference pattern prevents the
+GC from collecting a ChannelWrap while its embedded libuv handles are still open.
 
 #### Child Process (`node_process_wrap.cpp`, `node_spawn_sync.cpp`)
 
@@ -431,7 +434,7 @@ successfully and is used directly -- no shim needed. The `module_wrap` binding
 provides the constants and stubs that its ESM-related dependencies require at
 load time.
 
-### Process Object (`lib/process/`, inline JS in `hermes-node.cpp`)
+### Process Object (`lib/process/`, inline JS in `hermes_node_runtime.cpp`)
 
 The `NodeProcess` C++ class provides static properties (`pid`, `ppid`,
 `platform`, `arch`, `version`, `argv`, `execPath`) and methods (`cwd()`,
@@ -452,8 +455,12 @@ avoids a circular dependency -- `events.js` itself uses
 
 ## Bootstrap Sequence
 
-The `hermes-node` binary (`tools/hermes-node/hermes-node.cpp`) orchestrates a
-carefully ordered startup:
+The `runHermesNode()` function (`lib/runtime/hermes_node_runtime.cpp`)
+orchestrates a carefully ordered startup. The `hermes-node` binary
+(`tools/hermes-node/hermes-node.cpp`) is a thin CLI that parses arguments and
+calls `runHermesNode(config)`. The API is thread-safe: each invocation creates
+its own runtime, event loop, and per-env `RuntimeState`, so multiple runtimes
+can coexist in the same process.
 
 1. **Hermes runtime** with microtask queue, async generators, and ES6 block
    scoping enabled
@@ -461,8 +468,9 @@ carefully ordered startup:
 3. **NAPI environment** creation, bridging Hermes and libuv
 4. **Minimal console** (C++ `fprintf`-based `log`/`warn`/`error`/`info`) so
    early bootstrap errors are visible
-5. **Native binding registration** (~35 bindings) plus host callbacks for event
-   loops, microtask draining, and async break
+5. **`RuntimeState` allocation** (per-env struct holding loop pointer, callback
+   pointers, constructor refs, and channel tracking -- replaces file-scope
+   statics) plus **native binding registration** (~35 bindings)
 6. **Primordials** execution (polyfills, uncurried builtins, `Safe*` variants)
 7. **`internalBinding()` function** creation
 8. **`process` global** creation (C++ properties + inline JS event emitter)
@@ -585,6 +593,7 @@ hermes-node-compat/
     event-loop/                 libuv adapter
     module-loader/              Bootstrap require() for internal modules
     process/                    process global object
+    runtime/                    runHermesNode() API + RuntimeState
   libjs/
     primordials.js              Polyfills + uncurried builtins
     loader.js                   Module loader (JS side)
@@ -592,7 +601,7 @@ hermes-node-compat/
     shims/                      Targeted replacements for Node internals
   libjs-node/                   Vendored Node v24.13.0 lib/*.js (unmodified)
   include/hermes/node-compat/   Public C++ headers
-  tools/hermes-node/            CLI binary entry point
+  tools/hermes-node/            CLI binary (arg parsing + runHermesNode())
   test/                         JS tests (LLVM Lit)
   unittests/                    C++ unit tests (GTest)
   examples/                     Example projects (e.g., Babel parser/transform)
@@ -626,13 +635,14 @@ separated from our build integration.
      `napi_define_properties`
    - `FunctionTemplate::New` → `napi_define_class` (for constructor-based wraps)
 
-4. **Register the binding** in `hermes-node.cpp`:
+4. **Register the binding** in `lib/runtime/hermes_node_runtime.cpp`:
    `registry.registerBinding("name", initXxxBinding)`.
 
 5. **Add to CMakeLists.txt** in `lib/bindings/`.
 
-6. **If a libuv event loop is needed**, add a `setXxxEventLoop(uv_loop_t*)`
-   function and call it from `hermes-node.cpp` before binding init.
+6. **If a libuv event loop is needed**, use `getRuntimeState(env)->loop` (from
+   `runtime_state.h`). All per-env state is stored in `RuntimeState`; do not add
+   file-scope statics.
 
 7. **Check if a shim is needed**: if the Node JS module that uses this binding
    also depends on other unimplemented bindings, you may need a shim for those.

@@ -13,15 +13,6 @@
 namespace hermes {
 namespace node_compat {
 
-/// Function type for draining the microtask queue. Called by the
-/// runMicrotasks binding function.
-using DrainMicrotasksFn = void (*)(void *data);
-
-/// Set the microtask drain function BEFORE the task_queue binding is
-/// initialized. This must be called during bootstrap, before any JS code
-/// loads internal/process/task_queues.
-void setTaskQueueDrainMicrotasks(DrainMicrotasksFn fn, void *data);
-
 /// Initialize the task_queue binding.
 ///
 /// Exports:

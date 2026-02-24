@@ -10,14 +10,8 @@
 
 #include <node_api.h>
 
-struct uv_loop_s;
-
 namespace hermes {
 namespace node_compat {
-
-/// Set the libuv event loop BEFORE the timers binding is initialized.
-/// Must be called during bootstrap.
-void setTimersEventLoop(uv_loop_s *loop);
 
 /// Initialize the timers binding.
 ///
@@ -35,7 +29,7 @@ napi_value initTimersBinding(napi_env env, napi_value exports);
 /// Close the timer libuv handles. Must be called before the event loop is
 /// destroyed. After calling this, run uv_run(UV_RUN_NOWAIT) to process close
 /// callbacks.
-void closeTimersHandles();
+void closeTimersHandles(napi_env env);
 
 } // namespace node_compat
 } // namespace hermes

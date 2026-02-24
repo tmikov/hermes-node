@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/bindings/node_file.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 #include <uv.h>
 
@@ -22,16 +23,6 @@
 
 namespace hermes {
 namespace node_compat {
-
-// ---------------------------------------------------------------------------
-// Module-level state set by the host before binding init.
-// ---------------------------------------------------------------------------
-
-static uv_loop_t *s_fsLoop = nullptr;
-
-void setFsEventLoop(uv_loop_t *loop) {
-  s_fsLoop = loop;
-}
 
 // ---------------------------------------------------------------------------
 // Stat field layout -- must match Node's FsStatsOffset enum
@@ -470,7 +461,7 @@ static napi_value fileHandleClose(napi_env env, napi_callback_info info) {
   napi_value promise;
   napi_create_promise(env, &wrap->deferred, &promise);
 
-  uv_fs_close(s_fsLoop, &wrap->req, fd, fsAfterAsync);
+  uv_fs_close(getRuntimeState(env)->loop, &wrap->req, fd, fsAfterAsync);
   return promise;
 }
 
@@ -842,7 +833,12 @@ static napi_value fsAccess(napi_env env, napi_callback_info info) {
     wrap->resultType = FSReqResultType::Void;
     wrap->path = path;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_access(s_fsLoop, &wrap->req, path.c_str(), mode, fsAfterAsync);
+    uv_fs_access(
+        getRuntimeState(env)->loop,
+        &wrap->req,
+        path.c_str(),
+        mode,
+        fsAfterAsync);
     return result;
   }
 
@@ -872,7 +868,13 @@ static napi_value fsOpen(napi_env env, napi_callback_info info) {
     wrap->resultType = FSReqResultType::Integer;
     wrap->path = path;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_open(s_fsLoop, &wrap->req, path.c_str(), flags, mode, fsAfterAsync);
+    uv_fs_open(
+        getRuntimeState(env)->loop,
+        &wrap->req,
+        path.c_str(),
+        flags,
+        mode,
+        fsAfterAsync);
     return result;
   }
 
@@ -907,7 +909,13 @@ static napi_value fsOpenFileHandle(napi_env env, napi_callback_info info) {
     wrap->resultType = FSReqResultType::FileHandle;
     wrap->path = path;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_open(s_fsLoop, &wrap->req, path.c_str(), flags, mode, fsAfterAsync);
+    uv_fs_open(
+        getRuntimeState(env)->loop,
+        &wrap->req,
+        path.c_str(),
+        flags,
+        mode,
+        fsAfterAsync);
     return result;
   }
 
@@ -935,7 +943,7 @@ static napi_value fsClose(napi_env env, napi_callback_info info) {
     auto *wrap = new FSReqWrap();
     wrap->resultType = FSReqResultType::Void;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_close(s_fsLoop, &wrap->req, fd, fsAfterAsync);
+    uv_fs_close(getRuntimeState(env)->loop, &wrap->req, fd, fsAfterAsync);
     return result;
   }
 
@@ -980,7 +988,14 @@ static napi_value fsRead(napi_env env, napi_callback_info info) {
         reinterpret_cast<char *>(bufData + offset),
         static_cast<unsigned int>(length));
     // libuv copies bufs internally for async ops, so local var is fine.
-    uv_fs_read(s_fsLoop, &wrap->req, fd, &buf, 1, position, fsAfterAsync);
+    uv_fs_read(
+        getRuntimeState(env)->loop,
+        &wrap->req,
+        fd,
+        &buf,
+        1,
+        position,
+        fsAfterAsync);
     return result;
   }
 
@@ -1035,7 +1050,14 @@ static napi_value fsWriteBuffer(napi_env env, napi_callback_info info) {
     uv_buf_t buf = uv_buf_init(
         reinterpret_cast<char *>(bufData + offset),
         static_cast<unsigned int>(length));
-    uv_fs_write(s_fsLoop, &wrap->req, fd, &buf, 1, position, fsAfterAsync);
+    uv_fs_write(
+        getRuntimeState(env)->loop,
+        &wrap->req,
+        fd,
+        &buf,
+        1,
+        position,
+        fsAfterAsync);
     return result;
   }
 
@@ -1091,7 +1113,14 @@ static napi_value fsWriteString(napi_env env, napi_callback_info info) {
     uv_buf_t buf = uv_buf_init(
         const_cast<char *>(wrap->writeData.data()),
         static_cast<unsigned int>(wrap->writeData.size()));
-    uv_fs_write(s_fsLoop, &wrap->req, fd, &buf, 1, position, fsAfterAsync);
+    uv_fs_write(
+        getRuntimeState(env)->loop,
+        &wrap->req,
+        fd,
+        &buf,
+        1,
+        position,
+        fsAfterAsync);
     return result;
   }
 
@@ -1135,7 +1164,8 @@ static napi_value fsStat(napi_env env, napi_callback_info info) {
     wrap->path = path;
     wrap->useBigint = useBigint;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_stat(s_fsLoop, &wrap->req, path.c_str(), fsAfterAsync);
+    uv_fs_stat(
+        getRuntimeState(env)->loop, &wrap->req, path.c_str(), fsAfterAsync);
     return result;
   }
 
@@ -1179,7 +1209,8 @@ static napi_value fsLstat(napi_env env, napi_callback_info info) {
     wrap->path = path;
     wrap->useBigint = useBigint;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_lstat(s_fsLoop, &wrap->req, path.c_str(), fsAfterAsync);
+    uv_fs_lstat(
+        getRuntimeState(env)->loop, &wrap->req, path.c_str(), fsAfterAsync);
     return result;
   }
 
@@ -1221,7 +1252,7 @@ static napi_value fsFstat(napi_env env, napi_callback_info info) {
     wrap->resultType = FSReqResultType::Stat;
     wrap->useBigint = useBigint;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_fstat(s_fsLoop, &wrap->req, fd, fsAfterAsync);
+    uv_fs_fstat(getRuntimeState(env)->loop, &wrap->req, fd, fsAfterAsync);
     return result;
   }
 
@@ -1263,7 +1294,8 @@ static napi_value fsStatFs(napi_env env, napi_callback_info info) {
     wrap->path = path;
     wrap->useBigint = useBigint;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_statfs(s_fsLoop, &wrap->req, path.c_str(), fsAfterAsync);
+    uv_fs_statfs(
+        getRuntimeState(env)->loop, &wrap->req, path.c_str(), fsAfterAsync);
     return result;
   }
 
@@ -1331,7 +1363,11 @@ static napi_value fsRename(napi_env env, napi_callback_info info) {
     wrap->dest = newPath;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
     uv_fs_rename(
-        s_fsLoop, &wrap->req, oldPath.c_str(), newPath.c_str(), fsAfterAsync);
+        getRuntimeState(env)->loop,
+        &wrap->req,
+        oldPath.c_str(),
+        newPath.c_str(),
+        fsAfterAsync);
     return result;
   }
 
@@ -1361,7 +1397,8 @@ static napi_value fsUnlink(napi_env env, napi_callback_info info) {
     wrap->resultType = FSReqResultType::Void;
     wrap->path = path;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_unlink(s_fsLoop, &wrap->req, path.c_str(), fsAfterAsync);
+    uv_fs_unlink(
+        getRuntimeState(env)->loop, &wrap->req, path.c_str(), fsAfterAsync);
     return result;
   }
 
@@ -1450,7 +1487,12 @@ static napi_value fsMkdir(napi_env env, napi_callback_info info) {
     wrap->resultType = FSReqResultType::Void;
     wrap->path = path;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_mkdir(s_fsLoop, &wrap->req, path.c_str(), mode, fsAfterAsync);
+    uv_fs_mkdir(
+        getRuntimeState(env)->loop,
+        &wrap->req,
+        path.c_str(),
+        mode,
+        fsAfterAsync);
     return result;
   }
 
@@ -1544,7 +1586,8 @@ static napi_value fsRmdir(napi_env env, napi_callback_info info) {
     wrap->resultType = FSReqResultType::Void;
     wrap->path = path;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_rmdir(s_fsLoop, &wrap->req, path.c_str(), fsAfterAsync);
+    uv_fs_rmdir(
+        getRuntimeState(env)->loop, &wrap->req, path.c_str(), fsAfterAsync);
     return result;
   }
 
@@ -1575,7 +1618,8 @@ static napi_value fsReaddir(napi_env env, napi_callback_info info) {
     wrap->path = path;
     wrap->withFileTypes = withFileTypes;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_scandir(s_fsLoop, &wrap->req, path.c_str(), 0, fsAfterAsync);
+    uv_fs_scandir(
+        getRuntimeState(env)->loop, &wrap->req, path.c_str(), 0, fsAfterAsync);
     return result;
   }
 
@@ -1648,7 +1692,12 @@ static napi_value fsChmod(napi_env env, napi_callback_info info) {
     wrap->resultType = FSReqResultType::Void;
     wrap->path = path;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_chmod(s_fsLoop, &wrap->req, path.c_str(), mode, fsAfterAsync);
+    uv_fs_chmod(
+        getRuntimeState(env)->loop,
+        &wrap->req,
+        path.c_str(),
+        mode,
+        fsAfterAsync);
     return result;
   }
 
@@ -1676,7 +1725,8 @@ static napi_value fsFchmod(napi_env env, napi_callback_info info) {
     auto *wrap = new FSReqWrap();
     wrap->resultType = FSReqResultType::Void;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_fchmod(s_fsLoop, &wrap->req, fd, mode, fsAfterAsync);
+    uv_fs_fchmod(
+        getRuntimeState(env)->loop, &wrap->req, fd, mode, fsAfterAsync);
     return result;
   }
 
@@ -1706,7 +1756,13 @@ static napi_value fsChown(napi_env env, napi_callback_info info) {
     wrap->resultType = FSReqResultType::Void;
     wrap->path = path;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_chown(s_fsLoop, &wrap->req, path.c_str(), uid, gid, fsAfterAsync);
+    uv_fs_chown(
+        getRuntimeState(env)->loop,
+        &wrap->req,
+        path.c_str(),
+        uid,
+        gid,
+        fsAfterAsync);
     return result;
   }
 
@@ -1735,7 +1791,8 @@ static napi_value fsFchown(napi_env env, napi_callback_info info) {
     auto *wrap = new FSReqWrap();
     wrap->resultType = FSReqResultType::Void;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_fchown(s_fsLoop, &wrap->req, fd, uid, gid, fsAfterAsync);
+    uv_fs_fchown(
+        getRuntimeState(env)->loop, &wrap->req, fd, uid, gid, fsAfterAsync);
     return result;
   }
 
@@ -1765,7 +1822,13 @@ static napi_value fsLchown(napi_env env, napi_callback_info info) {
     wrap->resultType = FSReqResultType::Void;
     wrap->path = path;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_lchown(s_fsLoop, &wrap->req, path.c_str(), uid, gid, fsAfterAsync);
+    uv_fs_lchown(
+        getRuntimeState(env)->loop,
+        &wrap->req,
+        path.c_str(),
+        uid,
+        gid,
+        fsAfterAsync);
     return result;
   }
 
@@ -1796,7 +1859,7 @@ static napi_value fsLink(napi_env env, napi_callback_info info) {
     wrap->dest = newPath;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
     uv_fs_link(
-        s_fsLoop,
+        getRuntimeState(env)->loop,
         &wrap->req,
         existingPath.c_str(),
         newPath.c_str(),
@@ -1834,7 +1897,7 @@ static napi_value fsSymlink(napi_env env, napi_callback_info info) {
     wrap->dest = path;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
     uv_fs_symlink(
-        s_fsLoop,
+        getRuntimeState(env)->loop,
         &wrap->req,
         target.c_str(),
         path.c_str(),
@@ -1869,7 +1932,8 @@ static napi_value fsReadlink(napi_env env, napi_callback_info info) {
     wrap->resultType = FSReqResultType::StringPtr;
     wrap->path = path;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_readlink(s_fsLoop, &wrap->req, path.c_str(), fsAfterAsync);
+    uv_fs_readlink(
+        getRuntimeState(env)->loop, &wrap->req, path.c_str(), fsAfterAsync);
     return result;
   }
 
@@ -1902,7 +1966,8 @@ static napi_value fsRealpath(napi_env env, napi_callback_info info) {
     wrap->resultType = FSReqResultType::StringPtr;
     wrap->path = path;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_realpath(s_fsLoop, &wrap->req, path.c_str(), fsAfterAsync);
+    uv_fs_realpath(
+        getRuntimeState(env)->loop, &wrap->req, path.c_str(), fsAfterAsync);
     return result;
   }
 
@@ -1935,7 +2000,8 @@ static napi_value fsFtruncate(napi_env env, napi_callback_info info) {
     auto *wrap = new FSReqWrap();
     wrap->resultType = FSReqResultType::Void;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_ftruncate(s_fsLoop, &wrap->req, fd, len, fsAfterAsync);
+    uv_fs_ftruncate(
+        getRuntimeState(env)->loop, &wrap->req, fd, len, fsAfterAsync);
     return result;
   }
 
@@ -1965,7 +2031,13 @@ static napi_value fsUtimes(napi_env env, napi_callback_info info) {
     wrap->resultType = FSReqResultType::Void;
     wrap->path = path;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_utime(s_fsLoop, &wrap->req, path.c_str(), atime, mtime, fsAfterAsync);
+    uv_fs_utime(
+        getRuntimeState(env)->loop,
+        &wrap->req,
+        path.c_str(),
+        atime,
+        mtime,
+        fsAfterAsync);
     return result;
   }
 
@@ -1994,7 +2066,8 @@ static napi_value fsFutimes(napi_env env, napi_callback_info info) {
     auto *wrap = new FSReqWrap();
     wrap->resultType = FSReqResultType::Void;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_futime(s_fsLoop, &wrap->req, fd, atime, mtime, fsAfterAsync);
+    uv_fs_futime(
+        getRuntimeState(env)->loop, &wrap->req, fd, atime, mtime, fsAfterAsync);
     return result;
   }
 
@@ -2025,7 +2098,12 @@ static napi_value fsLutimes(napi_env env, napi_callback_info info) {
     wrap->path = path;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
     uv_fs_lutime(
-        s_fsLoop, &wrap->req, path.c_str(), atime, mtime, fsAfterAsync);
+        getRuntimeState(env)->loop,
+        &wrap->req,
+        path.c_str(),
+        atime,
+        mtime,
+        fsAfterAsync);
     return result;
   }
 
@@ -2054,7 +2132,8 @@ static napi_value fsMkdtemp(napi_env env, napi_callback_info info) {
     wrap->resultType = FSReqResultType::StringPath;
     wrap->path = prefix;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_mkdtemp(s_fsLoop, &wrap->req, tmpl.c_str(), fsAfterAsync);
+    uv_fs_mkdtemp(
+        getRuntimeState(env)->loop, &wrap->req, tmpl.c_str(), fsAfterAsync);
     return result;
   }
 
@@ -2090,7 +2169,12 @@ static napi_value fsCopyFile(napi_env env, napi_callback_info info) {
     wrap->dest = dest;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
     uv_fs_copyfile(
-        s_fsLoop, &wrap->req, src.c_str(), dest.c_str(), flags, fsAfterAsync);
+        getRuntimeState(env)->loop,
+        &wrap->req,
+        src.c_str(),
+        dest.c_str(),
+        flags,
+        fsAfterAsync);
     return result;
   }
 
@@ -2135,7 +2219,7 @@ static napi_value fsFsync(napi_env env, napi_callback_info info) {
     auto *wrap = new FSReqWrap();
     wrap->resultType = FSReqResultType::Void;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_fsync(s_fsLoop, &wrap->req, fd, fsAfterAsync);
+    uv_fs_fsync(getRuntimeState(env)->loop, &wrap->req, fd, fsAfterAsync);
     return result;
   }
 
@@ -2162,7 +2246,7 @@ static napi_value fsFdatasync(napi_env env, napi_callback_info info) {
     auto *wrap = new FSReqWrap();
     wrap->resultType = FSReqResultType::Void;
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
-    uv_fs_fdatasync(s_fsLoop, &wrap->req, fd, fsAfterAsync);
+    uv_fs_fdatasync(getRuntimeState(env)->loop, &wrap->req, fd, fsAfterAsync);
     return result;
   }
 
@@ -2454,7 +2538,7 @@ static napi_value fsReadBuffers(napi_env env, napi_callback_info info) {
     napi_create_reference(env, argv[1], 1, &wrap->bufferRef);
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
     uv_fs_read(
-        s_fsLoop,
+        getRuntimeState(env)->loop,
         &wrap->req,
         fd,
         bufs.data(),
@@ -2514,7 +2598,7 @@ static napi_value fsWriteBuffers(napi_env env, napi_callback_info info) {
     napi_create_reference(env, argv[1], 1, &wrap->bufferRef);
     napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
     uv_fs_write(
-        s_fsLoop,
+        getRuntimeState(env)->loop,
         &wrap->req,
         fd,
         bufs.data(),
@@ -3149,7 +3233,7 @@ static napi_value statWatcherNew(napi_env env, napi_callback_info info) {
   wrap->fsData = fsData;
   wrap->useBigint = useBigint;
 
-  int err = uv_fs_poll_init(s_fsLoop, &wrap->handle);
+  int err = uv_fs_poll_init(getRuntimeState(env)->loop, &wrap->handle);
   if (err != 0) {
     delete wrap;
     napi_throw_error(env, nullptr, "uv_fs_poll_init failed");

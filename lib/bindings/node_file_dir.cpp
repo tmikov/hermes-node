@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/bindings/node_file_dir.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 #include <uv.h>
 
@@ -16,16 +17,6 @@
 
 namespace hermes {
 namespace node_compat {
-
-// ---------------------------------------------------------------------------
-// Module-level state set by the host before binding init.
-// ---------------------------------------------------------------------------
-
-static uv_loop_t *s_fsDirLoop = nullptr;
-
-void setFsDirEventLoop(uv_loop_t *loop) {
-  s_fsDirLoop = loop;
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -265,7 +256,7 @@ static napi_value dirHandleRead(napi_env env, napi_callback_info info) {
 
   if (asyncReq) {
     // Async read.
-    if (!s_fsDirLoop) {
+    if (!getRuntimeState(env)->loop) {
       napi_throw_error(
           env, nullptr, "Event loop not set for async fs_dir operations");
       return nullptr;
@@ -280,8 +271,8 @@ static napi_value dirHandleRead(napi_env env, napi_callback_info info) {
     napi_create_reference(env, asyncReq, 1, &wrap->callbackRef);
     napi_create_reference(env, thisArg, 1, &wrap->dirHandleRef);
 
-    int err =
-        uv_fs_readdir(s_fsDirLoop, &wrap->req, dirHandle->dir, dirAfterAsync);
+    int err = uv_fs_readdir(
+        getRuntimeState(env)->loop, &wrap->req, dirHandle->dir, dirAfterAsync);
     if (err < 0) {
       napi_delete_reference(env, wrap->callbackRef);
       napi_delete_reference(env, wrap->dirHandleRef);
@@ -333,7 +324,7 @@ static napi_value dirHandleClose(napi_env env, napi_callback_info info) {
 
   if (asyncReq) {
     // Async close.
-    if (!s_fsDirLoop) {
+    if (!getRuntimeState(env)->loop) {
       napi_throw_error(
           env, nullptr, "Event loop not set for async fs_dir operations");
       return nullptr;
@@ -348,8 +339,8 @@ static napi_value dirHandleClose(napi_env env, napi_callback_info info) {
     napi_create_reference(env, asyncReq, 1, &wrap->callbackRef);
     napi_create_reference(env, thisArg, 1, &wrap->dirHandleRef);
 
-    int err =
-        uv_fs_closedir(s_fsDirLoop, &wrap->req, dirHandle->dir, dirAfterAsync);
+    int err = uv_fs_closedir(
+        getRuntimeState(env)->loop, &wrap->req, dirHandle->dir, dirAfterAsync);
     if (err < 0) {
       napi_delete_reference(env, wrap->callbackRef);
       napi_delete_reference(env, wrap->dirHandleRef);
@@ -475,7 +466,7 @@ static napi_value fsOpendir(napi_env env, napi_callback_info info) {
 
   if (asyncReq) {
     // Async opendir.
-    if (!s_fsDirLoop) {
+    if (!getRuntimeState(env)->loop) {
       napi_throw_error(
           env, nullptr, "Event loop not set for async fs_dir operations");
       return nullptr;
@@ -488,8 +479,11 @@ static napi_value fsOpendir(napi_env env, napi_callback_info info) {
 
     napi_create_reference(env, asyncReq, 1, &wrap->callbackRef);
 
-    int err =
-        uv_fs_opendir(s_fsDirLoop, &wrap->req, path.c_str(), opendirAfterAsync);
+    int err = uv_fs_opendir(
+        getRuntimeState(env)->loop,
+        &wrap->req,
+        path.c_str(),
+        opendirAfterAsync);
     if (err < 0) {
       napi_delete_reference(env, wrap->callbackRef);
       delete wrap;

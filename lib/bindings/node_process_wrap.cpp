@@ -8,6 +8,7 @@
 #include <hermes/node-compat/bindings/handle_wrap_base.h>
 #include <hermes/node-compat/bindings/libuv_stream_base.h>
 #include <hermes/node-compat/bindings/node_process_wrap.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 #include <uv.h>
 
@@ -449,7 +450,7 @@ class ProcessWrap : public HandleWrapBase {
       options.flags |= UV_PROCESS_WINDOWS_VERBATIM_ARGUMENTS;
 
     // Spawn the process.
-    int err = uv_spawn(getHandleWrapEventLoop(), &wrap->process_, &options);
+    int err = uv_spawn(getRuntimeState(env)->loop, &wrap->process_, &options);
 
     // uv_spawn always calls uv__handle_init, even on failure, so the handle
     // is registered with the loop regardless.  We must call init() in both

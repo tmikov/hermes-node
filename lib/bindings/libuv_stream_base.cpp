@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/bindings/libuv_stream_base.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 #include <uv.h>
 
@@ -26,13 +27,6 @@ enum StreamBaseStateFields {
   kBytesWritten,
   kLastWriteWasAsync,
 };
-
-// Shared state array pointer (set by stream_wrap binding init).
-static int32_t *s_streamBaseState = nullptr;
-
-void LibuvStreamBase::setStreamBaseState(int32_t *state) {
-  s_streamBaseState = state;
-}
 
 // ---------------------------------------------------------------------------
 // WriteReqData — native data attached to write request objects
@@ -186,9 +180,10 @@ void LibuvStreamBase::emitRead(ssize_t nread, const uv_buf_t *buf) {
   }
 
   // Set streamBaseState fields for the JS callback.
-  if (s_streamBaseState) {
-    s_streamBaseState[kReadBytesOrError] = static_cast<int32_t>(nread);
-    s_streamBaseState[kArrayBufferOffset] = 0;
+  if (getRuntimeState(env)->streamBaseState) {
+    getRuntimeState(env)->streamBaseState[kReadBytesOrError] =
+        static_cast<int32_t>(nread);
+    getRuntimeState(env)->streamBaseState[kArrayBufferOffset] = 0;
   }
 
   // Get the onread callback from the handle object.
@@ -250,9 +245,9 @@ int LibuvStreamBase::doWrite(napi_value reqObj, uv_buf_t *bufs, size_t count) {
     // Synchronous failure — clean up.
     napi_delete_reference(env, reqData->reqRef);
     delete reqData;
-    if (s_streamBaseState) {
-      s_streamBaseState[kLastWriteWasAsync] = 0;
-      s_streamBaseState[kBytesWritten] = 0;
+    if (getRuntimeState(env)->streamBaseState) {
+      getRuntimeState(env)->streamBaseState[kLastWriteWasAsync] = 0;
+      getRuntimeState(env)->streamBaseState[kBytesWritten] = 0;
     }
     return err;
   }
@@ -264,9 +259,10 @@ int LibuvStreamBase::doWrite(napi_value reqObj, uv_buf_t *bufs, size_t count) {
 
   bytesWritten_ += totalBytes;
 
-  if (s_streamBaseState) {
-    s_streamBaseState[kLastWriteWasAsync] = 1;
-    s_streamBaseState[kBytesWritten] = static_cast<int32_t>(totalBytes);
+  if (getRuntimeState(env)->streamBaseState) {
+    getRuntimeState(env)->streamBaseState[kLastWriteWasAsync] = 1;
+    getRuntimeState(env)->streamBaseState[kBytesWritten] =
+        static_cast<int32_t>(totalBytes);
   }
 
   return 0;
@@ -387,15 +383,16 @@ napi_value LibuvStreamBase::writeUtf8String(
   if (err != 0) {
     napi_delete_reference(env, reqData->reqRef);
     delete reqData;
-    if (s_streamBaseState) {
-      s_streamBaseState[kLastWriteWasAsync] = 0;
-      s_streamBaseState[kBytesWritten] = 0;
+    if (getRuntimeState(env)->streamBaseState) {
+      getRuntimeState(env)->streamBaseState[kLastWriteWasAsync] = 0;
+      getRuntimeState(env)->streamBaseState[kBytesWritten] = 0;
     }
   } else {
     wrap->bytesWritten_ += strLen;
-    if (s_streamBaseState) {
-      s_streamBaseState[kLastWriteWasAsync] = 1;
-      s_streamBaseState[kBytesWritten] = static_cast<int32_t>(strLen);
+    if (getRuntimeState(env)->streamBaseState) {
+      getRuntimeState(env)->streamBaseState[kLastWriteWasAsync] = 1;
+      getRuntimeState(env)->streamBaseState[kBytesWritten] =
+          static_cast<int32_t>(strLen);
     }
   }
 
@@ -446,15 +443,16 @@ napi_value LibuvStreamBase::writeLatin1String(
   if (err != 0) {
     napi_delete_reference(env, reqData->reqRef);
     delete reqData;
-    if (s_streamBaseState) {
-      s_streamBaseState[kLastWriteWasAsync] = 0;
-      s_streamBaseState[kBytesWritten] = 0;
+    if (getRuntimeState(env)->streamBaseState) {
+      getRuntimeState(env)->streamBaseState[kLastWriteWasAsync] = 0;
+      getRuntimeState(env)->streamBaseState[kBytesWritten] = 0;
     }
   } else {
     wrap->bytesWritten_ += strLen;
-    if (s_streamBaseState) {
-      s_streamBaseState[kLastWriteWasAsync] = 1;
-      s_streamBaseState[kBytesWritten] = static_cast<int32_t>(strLen);
+    if (getRuntimeState(env)->streamBaseState) {
+      getRuntimeState(env)->streamBaseState[kLastWriteWasAsync] = 1;
+      getRuntimeState(env)->streamBaseState[kBytesWritten] =
+          static_cast<int32_t>(strLen);
     }
   }
 
@@ -520,15 +518,16 @@ napi_value LibuvStreamBase::writeUcs2String(
   if (err != 0) {
     napi_delete_reference(env, reqData->reqRef);
     delete reqData;
-    if (s_streamBaseState) {
-      s_streamBaseState[kLastWriteWasAsync] = 0;
-      s_streamBaseState[kBytesWritten] = 0;
+    if (getRuntimeState(env)->streamBaseState) {
+      getRuntimeState(env)->streamBaseState[kLastWriteWasAsync] = 0;
+      getRuntimeState(env)->streamBaseState[kBytesWritten] = 0;
     }
   } else {
     wrap->bytesWritten_ += strLen * 2;
-    if (s_streamBaseState) {
-      s_streamBaseState[kLastWriteWasAsync] = 1;
-      s_streamBaseState[kBytesWritten] = static_cast<int32_t>(strLen * 2);
+    if (getRuntimeState(env)->streamBaseState) {
+      getRuntimeState(env)->streamBaseState[kLastWriteWasAsync] = 1;
+      getRuntimeState(env)->streamBaseState[kBytesWritten] =
+          static_cast<int32_t>(strLen * 2);
     }
   }
 
@@ -625,15 +624,16 @@ napi_value LibuvStreamBase::writev(napi_env env, napi_callback_info info) {
   if (err != 0) {
     napi_delete_reference(env, reqData->reqRef);
     delete reqData;
-    if (s_streamBaseState) {
-      s_streamBaseState[kLastWriteWasAsync] = 0;
-      s_streamBaseState[kBytesWritten] = 0;
+    if (getRuntimeState(env)->streamBaseState) {
+      getRuntimeState(env)->streamBaseState[kLastWriteWasAsync] = 0;
+      getRuntimeState(env)->streamBaseState[kBytesWritten] = 0;
     }
   } else {
     wrap->bytesWritten_ += totalBytes;
-    if (s_streamBaseState) {
-      s_streamBaseState[kLastWriteWasAsync] = 1;
-      s_streamBaseState[kBytesWritten] = static_cast<int32_t>(totalBytes);
+    if (getRuntimeState(env)->streamBaseState) {
+      getRuntimeState(env)->streamBaseState[kLastWriteWasAsync] = 1;
+      getRuntimeState(env)->streamBaseState[kBytesWritten] =
+          static_cast<int32_t>(totalBytes);
     }
   }
 

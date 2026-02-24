@@ -6,14 +6,7 @@
 add_hermes_tool(hermes-node
   hermes-node.cpp
   LINK_LIBS
-    hermesNodeEmbeddedModules
-    hermesNodeEventLoop
-    hermesNodeBindingRegistry
-    hermesNodeBindings
-    hermesNodeModuleLoader
-    hermesNodeProcess
-    hermesNapiCompile
-    hermesvm_a
+    hermesNodeRuntime
 )
 
 # hermesNapi was removed from hermesvm_a upstream (54c50a06a).

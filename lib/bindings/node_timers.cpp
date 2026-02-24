@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/bindings/node_timers.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 #include <uv.h>
 
@@ -17,16 +18,6 @@
 
 namespace hermes {
 namespace node_compat {
-
-// ---------------------------------------------------------------------------
-// Module-level state set by the host before binding init.
-// ---------------------------------------------------------------------------
-
-static uv_loop_t *s_loop = nullptr;
-
-void setTimersEventLoop(uv_loop_t *loop) {
-  s_loop = loop;
-}
 
 // ---------------------------------------------------------------------------
 // Per-binding state attached to the exports object.
@@ -57,8 +48,6 @@ struct TimersState {
   bool checkHandleInited = false;
   bool idleHandleInited = false;
 };
-
-static TimersState *s_timersState = nullptr;
 
 // ---------------------------------------------------------------------------
 // Helper: get TimersState from napi_callback_info data.
@@ -94,8 +83,9 @@ static void onTimerFired(uv_timer_t *handle) {
   }
 
   // Pass current libuv time (relative to timer base) as argument.
-  uv_update_time(s_loop);
-  uint64_t now = uv_now(s_loop) - state->timerBase;
+  uv_loop_t *loop = getRuntimeState(state->env)->loop;
+  uv_update_time(loop);
+  uint64_t now = uv_now(loop) - state->timerBase;
 
   napi_value nowArg;
   if (now <= 0xFFFFFFFF) {
@@ -151,10 +141,10 @@ static void onTimerFired(uv_timer_t *handle) {
   auto *h = reinterpret_cast<uv_handle_t *>(&state->timerHandle);
 
   if (expiryMs != 0) {
-    uv_update_time(s_loop);
+    uv_update_time(loop);
     int64_t duration =
         static_cast<int64_t>((expiryMs < 0 ? -expiryMs : expiryMs)) -
-        static_cast<int64_t>(uv_now(s_loop) - state->timerBase);
+        static_cast<int64_t>(uv_now(loop) - state->timerBase);
 
     uv_timer_start(
         &state->timerHandle,
@@ -278,8 +268,9 @@ static napi_value setupTimers(napi_env env, napi_callback_info info) {
 static napi_value getLibuvNow(napi_env env, napi_callback_info info) {
   auto *state = getState(env, info);
 
-  uv_update_time(s_loop);
-  uint64_t now = uv_now(s_loop) - state->timerBase;
+  uv_loop_t *loop = getRuntimeState(env)->loop;
+  uv_update_time(loop);
+  uint64_t now = uv_now(loop) - state->timerBase;
 
   napi_value result;
   napi_create_double(env, static_cast<double>(now), &result);
@@ -358,10 +349,11 @@ static napi_value toggleImmediateRef(napi_env env, napi_callback_info info) {
 // Close handles.
 // ---------------------------------------------------------------------------
 
-void closeTimersHandles() {
-  if (!s_timersState)
+void closeTimersHandles(napi_env env) {
+  auto *rtState = getRuntimeState(env);
+  if (!rtState || !rtState->timersState)
     return;
-  auto *state = s_timersState;
+  auto *state = static_cast<TimersState *>(rtState->timersState);
 
   if (state->timerHandleInited) {
     uv_timer_stop(&state->timerHandle);
@@ -395,8 +387,9 @@ static void cleanupState(napi_env env, void *data, void * /*hint*/) {
   // We don't close them here because the binding may be finalized after
   // the event loop is already closed.
 
-  if (s_timersState == state)
-    s_timersState = nullptr;
+  auto *rtState = getRuntimeState(env);
+  if (rtState && rtState->timersState == state)
+    rtState->timersState = nullptr;
 
   delete state;
 }
@@ -406,24 +399,26 @@ static void cleanupState(napi_env env, void *data, void * /*hint*/) {
 // ---------------------------------------------------------------------------
 
 napi_value initTimersBinding(napi_env env, napi_value exports) {
-  assert(s_loop && "setTimersEventLoop() must be called before init");
+  auto *rtState = getRuntimeState(env);
+  assert(rtState && rtState->loop && "RuntimeState must be set before init");
+  uv_loop_t *loop = rtState->loop;
 
   auto *state = new TimersState();
   state->env = env;
-  s_timersState = state;
+  rtState->timersState = state;
 
   // Record the timer base (current libuv time).
-  uv_update_time(s_loop);
-  state->timerBase = uv_now(s_loop);
+  uv_update_time(loop);
+  state->timerBase = uv_now(loop);
 
   // Initialize the timer handle (for setTimeout/setInterval scheduling).
-  uv_timer_init(s_loop, &state->timerHandle);
+  uv_timer_init(loop, &state->timerHandle);
   state->timerHandle.data = state;
   uv_unref(reinterpret_cast<uv_handle_t *>(&state->timerHandle));
   state->timerHandleInited = true;
 
   // Initialize the check handle (for draining immediates after I/O).
-  uv_check_init(s_loop, &state->immediateCheckHandle);
+  uv_check_init(loop, &state->immediateCheckHandle);
   state->immediateCheckHandle.data = state;
   uv_check_start(&state->immediateCheckHandle, onCheckImmediate);
   uv_unref(reinterpret_cast<uv_handle_t *>(&state->immediateCheckHandle));
@@ -431,7 +426,7 @@ napi_value initTimersBinding(napi_env env, napi_value exports) {
 
   // Initialize the idle handle (prevents event loop from blocking in poll
   // when there are refed immediates).
-  uv_idle_init(s_loop, &state->immediateIdleHandle);
+  uv_idle_init(loop, &state->immediateIdleHandle);
   state->immediateIdleHandle.data = state;
   // Starts stopped — toggleImmediateRef(true) starts it.
   state->idleHandleInited = true;

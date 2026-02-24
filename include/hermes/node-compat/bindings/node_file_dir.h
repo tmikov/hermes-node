@@ -10,15 +10,8 @@
 
 #include <node_api_types.h>
 
-struct uv_loop_s;
-typedef struct uv_loop_s uv_loop_t;
-
 namespace hermes {
 namespace node_compat {
-
-/// Set the event loop for async fs_dir operations.
-/// Must be called before initFsDirBinding().
-void setFsDirEventLoop(uv_loop_t *loop);
 
 /// Init function for the 'fs_dir' binding.
 /// Follows the napi_addon_register_func signature.

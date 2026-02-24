@@ -56,9 +56,6 @@ class LibuvStreamBase : public HandleWrapBase {
   /// to a JS prototype. Also adds HandleWrap methods.
   static void addStreamMethods(napi_env env, napi_value prototype);
 
-  /// Set the shared streamBaseState pointer (from stream_wrap binding).
-  static void setStreamBaseState(int32_t *state);
-
   // --- JS method callbacks ---
   static napi_value readStart(napi_env env, napi_callback_info info);
   static napi_value readStop(napi_env env, napi_callback_info info);

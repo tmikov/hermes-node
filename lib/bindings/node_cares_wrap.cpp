@@ -11,6 +11,7 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
 #include <hermes/node-compat/bindings/node_cares_wrap.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 
 #include <node_api.h>
 #include <uv.h>
@@ -28,21 +29,8 @@
 namespace hermes {
 namespace node_compat {
 
-// ---------------------------------------------------------------------------
-// Module-level state
-// ---------------------------------------------------------------------------
-
-static uv_loop_t *s_caresLoop = nullptr;
-
-/// Set of all live ChannelWrap instances, for shutdown cleanup.
-class ChannelWrap;
-static std::unordered_set<ChannelWrap *> s_channels;
-
-void setCaresWrapEventLoop(uv_loop_t *loop) {
-  s_caresLoop = loop;
-}
-
 // caresWrapShutdown() is defined after ChannelWrap (needs complete type).
+class ChannelWrap;
 
 // DNS order constants (matching Node's cares_wrap.h).
 static constexpr uint32_t DNS_ORDER_VERBATIM = 0;
@@ -215,7 +203,7 @@ static napi_value getaddrinfoFn(napi_env env, napi_callback_info info) {
   hints.ai_flags = flags;
 
   int err = uv_getaddrinfo(
-      s_caresLoop,
+      getRuntimeState(env)->loop,
       &wrap->req,
       afterGetAddrInfo,
       asciiHostname.c_str(),
@@ -311,7 +299,7 @@ static napi_value getnameinfoFn(napi_env env, napi_callback_info info) {
   napi_create_reference(env, argv[0], 1, &wrap->reqObjRef);
 
   int err = uv_getnameinfo(
-      s_caresLoop,
+      getRuntimeState(env)->loop,
       &wrap->req,
       afterGetNameInfo,
       reinterpret_cast<struct sockaddr *>(&addr),
@@ -469,6 +457,7 @@ class ChannelWrap {
   void releaseSelfRef();
 
   napi_env env_;
+  RuntimeState *rtState_; // cached for GC finalizer safety
   ares_channel_t *channel_ = nullptr;
   uv_timer_t timer_{};
   bool timerInitialized_ = false;
@@ -477,7 +466,8 @@ class ChannelWrap {
   std::unordered_map<ares_socket_t, AresTask *> tasks_;
 };
 
-ChannelWrap::ChannelWrap(napi_env env, napi_value jsObj) : env_(env) {
+ChannelWrap::ChannelWrap(napi_env env, napi_value jsObj)
+    : env_(env), rtState_(getRuntimeState(env)) {
   napi_wrap(
       env,
       jsObj,
@@ -489,11 +479,11 @@ ChannelWrap::ChannelWrap(napi_env env, napi_value jsObj) : env_(env) {
       nullptr);
   // Prevent GC from collecting us while we have active libuv handles.
   napi_create_reference(env, jsObj, 1, &selfRef_);
-  s_channels.insert(this);
+  rtState_->caresChannels.insert(this);
 }
 
 ChannelWrap::~ChannelWrap() {
-  s_channels.erase(this);
+  rtState_->caresChannels.erase(this);
   // By the time the destructor runs, closeChannel() should have been called
   // (either explicitly or via caresWrapShutdown). If not (e.g. loop already
   // dead), do a best-effort cleanup without touching libuv.
@@ -554,12 +544,15 @@ void ChannelWrap::closeChannel() {
   }
 }
 
-void caresWrapShutdown() {
+void caresWrapShutdown(napi_env env) {
+  auto *rtState = getRuntimeState(env);
+  if (!rtState)
+    return;
   // Close all live channels before the event loop is destroyed.
-  // closeChannel() does NOT remove from s_channels (that happens in dtor).
-  auto channels = s_channels;
-  for (auto *ch : channels)
-    ch->closeChannel();
+  // closeChannel() does NOT remove from caresChannels (that happens in dtor).
+  auto channels = rtState->caresChannels;
+  for (auto *ptr : channels)
+    static_cast<ChannelWrap *>(ptr)->closeChannel();
 }
 
 void ChannelWrap::setup(int timeout, int tries) {
@@ -584,7 +577,7 @@ void ChannelWrap::setup(int timeout, int tries) {
   (void)r;
 
   // Initialize timeout timer.
-  uv_timer_init(s_caresLoop, &timer_);
+  uv_timer_init(rtState_->loop, &timer_);
   timer_.data = this;
   uv_unref(reinterpret_cast<uv_handle_t *>(&timer_));
   timerInitialized_ = true;
@@ -619,7 +612,7 @@ void ChannelWrap::sockStateCb(
     task = new AresTask();
     task->channel = self;
     task->sock = sock;
-    uv_poll_init_socket(s_caresLoop, &task->poll_watcher, sock);
+    uv_poll_init_socket(self->rtState_->loop, &task->poll_watcher, sock);
     task->poll_watcher.data = task;
     self->tasks_[sock] = task;
   } else {

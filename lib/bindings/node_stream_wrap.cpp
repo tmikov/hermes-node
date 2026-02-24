@@ -7,6 +7,7 @@
 
 #include <hermes/node-compat/bindings/libuv_stream_base.h>
 #include <hermes/node-compat/bindings/node_stream_wrap.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 
 #include <cstdint>
@@ -105,9 +106,9 @@ napi_value initStreamWrapBinding(napi_env env, napi_value exports) {
         env, napi_int32_array, kNumStreamBaseStateFields, ab, 0, &arr));
     NAPI_CALL(napi_set_named_property(env, exports, "streamBaseState", arr));
 
-    // Share the state array pointer with LibuvStreamBase so native stream
+    // Share the state array pointer with RuntimeState so native stream
     // methods can update it directly.
-    LibuvStreamBase::setStreamBaseState(static_cast<int32_t *>(data));
+    getRuntimeState(env)->streamBaseState = static_cast<int32_t *>(data);
   }
 
   return exports;

@@ -43,6 +43,7 @@ add_subdirectory(lib/binding-registry)
 add_subdirectory(lib/module-loader)
 add_subdirectory(lib/process)
 add_subdirectory(lib/bindings)
+add_subdirectory(lib/runtime)
 
 # CLI tools
 add_subdirectory(tools/hermes-node)

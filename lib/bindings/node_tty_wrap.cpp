@@ -5,9 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <hermes/node-compat/bindings/node_tty_wrap.h>
 #include <hermes/node-compat/bindings/handle_wrap_base.h>
 #include <hermes/node-compat/bindings/libuv_stream_base.h>
+#include <hermes/node-compat/bindings/node_tty_wrap.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 #include <uv.h>
 
@@ -24,21 +25,18 @@ class TTYWrap : public LibuvStreamBase {
  public:
   /// Construct a TTYWrap for the given file descriptor.
   /// On error, sets error info on the ctx object.
-  TTYWrap(napi_env env, napi_value jsObj, int fd, napi_value ctx)
-      : handle_() {
-    int err = uv_tty_init(getHandleWrapEventLoop(), &handle_, fd, 0);
+  TTYWrap(napi_env env, napi_value jsObj, int fd, napi_value ctx) : handle_() {
+    int err = uv_tty_init(getRuntimeState(env)->loop, &handle_, fd, 0);
     if (err != 0) {
       // Set error info on ctx object for JS to detect.
       napi_value val;
       napi_create_int32(env, err, &val);
       napi_set_named_property(env, ctx, "errno", val);
-      napi_create_string_utf8(
-          env, uv_strerror(err), NAPI_AUTO_LENGTH, &val);
+      napi_create_string_utf8(env, uv_strerror(err), NAPI_AUTO_LENGTH, &val);
       napi_set_named_property(env, ctx, "message", val);
       napi_create_string_utf8(env, "uv_tty_init", NAPI_AUTO_LENGTH, &val);
       napi_set_named_property(env, ctx, "syscall", val);
-      napi_create_string_utf8(
-          env, uv_err_name(err), NAPI_AUTO_LENGTH, &val);
+      napi_create_string_utf8(env, uv_err_name(err), NAPI_AUTO_LENGTH, &val);
       napi_set_named_property(env, ctx, "code", val);
       return;
     }
@@ -138,8 +136,7 @@ class TTYWrap : public LibuvStreamBase {
     napi_get_value_bool(env, argv[0], &flag);
 
     int err = uv_tty_set_mode(
-        &wrap->handle_,
-        flag ? UV_TTY_MODE_RAW_VT : UV_TTY_MODE_NORMAL);
+        &wrap->handle_, flag ? UV_TTY_MODE_RAW_VT : UV_TTY_MODE_NORMAL);
 
     napi_value result;
     napi_create_int32(env, err, &result);

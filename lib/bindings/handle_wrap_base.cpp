@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/bindings/handle_wrap_base.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 #include <uv.h>
 
@@ -13,24 +14,6 @@
 
 namespace hermes {
 namespace node_compat {
-
-// ---------------------------------------------------------------------------
-// Module-level state
-// ---------------------------------------------------------------------------
-
-static uv_loop_t *s_handleWrapLoop = nullptr;
-
-void setHandleWrapEventLoop(uv_loop_t *loop) {
-  s_handleWrapLoop = loop;
-}
-
-uv_loop_t *getHandleWrapEventLoop() {
-  return s_handleWrapLoop;
-}
-
-void clearHandleWrapEventLoop() {
-  s_handleWrapLoop = nullptr;
-}
 
 // ---------------------------------------------------------------------------
 // HandleWrapBase
@@ -45,6 +28,7 @@ HandleWrapBase::~HandleWrapBase() {
 
 void HandleWrapBase::init(napi_env env, napi_value jsObj, uv_handle_t *handle) {
   env_ = env;
+  rtState_ = getRuntimeState(env);
   handle_ = handle;
   handle_->data = this;
   state_ = kInitialized;
@@ -148,12 +132,13 @@ void HandleWrapBase::invokeCloseCallback() {
   napi_close_handle_scope(env_, scope);
 }
 
-void HandleWrapBase::pointerCb(napi_env, void *data, void *) {
+void HandleWrapBase::pointerCb(napi_env env, void *data, void *) {
   // GC finalizer: clean up the HandleWrapBase.
   auto *wrap = static_cast<HandleWrapBase *>(data);
 
   if (wrap->state_ == kInitialized && wrap->handle_) {
-    if (!uv_is_closing(wrap->handle_) && s_handleWrapLoop) {
+    auto *rtState = wrap->rtState_;
+    if (!uv_is_closing(wrap->handle_) && rtState && rtState->loop) {
       // Handle is still active and loop is alive — async-close it.
       wrap->state_ = kClosing;
       uv_close(wrap->handle_, [](uv_handle_t *h) {

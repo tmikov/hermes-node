@@ -8,6 +8,7 @@
 #include <hermes/node-compat/bindings/handle_wrap_base.h>
 #include <hermes/node-compat/bindings/libuv_stream_base.h>
 #include <hermes/node-compat/bindings/node_pipe_wrap.h>
+#include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 #include <uv.h>
 
@@ -16,10 +17,6 @@
 
 namespace hermes {
 namespace node_compat {
-
-// Module-level reference to the Pipe constructor. Used by OnConnection
-// to instantiate client Pipe objects.
-static napi_ref s_pipeCtorRef = nullptr;
 
 // ---------------------------------------------------------------------------
 // PipeConnectReqData -- native data for uv_connect_t requests
@@ -45,7 +42,7 @@ class PipeWrap : public LibuvStreamBase {
 
   /// Construct a PipeWrap.
   PipeWrap(napi_env env, napi_value jsObj, bool ipc) : handle_() {
-    int err = uv_pipe_init(getHandleWrapEventLoop(), &handle_, ipc ? 1 : 0);
+    int err = uv_pipe_init(getRuntimeState(env)->loop, &handle_, ipc ? 1 : 0);
     if (err != 0) {
       // uv_pipe_init should not fail under normal circumstances.
       // If it does, we don't call initStream, and HandleWrapBase
@@ -187,7 +184,8 @@ class PipeWrap : public LibuvStreamBase {
     if (status == 0) {
       // Instantiate a new Pipe object for the client.
       napi_value pipeCtor;
-      napi_get_reference_value(env, s_pipeCtorRef, &pipeCtor);
+      napi_get_reference_value(
+          env, getRuntimeState(env)->pipeCtorRef, &pipeCtor);
 
       napi_value typeArg;
       napi_create_int32(env, SOCKET, &typeArg);
@@ -516,7 +514,7 @@ napi_value initPipeWrapBinding(napi_env env, napi_value exports) {
   napi_set_named_property(env, exports, "Pipe", pipeCtor);
 
   // Store a reference to the constructor for use in OnConnection.
-  napi_create_reference(env, pipeCtor, 1, &s_pipeCtorRef);
+  napi_create_reference(env, pipeCtor, 1, &getRuntimeState(env)->pipeCtorRef);
 
   // --- PipeConnectWrap constructor ---
   napi_value connectWrapCtor;

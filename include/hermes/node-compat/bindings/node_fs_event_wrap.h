@@ -10,18 +10,8 @@
 
 #include <node_api_types.h>
 
-struct uv_loop_s;
-typedef struct uv_loop_s uv_loop_t;
-
 namespace hermes {
 namespace node_compat {
-
-/// Set the event loop for fs_event_wrap operations.
-/// Must be called before initFsEventWrapBinding().
-void setFsEventWrapEventLoop(uv_loop_t *loop);
-
-/// Close all active fs_event_wrap handles. Call before event loop close.
-void closeFsEventWrapHandles();
 
 /// Init function for the 'fs_event_wrap' binding.
 /// Exports FSEvent constructor.
