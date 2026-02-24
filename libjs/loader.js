@@ -27,6 +27,12 @@
     // Module cache: moduleId -> { exports, loaded }
     var cache = Object.create(null);
 
+    // Load vendored package data (generated at build time from vendored/*/).
+    var vendoredDataFn = loadBytecodeModule('vendored-packages');
+    var vendoredData = vendoredDataFn ? vendoredDataFn() : { packages: {}, moduleIds: [] };
+    var vendoredPackages = vendoredData.packages;      // e.g. { 'ws': 'vendored/ws/index' }
+    var vendoredIdSet = new Set(vendoredData.moduleIds); // Set of all vendored embedded IDs
+
     // The module wrapper template. Node uses:
     // (function(exports, require, module, __filename, __dirname) { ... })
     // We add primordials and internalBinding as closure variables rather than
@@ -87,11 +93,15 @@
     function makeRequire(fromFilepath) {
       var lastSlash = fromFilepath.lastIndexOf('/');
       var fromDir = lastSlash >= 0 ? fromFilepath.substring(0, lastSlash) : '.';
+      var isVendored = fromDir.substring(0, 9) === 'vendored/';
 
       function require(name) {
         // Relative path requires are resolved relative to the requiring file.
         if (name.charAt(0) === '.') {
-          var resolvedPath = resolveRelative(fromDir, name);
+          // Vendored modules resolve against embedded IDs (no disk probing).
+          var resolvedPath = isVendored
+            ? resolveVendoredRelative(fromDir, name)
+            : resolveRelative(fromDir, name);
           // Check cache by resolved path.
           if (cache[resolvedPath]) {
             return cache[resolvedPath].exports;
@@ -103,7 +113,9 @@
       }
       require.resolve = function(name) {
         if (name.charAt(0) === '.') {
-          return resolveRelative(fromDir, name);
+          return isVendored
+            ? resolveVendoredRelative(fromDir, name)
+            : resolveRelative(fromDir, name);
         }
         return name;
       };
@@ -172,21 +184,41 @@
       return parts.join('/');
     }
 
+    // Resolve a relative require within a vendored package against embedded IDs.
+    // No disk probing -- purely checks vendoredIdSet.
+    function resolveVendoredRelative(fromDir, name) {
+      var base = resolvePath(fromDir, name);
+      if (vendoredIdSet.has(base)) return base;
+      var indexId = base + '/index';
+      if (vendoredIdSet.has(indexId)) return indexId;
+      return base; // will error at loadModule time
+    }
+
     // The main require implementation.
     function requireModule(name) {
       // Strip 'node:' prefix so require('node:fs') === require('fs').
-      if (name.startsWith('node:'))
-        name = name.slice(5);
+      var bareName = name;
+      if (name.substring(0, 5) === 'node:')
+        bareName = name.slice(5);
 
       // Check cache first.
-      if (cache[name]) {
-        return cache[name].exports;
+      if (cache[bareName]) {
+        return cache[bareName].exports;
+      }
+
+      // Check vendored packages (e.g. 'ws' -> 'vendored/ws/index').
+      var vendoredId = vendoredPackages[bareName];
+      if (vendoredId) {
+        var mod = loadModule(vendoredId, vendoredId);
+        // Also cache under the bare package name.
+        cache[bareName] = mod;
+        return mod.exports;
       }
 
       // Load and execute the module. For internal modules the ID is used
       // as both the module ID and filepath (bytecode is looked up by ID,
       // filepath only matters for user scripts).
-      var mod = loadModule(name, name);
+      var mod = loadModule(bareName, bareName);
       return mod.exports;
     }
 
@@ -232,6 +264,11 @@
               // Check if the bootstrap loader can resolve this module.
               if (cache[request]) return cache[request].exports;
               if (loadBytecodeModule(request)) {
+                return requireModule(request);
+              }
+              // Check vendored packages (bare name fallback when not in node_modules).
+              var vendoredId = vendoredPackages[request];
+              if (vendoredId) {
                 return requireModule(request);
               }
             }

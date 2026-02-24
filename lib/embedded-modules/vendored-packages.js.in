@@ -1,0 +1,9 @@
+// AUTO-GENERATED from vendored-packages.js.in -- DO NOT EDIT.
+// Provides the vendored packages map and module ID set to the loader.
+// Returns a function (not self-invoking) so the loader can call it lazily.
+(function() {
+  return {
+    packages: { @VENDORED_PACKAGES_ENTRIES@ },
+    moduleIds: [ @VENDORED_MODULE_IDS_ENTRIES@ ]
+  };
+})

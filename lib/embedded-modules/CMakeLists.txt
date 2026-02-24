@@ -127,13 +127,157 @@ foreach(LINE IN LISTS MANIFEST_LINES)
   list(APPEND ALL_INC_FILES "${INC_FILE}")
 endforeach()
 
+# ============================================================
+# Vendored NPM packages
+# ============================================================
+set(VENDORED_DIR ${PROJECT_SOURCE_DIR}/vendored)
+
+# Collect all vendored package directories.
+file(GLOB VENDORED_PKG_DIRS CONFIGURE_DEPENDS "${VENDORED_DIR}/*/")
+
+set(VENDORED_PACKAGES_ENTRIES "")
+set(VENDORED_MODULE_IDS_ENTRIES "")
+set(VENDORED_MANIFEST_LINES "")
+
+foreach(PKG_DIR IN LISTS VENDORED_PKG_DIRS)
+  get_filename_component(PKG_NAME "${PKG_DIR}" NAME)
+
+  # Read "main" field from package.json (default: index.js).
+  set(PKG_MAIN "index.js")
+  set(PKG_JSON_PATH "${PKG_DIR}/package.json")
+  if(EXISTS "${PKG_JSON_PATH}")
+    file(READ "${PKG_JSON_PATH}" PKG_JSON)
+    string(REGEX MATCH "\"main\"[[:space:]]*:[[:space:]]*\"([^\"]+)\"" _match "${PKG_JSON}")
+    if(CMAKE_MATCH_1)
+      set(PKG_MAIN "${CMAKE_MATCH_1}")
+    endif()
+  endif()
+  # Normalize and strip .js extension from main to get the entry module ID.
+  # Keep this simple and path-like because module IDs are slash-separated.
+  set(PKG_MAIN_STEM "${PKG_MAIN}")
+  string(REGEX REPLACE "^\\./" "" PKG_MAIN_STEM "${PKG_MAIN_STEM}")
+  string(REGEX REPLACE "\\.js$" "" PKG_MAIN_STEM "${PKG_MAIN_STEM}")
+  set(PKG_ENTRY_ID "vendored/${PKG_NAME}/${PKG_MAIN_STEM}")
+
+  # Build vendored-packages.js template entries.
+  if(VENDORED_PACKAGES_ENTRIES)
+    string(APPEND VENDORED_PACKAGES_ENTRIES ", ")
+  endif()
+  string(APPEND VENDORED_PACKAGES_ENTRIES "'${PKG_NAME}': '${PKG_ENTRY_ID}'")
+
+  # Glob all .js files in this package.
+  file(GLOB_RECURSE PKG_JS_FILES CONFIGURE_DEPENDS "${PKG_DIR}/*.js")
+
+  foreach(JS_FILE IN LISTS PKG_JS_FILES)
+    # Module ID = path relative to project root, minus .js extension.
+    file(RELATIVE_PATH REL_PATH "${PROJECT_SOURCE_DIR}" "${JS_FILE}")
+    string(REGEX REPLACE "\\.js$" "" MODULE_ID "${REL_PATH}")
+
+    # Add to module IDs list for vendored-packages.js.
+    if(VENDORED_MODULE_IDS_ENTRIES)
+      string(APPEND VENDORED_MODULE_IDS_ENTRIES ", ")
+    endif()
+    string(APPEND VENDORED_MODULE_IDS_ENTRIES "'${MODULE_ID}'")
+
+    # Add to manifest for gen-embedded-registry.py.
+    list(APPEND VENDORED_MANIFEST_LINES "${MODULE_ID}")
+
+    # Safe ID for file names.
+    string(REPLACE "/" "__" SAFE_ID "${MODULE_ID}")
+    string(REPLACE "-" "_" SAFE_ID "${SAFE_ID}")
+
+    list(APPEND ALL_JS_SOURCES "${JS_FILE}")
+
+    # CJS wrap.
+    get_filename_component(WRAPPED_SUBDIR "${WRAPPED_DIR}/${SAFE_ID}" DIRECTORY)
+    file(MAKE_DIRECTORY "${WRAPPED_SUBDIR}")
+
+    set(WRAPPED_FILE "${WRAPPED_DIR}/${SAFE_ID}.js")
+    add_custom_command(
+      OUTPUT "${WRAPPED_FILE}"
+      COMMAND ${Python_EXECUTABLE} ${WRAP_CJS_SCRIPT}
+              "${JS_FILE}" "${MODULE_ID}" "${WRAPPED_FILE}"
+      DEPENDS ${WRAP_CJS_SCRIPT} "${JS_FILE}"
+      COMMENT "Wrapping vendored ${MODULE_ID}"
+      VERBATIM
+    )
+
+    # Compile to bytecode.
+    set(HBC_FILE "${HBC_DIR}/${SAFE_ID}.hbc")
+    get_filename_component(HBC_SUBDIR "${HBC_FILE}" DIRECTORY)
+    file(MAKE_DIRECTORY "${HBC_SUBDIR}")
+
+    add_custom_command(
+      OUTPUT "${HBC_FILE}"
+      COMMAND ${hermesc_EXE} ${JS_COMPILER_FLAGS}
+              -out=${HBC_FILE} "${WRAPPED_FILE}"
+      DEPENDS hermesc "${WRAPPED_FILE}"
+      COMMENT "Compiling vendored ${MODULE_ID} to bytecode"
+      VERBATIM
+    )
+
+    # Convert to hex include.
+    set(INC_FILE "${INC_DIR}/${SAFE_ID}.hbc.inc")
+    get_filename_component(INC_SUBDIR "${INC_FILE}" DIRECTORY)
+    file(MAKE_DIRECTORY "${INC_SUBDIR}")
+
+    add_custom_command(
+      OUTPUT "${INC_FILE}"
+      COMMAND ${Python_EXECUTABLE} ${XXD_SCRIPT} "${HBC_FILE}" > "${INC_FILE}"
+      DEPENDS ${XXD_SCRIPT} "${HBC_FILE}"
+      COMMENT "Generating vendored ${SAFE_ID}.hbc.inc"
+      VERBATIM
+    )
+
+    list(APPEND ALL_INC_FILES "${INC_FILE}")
+  endforeach()
+endforeach()
+
+# Generate vendored-packages.js from template.
+set(VENDORED_PACKAGES_JS_IN "${CMAKE_CURRENT_SOURCE_DIR}/vendored-packages.js.in")
+set(VENDORED_PACKAGES_JS "${CMAKE_CURRENT_BINARY_DIR}/vendored-packages.js")
+configure_file("${VENDORED_PACKAGES_JS_IN}" "${VENDORED_PACKAGES_JS}" @ONLY)
+
+# Process vendored-packages.js as a bootstrap module (no CJS wrap).
+set(VP_SAFE_ID "vendored_packages")
+
+set(VP_HBC_FILE "${HBC_DIR}/${VP_SAFE_ID}.hbc")
+add_custom_command(
+  OUTPUT "${VP_HBC_FILE}"
+  COMMAND ${hermesc_EXE} ${JS_COMPILER_FLAGS}
+          -out=${VP_HBC_FILE} "${VENDORED_PACKAGES_JS}"
+  DEPENDS hermesc "${VENDORED_PACKAGES_JS}"
+  COMMENT "Compiling vendored-packages to bytecode"
+  VERBATIM
+)
+
+set(VP_INC_FILE "${INC_DIR}/${VP_SAFE_ID}.hbc.inc")
+add_custom_command(
+  OUTPUT "${VP_INC_FILE}"
+  COMMAND ${Python_EXECUTABLE} ${XXD_SCRIPT} "${VP_HBC_FILE}" > "${VP_INC_FILE}"
+  DEPENDS ${XXD_SCRIPT} "${VP_HBC_FILE}"
+  COMMENT "Generating vendored_packages.hbc.inc"
+  VERBATIM
+)
+
+list(APPEND ALL_INC_FILES "${VP_INC_FILE}")
+
+# Write combined manifest (original + vendored-packages bootstrap + vendored modules).
+set(COMBINED_MANIFEST "${CMAKE_CURRENT_BINARY_DIR}/combined-manifest.txt")
+file(READ "${MANIFEST_FILE}" _manifest_content)
+set(_combined "${_manifest_content}\n# Vendored packages bootstrap\n@bootstrap vendored-packages\n\n# Vendored modules\n")
+foreach(_vline IN LISTS VENDORED_MANIFEST_LINES)
+  string(APPEND _combined "${_vline}\n")
+endforeach()
+file(WRITE "${COMBINED_MANIFEST}" "${_combined}")
+
 # Generate the registry C++ file from all .inc files.
 set(REGISTRY_CPP "${CMAKE_CURRENT_BINARY_DIR}/embedded_modules_registry.cpp")
 
 add_custom_command(
   OUTPUT "${REGISTRY_CPP}"
   COMMAND ${Python_EXECUTABLE} ${GEN_REGISTRY_SCRIPT}
-          "${MANIFEST_FILE}" "${INC_DIR}" "${REGISTRY_CPP}"
+          "${COMBINED_MANIFEST}" "${INC_DIR}" "${REGISTRY_CPP}"
   DEPENDS ${GEN_REGISTRY_SCRIPT} ${MANIFEST_FILE} ${ALL_INC_FILES}
   COMMENT "Generating embedded modules registry"
   VERBATIM

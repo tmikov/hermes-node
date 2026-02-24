@@ -114,6 +114,10 @@ child_process
 internal/child_process
 internal/socket_list
 
+# Stubbed-out HTTPS/TLS support (TLS not yet implemented)
+https
+tls
+
 # HTTP support
 http
 _http_agent

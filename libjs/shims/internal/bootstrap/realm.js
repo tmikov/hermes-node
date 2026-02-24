@@ -8,17 +8,22 @@
 var builtinIds = [
   'assert', 'assert/strict', 'async_hooks', 'buffer', 'child_process',
   'cluster', 'console', 'constants', 'dgram', 'diagnostics_channel',
-  'dns', 'dns/promises', 'domain', 'events', 'fs', 'fs/promises', 'http',
+  'dns', 'dns/promises', 'domain', 'events', 'fs', 'fs/promises', 'http', 'https',
   'net', 'os', 'path', 'path/posix', 'path/win32', 'process',
   'querystring', 'readline', 'readline/promises', 'repl',
   'module',
   'crypto',
   'stream', 'stream/consumers', 'stream/promises', 'stream/web',
-  'string_decoder', 'timers', 'timers/promises', 'tty', 'url', 'util',
+  'string_decoder', 'timers', 'timers/promises', 'tls', 'tty', 'url', 'util',
   'util/types', 'vm',
 ];
 
 var builtinSet = new Set(builtinIds);
+
+// Vendored package names (available via require('node:ws') or as fallback).
+var vendoredIds = ['ws'];
+var allRequirableIds = builtinIds.concat(vendoredIds);
+var allRequirableSet = new Set(allRequirableIds);
 
 // Capture bootstrap loader require for compileForPublicLoader.
 var _bootstrapRequire = globalThis.require;
@@ -43,29 +48,34 @@ var BuiltinModule = class BuiltinModule {
   }
 
   static exists(id) {
-    return builtinSet.has(id);
+    return allRequirableSet.has(id);
   }
 
   static canBeRequiredByUsers(id) {
-    return builtinSet.has(id);
+    return allRequirableSet.has(id);
   }
 
+  // Only builtins can be required without 'node:' prefix (so bare
+  // require('ws') goes through node_modules first, not short-circuiting).
   static canBeRequiredWithoutScheme(id) {
     return builtinSet.has(id);
   }
 
   static isBuiltin(id) {
-    if (builtinSet.has(id)) return true;
+    if (allRequirableSet.has(id)) return true;
     if (typeof id === 'string' && id.startsWith('node:')) {
-      return builtinSet.has(id.slice(5));
+      return allRequirableSet.has(id.slice(5));
     }
     return false;
   }
 
+  // For 'node:' prefix: resolve against allRequirableSet (so node:ws works).
+  // For bare names: resolve only against builtinSet (so require('ws')
+  // doesn't short-circuit to builtin -- goes through node_modules first).
   static normalizeRequirableId(id) {
     if (typeof id === 'string' && id.startsWith('node:')) {
       var normalizedId = id.slice(5);
-      if (builtinSet.has(normalizedId)) return normalizedId;
+      if (allRequirableSet.has(normalizedId)) return normalizedId;
     } else if (builtinSet.has(id)) {
       return id;
     }
@@ -79,12 +89,12 @@ var BuiltinModule = class BuiltinModule {
   }
 
   static getAllBuiltinModuleIds() {
-    return builtinIds.slice();
+    return allRequirableIds.slice();
   }
 };
 
 BuiltinModule.map = new Map(
-  builtinIds.map(function(id) { return [id, new BuiltinModule(id)]; })
+  allRequirableIds.map(function(id) { return [id, new BuiltinModule(id)]; })
 );
 
 module.exports = { BuiltinModule };
