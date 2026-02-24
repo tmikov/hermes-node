@@ -9,6 +9,8 @@
 # Bootstrap modules (non-CJS, executed directly)
 @bootstrap primordials
 @bootstrap loader
+@bootstrap process-events
+@bootstrap console-init
 @bootstrap setup-stdio
 
 # Internal modules (CJS-wrapped)

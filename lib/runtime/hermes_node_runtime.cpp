@@ -450,91 +450,11 @@ int runHermesNode(const HermesNodeConfig &config) {
       napi_set_named_property(env, global, "process", processObj);
 
       // Add minimal process event emitter methods (on/emit/emitWarning).
-      const char *processEventEmitterCode =
-          "(function(process) {\n"
-          "  var handlers = {};\n"
-          "  process.on = process.addListener = function(event, fn) {\n"
-          "    if (!handlers[event]) handlers[event] = [];\n"
-          "    if (event !== 'newListener') process.emit('newListener', event, fn);\n"
-          "    handlers[event].push(fn);\n"
-          "    return process;\n"
-          "  };\n"
-          "  process.prependListener = function(event, fn) {\n"
-          "    if (!handlers[event]) handlers[event] = [];\n"
-          "    if (event !== 'newListener') process.emit('newListener', event, fn);\n"
-          "    handlers[event].unshift(fn);\n"
-          "    return process;\n"
-          "  };\n"
-          "  process.prependOnceListener = function(event, fn) {\n"
-          "    function wrapper() {\n"
-          "      process.off(event, wrapper);\n"
-          "      fn.apply(this, arguments);\n"
-          "    }\n"
-          "    return process.prependListener(event, wrapper);\n"
-          "  };\n"
-          "  process.off = process.removeListener = function(event, fn) {\n"
-          "    var list = handlers[event];\n"
-          "    if (list) {\n"
-          "      var idx = list.indexOf(fn);\n"
-          "      if (idx >= 0) list.splice(idx, 1);\n"
-          "    }\n"
-          "    return process;\n"
-          "  };\n"
-          "  process.once = function(event, fn) {\n"
-          "    function wrapper() {\n"
-          "      process.off(event, wrapper);\n"
-          "      fn.apply(this, arguments);\n"
-          "    }\n"
-          "    return process.on(event, wrapper);\n"
-          "  };\n"
-          "  process.emit = function(event) {\n"
-          "    var list = handlers[event];\n"
-          "    if (!list) return false;\n"
-          "    var args = Array.prototype.slice.call(arguments, 1);\n"
-          "    var copy = list.slice();\n"
-          "    for (var i = 0; i < copy.length; i++) {\n"
-          "      copy[i].apply(process, args);\n"
-          "    }\n"
-          "    return true;\n"
-          "  };\n"
-          "  process.listeners = function(event) {\n"
-          "    return (handlers[event] || []).slice();\n"
-          "  };\n"
-          "  process.listenerCount = function(event) {\n"
-          "    return (handlers[event] || []).length;\n"
-          "  };\n"
-          "  process.rawListeners = function(event) {\n"
-          "    return (handlers[event] || []).slice();\n"
-          "  };\n"
-          "  process.removeAllListeners = function(event) {\n"
-          "    if (event !== undefined) { delete handlers[event]; }\n"
-          "    else { handlers = {}; }\n"
-          "    return process;\n"
-          "  };\n"
-          "  process.emitWarning = function(warning, type, code) {\n"
-          "    if (typeof type === 'object' && type !== null) {\n"
-          "      code = type.code; type = type.type || type.name;\n"
-          "    }\n"
-          "    if (typeof warning === 'string') {\n"
-          "      var w = new Error(warning);\n"
-          "      w.name = type || 'Warning';\n"
-          "      if (code) w.code = code;\n"
-          "      warning = w;\n"
-          "    }\n"
-          "    process.emit('warning', warning);\n"
-          "  };\n"
-          "});\n"
-          "//# sourceURL=hermes-node:process-events\n";
-      napi_value processEventEmitterStr;
-      napi_create_string_utf8(
-          env,
-          processEventEmitterCode,
-          NAPI_AUTO_LENGTH,
-          &processEventEmitterStr);
-      napi_value setupFn;
-      if (napi_run_script(env, processEventEmitterStr, &setupFn) == napi_ok) {
-        napi_value callResult;
-        napi_call_function(env, global, setupFn, 1, &processObj, &callResult);
+      napi_value peResult;
+      if (runEmbeddedModule(env, "process-events", &peResult) != napi_ok) {
+        std::fprintf(stderr, "Error: failed to execute process-events\n");
+        printAndClearException(env);
+        exitCode = 1;
       }
     }
   }
@@ -735,17 +655,8 @@ int runHermesNode(const HermesNodeConfig &config) {
 
   // 11d. Load and install the real console module.
   if (exitCode == 0) {
-    const char *consoleInitCode =
-        "(function() {"
-        "  var c = require('console');"
-        "  var ctor = require('internal/console/constructor');"
-        "  c[ctor.kBindStreamsLazy](process);"
-        "  globalThis.console = c;"
-        "})()";
-    napi_value initScript, initResult;
-    napi_create_string_utf8(
-        env, consoleInitCode, NAPI_AUTO_LENGTH, &initScript);
-    if (napi_run_script(env, initScript, &initResult) != napi_ok) {
+    napi_value ciResult;
+    if (runEmbeddedModule(env, "console-init", &ciResult) != napi_ok) {
       // Non-fatal: fall back to the minimal C++ console from step 4.
       printAndClearException(env);
     }
