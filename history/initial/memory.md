@@ -43,6 +43,9 @@ module loader, and test infrastructure basics, see `CLAUDE.md`.
 - Config fields: `HermesNodeConfig::inspect`, `inspectBrk`, `inspectHost`, `inspectPort` (in `hermes_node_runtime.h`).
 - `--inspect-brk` implies `inspect = true`. Port 0 = OS-assigned.
 - Flags parsed in `hermes-node.cpp`, `parseInspectHostPort()` handles `PORT` or `HOST:PORT`.
+- CDP creation: `CDPDebugAPI::create(*hermesRT)` then `CDPAgent::create(1, *cdpDebugAPI, enqueueTask, messageCallback)`. Call `enableRuntimeDomain()` after creation. Destruction order: cdpAgent -> cdpDebugAPI -> napi_env -> hermesRT.
+- `EnqueueRuntimeTaskFunc` = `std::function<void(RuntimeTask)>`, `RuntimeTask` = `std::function<void(HermesRuntime&)>`. Both in `hermes/RuntimeTaskRunner.h`.
+- `OutboundMessageFunc` = `std::function<void(const std::string&)>`. In `hermes/cdp/CDPAgent.h`.
 
 ## HermesRuntime (JSI) vs vm::Runtime
 - `makeHermesRuntime(rtConfig)` returns `unique_ptr<HermesRuntime>` (JSI-level). `hermes/hermes.h` header.

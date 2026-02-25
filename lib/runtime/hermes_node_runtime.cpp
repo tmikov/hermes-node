@@ -13,6 +13,11 @@
 #include "hermes/VM/Runtime.h"
 #include "hermes/hermes.h"
 
+#ifdef HERMES_ENABLE_DEBUGGER
+#include <hermes/cdp/CDPAgent.h>
+#include <hermes/cdp/CDPDebugAPI.h>
+#endif
+
 #include <hermes/node-compat/binding-registry/binding_registry.h>
 #include <hermes/node-compat/bindings/handle_wrap_base.h>
 #include <hermes/node-compat/bindings/node_async_context_frame.h>
@@ -348,6 +353,24 @@ int runHermesNode(const HermesNodeConfig &config) {
   // after hermesRT.reset() below.
   napi_set_instance_data(
       env, runtimeState, [](napi_env, void *, void *) {}, nullptr);
+
+  // Create CDP objects for debugger support when --inspect is enabled.
+#ifdef HERMES_ENABLE_DEBUGGER
+  std::unique_ptr<facebook::hermes::cdp::CDPDebugAPI> cdpDebugAPI;
+  std::unique_ptr<facebook::hermes::cdp::CDPAgent> cdpAgent;
+  if (config.inspect) {
+    cdpDebugAPI = facebook::hermes::cdp::CDPDebugAPI::create(*hermesRT);
+    cdpAgent = facebook::hermes::cdp::CDPAgent::create(
+        /*executionContextID=*/
+        1,
+        *cdpDebugAPI,
+        /*enqueueRuntimeTask=*/
+        [](facebook::hermes::debugger::RuntimeTask) { /* placeholder */ },
+        /*messageCallback=*/
+        [](const std::string &) { /* placeholder */ });
+    cdpAgent->enableRuntimeDomain();
+  }
+#endif
 
   napi_handle_scope scope;
   napi_open_handle_scope(env, &scope);
@@ -852,6 +875,13 @@ int runHermesNode(const HermesNodeConfig &config) {
   registry.detach(env);
 
   napi_close_handle_scope(env, scope);
+
+  // Destroy CDP objects before env and runtime (reverse creation order).
+#ifdef HERMES_ENABLE_DEBUGGER
+  cdpAgent.reset();
+  cdpDebugAPI.reset();
+#endif
+
   hermes_napi_destroy_env(env);
   hermesRT.reset();
   delete runtimeState;

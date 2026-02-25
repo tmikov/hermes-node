@@ -45,7 +45,7 @@ be omitted):
 | Step 1 | Enable HERMES_ENABLE_DEBUGGER in CMake | — | done |  |
 | Step 2 | Switch runtime creation to makeHermesRuntime() | 1 | done |  |
 | Step 3 | Add --inspect / --inspect-brk flag parsing | — | done |  |
-| Step 4 | Create CDPDebugAPI and CDPAgent with placeholder callbacks | 2 |  |  |
+| Step 4 | Create CDPDebugAPI and CDPAgent with placeholder callbacks | 2 | done |  |
 | Step 5 | Add RuntimeTask queue and uv_async_t for CDP processing | 4 |  |  |
 | Step 6 | Vendor ws package | — | done | Vendored ws 8.19.0 in prior commit |
 | Step 7 | Add inspectorBridgeContext to config and RuntimeState | 5 |  |  |
@@ -77,4 +77,10 @@ be omitted):
 - **What was done**: Added `inspect`, `inspectBrk`, `inspectHost`, `inspectPort` fields to `HermesNodeConfig`. Added `parseInspectHostPort()` helper and CLI parsing for `--inspect[=[host:]port]` and `--inspect-brk[=[host:]port]`. `--inspect-brk` implies `inspect = true`. Updated `printUsage()`.
 - **Decisions**: Used `strrchr` for last colon to split host:port (handles IPv4 addresses). Port 0 is valid (OS-assigned). Port range validated 0-65535.
 - **Notes for next step**: Flags are parsed and stored in config but have no runtime effect yet. Step 4 will read `config.inspect` to conditionally create CDPDebugAPI/CDPAgent.
+
+### Step 4: Create CDPDebugAPI and CDPAgent with placeholder callbacks
+- **Files**: modified `lib/runtime/hermes_node_runtime.cpp`, modified `lib/runtime/CMakeLists.txt`.
+- **What was done**: When `config.inspect` is true, create `CDPDebugAPI` (from `HermesRuntime&`) and `CDPAgent` (with no-op placeholder callbacks for `enqueueRuntimeTask` and `messageCallback`). Call `enableRuntimeDomain()` on the agent. In shutdown, destroy `cdpAgent` then `cdpDebugAPI` before `hermes_napi_destroy_env`. All code guarded by `#ifdef HERMES_ENABLE_DEBUGGER`. Added `target_compile_definitions(hermesNodeRuntime PRIVATE HERMES_ENABLE_DEBUGGER)` to CMakeLists.txt since the Hermes `add_definitions` is subdirectory-scoped.
+- **Decisions**: Placed CDP creation after RuntimeState setup but before handle scope open. Destruction order: cdpAgent -> cdpDebugAPI -> napi_env -> hermesRT (reverse creation order).
+- **Notes for next step**: `cdpAgent` and `cdpDebugAPI` are local variables in `runHermesNode()`. Step 5 will replace the placeholder `enqueueRuntimeTask` callback with a real queue + `uv_async_t`. The `hermesRT` pointer is available for `RuntimeTask` execution (`task(*hermesRT)`).
 

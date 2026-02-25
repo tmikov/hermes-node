@@ -16,6 +16,10 @@ target_include_directories(hermesNodeRuntime
     ${PROJECT_SOURCE_DIR}/hermes/API
 )
 
+if(HERMES_ENABLE_DEBUGGER)
+  target_compile_definitions(hermesNodeRuntime PRIVATE HERMES_ENABLE_DEBUGGER)
+endif()
+
 target_link_libraries(hermesNodeRuntime
   PUBLIC
     hermesNodeEmbeddedModules
