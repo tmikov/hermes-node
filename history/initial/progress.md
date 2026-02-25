@@ -48,7 +48,7 @@ be omitted):
 | Step 4 | Create CDPDebugAPI and CDPAgent with placeholder callbacks | 2 | done |  |
 | Step 5 | Add RuntimeTask queue and uv_async_t for CDP processing | 4 | done |  |
 | Step 6 | Vendor ws package | — | done | Vendored ws 8.19.0 in prior commit |
-| Step 7 | Add inspectorBridgeContext to config and RuntimeState | 5 |  |  |
+| Step 7 | Add inspectorBridgeContext to config and RuntimeState | 5 | done |  |
 | Step 8 | Create inspector_bridge native binding | 7 |  |  |
 | Step 9 | Create inspector JS server script | 6, 8 |  |  |
 | Step 10 | Start inspector runtime on a dedicated thread | 5, 8, 9 |  |  |
@@ -89,4 +89,9 @@ be omitted):
 - **What was done**: Added `InspectorState` struct (mutex-protected queues for inbound CDP commands and RuntimeTasks, `uv_async_t`, pointers to CDPAgent and HermesRuntime, `std::atomic<bool> asyncActive` flag). Added `onInspectorAsync` callback that drains both queues. Added `pushInspectorCommand` helper (unused now, for Step 8+). Replaced placeholder `enqueueRuntimeTask` callback with real push-to-queue + `uv_async_send`. Added shutdown: close async handle alongside check/prepare handles, then drain remaining RuntimeTasks after `cdpAgent.reset()` (CDPAgent destructor may enqueue tasks).
 - **Decisions**: Used `std::atomic<bool> asyncActive` to guard `uv_async_send` calls after the handle is closed (CDPAgent destructor calls `enqueueRuntimeTask` during destruction). Queues swapped under lock then drained outside lock to minimize hold time. `pushInspectorCommand` marked `[[maybe_unused]]` to suppress warning until Step 8.
 - **Notes for next step**: `InspectorState` is stack-allocated in `runHermesNode()`. Step 7 adds `InspectorBridgeContext` to config/RuntimeState. Step 8 creates the inspector_bridge binding that calls `pushInspectorCommand` (or accesses queues directly via `InspectorBridgeContext` pointers). The `messageCallback` (outbound CDP) is still a placeholder -- wired in Step 11.
+
+### Step 7: Add inspectorBridgeContext to config and RuntimeState
+- **Files**: modified `hermes_node_runtime.h`, `runtime_state.h`, `hermes_node_runtime.cpp`.
+- **What was done**: Added `void *inspectorBridgeContext = nullptr` to `HermesNodeConfig` (opaque pointer for cross-thread CDP messaging, null for user runtime, set for inspector runtime) and to `RuntimeState` (so bindings can access it via `getRuntimeState(env)`). Copied config value to runtimeState in `runHermesNode()` alongside the other state initialization.
+- **Notes for next step**: Step 8 will define the actual `InspectorBridgeContext` struct and create the `inspector_bridge` native binding that retrieves this pointer from `RuntimeState` to communicate with the main thread.
 

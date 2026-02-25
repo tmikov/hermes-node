@@ -49,6 +49,10 @@ struct RuntimeState {
   napi_ref pipeCtorRef = nullptr;
   napi_ref hashCtorRef = nullptr;
   napi_ref contextifySymbolRef = nullptr;
+
+  // Opaque pointer to InspectorBridgeContext for cross-thread CDP messaging.
+  // Null for the user runtime, set for the inspector runtime.
+  void *inspectorBridgeContext = nullptr;
 };
 
 /// Retrieve the per-env RuntimeState. Returns nullptr if not set.

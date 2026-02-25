@@ -42,6 +42,11 @@ struct HermesNodeConfig {
 
   /// Inspector port (0 = OS-assigned).
   int inspectPort = 9229;
+
+  /// Opaque pointer to the inspector bridge context for cross-thread CDP
+  /// messaging. Null for the user runtime (normal operation). Set when this
+  /// runtime is the inspector runtime running on the IO thread.
+  void *inspectorBridgeContext = nullptr;
 };
 
 /// Run a complete hermes-node instance. Blocks until the event loop exits.

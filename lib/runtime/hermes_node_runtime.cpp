@@ -419,6 +419,7 @@ int runHermesNode(const HermesNodeConfig &config) {
     static_cast<hermes::vm::Runtime *>(data)->triggerTimeoutAsyncBreak();
   };
   runtimeState->triggerAsyncBreakData = vmRuntime;
+  runtimeState->inspectorBridgeContext = config.inspectorBridgeContext;
   // Use a no-op finalizer: RuntimeState must outlive the env because GC
   // finalizers (which run during runtime destruction, after env is freed) may
   // still reference it via cached rtState_ pointers. We delete it manually
