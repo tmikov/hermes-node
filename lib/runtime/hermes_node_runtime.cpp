@@ -21,6 +21,7 @@
 #include <atomic>
 #include <mutex>
 #include <queue>
+#include <thread>
 #endif
 
 #include <hermes/node-compat/binding-registry/binding_registry.h>
@@ -373,6 +374,45 @@ static void onInspectorAsync(uv_async_t *handle) {
   }
 }
 
+/// Generate a UUID-like session ID for the inspector WebSocket path.
+static std::string generateSessionId() {
+  unsigned char bytes[16];
+  int err = uv_random(nullptr, nullptr, bytes, sizeof(bytes), 0, nullptr);
+  if (err != 0) {
+    // Fallback: use high-res timer + process ID.
+    uint64_t t = uv_hrtime();
+    uint32_t pid = uv_os_getpid();
+    std::memcpy(bytes, &t, sizeof(t));
+    std::memcpy(bytes + sizeof(t), &pid, sizeof(pid));
+    std::memset(
+        bytes + sizeof(t) + sizeof(pid),
+        0,
+        sizeof(bytes) - sizeof(t) - sizeof(pid));
+  }
+  char buf[37];
+  std::snprintf(
+      buf,
+      sizeof(buf),
+      "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+      bytes[0],
+      bytes[1],
+      bytes[2],
+      bytes[3],
+      bytes[4],
+      bytes[5],
+      bytes[6],
+      bytes[7],
+      bytes[8],
+      bytes[9],
+      bytes[10],
+      bytes[11],
+      bytes[12],
+      bytes[13],
+      bytes[14],
+      bytes[15]);
+  return buf;
+}
+
 #endif // HERMES_ENABLE_DEBUGGER
 
 // ---------------------------------------------------------------------------
@@ -465,6 +505,61 @@ int runHermesNode(const HermesNodeConfig &config) {
     inspectorState.agent = cdpAgent.get();
     inspectorState.hermesRT = hermesRT.get();
     cdpAgent->enableRuntimeDomain();
+  }
+
+  // Start inspector runtime on a dedicated thread.
+  std::thread inspectorThread;
+  InspectorBridgeContext *bridgeCtx = nullptr;
+  if (config.inspect) {
+    std::string sessionId = generateSessionId();
+
+    // Allocate and populate the cross-thread bridge context.
+    bridgeCtx = new InspectorBridgeContext();
+    bridgeCtx->host = config.inspectHost;
+    bridgeCtx->port = config.inspectPort;
+    bridgeCtx->scriptName = config.scriptPath;
+    bridgeCtx->sessionId = sessionId;
+
+    // Wire up inbound (inspector -> main) pointers.
+    bridgeCtx->inboundMutex = &inspectorState.mutex;
+    bridgeCtx->inboundQueue = &inspectorState.inboundCommands;
+    bridgeCtx->mainAsync = &inspectorState.asyncHandle;
+    bridgeCtx->mainAsyncActive = &inspectorState.asyncActive;
+
+    // Build inspector config.
+    HermesNodeConfig inspectorConfig;
+    inspectorConfig.evalCode = "require('inspector-server');";
+    inspectorConfig.argv = {"hermes-node-inspector"};
+    inspectorConfig.inspectorBridgeContext = bridgeCtx;
+
+    // Launch inspector thread.
+    inspectorThread = std::thread([bridgeCtx, inspectorConfig]() {
+      runHermesNode(inspectorConfig);
+      // Ensure the main thread's readyCv wait doesn't hang if the inspector
+      // failed to start (notifyReady was never called).
+      {
+        std::lock_guard<std::mutex> lock(bridgeCtx->readyMutex);
+        bridgeCtx->ready = true;
+      }
+      bridgeCtx->readyCv.notify_one();
+    });
+
+    // Wait for the inspector server to signal it's listening.
+    {
+      std::unique_lock<std::mutex> lock(bridgeCtx->readyMutex);
+      bridgeCtx->readyCv.wait(lock, [&] { return bridgeCtx->ready; });
+    }
+
+    if (bridgeCtx->actualPort > 0) {
+      std::fprintf(
+          stderr,
+          "Debugger listening on ws://%s:%d/%s\n",
+          bridgeCtx->host.c_str(),
+          bridgeCtx->actualPort,
+          bridgeCtx->sessionId.c_str());
+    } else {
+      std::fprintf(stderr, "Warning: inspector failed to start\n");
+    }
   }
 #endif
 
@@ -955,12 +1050,27 @@ int runHermesNode(const HermesNodeConfig &config) {
     uv_close(reinterpret_cast<uv_handle_t *>(&prepareHandle), nullptr);
   }
 
-  // Close the inspector async handle before the event loop shuts down.
+  // Shut down the inspector thread and close the inspector async handle.
 #ifdef HERMES_ENABLE_DEBUGGER
   if (inspectorAsyncActive) {
-    // Prevent further uv_async_send calls (e.g. from CDPAgent destruction).
+    // Signal the inspector thread to stop its event loop.
+    if (inspectorThread.joinable() && bridgeCtx) {
+      std::lock_guard<std::mutex> lock(bridgeCtx->shutdownMutex);
+      if (bridgeCtx->canSendShutdown) {
+        uv_async_send(&bridgeCtx->shutdownAsync);
+      }
+    }
+
+    // Prevent further uv_async_send calls from the inspector thread
+    // (or from CDPAgent destruction).
     inspectorState.asyncActive.store(false, std::memory_order_release);
     inspectorState.agent = nullptr;
+
+    // Wait for the inspector thread to complete its cleanup.
+    if (inspectorThread.joinable()) {
+      inspectorThread.join();
+    }
+
     uv_close(
         reinterpret_cast<uv_handle_t *>(&inspectorState.asyncHandle), nullptr);
   }
@@ -969,6 +1079,16 @@ int runHermesNode(const HermesNodeConfig &config) {
   uv_run(eventLoop.getLoop(), UV_RUN_NOWAIT);
 
   caresWrapShutdown(env);
+
+  // If this is the inspector runtime, mark shutdown signaling as no longer
+  // safe before closing the event loop. This prevents the main thread from
+  // sending to shutdownAsync after the loop is destroyed.
+  if (config.inspectorBridgeContext) {
+    auto *bc =
+        static_cast<InspectorBridgeContext *>(config.inspectorBridgeContext);
+    std::lock_guard<std::mutex> lock(bc->shutdownMutex);
+    bc->canSendShutdown = false;
+  }
 
   eventLoop.close();
 
@@ -999,6 +1119,7 @@ int runHermesNode(const HermesNodeConfig &config) {
     inspectorAsyncActive = false;
   }
   cdpDebugAPI.reset();
+  delete bridgeCtx;
 #endif
 
   hermes_napi_destroy_env(env);

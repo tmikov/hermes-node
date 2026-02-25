@@ -28,7 +28,8 @@ struct InspectorBridgeContext {
   std::mutex outboundMutex;
   std::queue<std::string> outboundQueue;
   /// Async handle in the inspector's event loop. Set by the inspector binding
-  /// during init. Used to wake the inspector loop when outbound messages arrive.
+  /// during init. Used to wake the inspector loop when outbound messages
+  /// arrive.
   uv_async_t *inspectorAsync = nullptr;
 
   // --- Inspector -> Main (inbound CDP commands) ---
@@ -54,8 +55,21 @@ struct InspectorBridgeContext {
   /// Actual port after bind (useful when port 0 was requested).
   int actualPort = 0;
 
+  // --- Shutdown signaling ---
+  /// Async handle on the inspector's event loop. When signaled by the main
+  /// thread, calls uv_stop() to terminate the inspector's event loop.
+  uv_async_t shutdownAsync{};
+  /// Mutex protecting canSendShutdown. The main thread holds this while
+  /// calling uv_async_send; the inspector thread holds it while clearing
+  /// the flag before closing the loop. This prevents use-after-close races.
+  std::mutex shutdownMutex;
+  /// True once shutdownAsync is initialized and safe to signal. Set to false
+  /// by the inspector runtime just before eventLoop.close().
+  bool canSendShutdown = false;
+
   // --- Inspector-side JS callback state (set during binding init) ---
   napi_ref messageCallbackRef = nullptr;
+  napi_ref shutdownCallbackRef = nullptr;
   napi_env inspectorEnv = nullptr;
 };
 

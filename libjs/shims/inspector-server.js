@@ -125,6 +125,17 @@ bridge.setMessageCallback(function(msg) {
   }
 });
 
+// Register shutdown callback so the main thread can stop the inspector.
+bridge.setShutdownCallback(function() {
+  // Close WebSocket connections and servers to let the event loop exit.
+  if (activeWs) {
+    activeWs.close();
+    activeWs = null;
+  }
+  wss.close();
+  server.close();
+});
+
 // --- Start listening ---
 
 server.listen(config.port, config.host, function() {

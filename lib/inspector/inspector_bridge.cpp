@@ -194,6 +194,94 @@ static napi_value notifyReady(napi_env env, napi_callback_info info) {
 }
 
 // ---------------------------------------------------------------------------
+// setShutdownCallback(fn)
+// ---------------------------------------------------------------------------
+
+/// Register a JS function to be called when the main thread signals shutdown.
+/// The callback should close the HTTP/WS servers so the event loop exits.
+static napi_value setShutdownCallback(napi_env env, napi_callback_info info) {
+  InspectorBridgeContext *ctx = getBridgeContext(env);
+  if (!ctx) {
+    napi_throw_error(env, nullptr, "inspector_bridge: no bridge context");
+    return nullptr;
+  }
+
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  if (argc < 1) {
+    napi_throw_error(
+        env,
+        nullptr,
+        "inspector_bridge.setShutdownCallback: expected 1 argument");
+    return nullptr;
+  }
+
+  napi_valuetype argType;
+  napi_typeof(env, argv[0], &argType);
+  if (argType != napi_function) {
+    napi_throw_type_error(
+        env,
+        nullptr,
+        "inspector_bridge.setShutdownCallback: argument must be a function");
+    return nullptr;
+  }
+
+  if (ctx->shutdownCallbackRef) {
+    napi_delete_reference(env, ctx->shutdownCallbackRef);
+    ctx->shutdownCallbackRef = nullptr;
+  }
+
+  napi_create_reference(env, argv[0], 1, &ctx->shutdownCallbackRef);
+  ctx->inspectorEnv = env;
+
+  napi_value undef;
+  napi_get_undefined(env, &undef);
+  return undef;
+}
+
+// ---------------------------------------------------------------------------
+// Shutdown async callback
+// ---------------------------------------------------------------------------
+
+/// Called on the inspector's event loop when the main thread signals shutdown.
+/// Invokes the JS shutdown callback which closes servers, letting the event
+/// loop exit naturally.
+static void onShutdownAsync(uv_async_t *handle) {
+  auto *ctx = static_cast<InspectorBridgeContext *>(handle->data);
+  if (!ctx || !ctx->inspectorEnv)
+    return;
+
+  napi_handle_scope scope;
+  napi_open_handle_scope(ctx->inspectorEnv, &scope);
+
+  if (ctx->shutdownCallbackRef) {
+    napi_value fn;
+    napi_get_reference_value(ctx->inspectorEnv, ctx->shutdownCallbackRef, &fn);
+
+    napi_valuetype fnType;
+    napi_typeof(ctx->inspectorEnv, fn, &fnType);
+    if (fnType == napi_function) {
+      napi_value global;
+      napi_get_global(ctx->inspectorEnv, &global);
+      napi_value result;
+      napi_call_function(ctx->inspectorEnv, global, fn, 0, nullptr, &result);
+
+      // Clear any exception from the callback.
+      bool pending = false;
+      napi_is_exception_pending(ctx->inspectorEnv, &pending);
+      if (pending) {
+        napi_value exc;
+        napi_get_and_clear_last_exception(ctx->inspectorEnv, &exc);
+      }
+    }
+  }
+
+  napi_close_handle_scope(ctx->inspectorEnv, scope);
+}
+
+// ---------------------------------------------------------------------------
 // initInspectorBridgeBinding
 // ---------------------------------------------------------------------------
 
@@ -235,6 +323,29 @@ napi_value initInspectorBridgeBinding(napi_env env, napi_value exports) {
       nullptr,
       &notifyReadyFn);
   napi_set_named_property(env, exports, "notifyReady", notifyReadyFn);
+
+  napi_value setShutdownCallbackFn;
+  napi_create_function(
+      env,
+      "setShutdownCallback",
+      NAPI_AUTO_LENGTH,
+      setShutdownCallback,
+      nullptr,
+      &setShutdownCallbackFn);
+  napi_set_named_property(
+      env, exports, "setShutdownCallback", setShutdownCallbackFn);
+
+  // Initialize the shutdown async handle on the inspector's event loop.
+  // When signaled from the main thread, this invokes the JS shutdown callback
+  // which closes the HTTP/WS servers, letting the event loop exit naturally.
+  RuntimeState *state = getRuntimeState(env);
+  if (state && state->loop) {
+    uv_async_init(state->loop, &ctx->shutdownAsync, onShutdownAsync);
+    ctx->shutdownAsync.data = ctx;
+    uv_unref(reinterpret_cast<uv_handle_t *>(&ctx->shutdownAsync));
+    std::lock_guard<std::mutex> lock(ctx->shutdownMutex);
+    ctx->canSendShutdown = true;
+  }
 
   return exports;
 }
