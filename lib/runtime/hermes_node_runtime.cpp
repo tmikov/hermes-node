@@ -63,6 +63,7 @@
 #include <hermes/node-compat/bindings/node_zlib.h>
 #include <hermes/node-compat/embedded-modules/embedded_modules.h>
 #include <hermes/node-compat/event-loop/uv_event_loop.h>
+#include <hermes/node-compat/inspector/inspector_bridge.h>
 #include <hermes/node-compat/module-loader/module_loader.h>
 #include <hermes/node-compat/process/node_process.h>
 #include <hermes/node-compat/runtime/runtime_state.h>
@@ -495,6 +496,7 @@ int runHermesNode(const HermesNodeConfig &config) {
   registry.registerBinding("fs_dir", initFsDirBinding);
   registry.registerBinding("fs_event_wrap", initFsEventWrapBinding);
   registry.registerBinding("http_parser", initHttpParserBinding);
+  registry.registerBinding("inspector_bridge", initInspectorBridgeBinding);
   registry.registerBinding("module_wrap", initModuleWrapBinding);
   registry.registerBinding("modules", initModulesBinding);
   registry.registerBinding("os", initOsBinding);

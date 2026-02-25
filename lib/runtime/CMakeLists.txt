@@ -28,6 +28,7 @@ target_link_libraries(hermesNodeRuntime
     hermesNodeBindings
     hermesNodeModuleLoader
     hermesNodeProcess
+    hermesNodeInspector
     hermesNapiCompile
     hermesvm_a
 )

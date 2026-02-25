@@ -49,7 +49,7 @@ be omitted):
 | Step 5 | Add RuntimeTask queue and uv_async_t for CDP processing | 4 | done |  |
 | Step 6 | Vendor ws package | — | done | Vendored ws 8.19.0 in prior commit |
 | Step 7 | Add inspectorBridgeContext to config and RuntimeState | 5 | done |  |
-| Step 8 | Create inspector_bridge native binding | 7 |  |  |
+| Step 8 | Create inspector_bridge native binding | 7 | done |  |
 | Step 9 | Create inspector JS server script | 6, 8 |  |  |
 | Step 10 | Start inspector runtime on a dedicated thread | 5, 8, 9 |  |  |
 | Step 11 | Wire end-to-end CDP message flow | 10 |  |  |
@@ -94,4 +94,10 @@ be omitted):
 - **Files**: modified `hermes_node_runtime.h`, `runtime_state.h`, `hermes_node_runtime.cpp`.
 - **What was done**: Added `void *inspectorBridgeContext = nullptr` to `HermesNodeConfig` (opaque pointer for cross-thread CDP messaging, null for user runtime, set for inspector runtime) and to `RuntimeState` (so bindings can access it via `getRuntimeState(env)`). Copied config value to runtimeState in `runHermesNode()` alongside the other state initialization.
 - **Notes for next step**: Step 8 will define the actual `InspectorBridgeContext` struct and create the `inspector_bridge` native binding that retrieves this pointer from `RuntimeState` to communicate with the main thread.
+
+### Step 8: Create inspector_bridge native binding
+- **Files**: created `include/hermes/node-compat/inspector/inspector_bridge.h`, created `lib/inspector/inspector_bridge.cpp`, created `lib/inspector/CMakeLists.txt`, modified `CMakeLists.txt`, modified `lib/runtime/CMakeLists.txt`, modified `lib/runtime/hermes_node_runtime.cpp`.
+- **What was done**: Defined `InspectorBridgeContext` struct with fields for cross-thread CDP messaging (inbound/outbound queues, mutexes, async handles, config, startup synchronization, JS callback ref). Created `inspector_bridge` native binding with 4 functions: `sendToMain(json)` pushes CDP commands to main thread's inbound queue + signals via `uv_async_send`; `setMessageCallback(fn)` stores persistent ref to JS callback for outbound CDP messages; `getConfig()` returns `{host, port, scriptName, sessionId}`; `notifyReady(actualPort)` signals main thread via condition variable that the inspector server is listening. When `inspectorBridgeContext` is null (normal runtime), binding returns empty object. Created `hermesNodeInspector` static library, linked from `hermesNodeRuntime`. Registered as `"inspector_bridge"` binding.
+- **Decisions**: The bridge context holds raw pointers to the main thread's `InspectorState` members (mutex, queue, async handle, asyncActive flag) rather than a pointer to the whole `InspectorState`, keeping the inspector side decoupled. The `mainAsyncActive` pointer (to `std::atomic<bool>`) guards `uv_async_send` calls after shutdown.
+- **Notes for next step**: Step 9 creates the inspector JS server script that calls `internalBinding('inspector_bridge')` to use these functions. Step 10 allocates `InspectorBridgeContext`, populates its pointers from `InspectorState`, and passes it via `config.inspectorBridgeContext` when starting the inspector runtime thread. Step 11 wires the outbound `uv_async_t` on the inspector loop to drain `outboundQueue` and invoke the JS `messageCallback`.
 

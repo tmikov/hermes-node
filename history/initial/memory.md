@@ -48,6 +48,8 @@ module loader, and test infrastructure basics, see `CLAUDE.md`.
 - `OutboundMessageFunc` = `std::function<void(const std::string&)>`. In `hermes/cdp/CDPAgent.h`.
 - `InspectorState` struct (in `hermes_node_runtime.cpp`): mutex-protected queues + `uv_async_t` + `std::atomic<bool> asyncActive`. Drains inbound CDP commands (`agent->handleCommand`) and RuntimeTasks (`task(*hermesRT)`) on main thread. `pushInspectorCommand()` for cross-thread command injection.
 - **CDPAgent destructor enqueues RuntimeTasks**: must drain remaining tasks after `cdpAgent.reset()`. Guard `uv_async_send` with `asyncActive` atomic (set false before `uv_close`).
+- `InspectorBridgeContext` struct (`inspector/inspector_bridge.h`): cross-thread CDP messaging context. Holds outbound queue+mutex (main->inspector), pointers to inbound queue+mutex+async (inspector->main), config (host/port/scriptName/sessionId), startup sync (readyMutex/readyCv/ready/actualPort), JS callback ref. Null for user runtime, set for inspector runtime via `config.inspectorBridgeContext`.
+- `inspector_bridge` binding: `sendToMain`, `setMessageCallback`, `getConfig`, `notifyReady`. Empty object when no bridge context. Library: `hermesNodeInspector` in `lib/inspector/`.
 
 ## HermesRuntime (JSI) vs vm::Runtime
 - `makeHermesRuntime(rtConfig)` returns `unique_ptr<HermesRuntime>` (JSI-level). `hermes/hermes.h` header.
