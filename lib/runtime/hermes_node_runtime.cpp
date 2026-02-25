@@ -576,6 +576,16 @@ int runHermesNode(const HermesNodeConfig &config) {
           bridgeCtx->host.c_str(),
           bridgeCtx->actualPort,
           bridgeCtx->sessionId.c_str());
+      std::fprintf(
+          stderr, "For help, see: https://nodejs.org/en/docs/inspector\n");
+      std::fprintf(
+          stderr,
+          "Open DevTools: http://%s:%d/devtools/inspector.html?ws=%s:%d/%s\n",
+          bridgeCtx->host.c_str(),
+          bridgeCtx->actualPort,
+          bridgeCtx->host.c_str(),
+          bridgeCtx->actualPort,
+          bridgeCtx->sessionId.c_str());
     } else {
       std::fprintf(stderr, "Warning: inspector failed to start\n");
     }

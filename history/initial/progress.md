@@ -56,7 +56,7 @@ be omitted):
 | Step 12 | Add /json discovery endpoints | 10 | done | Already implemented in Step 9 |
 | Step 13 | Add DevTools CDN redirect | 12 | done | Already implemented in Step 9 |
 | Step 14 | Add --inspect-brk (pause at first line) | 11 | done |  |
-| Step 15 | Add stderr diagnostic messages | 10 |  |  |
+| Step 15 | Add stderr diagnostic messages | 10 | done |  |
 | Step 16 | End-to-end integration test | 11, 12, 13, 14, 15 |  |  |
 
 ## Context Notes
@@ -137,4 +137,9 @@ be omitted):
   -- Flush runtime tasks synchronously before `debugger;` to ensure `enableDebuggerDomain()`'s task completes (registers the coordinator's event callback). Without this, the `debugger;` statement's `DebuggerStatement` event would have no event callback to handle it.
 - **Issues**: Several approaches were tried before the working solution: (1) `cdpAgent->handleCommand(Debugger.pause)` was too asynchronous -- the CDP command chain didn't complete before short scripts finished. (2) `coordinator().pause()` sets the VM async break flag, but the flag was never consumed because `ScriptLoaded` breakpoints (from `pauseOnScriptLoad`) intercept execution before `doCall` points. (3) Without `compileFlags.debug = true` in NAPI, eval'd code had no debug info, making breakpoints/stepping impossible. The Hermes JSI API (hermes.cpp) and `eval()` (eval.cpp) both set this flag, but NAPI was missing it.
 - **Notes for next step**: Step 15 should be straightforward (stderr diagnostic messages). Step 16 (end-to-end test) can verify the full DevTools connection flow including the `--inspect-brk` pause. The `-g` flag on embedded modules makes all bootstrap code debuggable but slightly increases bytecode size.
+
+### Step 15: Add stderr diagnostic messages
+- **Files**: modified `lib/runtime/hermes_node_runtime.cpp`.
+- **What was done**: Added two additional stderr lines after the existing "Debugger listening" message: (1) `For help, see: https://nodejs.org/en/docs/inspector` and (2) `Open DevTools: http://HOST:PORT/devtools/inspector.html?ws=HOST:PORT/UUID`. All three lines use the actual host/port/sessionId from `bridgeCtx`. The DevTools URL is clickable and opens the CDN redirect page.
+- **Notes for next step**: Step 16 (end-to-end integration test) can verify these messages appear in stderr by grepping for "Debugger listening" or "For help".
 
