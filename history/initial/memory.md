@@ -46,6 +46,8 @@ module loader, and test infrastructure basics, see `CLAUDE.md`.
 - CDP creation: `CDPDebugAPI::create(*hermesRT)` then `CDPAgent::create(1, *cdpDebugAPI, enqueueTask, messageCallback)`. Call `enableRuntimeDomain()` after creation. Destruction order: cdpAgent -> cdpDebugAPI -> napi_env -> hermesRT.
 - `EnqueueRuntimeTaskFunc` = `std::function<void(RuntimeTask)>`, `RuntimeTask` = `std::function<void(HermesRuntime&)>`. Both in `hermes/RuntimeTaskRunner.h`.
 - `OutboundMessageFunc` = `std::function<void(const std::string&)>`. In `hermes/cdp/CDPAgent.h`.
+- `InspectorState` struct (in `hermes_node_runtime.cpp`): mutex-protected queues + `uv_async_t` + `std::atomic<bool> asyncActive`. Drains inbound CDP commands (`agent->handleCommand`) and RuntimeTasks (`task(*hermesRT)`) on main thread. `pushInspectorCommand()` for cross-thread command injection.
+- **CDPAgent destructor enqueues RuntimeTasks**: must drain remaining tasks after `cdpAgent.reset()`. Guard `uv_async_send` with `asyncActive` atomic (set false before `uv_close`).
 
 ## HermesRuntime (JSI) vs vm::Runtime
 - `makeHermesRuntime(rtConfig)` returns `unique_ptr<HermesRuntime>` (JSI-level). `hermes/hermes.h` header.

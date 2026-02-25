@@ -14,8 +14,13 @@
 #include "hermes/hermes.h"
 
 #ifdef HERMES_ENABLE_DEBUGGER
+#include <hermes/RuntimeTaskRunner.h>
 #include <hermes/cdp/CDPAgent.h>
 #include <hermes/cdp/CDPDebugAPI.h>
+
+#include <atomic>
+#include <mutex>
+#include <queue>
 #endif
 
 #include <hermes/node-compat/binding-registry/binding_registry.h>
@@ -303,6 +308,73 @@ static void onPrepareDrainTicks(uv_prepare_t *handle) {
 }
 
 // ---------------------------------------------------------------------------
+// Inspector state for CDP debugging (cross-thread communication)
+// ---------------------------------------------------------------------------
+
+#ifdef HERMES_ENABLE_DEBUGGER
+
+/// Main-thread state for cross-thread CDP communication. Holds mutex-protected
+/// queues for inbound CDP commands and RuntimeTasks, plus a uv_async_t handle
+/// that signals the main event loop to drain them.
+struct InspectorState {
+  std::mutex mutex;
+  std::queue<std::string> inboundCommands;
+  std::queue<facebook::hermes::debugger::RuntimeTask> runtimeTasks;
+  uv_async_t asyncHandle{};
+  facebook::hermes::cdp::CDPAgent *agent = nullptr;
+  facebook::hermes::HermesRuntime *hermesRT = nullptr;
+  /// Set to false before closing the async handle to prevent uv_async_send
+  /// calls on a closed handle (e.g. during CDPAgent destruction).
+  std::atomic<bool> asyncActive{false};
+};
+
+/// Push a CDP command (JSON string) into the inbound queue and signal the main
+/// event loop. Thread-safe; called from the inspector thread (Step 8+).
+[[maybe_unused]] static void pushInspectorCommand(
+    InspectorState *state,
+    std::string command) {
+  {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->inboundCommands.push(std::move(command));
+  }
+  if (state->asyncActive.load(std::memory_order_acquire)) {
+    uv_async_send(&state->asyncHandle);
+  }
+}
+
+/// uv_async_t callback: drain inbound CDP commands and runtime tasks.
+static void onInspectorAsync(uv_async_t *handle) {
+  auto *state = static_cast<InspectorState *>(handle->data);
+
+  // Swap queues under lock to minimize lock hold time.
+  std::queue<std::string> commands;
+  std::queue<facebook::hermes::debugger::RuntimeTask> tasks;
+  {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    commands.swap(state->inboundCommands);
+    tasks.swap(state->runtimeTasks);
+  }
+
+  // Process inbound CDP commands.
+  while (!commands.empty()) {
+    if (state->agent) {
+      state->agent->handleCommand(commands.front());
+    }
+    commands.pop();
+  }
+
+  // Execute runtime tasks.
+  while (!tasks.empty()) {
+    if (state->hermesRT) {
+      tasks.front()(*state->hermesRT);
+    }
+    tasks.pop();
+  }
+}
+
+#endif // HERMES_ENABLE_DEBUGGER
+
+// ---------------------------------------------------------------------------
 // runHermesNode
 // ---------------------------------------------------------------------------
 
@@ -354,20 +426,42 @@ int runHermesNode(const HermesNodeConfig &config) {
   napi_set_instance_data(
       env, runtimeState, [](napi_env, void *, void *) {}, nullptr);
 
-  // Create CDP objects for debugger support when --inspect is enabled.
+  // Create CDP objects and inspector async handle for debugger support.
 #ifdef HERMES_ENABLE_DEBUGGER
   std::unique_ptr<facebook::hermes::cdp::CDPDebugAPI> cdpDebugAPI;
   std::unique_ptr<facebook::hermes::cdp::CDPAgent> cdpAgent;
+  InspectorState inspectorState;
+  bool inspectorAsyncActive = false;
   if (config.inspect) {
     cdpDebugAPI = facebook::hermes::cdp::CDPDebugAPI::create(*hermesRT);
+
+    // Initialize the async handle for cross-thread CDP signaling.
+    uv_async_init(
+        eventLoop.getLoop(), &inspectorState.asyncHandle, onInspectorAsync);
+    inspectorState.asyncHandle.data = &inspectorState;
+    uv_unref(reinterpret_cast<uv_handle_t *>(&inspectorState.asyncHandle));
+    inspectorState.asyncActive.store(true, std::memory_order_release);
+    inspectorAsyncActive = true;
+
     cdpAgent = facebook::hermes::cdp::CDPAgent::create(
         /*executionContextID=*/
         1,
         *cdpDebugAPI,
         /*enqueueRuntimeTask=*/
-        [](facebook::hermes::debugger::RuntimeTask) { /* placeholder */ },
+        [&inspectorState](facebook::hermes::debugger::RuntimeTask task) {
+          {
+            std::lock_guard<std::mutex> lock(inspectorState.mutex);
+            inspectorState.runtimeTasks.push(std::move(task));
+          }
+          if (inspectorState.asyncActive.load(std::memory_order_acquire)) {
+            uv_async_send(&inspectorState.asyncHandle);
+          }
+        },
         /*messageCallback=*/
-        [](const std::string &) { /* placeholder */ });
+        [](const std::string &) { /* placeholder - wired in Step 11 */ });
+
+    inspectorState.agent = cdpAgent.get();
+    inspectorState.hermesRT = hermesRT.get();
     cdpAgent->enableRuntimeDomain();
   }
 #endif
@@ -858,6 +952,17 @@ int runHermesNode(const HermesNodeConfig &config) {
     uv_close(reinterpret_cast<uv_handle_t *>(&prepareHandle), nullptr);
   }
 
+  // Close the inspector async handle before the event loop shuts down.
+#ifdef HERMES_ENABLE_DEBUGGER
+  if (inspectorAsyncActive) {
+    // Prevent further uv_async_send calls (e.g. from CDPAgent destruction).
+    inspectorState.asyncActive.store(false, std::memory_order_release);
+    inspectorState.agent = nullptr;
+    uv_close(
+        reinterpret_cast<uv_handle_t *>(&inspectorState.asyncHandle), nullptr);
+  }
+#endif
+
   uv_run(eventLoop.getLoop(), UV_RUN_NOWAIT);
 
   caresWrapShutdown(env);
@@ -877,8 +982,19 @@ int runHermesNode(const HermesNodeConfig &config) {
   napi_close_handle_scope(env, scope);
 
   // Destroy CDP objects before env and runtime (reverse creation order).
+  // CDPAgent destructor may enqueue runtime tasks; drain them manually since
+  // the async handle is already closed.
 #ifdef HERMES_ENABLE_DEBUGGER
   cdpAgent.reset();
+  if (inspectorAsyncActive) {
+    std::lock_guard<std::mutex> lock(inspectorState.mutex);
+    while (!inspectorState.runtimeTasks.empty()) {
+      inspectorState.runtimeTasks.front()(*hermesRT);
+      inspectorState.runtimeTasks.pop();
+    }
+    inspectorState.hermesRT = nullptr;
+    inspectorAsyncActive = false;
+  }
   cdpDebugAPI.reset();
 #endif
 

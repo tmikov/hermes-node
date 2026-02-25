@@ -46,7 +46,7 @@ be omitted):
 | Step 2 | Switch runtime creation to makeHermesRuntime() | 1 | done |  |
 | Step 3 | Add --inspect / --inspect-brk flag parsing | — | done |  |
 | Step 4 | Create CDPDebugAPI and CDPAgent with placeholder callbacks | 2 | done |  |
-| Step 5 | Add RuntimeTask queue and uv_async_t for CDP processing | 4 |  |  |
+| Step 5 | Add RuntimeTask queue and uv_async_t for CDP processing | 4 | done |  |
 | Step 6 | Vendor ws package | — | done | Vendored ws 8.19.0 in prior commit |
 | Step 7 | Add inspectorBridgeContext to config and RuntimeState | 5 |  |  |
 | Step 8 | Create inspector_bridge native binding | 7 |  |  |
@@ -83,4 +83,10 @@ be omitted):
 - **What was done**: When `config.inspect` is true, create `CDPDebugAPI` (from `HermesRuntime&`) and `CDPAgent` (with no-op placeholder callbacks for `enqueueRuntimeTask` and `messageCallback`). Call `enableRuntimeDomain()` on the agent. In shutdown, destroy `cdpAgent` then `cdpDebugAPI` before `hermes_napi_destroy_env`. All code guarded by `#ifdef HERMES_ENABLE_DEBUGGER`. Added `target_compile_definitions(hermesNodeRuntime PRIVATE HERMES_ENABLE_DEBUGGER)` to CMakeLists.txt since the Hermes `add_definitions` is subdirectory-scoped.
 - **Decisions**: Placed CDP creation after RuntimeState setup but before handle scope open. Destruction order: cdpAgent -> cdpDebugAPI -> napi_env -> hermesRT (reverse creation order).
 - **Notes for next step**: `cdpAgent` and `cdpDebugAPI` are local variables in `runHermesNode()`. Step 5 will replace the placeholder `enqueueRuntimeTask` callback with a real queue + `uv_async_t`. The `hermesRT` pointer is available for `RuntimeTask` execution (`task(*hermesRT)`).
+
+### Step 5: Add RuntimeTask queue and uv_async_t for CDP processing
+- **Files**: modified `lib/runtime/hermes_node_runtime.cpp`.
+- **What was done**: Added `InspectorState` struct (mutex-protected queues for inbound CDP commands and RuntimeTasks, `uv_async_t`, pointers to CDPAgent and HermesRuntime, `std::atomic<bool> asyncActive` flag). Added `onInspectorAsync` callback that drains both queues. Added `pushInspectorCommand` helper (unused now, for Step 8+). Replaced placeholder `enqueueRuntimeTask` callback with real push-to-queue + `uv_async_send`. Added shutdown: close async handle alongside check/prepare handles, then drain remaining RuntimeTasks after `cdpAgent.reset()` (CDPAgent destructor may enqueue tasks).
+- **Decisions**: Used `std::atomic<bool> asyncActive` to guard `uv_async_send` calls after the handle is closed (CDPAgent destructor calls `enqueueRuntimeTask` during destruction). Queues swapped under lock then drained outside lock to minimize hold time. `pushInspectorCommand` marked `[[maybe_unused]]` to suppress warning until Step 8.
+- **Notes for next step**: `InspectorState` is stack-allocated in `runHermesNode()`. Step 7 adds `InspectorBridgeContext` to config/RuntimeState. Step 8 creates the inspector_bridge binding that calls `pushInspectorCommand` (or accesses queues directly via `InspectorBridgeContext` pointers). The `messageCallback` (outbound CDP) is still a placeholder -- wired in Step 11.
 
