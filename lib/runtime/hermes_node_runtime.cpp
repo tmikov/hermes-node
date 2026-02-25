@@ -516,6 +516,35 @@ int runHermesNode(const HermesNodeConfig &config) {
     inspectorState.agent = cdpAgent.get();
     inspectorState.hermesRT = hermesRT.get();
     cdpAgent->enableRuntimeDomain();
+    if (config.inspectBrk) {
+      // Pre-enable the debugger domain so its event callback is registered
+      // before user code. The task fires during the first JS execution
+      // (primordials), setting pauseOnScriptLoad=true and registering the
+      // coordinator's event callback. This is required for the
+      // coordinator().pause() call in step 12b below to actually pause the VM.
+      cdpAgent->enableDebuggerDomain();
+    }
+
+    // Set up the interrupt-based drain for inbound CDP commands. When the
+    // runtime is paused at a breakpoint, the event loop is not running, so
+    // uv_async_send alone cannot deliver commands. This function triggers a
+    // runtime interrupt that drains the inbound queue and calls handleCommand.
+    bridgeCtx->triggerInboundDrain = [&inspectorState, &cdpDebugAPI]() {
+      cdpDebugAPI->asyncDebuggerAPI().triggerInterrupt_TS(
+          [&inspectorState](facebook::hermes::HermesRuntime &) {
+            std::queue<std::string> commands;
+            {
+              std::lock_guard<std::mutex> lock(inspectorState.mutex);
+              commands.swap(inspectorState.inboundCommands);
+            }
+            while (!commands.empty()) {
+              if (inspectorState.agent) {
+                inspectorState.agent->handleCommand(commands.front());
+              }
+              commands.pop();
+            }
+          });
+    };
 
     // Build inspector config and launch the inspector thread.
     HermesNodeConfig inspectorConfig;
@@ -902,6 +931,44 @@ int runHermesNode(const HermesNodeConfig &config) {
 
     tickHandlesActive = true;
   }
+
+  // 12b. For --inspect-brk, pause right before user code.
+  // We run a tiny script containing a `debugger;` statement. This triggers
+  // the VM's built-in Debugger which calls into the AsyncDebuggerAPI's
+  // didPause -> coordinator -> setPaused, blocking in
+  // processInterruptWhilePaused until a DevTools client connects and resumes.
+  //
+  // We can't use coordinator().pause() here because it sets the VM's async
+  // break flag, which is only checked at AsyncBreakCheck instructions and
+  // doCall points. During bootstrap module loading (with pauseOnScriptLoad
+  // enabled), each module enters the debugger via a ScriptLoaded breakpoint
+  // before any doCall occurs, so the ExplicitPause flag is never consumed.
+  //
+  // enableDebuggerDomain() was called during inspector setup. Its task was
+  // enqueued to inspectorState.runtimeTasks and must be flushed so the
+  // debugger domain's event callback is registered before the debugger;
+  // statement fires.
+#ifdef HERMES_ENABLE_DEBUGGER
+  if (exitCode == 0 && config.inspectBrk && cdpDebugAPI) {
+    // Flush pending runtime tasks (enableDebuggerDomain) synchronously.
+    {
+      std::queue<facebook::hermes::debugger::RuntimeTask> tasks;
+      {
+        std::lock_guard<std::mutex> lock(inspectorState.mutex);
+        tasks.swap(inspectorState.runtimeTasks);
+      }
+      while (!tasks.empty()) {
+        tasks.front()(*hermesRT);
+        tasks.pop();
+      }
+    }
+    // Execute debugger; statement to trigger the pause.
+    const char *brkCode = "debugger; //# sourceURL=hermes-node:inspect-brk\n";
+    napi_value brkScript, brkResult;
+    napi_create_string_utf8(env, brkCode, NAPI_AUTO_LENGTH, &brkScript);
+    napi_run_script(env, brkScript, &brkResult);
+  }
+#endif
 
   // 13. Load and execute the user script, eval code, or start the REPL.
   if (exitCode == 0) {

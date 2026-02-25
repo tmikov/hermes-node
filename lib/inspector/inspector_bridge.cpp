@@ -62,6 +62,12 @@ static napi_value sendToMain(napi_env env, napi_callback_info info) {
         ctx->mainAsyncActive->load(std::memory_order_acquire)) {
       uv_async_send(ctx->mainAsync);
     }
+    // Also trigger an interrupt on the main runtime so that inbound commands
+    // are delivered even when the runtime is paused at a breakpoint (the event
+    // loop is not running during a pause, so uv_async_send alone won't work).
+    if (ctx->triggerInboundDrain) {
+      ctx->triggerInboundDrain();
+    }
   }
 
   napi_value undef;

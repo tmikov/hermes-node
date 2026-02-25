@@ -32,6 +32,7 @@ set(JS_COMPILER_FLAGS
   -Xasync-generators
   -Wno-undefined-variable
   -emit-binary
+  -g
 )
 
 # Parse the manifest to get module entries.

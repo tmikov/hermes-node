@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -43,6 +44,11 @@ struct InspectorBridgeContext {
   uv_async_t *mainAsync = nullptr;
   /// Guard for mainAsync: only send if the main async handle is active.
   std::atomic<bool> *mainAsyncActive = nullptr;
+  /// Trigger an interrupt on the main runtime to drain inbound CDP commands.
+  /// Called from the inspector thread's sendToMain() so that commands are
+  /// delivered even when the main runtime is paused at a breakpoint (the event
+  /// loop is not running, so uv_async_send alone is insufficient).
+  std::function<void()> triggerInboundDrain;
 
   // --- Config ---
   std::string host;

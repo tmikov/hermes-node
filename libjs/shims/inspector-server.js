@@ -20,6 +20,11 @@ var config = bridge.getConfig();
 
 // Only one debugger client at a time.
 var activeWs = null;
+// Buffer outbound CDP messages when no client is connected. This is needed
+// for --inspect-brk: the runtime pauses and sends Debugger.paused before
+// any DevTools client has connected. When a client connects, buffered
+// messages are replayed so the client sees the paused state.
+var pendingMessages = [];
 
 // --- HTTP server ---
 
@@ -100,6 +105,15 @@ wss.on('connection', function(ws) {
 
   activeWs = ws;
 
+  // Replay any buffered outbound messages (e.g. Debugger.paused from
+  // --inspect-brk that arrived before the client connected).
+  if (pendingMessages.length > 0) {
+    for (var i = 0; i < pendingMessages.length; i++) {
+      ws.send(pendingMessages[i]);
+    }
+    pendingMessages = [];
+  }
+
   // Forward WebSocket messages (CDP commands) to main runtime.
   ws.on('message', function(data) {
     bridge.sendToMain(data.toString());
@@ -122,6 +136,10 @@ wss.on('connection', function(ws) {
 bridge.setMessageCallback(function(msg) {
   if (activeWs && activeWs.readyState === 1) { // WebSocket.OPEN === 1
     activeWs.send(msg);
+  } else {
+    // Buffer messages when no client is connected (e.g. --inspect-brk pause
+    // sends Debugger.paused before DevTools has connected).
+    pendingMessages.push(msg);
   }
 });
 
