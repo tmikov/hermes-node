@@ -50,6 +50,8 @@ module loader, and test infrastructure basics, see `CLAUDE.md`.
 - **CDPAgent destructor enqueues RuntimeTasks**: must drain remaining tasks after `cdpAgent.reset()`. Guard `uv_async_send` with `asyncActive` atomic (set false before `uv_close`).
 - `InspectorBridgeContext` struct (`inspector/inspector_bridge.h`): cross-thread CDP messaging context. Holds outbound queue+mutex (main->inspector), pointers to inbound queue+mutex+async (inspector->main), config (host/port/scriptName/sessionId), startup sync (readyMutex/readyCv/ready/actualPort), JS callback ref. Null for user runtime, set for inspector runtime via `config.inspectorBridgeContext`.
 - `inspector_bridge` binding: `sendToMain`, `setMessageCallback`, `getConfig`, `notifyReady`. Empty object when no bridge context. Library: `hermesNodeInspector` in `lib/inspector/`.
+- Inspector JS server: `libjs/shims/inspector-server.js`. Loaded via `require('inspector-server')` in inspector runtime. HTTP+WS server using vendored `ws`. Single-client. Calls `notifyReady(port)` after listen.
+- **Embedded module placement for custom code**: Use `libjs/shims/<id>.js` for non-Node CJS modules. CMake resolves shims before libjs-node. `libjs/<id>.js` is only for `@bootstrap` modules (no CJS wrapper).
 
 ## HermesRuntime (JSI) vs vm::Runtime
 - `makeHermesRuntime(rtConfig)` returns `unique_ptr<HermesRuntime>` (JSI-level). `hermes/hermes.h` header.

@@ -193,3 +193,6 @@ internal/util/inspector
 internal/deps/acorn/acorn/dist/acorn
 internal/deps/acorn/acorn-walk/dist/walk
 internal/vm/module
+
+# Inspector support
+inspector-server
