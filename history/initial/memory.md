@@ -11,6 +11,7 @@ module loader, and test infrastructure basics, see `CLAUDE.md`.
 - **Handle scopes required**: All NAPI calls creating JS values require `napi_open_handle_scope`.
 - **Include order**: `hermes_napi.h` must come before `uv_event_loop.h` (struct redefinition).
 - **New shim files require CMake reconfigure** (shim resolution uses `EXISTS` at configure time).
+- **HERMES_ENABLE_DEBUGGER**: Set ON via FORCE in top-level CMakeLists.txt. Hermes's `add_definitions(-DHERMES_ENABLE_DEBUGGER)` is subdirectory-scoped — our targets don't inherit it. Add `target_compile_definitions(... PRIVATE HERMES_ENABLE_DEBUGGER)` to any of our targets that need `#ifdef HERMES_ENABLE_DEBUGGER` guards.
 
 ## NAPI Gotchas
 - `napi_default` (=0) = non-enumerable. Use `napi_enumerable` for bindings whose exports are spread in JS.

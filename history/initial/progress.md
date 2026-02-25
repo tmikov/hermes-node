@@ -42,7 +42,7 @@ be omitted):
 
 | Step | Description | Depends On | Status | Brief Note (optional) |
 |------|-------------|------------|--------|-----------------------|
-| Step 1 | Enable HERMES_ENABLE_DEBUGGER in CMake | — |  |  |
+| Step 1 | Enable HERMES_ENABLE_DEBUGGER in CMake | — | done |  |
 | Step 2 | Switch runtime creation to makeHermesRuntime() | 1 |  |  |
 | Step 3 | Add --inspect / --inspect-brk flag parsing | — |  |  |
 | Step 4 | Create CDPDebugAPI and CDPAgent with placeholder callbacks | 2 |  |  |
@@ -60,4 +60,9 @@ be omitted):
 | Step 16 | End-to-end integration test | 11, 12, 13, 14, 15 |  |  |
 
 ## Context Notes
+
+### Step 1: Enable HERMES_ENABLE_DEBUGGER in CMake
+- **Files**: modified `CMakeLists.txt`.
+- **What was done**: Added `set(HERMES_ENABLE_DEBUGGER ON CACHE BOOL "Enable Hermes debugger/CDP" FORCE)` before `add_subdirectory(hermes)`. This causes Hermes to compile with debugger support, including CDP sources (CDPAgent, CDPDebugAPI, AsyncDebuggerAPI, RuntimeTaskRunner, domain agents) into `hermesapi_obj`.
+- **Notes for next step**: `HERMES_ENABLE_DEBUGGER` is now defined for all Hermes targets but NOT for our targets. Our code will need `#ifdef HERMES_ENABLE_DEBUGGER` guards when including CDP headers (Step 4). The `add_definitions(-DHERMES_ENABLE_DEBUGGER)` in Hermes is subdirectory-scoped.
 
