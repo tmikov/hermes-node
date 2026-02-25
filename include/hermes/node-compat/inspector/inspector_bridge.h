@@ -27,10 +27,12 @@ struct InspectorBridgeContext {
   // --- Main -> Inspector (outbound CDP messages) ---
   std::mutex outboundMutex;
   std::queue<std::string> outboundQueue;
-  /// Async handle in the inspector's event loop. Set by the inspector binding
-  /// during init. Used to wake the inspector loop when outbound messages
-  /// arrive.
-  uv_async_t *inspectorAsync = nullptr;
+  /// Async handle in the inspector's event loop. Initialized by the inspector
+  /// binding during init. Used to wake the inspector loop when outbound
+  /// messages arrive from CDPAgent.
+  uv_async_t inspectorAsync{};
+  /// Guard for inspectorAsync: only send if the handle is initialized.
+  std::atomic<bool> inspectorAsyncActive{false};
 
   // --- Inspector -> Main (inbound CDP commands) ---
   /// Points to InspectorState::mutex on the main thread.

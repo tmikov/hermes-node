@@ -330,20 +330,6 @@ struct InspectorState {
   std::atomic<bool> asyncActive{false};
 };
 
-/// Push a CDP command (JSON string) into the inbound queue and signal the main
-/// event loop. Thread-safe; called from the inspector thread (Step 8+).
-[[maybe_unused]] static void pushInspectorCommand(
-    InspectorState *state,
-    std::string command) {
-  {
-    std::lock_guard<std::mutex> lock(state->mutex);
-    state->inboundCommands.push(std::move(command));
-  }
-  if (state->asyncActive.load(std::memory_order_acquire)) {
-    uv_async_send(&state->asyncHandle);
-  }
-}
-
 /// uv_async_t callback: drain inbound CDP commands and runtime tasks.
 static void onInspectorAsync(uv_async_t *handle) {
   auto *state = static_cast<InspectorState *>(handle->data);
@@ -474,6 +460,8 @@ int runHermesNode(const HermesNodeConfig &config) {
   std::unique_ptr<facebook::hermes::cdp::CDPAgent> cdpAgent;
   InspectorState inspectorState;
   bool inspectorAsyncActive = false;
+  std::thread inspectorThread;
+  InspectorBridgeContext *bridgeCtx = nullptr;
   if (config.inspect) {
     cdpDebugAPI = facebook::hermes::cdp::CDPDebugAPI::create(*hermesRT);
 
@@ -484,6 +472,21 @@ int runHermesNode(const HermesNodeConfig &config) {
     uv_unref(reinterpret_cast<uv_handle_t *>(&inspectorState.asyncHandle));
     inspectorState.asyncActive.store(true, std::memory_order_release);
     inspectorAsyncActive = true;
+
+    // Allocate the bridge context before CDPAgent so the outbound
+    // messageCallback can capture it.
+    std::string sessionId = generateSessionId();
+    bridgeCtx = new InspectorBridgeContext();
+    bridgeCtx->host = config.inspectHost;
+    bridgeCtx->port = config.inspectPort;
+    bridgeCtx->scriptName = config.scriptPath;
+    bridgeCtx->sessionId = sessionId;
+
+    // Wire up inbound (inspector -> main) pointers.
+    bridgeCtx->inboundMutex = &inspectorState.mutex;
+    bridgeCtx->inboundQueue = &inspectorState.inboundCommands;
+    bridgeCtx->mainAsync = &inspectorState.asyncHandle;
+    bridgeCtx->mainAsyncActive = &inspectorState.asyncActive;
 
     cdpAgent = facebook::hermes::cdp::CDPAgent::create(
         /*executionContextID=*/
@@ -500,39 +503,26 @@ int runHermesNode(const HermesNodeConfig &config) {
           }
         },
         /*messageCallback=*/
-        [](const std::string &) { /* placeholder - wired in Step 11 */ });
+        [bridgeCtx](const std::string &msg) {
+          {
+            std::lock_guard<std::mutex> lock(bridgeCtx->outboundMutex);
+            bridgeCtx->outboundQueue.push(msg);
+          }
+          if (bridgeCtx->inspectorAsyncActive.load(std::memory_order_acquire)) {
+            uv_async_send(&bridgeCtx->inspectorAsync);
+          }
+        });
 
     inspectorState.agent = cdpAgent.get();
     inspectorState.hermesRT = hermesRT.get();
     cdpAgent->enableRuntimeDomain();
-  }
 
-  // Start inspector runtime on a dedicated thread.
-  std::thread inspectorThread;
-  InspectorBridgeContext *bridgeCtx = nullptr;
-  if (config.inspect) {
-    std::string sessionId = generateSessionId();
-
-    // Allocate and populate the cross-thread bridge context.
-    bridgeCtx = new InspectorBridgeContext();
-    bridgeCtx->host = config.inspectHost;
-    bridgeCtx->port = config.inspectPort;
-    bridgeCtx->scriptName = config.scriptPath;
-    bridgeCtx->sessionId = sessionId;
-
-    // Wire up inbound (inspector -> main) pointers.
-    bridgeCtx->inboundMutex = &inspectorState.mutex;
-    bridgeCtx->inboundQueue = &inspectorState.inboundCommands;
-    bridgeCtx->mainAsync = &inspectorState.asyncHandle;
-    bridgeCtx->mainAsyncActive = &inspectorState.asyncActive;
-
-    // Build inspector config.
+    // Build inspector config and launch the inspector thread.
     HermesNodeConfig inspectorConfig;
     inspectorConfig.evalCode = "require('inspector-server');";
     inspectorConfig.argv = {"hermes-node-inspector"};
     inspectorConfig.inspectorBridgeContext = bridgeCtx;
 
-    // Launch inspector thread.
     inspectorThread = std::thread([bridgeCtx, inspectorConfig]() {
       runHermesNode(inspectorConfig);
       // Ensure the main thread's readyCv wait doesn't hang if the inspector
@@ -1080,12 +1070,13 @@ int runHermesNode(const HermesNodeConfig &config) {
 
   caresWrapShutdown(env);
 
-  // If this is the inspector runtime, mark shutdown signaling as no longer
-  // safe before closing the event loop. This prevents the main thread from
-  // sending to shutdownAsync after the loop is destroyed.
+  // If this is the inspector runtime, mark async handles as no longer safe
+  // before closing the event loop. This prevents the main thread from sending
+  // to inspectorAsync or shutdownAsync after the loop is destroyed.
   if (config.inspectorBridgeContext) {
     auto *bc =
         static_cast<InspectorBridgeContext *>(config.inspectorBridgeContext);
+    bc->inspectorAsyncActive.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> lock(bc->shutdownMutex);
     bc->canSendShutdown = false;
   }

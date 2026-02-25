@@ -242,6 +242,61 @@ static napi_value setShutdownCallback(napi_env env, napi_callback_info info) {
 }
 
 // ---------------------------------------------------------------------------
+// Outbound async callback (main -> inspector)
+// ---------------------------------------------------------------------------
+
+/// Called on the inspector's event loop when the CDPAgent pushes outbound CDP
+/// messages (responses/events). Drains the outbound queue and invokes the JS
+/// messageCallback for each message, which sends it over the WebSocket.
+static void onOutboundAsync(uv_async_t *handle) {
+  auto *ctx = static_cast<InspectorBridgeContext *>(handle->data);
+  if (!ctx || !ctx->inspectorEnv || !ctx->messageCallbackRef)
+    return;
+
+  // Swap the queue under lock to minimize hold time.
+  std::queue<std::string> messages;
+  {
+    std::lock_guard<std::mutex> lock(ctx->outboundMutex);
+    messages.swap(ctx->outboundQueue);
+  }
+
+  if (messages.empty())
+    return;
+
+  napi_handle_scope scope;
+  napi_open_handle_scope(ctx->inspectorEnv, &scope);
+
+  napi_value fn;
+  napi_get_reference_value(ctx->inspectorEnv, ctx->messageCallbackRef, &fn);
+
+  napi_value global;
+  napi_get_global(ctx->inspectorEnv, &global);
+
+  while (!messages.empty()) {
+    napi_value msgStr;
+    napi_create_string_utf8(
+        ctx->inspectorEnv,
+        messages.front().c_str(),
+        messages.front().size(),
+        &msgStr);
+    napi_value result;
+    napi_call_function(ctx->inspectorEnv, global, fn, 1, &msgStr, &result);
+
+    // Clear any exception from the callback.
+    bool pending = false;
+    napi_is_exception_pending(ctx->inspectorEnv, &pending);
+    if (pending) {
+      napi_value exc;
+      napi_get_and_clear_last_exception(ctx->inspectorEnv, &exc);
+    }
+
+    messages.pop();
+  }
+
+  napi_close_handle_scope(ctx->inspectorEnv, scope);
+}
+
+// ---------------------------------------------------------------------------
 // Shutdown async callback
 // ---------------------------------------------------------------------------
 
@@ -335,11 +390,17 @@ napi_value initInspectorBridgeBinding(napi_env env, napi_value exports) {
   napi_set_named_property(
       env, exports, "setShutdownCallback", setShutdownCallbackFn);
 
-  // Initialize the shutdown async handle on the inspector's event loop.
-  // When signaled from the main thread, this invokes the JS shutdown callback
-  // which closes the HTTP/WS servers, letting the event loop exit naturally.
+  // Initialize async handles on the inspector's event loop.
   RuntimeState *state = getRuntimeState(env);
   if (state && state->loop) {
+    // Outbound async: CDPAgent pushes responses/events here, we drain and
+    // forward to JS messageCallback which sends over WebSocket.
+    uv_async_init(state->loop, &ctx->inspectorAsync, onOutboundAsync);
+    ctx->inspectorAsync.data = ctx;
+    uv_unref(reinterpret_cast<uv_handle_t *>(&ctx->inspectorAsync));
+    ctx->inspectorAsyncActive.store(true, std::memory_order_release);
+
+    // Shutdown async: main thread signals this to close servers.
     uv_async_init(state->loop, &ctx->shutdownAsync, onShutdownAsync);
     ctx->shutdownAsync.data = ctx;
     uv_unref(reinterpret_cast<uv_handle_t *>(&ctx->shutdownAsync));

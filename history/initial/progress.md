@@ -52,7 +52,7 @@ be omitted):
 | Step 8 | Create inspector_bridge native binding | 7 | done |  |
 | Step 9 | Create inspector JS server script | 6, 8 | done |  |
 | Step 10 | Start inspector runtime on a dedicated thread | 5, 8, 9 | done |  |
-| Step 11 | Wire end-to-end CDP message flow | 10 |  |  |
+| Step 11 | Wire end-to-end CDP message flow | 10 | done |  |
 | Step 12 | Add /json discovery endpoints | 10 |  |  |
 | Step 13 | Add DevTools CDN redirect | 12 |  |  |
 | Step 14 | Add --inspect-brk (pause at first line) | 11 |  |  |
@@ -112,4 +112,10 @@ be omitted):
 - **What was done**: When `config.inspect` is true, generates a UUID session ID (via `uv_random`), allocates `InspectorBridgeContext`, populates it with pointers from `InspectorState`, launches a `std::thread` running `runHermesNode()` with `evalCode = "require('inspector-server');"`, waits for `readyCv` signal from the inspector, and prints `Debugger listening on ws://HOST:PORT/UUID` to stderr. Added graceful shutdown: main thread sends `uv_async_send` to a shutdown handle on the inspector loop, which invokes a JS callback that closes the HTTP/WS servers so the event loop exits naturally. Thread is joined during main runtime cleanup. Mutex-protected `canSendShutdown` flag prevents use-after-close races. Inspector bridge shutdown flag clearing (`canSendShutdown = false`) added before `eventLoop.close()` for the inspector runtime.
 - **Decisions**: Used JS callback for shutdown instead of `uv_stop()` because `UvEventLoop::close()` uses `uv_run(UV_RUN_DEFAULT)` internally which blocks on active handles. The JS callback closes the HTTP/WS servers letting the loop exit naturally. Session ID uses `uv_random()` (sync mode) with `uv_hrtime()` + PID fallback. `InspectorBridgeContext` heap-allocated, deleted after CDPAgent/CDPDebugAPI destruction.
 - **Notes for next step**: Step 11 wires the CDPAgent's outbound message callback to push to `bridgeCtx->outboundQueue` + `uv_async_send(bridgeCtx->inspectorAsync)`, and initializes `inspectorAsync` on the inspector's event loop to drain the queue and invoke the JS `messageCallback`. The outbound callback is currently a placeholder no-op.
+
+### Step 11: Wire end-to-end CDP message flow
+- **Files**: modified `include/hermes/node-compat/inspector/inspector_bridge.h`, modified `lib/inspector/inspector_bridge.cpp`, modified `lib/runtime/hermes_node_runtime.cpp`.
+- **What was done**: Wired the complete CDP message path: DevTools -> WS -> inspector JS -> sendToMain -> main inbound queue -> uv_async -> cdpAgent->handleCommand -> outbound callback -> bridgeCtx->outboundQueue -> inspector uv_async -> onOutboundAsync -> JS messageCallback -> ws.send -> DevTools. Three changes: (1) Changed `inspectorAsync` from pointer to embedded `uv_async_t` in `InspectorBridgeContext`, added `inspectorAsyncActive` atomic guard. (2) Added `onOutboundAsync` callback in inspector_bridge.cpp that drains the outbound queue and invokes the JS messageCallback; initialized `inspectorAsync` in `initInspectorBridgeBinding`. (3) Reordered `hermes_node_runtime.cpp` to allocate `bridgeCtx` before `CDPAgent::create()` so the outbound messageCallback lambda can capture `bridgeCtx`. Removed redundant `pushInspectorCommand` function.
+- **Decisions**: Moved `bridgeCtx` allocation before CDPAgent creation (no circular dependency — bridgeCtx only needs config fields and InspectorState pointers). Used `std::atomic<bool> inspectorAsyncActive` to guard `uv_async_send` from CDPAgent's message callback, matching the existing pattern for `mainAsyncActive`. Set `inspectorAsyncActive = false` in inspector runtime cleanup alongside `canSendShutdown = false`.
+- **Notes for next step**: The full message path is now live. Step 14 (--inspect-brk) needs to handle the case where the runtime is paused at a breakpoint and the main event loop is not running — CDP commands must still be processed via `triggerInterrupt_TS()` / `RuntimeTaskRunner` dual-path approach.
 
