@@ -53,7 +53,7 @@ be omitted):
 | Step 9 | Create inspector JS server script | 6, 8 | done |  |
 | Step 10 | Start inspector runtime on a dedicated thread | 5, 8, 9 | done |  |
 | Step 11 | Wire end-to-end CDP message flow | 10 | done |  |
-| Step 12 | Add /json discovery endpoints | 10 |  |  |
+| Step 12 | Add /json discovery endpoints | 10 | done | Already implemented in Step 9 |
 | Step 13 | Add DevTools CDN redirect | 12 |  |  |
 | Step 14 | Add --inspect-brk (pause at first line) | 11 |  |  |
 | Step 15 | Add stderr diagnostic messages | 10 |  |  |
@@ -118,4 +118,9 @@ be omitted):
 - **What was done**: Wired the complete CDP message path: DevTools -> WS -> inspector JS -> sendToMain -> main inbound queue -> uv_async -> cdpAgent->handleCommand -> outbound callback -> bridgeCtx->outboundQueue -> inspector uv_async -> onOutboundAsync -> JS messageCallback -> ws.send -> DevTools. Three changes: (1) Changed `inspectorAsync` from pointer to embedded `uv_async_t` in `InspectorBridgeContext`, added `inspectorAsyncActive` atomic guard. (2) Added `onOutboundAsync` callback in inspector_bridge.cpp that drains the outbound queue and invokes the JS messageCallback; initialized `inspectorAsync` in `initInspectorBridgeBinding`. (3) Reordered `hermes_node_runtime.cpp` to allocate `bridgeCtx` before `CDPAgent::create()` so the outbound messageCallback lambda can capture `bridgeCtx`. Removed redundant `pushInspectorCommand` function.
 - **Decisions**: Moved `bridgeCtx` allocation before CDPAgent creation (no circular dependency — bridgeCtx only needs config fields and InspectorState pointers). Used `std::atomic<bool> inspectorAsyncActive` to guard `uv_async_send` from CDPAgent's message callback, matching the existing pattern for `mainAsyncActive`. Set `inspectorAsyncActive = false` in inspector runtime cleanup alongside `canSendShutdown = false`.
 - **Notes for next step**: The full message path is now live. Step 14 (--inspect-brk) needs to handle the case where the runtime is paused at a breakpoint and the main event loop is not running — CDP commands must still be processed via `triggerInterrupt_TS()` / `RuntimeTaskRunner` dual-path approach.
+
+### Step 12: Add /json discovery endpoints
+- **Files**: no changes needed (already implemented in `libjs/shims/inspector-server.js` from Step 9).
+- **What was done**: Verified that the `/json`, `/json/list`, and `/json/version` HTTP endpoints work correctly. Step 9 included the full implementation of these endpoints. Tested with `--inspect=0` (OS-assigned port) and confirmed: (1) `/json/list` returns valid JSON array with description, id, title, type, url, webSocketDebuggerUrl, devtoolsFrontendUrl; (2) `/json` returns identical response; (3) `/json/version` returns `{"Browser":"hermes-node/0.1.0","Protocol-Version":"1.1"}`; (4) title and url fields populate correctly from scriptPath (title=path, url=`file://`+path) or fall back to "hermes-node"/empty for `-e` mode.
+- **Notes for next step**: Step 13 (DevTools CDN redirect) is also already implemented in the inspector-server.js HTTP handler (lines 63-81). The `/devtools/*` path serves a redirect HTML page pointing to chrome-devtools-frontend.appspot.com.
 
