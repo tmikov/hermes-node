@@ -54,7 +54,7 @@ be omitted):
 | Step 10 | Start inspector runtime on a dedicated thread | 5, 8, 9 | done |  |
 | Step 11 | Wire end-to-end CDP message flow | 10 | done |  |
 | Step 12 | Add /json discovery endpoints | 10 | done | Already implemented in Step 9 |
-| Step 13 | Add DevTools CDN redirect | 12 |  |  |
+| Step 13 | Add DevTools CDN redirect | 12 | done | Already implemented in Step 9 |
 | Step 14 | Add --inspect-brk (pause at first line) | 11 |  |  |
 | Step 15 | Add stderr diagnostic messages | 10 |  |  |
 | Step 16 | End-to-end integration test | 11, 12, 13, 14, 15 |  |  |
@@ -123,4 +123,8 @@ be omitted):
 - **Files**: no changes needed (already implemented in `libjs/shims/inspector-server.js` from Step 9).
 - **What was done**: Verified that the `/json`, `/json/list`, and `/json/version` HTTP endpoints work correctly. Step 9 included the full implementation of these endpoints. Tested with `--inspect=0` (OS-assigned port) and confirmed: (1) `/json/list` returns valid JSON array with description, id, title, type, url, webSocketDebuggerUrl, devtoolsFrontendUrl; (2) `/json` returns identical response; (3) `/json/version` returns `{"Browser":"hermes-node/0.1.0","Protocol-Version":"1.1"}`; (4) title and url fields populate correctly from scriptPath (title=path, url=`file://`+path) or fall back to "hermes-node"/empty for `-e` mode.
 - **Notes for next step**: Step 13 (DevTools CDN redirect) is also already implemented in the inspector-server.js HTTP handler (lines 63-81). The `/devtools/*` path serves a redirect HTML page pointing to chrome-devtools-frontend.appspot.com.
+
+### Step 13: Add DevTools CDN redirect
+- **Files**: no changes needed (already implemented in `libjs/shims/inspector-server.js` from Step 9, lines 63-81).
+- **What was done**: Verified the `/devtools/*` CDN redirect endpoint works correctly. The implementation serves an HTML page with a `<script>` that sets `location` to `chrome-devtools-frontend.appspot.com/serve_file/@60127beb442528082b3f6eff7392267e145262c3/js_app.html?ws=...`. Tested with `--inspect=0`: (1) With `?ws=` param: redirect uses the provided ws value; (2) Without `?ws=` param: defaults to the actual session URL (host:port/sessionId). All 133 tests pass.
 
