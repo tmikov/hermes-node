@@ -8,6 +8,7 @@
 #include <hermes/node-compat/runtime/hermes_node_runtime.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 using hermes::node_compat::HermesNodeConfig;
@@ -19,10 +20,63 @@ static void printUsage(const char *argv0) {
       "Usage: %s [options] [script.js] [-- script-args...]\n"
       "\n"
       "Options:\n"
-      "  -e, --eval <code>         Evaluate code\n"
-      "  --node-version <version>  Override process.version (e.g. v24.13.0)\n"
-      "  -h, --help                Show this help\n",
+      "  -e, --eval <code>              Evaluate code\n"
+      "  --inspect[=[host:]port]        Enable inspector (default 127.0.0.1:9229)\n"
+      "  --inspect-brk[=[host:]port]    Enable inspector, break before user code\n"
+      "  --node-version <version>       Override process.version (e.g. v24.13.0)\n"
+      "  -h, --help                     Show this help\n",
       argv0);
+}
+
+/// Parse an optional [host:]port value for --inspect/--inspect-brk.
+/// \p value is the part after '=' (may be empty if no '=' was present).
+/// Returns true on success, false on parse error.
+static bool parseInspectHostPort(const char *value, HermesNodeConfig &config) {
+  if (!value || value[0] == '\0')
+    return true; // use defaults
+
+  // Check if it's just a port number (all digits).
+  const char *p = value;
+  bool allDigits = true;
+  while (*p) {
+    if (*p < '0' || *p > '9') {
+      allDigits = false;
+      break;
+    }
+    ++p;
+  }
+
+  if (allDigits) {
+    long port = std::strtol(value, nullptr, 10);
+    if (port < 0 || port > 65535) {
+      std::fprintf(stderr, "Error: invalid port number '%s'\n", value);
+      return false;
+    }
+    config.inspectPort = static_cast<int>(port);
+    return true;
+  }
+
+  // Look for the last ':' to split host:port.
+  const char *lastColon = std::strrchr(value, ':');
+  if (!lastColon || lastColon == value) {
+    std::fprintf(stderr, "Error: invalid inspect address '%s'\n", value);
+    return false;
+  }
+
+  config.inspectHost = std::string(value, lastColon - value);
+
+  const char *portStr = lastColon + 1;
+  if (*portStr == '\0') {
+    std::fprintf(stderr, "Error: missing port in '%s'\n", value);
+    return false;
+  }
+  long port = std::strtol(portStr, nullptr, 10);
+  if (port < 0 || port > 65535) {
+    std::fprintf(stderr, "Error: invalid port number '%s'\n", portStr);
+    return false;
+  }
+  config.inspectPort = static_cast<int>(port);
+  return true;
 }
 
 int main(int argc, char **argv) {
@@ -48,6 +102,20 @@ int main(int argc, char **argv) {
     } else if (std::strncmp(argv[i], "--eval=", 7) == 0) {
       config.evalCode = argv[i] + 7;
       hasEvalCode = true;
+    } else if (std::strcmp(argv[i], "--inspect") == 0) {
+      config.inspect = true;
+    } else if (std::strncmp(argv[i], "--inspect=", 10) == 0) {
+      config.inspect = true;
+      if (!parseInspectHostPort(argv[i] + 10, config))
+        return 1;
+    } else if (std::strcmp(argv[i], "--inspect-brk") == 0) {
+      config.inspect = true;
+      config.inspectBrk = true;
+    } else if (std::strncmp(argv[i], "--inspect-brk=", 14) == 0) {
+      config.inspect = true;
+      config.inspectBrk = true;
+      if (!parseInspectHostPort(argv[i] + 14, config))
+        return 1;
     } else if (std::strcmp(argv[i], "--node-version") == 0) {
       if (i + 1 >= argc) {
         std::fprintf(stderr, "Error: --node-version requires a value\n");

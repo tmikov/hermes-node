@@ -44,7 +44,7 @@ be omitted):
 |------|-------------|------------|--------|-----------------------|
 | Step 1 | Enable HERMES_ENABLE_DEBUGGER in CMake | — | done |  |
 | Step 2 | Switch runtime creation to makeHermesRuntime() | 1 | done |  |
-| Step 3 | Add --inspect / --inspect-brk flag parsing | — |  |  |
+| Step 3 | Add --inspect / --inspect-brk flag parsing | — | done |  |
 | Step 4 | Create CDPDebugAPI and CDPAgent with placeholder callbacks | 2 |  |  |
 | Step 5 | Add RuntimeTask queue and uv_async_t for CDP processing | 4 |  |  |
 | Step 6 | Vendor ws package | — | done | Vendored ws 8.19.0 in prior commit |
@@ -71,4 +71,10 @@ be omitted):
 - **What was done**: Replaced `hermes::vm::Runtime::create(rtConfig)` with `facebook::hermes::makeHermesRuntime(rtConfig)`. Extract `vm::Runtime*` via `hermesRT->getVMRuntimeUnsafe()` for NAPI env creation and the two callbacks that need it (drainJobs, triggerTimeoutAsyncBreak). The `hermesRT` unique_ptr (HermesRuntime) is kept alive for the full function scope; `vmRuntime` raw pointer is used everywhere the old `runtime.get()` was used.
 - **Decisions**: Used direct `hermesRT->getVMRuntimeUnsafe()` call instead of `castInterface<IHermes>` pattern since `HermesRuntime` directly inherits from `IHermes`.
 - **Notes for next step**: `hermesRT` (`unique_ptr<HermesRuntime>`) is the JSI-level runtime needed by `CDPDebugAPI::create(*hermesRT)` in Step 4. `vmRuntime` (`vm::Runtime*`) is the low-level VM pointer used by NAPI and event loop. CMakeLists.txt already had `hermes/API` include path -- no change needed there.
+
+### Step 3: Add --inspect / --inspect-brk flag parsing
+- **Files**: modified `include/hermes/node-compat/runtime/hermes_node_runtime.h`, modified `tools/hermes-node/hermes-node.cpp`.
+- **What was done**: Added `inspect`, `inspectBrk`, `inspectHost`, `inspectPort` fields to `HermesNodeConfig`. Added `parseInspectHostPort()` helper and CLI parsing for `--inspect[=[host:]port]` and `--inspect-brk[=[host:]port]`. `--inspect-brk` implies `inspect = true`. Updated `printUsage()`.
+- **Decisions**: Used `strrchr` for last colon to split host:port (handles IPv4 addresses). Port 0 is valid (OS-assigned). Port range validated 0-65535.
+- **Notes for next step**: Flags are parsed and stored in config but have no runtime effect yet. Step 4 will read `config.inspect` to conditionally create CDPDebugAPI/CDPAgent.
 

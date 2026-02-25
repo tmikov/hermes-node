@@ -30,6 +30,18 @@ struct HermesNodeConfig {
 
   /// Start the REPL when no scriptPath and no evalCode are provided.
   bool enableRepl = false;
+
+  /// Enable the inspector (CDP debugger).
+  bool inspect = false;
+
+  /// Pause before executing the first user statement (implies inspect).
+  bool inspectBrk = false;
+
+  /// Inspector host address.
+  std::string inspectHost = "127.0.0.1";
+
+  /// Inspector port (0 = OS-assigned).
+  int inspectPort = 9229;
 };
 
 /// Run a complete hermes-node instance. Blocks until the event loop exits.

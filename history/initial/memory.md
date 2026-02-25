@@ -39,6 +39,11 @@ module loader, and test infrastructure basics, see `CLAUDE.md`.
 - Hermes supports `//# sourceURL=` for custom filenames in stack traces
 - Hermes NAPI compile API: `hermes_compile_to_bytecode()` / `hermes_run_bytecode()` / `hermes_free_bytecode()`
 
+## Inspector (CDP Debugger)
+- Config fields: `HermesNodeConfig::inspect`, `inspectBrk`, `inspectHost`, `inspectPort` (in `hermes_node_runtime.h`).
+- `--inspect-brk` implies `inspect = true`. Port 0 = OS-assigned.
+- Flags parsed in `hermes-node.cpp`, `parseInspectHostPort()` handles `PORT` or `HOST:PORT`.
+
 ## HermesRuntime (JSI) vs vm::Runtime
 - `makeHermesRuntime(rtConfig)` returns `unique_ptr<HermesRuntime>` (JSI-level). `hermes/hermes.h` header.
 - `hermesRT->getVMRuntimeUnsafe()` returns `void*`, cast to `vm::Runtime*` for NAPI.
