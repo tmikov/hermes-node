@@ -57,7 +57,7 @@ be omitted):
 | Step 13 | Add DevTools CDN redirect | 12 | done | Already implemented in Step 9 |
 | Step 14 | Add --inspect-brk (pause at first line) | 11 | done |  |
 | Step 15 | Add stderr diagnostic messages | 10 | done |  |
-| Step 16 | End-to-end integration test | 11, 12, 13, 14, 15 |  |  |
+| Step 16 | End-to-end integration test | 11, 12, 13, 14, 15 | done |  |
 
 ## Context Notes
 
@@ -143,3 +143,7 @@ be omitted):
 - **What was done**: Added two additional stderr lines after the existing "Debugger listening" message: (1) `For help, see: https://nodejs.org/en/docs/inspector` and (2) `Open DevTools: http://HOST:PORT/devtools/inspector.html?ws=HOST:PORT/UUID`. All three lines use the actual host/port/sessionId from `bridgeCtx`. The DevTools URL is clickable and opens the CDN redirect page.
 - **Notes for next step**: Step 16 (end-to-end integration test) can verify these messages appear in stderr by grepping for "Debugger listening" or "For help".
 
+### Step 16: End-to-end integration test
+- **Files**: created `test/test-inspect.js`.
+- **What was done**: Added a Lit test using `child_process.spawnSync` to verify the full inspector flow. Five tests: (1) `--inspect=0 -e "console.log('PASS')"` verifies inspector starts, stderr contains "Debugger listening", help URL, and DevTools URL, stdout has script output, exit code 0. (2) `--inspect=0 -e ""` verifies empty script with inspector exits cleanly. (3) `--inspect-brk=0` verifies runtime pauses (process times out, does NOT print user code output) and stderr has debugger message. (4) `--inspect=127.0.0.1:0` verifies HOST:PORT parsing. (5) Validates ws:// URL format matches `ws://127.0.0.1:PORT/UUID` pattern.
+- **Decisions**: Used `child_process.spawnSync` pattern (like `test-cli-eval.js`) instead of Lit RUN directives with `2>%t.stderr` + grep, because it allows multiple test scenarios in a single test file and richer assertions. Used `timeout: 10000` (10s) for normal tests and `timeout: 3000` (3s) for the --inspect-brk test. Port 0 throughout to avoid conflicts.

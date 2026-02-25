@@ -208,8 +208,9 @@ module loader, and test infrastructure basics, see `CLAUDE.md`.
 - **Test timeout rule**: `check-hermes-node` should complete in under 3 minutes.
 - Net write-slow test: reduce data size for ASAN (original 2MB with 20ms delays hangs).
 - CJS test pattern: fixture dirs in `test/fixtures/<name>/main.js`, lit file has RUN/CHECK.
+- **Inspector tests**: `test-inspect.js` uses `spawnSync` with `--inspect=0` (OS-assigned port). The `--inspect-brk` test uses a 3s timeout and verifies the process was killed (paused, never exited).
 
 ## Module Status Summary
-- **Working**: events, path, buffer, util, stream (+ operators), fs, fs.promises, os, url, dns (lookup + resolve), net (TCP + Unix sockets), http (server + client), child_process (async + sync), tty, readline, vm, repl
+- **Working**: events, path, buffer, util, stream (+ operators), fs, fs.promises, os, url, dns (lookup + resolve), net (TCP + Unix sockets), http (server + client), child_process (async + sync), tty, readline, vm, repl, inspector (--inspect/--inspect-brk)
 - **CJS resolution complete**: node_modules traversal, package.json main/exports, conditional/subpath/wildcard exports, JSON loading, nested deps, circular deps, require.resolve, npm packages
 - **Unverified**: `Duplex.from()` (in `duplexify.js`) may still have issues
