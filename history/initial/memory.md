@@ -39,6 +39,14 @@ module loader, and test infrastructure basics, see `CLAUDE.md`.
 - Hermes supports `//# sourceURL=` for custom filenames in stack traces
 - Hermes NAPI compile API: `hermes_compile_to_bytecode()` / `hermes_run_bytecode()` / `hermes_free_bytecode()`
 
+## HermesRuntime (JSI) vs vm::Runtime
+- `makeHermesRuntime(rtConfig)` returns `unique_ptr<HermesRuntime>` (JSI-level). `hermes/hermes.h` header.
+- `hermesRT->getVMRuntimeUnsafe()` returns `void*`, cast to `vm::Runtime*` for NAPI.
+- `HermesRuntime` inherits `IHermes` directly -- no need for `castInterface<IHermes>()`.
+- `CDPDebugAPI::create()` requires `HermesRuntime&` (JSI level), not `vm::Runtime*`.
+- `hermes_napi_create_env()` requires `vm::Runtime*` (low level).
+- `hermes/API` include path already in `lib/runtime/CMakeLists.txt` (PRIVATE).
+
 ## V8 API Polyfills
 - `Error.captureStackTrace`: polyfilled in `primordials.js`. Creates Error for stack, sets lazy getter.
 - `Error.stackTraceLimit`: writable property (default 10) if missing.

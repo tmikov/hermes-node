@@ -11,6 +11,7 @@
 
 #include "hermes/Public/RuntimeConfig.h"
 #include "hermes/VM/Runtime.h"
+#include "hermes/hermes.h"
 
 #include <hermes/node-compat/binding-registry/binding_registry.h>
 #include <hermes/node-compat/bindings/handle_wrap_base.h>
@@ -310,7 +311,9 @@ int runHermesNode(const HermesNodeConfig &config) {
                       .withEnableAsyncGenerators(true)
                       .withES6BlockScoping(true)
                       .build();
-  auto runtime = hermes::vm::Runtime::create(rtConfig);
+  auto hermesRT = facebook::hermes::makeHermesRuntime(rtConfig);
+  auto *vmRuntime =
+      static_cast<hermes::vm::Runtime *>(hermesRT->getVMRuntimeUnsafe());
 
   // 2. Create libuv event loop adapter.
   UvEventLoop eventLoop;
@@ -326,7 +329,7 @@ int runHermesNode(const HermesNodeConfig &config) {
   // 3. Create napi_env with host integration.
   eventLoop.getHost()->fatal_exception = onFatalException;
 
-  napi_env env = hermes_napi_create_env(runtime.get(), eventLoop.getHost());
+  napi_env env = hermes_napi_create_env(vmRuntime, eventLoop.getHost());
 
   // Allocate and install per-instance state for bindings.
   auto *runtimeState = new RuntimeState();
@@ -334,15 +337,15 @@ int runHermesNode(const HermesNodeConfig &config) {
   runtimeState->drainMicrotasksFn = [](void *data) {
     static_cast<hermes::vm::Runtime *>(data)->drainJobs();
   };
-  runtimeState->drainMicrotasksData = runtime.get();
+  runtimeState->drainMicrotasksData = vmRuntime;
   runtimeState->triggerAsyncBreakFn = [](void *data) {
     static_cast<hermes::vm::Runtime *>(data)->triggerTimeoutAsyncBreak();
   };
-  runtimeState->triggerAsyncBreakData = runtime.get();
+  runtimeState->triggerAsyncBreakData = vmRuntime;
   // Use a no-op finalizer: RuntimeState must outlive the env because GC
   // finalizers (which run during runtime destruction, after env is freed) may
   // still reference it via cached rtState_ pointers. We delete it manually
-  // after runtime.reset() below.
+  // after hermesRT.reset() below.
   napi_set_instance_data(
       env, runtimeState, [](napi_env, void *, void *) {}, nullptr);
 
@@ -678,7 +681,7 @@ int runHermesNode(const HermesNodeConfig &config) {
   // 12. Set up event loop check and prepare handles for tick draining.
   uv_check_t checkHandle;
   uv_prepare_t prepareHandle;
-  TickDrainData tickDrainData{env, runtime.get(), tickCallbackRef};
+  TickDrainData tickDrainData{env, vmRuntime, tickCallbackRef};
   bool tickHandlesActive = false;
 
   if (exitCode == 0 && tickCallbackRef) {
@@ -747,7 +750,7 @@ int runHermesNode(const HermesNodeConfig &config) {
 
   // 14. Run event loop.
   if (exitCode == 0) {
-    runtime->drainJobs();
+    vmRuntime->drainJobs();
 
     if (tickCallbackRef) {
       napi_value tickCb;
@@ -850,7 +853,7 @@ int runHermesNode(const HermesNodeConfig &config) {
 
   napi_close_handle_scope(env, scope);
   hermes_napi_destroy_env(env);
-  runtime.reset();
+  hermesRT.reset();
   delete runtimeState;
 
   return exitCode;

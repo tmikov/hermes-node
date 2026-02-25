@@ -43,7 +43,7 @@ be omitted):
 | Step | Description | Depends On | Status | Brief Note (optional) |
 |------|-------------|------------|--------|-----------------------|
 | Step 1 | Enable HERMES_ENABLE_DEBUGGER in CMake | — | done |  |
-| Step 2 | Switch runtime creation to makeHermesRuntime() | 1 |  |  |
+| Step 2 | Switch runtime creation to makeHermesRuntime() | 1 | done |  |
 | Step 3 | Add --inspect / --inspect-brk flag parsing | — |  |  |
 | Step 4 | Create CDPDebugAPI and CDPAgent with placeholder callbacks | 2 |  |  |
 | Step 5 | Add RuntimeTask queue and uv_async_t for CDP processing | 4 |  |  |
@@ -65,4 +65,10 @@ be omitted):
 - **Files**: modified `CMakeLists.txt`.
 - **What was done**: Added `set(HERMES_ENABLE_DEBUGGER ON CACHE BOOL "Enable Hermes debugger/CDP" FORCE)` before `add_subdirectory(hermes)`. This causes Hermes to compile with debugger support, including CDP sources (CDPAgent, CDPDebugAPI, AsyncDebuggerAPI, RuntimeTaskRunner, domain agents) into `hermesapi_obj`.
 - **Notes for next step**: `HERMES_ENABLE_DEBUGGER` is now defined for all Hermes targets but NOT for our targets. Our code will need `#ifdef HERMES_ENABLE_DEBUGGER` guards when including CDP headers (Step 4). The `add_definitions(-DHERMES_ENABLE_DEBUGGER)` in Hermes is subdirectory-scoped.
+
+### Step 2: Switch runtime creation to makeHermesRuntime()
+- **Files**: modified `lib/runtime/hermes_node_runtime.cpp`.
+- **What was done**: Replaced `hermes::vm::Runtime::create(rtConfig)` with `facebook::hermes::makeHermesRuntime(rtConfig)`. Extract `vm::Runtime*` via `hermesRT->getVMRuntimeUnsafe()` for NAPI env creation and the two callbacks that need it (drainJobs, triggerTimeoutAsyncBreak). The `hermesRT` unique_ptr (HermesRuntime) is kept alive for the full function scope; `vmRuntime` raw pointer is used everywhere the old `runtime.get()` was used.
+- **Decisions**: Used direct `hermesRT->getVMRuntimeUnsafe()` call instead of `castInterface<IHermes>` pattern since `HermesRuntime` directly inherits from `IHermes`.
+- **Notes for next step**: `hermesRT` (`unique_ptr<HermesRuntime>`) is the JSI-level runtime needed by `CDPDebugAPI::create(*hermesRT)` in Step 4. `vmRuntime` (`vm::Runtime*`) is the low-level VM pointer used by NAPI and event loop. CMakeLists.txt already had `hermes/API` include path -- no change needed there.
 
