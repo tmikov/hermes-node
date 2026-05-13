@@ -6,6 +6,10 @@
 cmake_minimum_required(VERSION 3.21.0)
 project(hermes-node-compat LANGUAGES C CXX)
 
+# Match Hermes C++ standard (required since Hermes headers use C++17 features).
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 # Enable Hermes debugger/CDP support (CDPAgent, CDPDebugAPI, AsyncDebuggerAPI).
 # Must be set before add_subdirectory(hermes) to override Hermes's default OFF.
 set(HERMES_ENABLE_DEBUGGER ON CACHE BOOL "Enable Hermes debugger/CDP" FORCE)
