@@ -30,6 +30,35 @@ var pendingMessages = [];
 // Debugger.getScriptSource requests from disk.
 var scriptUrls = Object.create(null);
 
+// Given a regex string from Debugger.setBreakpointByUrl.urlRegex, return
+// the URL of a known script that the regex matches, or (if none yet)
+// the most plausible literal alternative from the regex itself (the one
+// that does not start with file:// -- Hermes uses bare paths). Returns
+// null if the regex cannot be parsed at all.
+function pickUrlForRegex(urlRegex) {
+  var re;
+  try {
+    re = new RegExp(urlRegex);
+  } catch (e) {
+    return null;
+  }
+  for (var sid in scriptUrls) {
+    if (re.test(scriptUrls[sid])) {
+      return scriptUrls[sid];
+    }
+  }
+  // No known script matches yet (the script may not have been parsed).
+  // Fall back: split on '|' top-level alternatives, undo regex escapes,
+  // and prefer the alternative that does not start with file://.
+  var alts = urlRegex.split('|').map(function(a) {
+    return a.replace(/\\(.)/g, '$1');
+  });
+  for (var i = 0; i < alts.length; i++) {
+    if (alts[i].indexOf('file://') !== 0) return alts[i];
+  }
+  return alts[0] || null;
+}
+
 // --- HTTP server ---
 
 var server = http.createServer(function(req, res) {
@@ -143,6 +172,31 @@ wss.on('connection', function(ws) {
         }
       } catch (e) {
         // JSON parse failed -- fall through to normal forwarding.
+      }
+    }
+    // Rewrite Debugger.setBreakpointByUrl with urlRegex into url. Hermes
+    // does not implement urlRegex; if we let the request through it
+    // returns an error and DevTools resubmits forever. We compile the
+    // regex, match it against URLs of known scripts, and forward with
+    // url: <match> instead. If no script matches yet (the script may
+    // not be parsed), we still rewrite using the alternative that does
+    // not start with file:// (the form Hermes uses for scriptParsed).
+    if (str.indexOf('setBreakpointByUrl') !== -1) {
+      try {
+        var bpMsg = JSON.parse(str);
+        if (bpMsg.method === 'Debugger.setBreakpointByUrl' &&
+            bpMsg.params &&
+            bpMsg.params.urlRegex &&
+            !bpMsg.params.url) {
+          var rewritten = pickUrlForRegex(bpMsg.params.urlRegex);
+          if (rewritten) {
+            bpMsg.params.url = rewritten;
+            delete bpMsg.params.urlRegex;
+            str = JSON.stringify(bpMsg);
+          }
+        }
+      } catch (e) {
+        // Fall through.
       }
     }
     bridge.sendToMain(str);
