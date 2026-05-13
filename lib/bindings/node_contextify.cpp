@@ -552,10 +552,12 @@ static napi_value compileFunctionForCJSLoaderCb(
 
   // Wrap the source in a function with CJS parameters, matching Node's
   // GetCJSParameters: exports, require, module, __filename, __dirname.
+  // No newline after the opening `{` so user line N maps to wrapped line N
+  // (the debugger reports line numbers based on the wrapped source).
   std::string wrappedSource;
   wrappedSource.reserve(content.size() + filename.size() + 128);
   wrappedSource +=
-      "(function(exports, require, module, __filename, __dirname) {\n";
+      "(function(exports, require, module, __filename, __dirname) {";
   wrappedSource += content;
   wrappedSource += "\n})";
   if (!filename.empty()) {
