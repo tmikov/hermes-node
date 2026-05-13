@@ -12,6 +12,7 @@
 
 'use strict';
 
+var fs = require('fs');
 var http = require('http');
 var { WebSocketServer } = require('ws');
 var bridge = internalBinding('inspector_bridge');
@@ -25,6 +26,9 @@ var activeWs = null;
 // any DevTools client has connected. When a client connects, buffered
 // messages are replayed so the client sees the paused state.
 var pendingMessages = [];
+// Map scriptId -> url from Debugger.scriptParsed events, used to serve
+// Debugger.getScriptSource requests from disk.
+var scriptUrls = Object.create(null);
 
 // --- HTTP server ---
 
@@ -116,7 +120,32 @@ wss.on('connection', function(ws) {
 
   // Forward WebSocket messages (CDP commands) to main runtime.
   ws.on('message', function(data) {
-    bridge.sendToMain(data.toString());
+    var str = data.toString();
+    // Intercept Debugger.getScriptSource: serve from disk when possible.
+    if (str.indexOf('getScriptSource') !== -1) {
+      try {
+        var msg = JSON.parse(str);
+        if (msg.method === 'Debugger.getScriptSource') {
+          var scriptId = msg.params && msg.params.scriptId;
+          var url = scriptId && scriptUrls[scriptId];
+          if (url) {
+            try {
+              var source = fs.readFileSync(url, 'utf8');
+              ws.send(JSON.stringify({
+                id: msg.id,
+                result: { scriptSource: source }
+              }));
+              return;
+            } catch (e) {
+              // File unreadable (e.g. internal module) -- fall through.
+            }
+          }
+        }
+      } catch (e) {
+        // JSON parse failed -- fall through to normal forwarding.
+      }
+    }
+    bridge.sendToMain(str);
   });
 
   ws.on('close', function() {
@@ -134,6 +163,20 @@ wss.on('connection', function(ws) {
 
 // Register callback for outbound CDP messages from main runtime.
 bridge.setMessageCallback(function(msg) {
+  // Track Debugger.scriptParsed events to map scriptId -> url.
+  if (msg.indexOf('scriptParsed') !== -1) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.method === 'Debugger.scriptParsed' && parsed.params) {
+        var p = parsed.params;
+        if (p.scriptId && p.url) {
+          scriptUrls[p.scriptId] = p.url;
+        }
+      }
+    } catch (e) {
+      // Ignore parse errors.
+    }
+  }
   if (activeWs && activeWs.readyState === 1) { // WebSocket.OPEN === 1
     activeWs.send(msg);
   } else {
