@@ -23,6 +23,7 @@ static void printUsage(const char *argv0) {
       "  -e, --eval <code>              Evaluate code\n"
       "  --inspect[=[host:]port]        Enable inspector (default 127.0.0.1:9229)\n"
       "  --inspect-brk[=[host:]port]    Enable inspector, break before user code\n"
+      "  --inspect-open                 Open the DevTools URL in the system browser\n"
       "  --node-version <version>       Override process.version (e.g. v24.13.0)\n"
       "  -h, --help                     Show this help\n",
       argv0);
@@ -116,6 +117,9 @@ int main(int argc, char **argv) {
       config.inspectBrk = true;
       if (!parseInspectHostPort(argv[i] + 14, config))
         return 1;
+    } else if (std::strcmp(argv[i], "--inspect-open") == 0) {
+      config.inspect = true;
+      config.inspectOpen = true;
     } else if (std::strcmp(argv[i], "--node-version") == 0) {
       if (i + 1 >= argc) {
         std::fprintf(stderr, "Error: --node-version requires a value\n");

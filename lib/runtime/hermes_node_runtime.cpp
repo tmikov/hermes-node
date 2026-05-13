@@ -78,11 +78,49 @@
 #include <string>
 #include <vector>
 
+#ifdef HERMES_ENABLE_DEBUGGER
+#include <spawn.h>
+#include <sys/wait.h>
+extern char **environ;
+#endif
+
 using namespace hermes::node_compat;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+#ifdef HERMES_ENABLE_DEBUGGER
+/// Spawn the platform browser-opener (open on macOS, xdg-open on Linux)
+/// to open \p url. Best-effort: failures are reported on stderr but do not
+/// abort the parent. The DevTools URL printed above is still usable.
+static void openDevToolsUrl(const char *url) {
+#if defined(__APPLE__)
+  const char *opener = "/usr/bin/open";
+#elif defined(__linux__)
+  const char *opener = "/usr/bin/xdg-open";
+#else
+  std::fprintf(stderr, "--inspect-open: unsupported platform\n");
+  return;
+#endif
+  char *const argv[] = {
+      const_cast<char *>(opener), const_cast<char *>(url), nullptr};
+  pid_t pid = 0;
+  int rc = posix_spawn(&pid, opener, nullptr, nullptr, argv, environ);
+  if (rc != 0) {
+    std::fprintf(
+        stderr,
+        "--inspect-open: posix_spawn(%s) failed: %s\n",
+        opener,
+        std::strerror(rc));
+    return;
+  }
+  // Reap the child so it doesn't become a zombie. The opener returns
+  // immediately after handing off to the browser.
+  int status = 0;
+  waitpid(pid, &status, 0);
+}
+#endif
 
 /// Print a JS exception to stderr and clear it.
 static void printAndClearException(napi_env env) {
@@ -578,14 +616,20 @@ int runHermesNode(const HermesNodeConfig &config) {
           bridgeCtx->sessionId.c_str());
       std::fprintf(
           stderr, "For help, see: https://nodejs.org/en/docs/inspector\n");
-      std::fprintf(
-          stderr,
-          "Open DevTools: http://%s:%d/devtools/inspector.html?ws=%s:%d/%s\n",
+      char devtoolsUrl[1024];
+      std::snprintf(
+          devtoolsUrl,
+          sizeof(devtoolsUrl),
+          "http://%s:%d/devtools/inspector.html?ws=%s:%d/%s",
           bridgeCtx->host.c_str(),
           bridgeCtx->actualPort,
           bridgeCtx->host.c_str(),
           bridgeCtx->actualPort,
           bridgeCtx->sessionId.c_str());
+      std::fprintf(stderr, "Open DevTools: %s\n", devtoolsUrl);
+      if (config.inspectOpen) {
+        openDevToolsUrl(devtoolsUrl);
+      }
     } else {
       std::fprintf(stderr, "Warning: inspector failed to start\n");
     }

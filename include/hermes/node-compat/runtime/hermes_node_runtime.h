@@ -43,6 +43,10 @@ struct HermesNodeConfig {
   /// Inspector port (0 = OS-assigned).
   int inspectPort = 9229;
 
+  /// Open the DevTools URL in the system browser once the inspector is
+  /// listening (implies inspect).
+  bool inspectOpen = false;
+
   /// Opaque pointer to the inspector bridge context for cross-thread CDP
   /// messaging. Null for the user runtime (normal operation). Set when this
   /// runtime is the inspector runtime running on the IO thread.
