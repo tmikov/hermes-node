@@ -556,8 +556,7 @@ static napi_value compileFunctionForCJSLoaderCb(
   // (the debugger reports line numbers based on the wrapped source).
   std::string wrappedSource;
   wrappedSource.reserve(content.size() + filename.size() + 128);
-  wrappedSource +=
-      "(function(exports, require, module, __filename, __dirname) {";
+  wrappedSource += kCJSWrapperPrefix;
   wrappedSource += content;
   wrappedSource += "\n})";
   if (!filename.empty()) {

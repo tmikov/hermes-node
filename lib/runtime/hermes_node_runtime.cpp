@@ -81,6 +81,8 @@
 #ifdef HERMES_ENABLE_DEBUGGER
 #include <spawn.h>
 #include <sys/wait.h>
+#include <climits>
+#include <cstdlib>
 extern char **environ;
 #endif
 
@@ -986,26 +988,30 @@ int runHermesNode(const HermesNodeConfig &config) {
     tickHandlesActive = true;
   }
 
-  // 12b. For --inspect-brk, pause right before user code.
-  // We run a tiny script containing a `debugger;` statement. This triggers
-  // the VM's built-in Debugger which calls into the AsyncDebuggerAPI's
-  // didPause -> coordinator -> setPaused, blocking in
-  // processInterruptWhilePaused until a DevTools client connects and resumes.
+  // 12b. For --inspect-brk, register a CDP breakpoint at the user file's
+  // first user statement so the runtime pauses there once the script is
+  // parsed and execution enters the wrapper function body.
   //
-  // We can't use coordinator().pause() here because it sets the VM's async
-  // break flag, which is only checked at AsyncBreakCheck instructions and
-  // doCall points. During bootstrap module loading (with pauseOnScriptLoad
-  // enabled), each module enters the debugger via a ScriptLoaded breakpoint
-  // before any doCall occurs, so the ExplicitPause flag is never consumed.
+  // We rely on Debugger.setBreakpointByUrl rather than coordinator.pause()
+  // or a synthetic `debugger;` statement because:
+  //   - CDP's ScriptLoaded handler always auto-resumes (it never user-pauses).
+  //   - coordinator.pause()'s ExplicitPause flag, set this early, gets
+  //     swallowed by the legacy Debugger's runUntilValidPauseLocation when
+  //     the bytecode it lands on isn't yet a valid pause point.
+  //   - Setting the breakpoint here means it's already pending when
+  //     compileFunctionForCJSLoader parses the user file; processScript
+  //     resolves it against the matching URL and the Breakpoint event is
+  //     delivered as a real user-visible pause.
   //
-  // enableDebuggerDomain() was called during inspector setup. Its task was
-  // enqueued to inspectorState.runtimeTasks and must be flushed so the
-  // debugger domain's event callback is registered before the debugger;
-  // statement fires.
+  // Column offset: the wrapper function expression starts at column 0 on
+  // line 1, with the user's first character at column kCJSWrapperPrefixLen.
+  // Setting the breakpoint at that column makes the resolver land inside
+  // the wrapper body rather than on the script-level function-expression
+  // statement (which evaluates without entering the body).
 #ifdef HERMES_ENABLE_DEBUGGER
-  if (exitCode == 0 && config.inspectBrk && cdpDebugAPI) {
-    // Flush pending runtime tasks (enableDebuggerDomain) synchronously.
-    {
+  if (exitCode == 0 && config.inspectBrk && cdpDebugAPI &&
+      !config.scriptPath.empty()) {
+    auto flushRuntimeTasks = [&]() {
       std::queue<facebook::hermes::debugger::RuntimeTask> tasks;
       {
         std::lock_guard<std::mutex> lock(inspectorState.mutex);
@@ -1015,12 +1021,32 @@ int runHermesNode(const HermesNodeConfig &config) {
         tasks.front()(*hermesRT);
         tasks.pop();
       }
+    };
+    // Flush enableDebuggerDomain so the agent is wired up before we add
+    // the breakpoint.
+    flushRuntimeTasks();
+    // Resolve the user script path to absolute form so it matches what
+    // compileFunctionForCJSLoader records as the script's sourceURL.
+    char absScriptPath[PATH_MAX] = {0};
+    const char *url = config.scriptPath.c_str();
+    if (realpath(config.scriptPath.c_str(), absScriptPath)) {
+      url = absScriptPath;
     }
-    // Execute debugger; statement to trigger the pause.
-    const char *brkCode = "debugger; //# sourceURL=hermes-node:inspect-brk\n";
-    napi_value brkScript, brkResult;
-    napi_create_string_utf8(env, brkCode, NAPI_AUTO_LENGTH, &brkScript);
-    napi_run_script(env, brkScript, &brkResult);
+    char cmd[PATH_MAX + 256];
+    std::snprintf(
+        cmd,
+        sizeof(cmd),
+        "{\"id\":1,\"method\":\"Debugger.setBreakpointByUrl\","
+        "\"params\":{\"url\":\"%s\",\"lineNumber\":0,\"columnNumber\":%zu}}",
+        url,
+        kCJSWrapperPrefixLen);
+    cdpAgent->handleCommand(cmd);
+    // Without setBreakpointsActive(true) the Breakpoint event handler in
+    // DebuggerDomainCoordinator auto-resumes instead of user-pausing.
+    cdpAgent->handleCommand(
+        "{\"id\":2,\"method\":\"Debugger.setBreakpointsActive\","
+        "\"params\":{\"active\":true}}");
+    flushRuntimeTasks();
   }
 #endif
 
