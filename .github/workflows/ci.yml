@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format-check:
+    name: Format check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-18
+          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-18 100
+
+      - name: Run format check
+        run: ./utils/format.sh --check
+
+  build-and-test:
+    name: Build & test (${{ matrix.os }}, ${{ matrix.config }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        config: [asan-debug-o1, release]
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake python3 ccache \
+                                  clang-18 lld-18
+
+      - name: Install toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja ccache
+
+      - name: Compute ccache path
+        id: ccache-path
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            echo "path=$HOME/Library/Caches/ccache" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=$HOME/.cache/ccache" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.ccache-path.outputs.path }}
+          key: ccache-${{ matrix.os }}-${{ matrix.config }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.os }}-${{ matrix.config }}-
+
+      - name: Configure ccache
+        run: ccache -M 3G
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          common_args=(
+            -B build
+            -G Ninja
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          )
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            common_args+=(
+              -DCMAKE_C_COMPILER=clang-18
+              -DCMAKE_CXX_COMPILER=clang++-18
+            )
+          fi
+          case "${{ matrix.config }}" in
+            asan-debug-o1)
+              common_args+=(
+                -DCMAKE_BUILD_TYPE=Debug
+                -DHERMES_ENABLE_ADDRESS_SANITIZER=ON
+                -DHERMESVM_SANITIZE_HANDLES=ON
+                -DCMAKE_C_FLAGS_DEBUG_INIT="-g -O1"
+                -DCMAKE_CXX_FLAGS_DEBUG_INIT="-g -O1"
+              )
+              ;;
+            release)
+              common_args+=(
+                -DCMAKE_BUILD_TYPE=Release
+              )
+              ;;
+          esac
+          cmake "${common_args[@]}"
+
+      - name: ccache stats (before build)
+        run: ccache -s
+
+      - name: Build & test
+        run: cmake --build build --target check-hermes-node
+
+      - name: ccache stats (after build)
+        if: always()
+        run: ccache -s
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.os }}-${{ matrix.config }}
+          path: |
+            build/test/
+            build/unittests/
+          if-no-files-found: ignore
