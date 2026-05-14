@@ -10,7 +10,7 @@ var http = require('http');
 var net = require('net');
 
 var testsRun = 0;
-var testsExpected = 11;
+var testsExpected = 12;
 
 function done() {
   testsRun++;
@@ -317,6 +317,45 @@ function test11() {
   });
 }
 
+// Test 12: server.closeAllConnections() destroys keep-alive sockets so that
+// server.close() can complete promptly. Regression test for the case where
+// our HTTPParser binding never registers parsers in the server's
+// ConnectionsList, leaving closeAllConnections() with nothing to close.
+function test12() {
+  var server = http.createServer(function(req, res) {
+    res.writeHead(200);
+    res.end('ok');
+  });
+
+  server.listen(0, function() {
+    var port = server.address().port;
+    var agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+
+    http.get({ port: port, agent: agent }, function(res) {
+      res.resume();
+      res.on('end', function() {
+        // Connection is now keep-alive idle on both sides.
+        var serverClosed = false;
+        server.close(function() { serverClosed = true; });
+        // Should destroy the idle keep-alive socket, allowing server.close()
+        // to complete on the next tick.
+        server.closeAllConnections();
+        setTimeout(function() {
+          // Tear down the client side regardless of outcome so the process
+          // can exit. Then assert.
+          agent.destroy();
+          if (!serverClosed) {
+            console.log(
+              'FAIL: server.close() did not complete after closeAllConnections()');
+            process.exit(1);
+          }
+          done();
+        }, 100);
+      });
+    });
+  });
+}
+
 // Run all tests
 test1();
 test2();
@@ -329,3 +368,4 @@ test8();
 test9();
 test10();
 test11();
+test12();

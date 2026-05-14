@@ -99,6 +99,9 @@ static constexpr int kAllMethodCount =
 // Parser class — wraps llhttp_t
 // ============================================================================
 
+// Forward declaration -- the full definition appears below Parser.
+class ConnectionsList;
+
 class Parser {
  public:
   Parser() {
@@ -298,6 +301,12 @@ class Parser {
     napi_unwrap(env, obj, &data);
     return static_cast<Parser *>(data);
   }
+
+  // Optional ConnectionsList this parser is registered with. Used by
+  // http.Server.closeAllConnections() / closeIdleConnections() to enumerate
+  // and forcibly destroy active sockets at server shutdown. Borrowed
+  // pointer -- the JS side keeps the list alive via the server reference.
+  ConnectionsList *connectionsList_ = nullptr;
 
  private:
   // -------------------------------------------------------------------
@@ -893,9 +902,24 @@ static napi_value ParserInitialize(napi_env env, napi_callback_info info) {
     }
   }
 
-  // args[4] = connectionsList (optional, unused for now)
-
   parser->initialize(type, maxHeaderSize, lenientFlags);
+
+  // args[4] = optional ConnectionsList. If provided, register this parser
+  // with the list so that http.Server.closeAllConnections() can find it
+  // and tear down the underlying socket. Server keeps the list alive, so we
+  // store a borrowed pointer.
+  parser->connectionsList_ = nullptr;
+  if (argc > 4) {
+    napi_valuetype vt;
+    napi_typeof(env, args[4], &vt);
+    if (vt == napi_object) {
+      auto *list = ConnectionsList::unwrap(env, args[4]);
+      if (list) {
+        parser->connectionsList_ = list;
+        list->push(jsThis);
+      }
+    }
+  }
 
   napi_value undef;
   napi_get_undefined(env, &undef);
@@ -962,8 +986,15 @@ static napi_value ParserFree(napi_env env, napi_callback_info info) {
 
 // ---------- HTTPParser.prototype.remove ----------
 static napi_value ParserRemove(napi_env env, napi_callback_info info) {
-  // Remove from ConnectionsList. No-op in our simplified implementation
-  // since ConnectionsList tracking is minimal.
+  napi_value jsThis;
+  napi_get_cb_info(env, info, nullptr, nullptr, &jsThis, nullptr);
+
+  Parser *parser = Parser::unwrap(env, jsThis);
+  if (parser && parser->connectionsList_) {
+    parser->connectionsList_->remove(jsThis);
+    parser->connectionsList_ = nullptr;
+  }
+
   napi_value undef;
   napi_get_undefined(env, &undef);
   return undef;
