@@ -28,9 +28,11 @@
 - Task queue: mutex + singly-linked list, LIFO push, reversed to FIFO on drain
 
 ## Hermes JS Engine Limitations
-- No `FinalizationRegistry` (typeof is undefined)
+- No `FinalizationRegistry` (typeof is undefined) — no-op polyfill in `primordials.js`
 - No `Atomics` (typeof is undefined)
-- No async generators (SyntaxError)
+- Async generators: supported with `withEnableAsyncGenerators(true)` / `-Xasync-generators`
+- No `Promise.withResolvers` — blocks stream operators at runtime
+- Async generator prototype chain is flat (gen.prototype.__proto__ is Object.prototype, no AsyncGeneratorPrototype/AsyncIteratorPrototype) — Hermes bug
 - `WeakRef`: supported
 - Private class fields (`#x`): supported
 - `BigInt`, `BigInt64Array`: supported
@@ -238,11 +240,9 @@
 
 ## Streams Verification (Step 26)
 - `stream` module (Readable, Writable, Transform, Duplex, PassThrough, pipeline, finished) fully functional
-- **Async generator workarounds**: Hermes doesn't support `async function*`. Patched `readable.js` (manual async iterator) and `pipeline.js` (direct delegation). Stubbed `operators.js` (empty exports).
-- **Shims created**: `internal/streams/operators.js` (empty stream/promise operators), `internal/abort_controller.js` (minimal AbortController/AbortSignal using EventEmitter + DOMException polyfill)
-- **Dependency chain**: `abort_controller` -> `event_target` -> `internalBinding('performance')` — bypassed by shim
-- **Still broken**: `Duplex.from()` (lazy-loads `duplexify.js` which has `async function*`), stream operators (`.map`/`.filter`/`.drop`/`.take`/`.flatMap`), `for await` on streams (works via manual iterator but `yield*` pattern unavailable)
-- **Vendored file modifications**: `readable.js`, `pipeline.js` — documented in `libjs-node/README.md`
+- All vendored stream files are unmodified (async generators enabled)
+- **Shims**: `internal/abort_controller.js` (minimal AbortController/AbortSignal using EventEmitter), `internal/event_target.js` (exports `kWeakHandler`/`kResistStopPropagation` symbols). Needed because original `abort_controller` depends on `event_target` -> `internalBinding('performance')` chain.
+- **Runtime limitation**: Stream operators (`.map`/`.filter` etc.) and `Duplex.from()` parse OK but fail at runtime: need `Promise.withResolvers` (not available in Hermes)
 
 ## FS Binding (sync operations)
 - `initFsBinding` — 38 functions + 4 shared typed arrays + FSReqCallback stub
@@ -262,12 +262,13 @@
 - DirHandle: plain JS object with native data via `napi_wrap`, GC destructor closes dir if not explicitly closed
 - Read result: flat array `[name1, type1, name2, type2, ...]` or null at EOF
 - **Gotcha**: `uv_dirent_t.name` points to `uv_fs_t` request-owned memory. Must build JS result BEFORE `uv_fs_req_cleanup`.
-- Patched `internal/fs/dir.js`: replaced `async* entries()` with manual async iterator (Hermes async generator limitation)
 
 ## FS Module Shims
 - `internal/blob.js`: stub (Blob not supported), exports createBlobFromFilePath (throws), isBlob (false)
 - `internal/url.js`: minimal toPathIfFileURL, pathToFileURL, fileURLToPath, isURL
 - `internal/process/permission.js`: stub, isEnabled() returns false, has() returns true
+- `internal/readline/interface.js`: stub (original chain: readline -> repl/history -> os -> credentials). Only used by FileHandle.readLines()
+- `internal/worker/js_transferable.js`: stub (original needs internalBinding('messaging')). Provides kDeserialize/kTransfer/kTransferList symbols and no-op markTransferMode
 
 ## UV Binding
 - `initUvBinding` — UV_* error constants (via `UV_ERRNO_MAP` macro), errname(err), getErrorMap(), getErrorMessage(err)
@@ -293,9 +294,10 @@
 - `fs.statSync(path, { bigint: true })` returns BigInt values for size, ino, mtimeNs, etc.
 
 ## FS Async Verification (Step 32)
-- All 32 callback-based async fs operations verified: chmod, lstat, ftruncate, link, symlink, readlink, realpath, utimes, access, stat bigint, fsync, fdatasync, mkdir recursive, readdir withFileTypes/recursive, writeFile/readFile Buffer, write string, copyFile, opendir sequential reads, EISDIR error, concurrent async (5 parallel), lchown, chown, fchown, fchmod, fstat, fstat bigint, lutimes, rmdir, futimes, statfs
-- **`fs.promises` permanently unavailable**: `internal/fs/promises.js` has `async function*` (lines 1273, 1294) which Hermes rejects as SyntaxError at parse time. The `fs.promises` getter is lazy, so `require('fs')` works fine; only accessing `.promises` fails.
-- `for await...of` directory iteration untestable; use callback-based `dir.read()` instead
+- All 32 callback-based async fs operations verified
+- **`fs.promises` available**: requires `openFileHandle` binding (returns {fd, getAsyncId(), close()}), `fileHandleClose`, `createFreshStats` for promise-mode stat results
+- **Promise-mode stats**: must use fresh (non-shared) typed arrays. Shared Float64Array causes race conditions with concurrent callback-mode ops.
+- 12 promise-based tests covering mkdir+readdir, rename, copyFile, chmod, symlink+readlink, access, FileHandle, mkdtemp, realpath, utimes, unlink, link
 
 ## Hermes NAPI Key Facts
 - `hermes_napi_event_loop` (hermes_napi.h:269-300): post_work, cancel_work, post_task
