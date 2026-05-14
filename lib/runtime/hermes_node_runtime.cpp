@@ -1009,8 +1009,7 @@ int runHermesNode(const HermesNodeConfig &config) {
   // the wrapper body rather than on the script-level function-expression
   // statement (which evaluates without entering the body).
 #ifdef HERMES_ENABLE_DEBUGGER
-  if (exitCode == 0 && config.inspectBrk && cdpDebugAPI &&
-      !config.scriptPath.empty()) {
+  if (exitCode == 0 && config.inspectBrk && cdpDebugAPI) {
     auto flushRuntimeTasks = [&]() {
       std::queue<facebook::hermes::debugger::RuntimeTask> tasks;
       {
@@ -1023,30 +1022,51 @@ int runHermesNode(const HermesNodeConfig &config) {
       }
     };
     // Flush enableDebuggerDomain so the agent is wired up before we add
-    // the breakpoint.
+    // the breakpoint or run the synthetic debugger; statement.
     flushRuntimeTasks();
-    // Resolve the user script path to absolute form so it matches what
-    // compileFunctionForCJSLoader records as the script's sourceURL.
-    char absScriptPath[PATH_MAX] = {0};
-    const char *url = config.scriptPath.c_str();
-    if (realpath(config.scriptPath.c_str(), absScriptPath)) {
-      url = absScriptPath;
+
+    if (!config.scriptPath.empty()) {
+      // File mode: resolve the user script path to absolute form so it
+      // matches what compileFunctionForCJSLoader records as the script's
+      // sourceURL.
+      char absScriptPath[PATH_MAX] = {0};
+      const char *url = config.scriptPath.c_str();
+      if (realpath(config.scriptPath.c_str(), absScriptPath)) {
+        url = absScriptPath;
+      }
+      char cmd[PATH_MAX + 256];
+      std::snprintf(
+          cmd,
+          sizeof(cmd),
+          "{\"id\":1,\"method\":\"Debugger.setBreakpointByUrl\","
+          "\"params\":{\"url\":\"%s\",\"lineNumber\":0,\"columnNumber\":%zu}}",
+          url,
+          kCJSWrapperPrefixLen);
+      cdpAgent->handleCommand(cmd);
+      // Without setBreakpointsActive(true) the Breakpoint event handler in
+      // DebuggerDomainCoordinator auto-resumes instead of user-pausing.
+      cdpAgent->handleCommand(
+          "{\"id\":2,\"method\":\"Debugger.setBreakpointsActive\","
+          "\"params\":{\"active\":true}}");
+      flushRuntimeTasks();
+    } else {
+      // Eval / REPL mode: there is no user file URL to set a breakpoint
+      // on, so fall back to running a synthetic `debugger;` statement
+      // (the same primitive the binding used before commit 5d36ec8).
+      // The legacy Debugger fires immediately and blocks on the
+      // coordinator until a DevTools client connects and sends Resume.
+      // The synthetic-frame DevTools UX caveat from that commit only
+      // matters in file mode, where the user expects to land in their
+      // own source.
+      napi_value brkScript;
+      napi_create_string_utf8(
+          env,
+          "debugger; //# sourceURL=hermes-node:inspect-brk",
+          NAPI_AUTO_LENGTH,
+          &brkScript);
+      napi_value brkResult;
+      napi_run_script(env, brkScript, &brkResult);
     }
-    char cmd[PATH_MAX + 256];
-    std::snprintf(
-        cmd,
-        sizeof(cmd),
-        "{\"id\":1,\"method\":\"Debugger.setBreakpointByUrl\","
-        "\"params\":{\"url\":\"%s\",\"lineNumber\":0,\"columnNumber\":%zu}}",
-        url,
-        kCJSWrapperPrefixLen);
-    cdpAgent->handleCommand(cmd);
-    // Without setBreakpointsActive(true) the Breakpoint event handler in
-    // DebuggerDomainCoordinator auto-resumes instead of user-pausing.
-    cdpAgent->handleCommand(
-        "{\"id\":2,\"method\":\"Debugger.setBreakpointsActive\","
-        "\"params\":{\"active\":true}}");
-    flushRuntimeTasks();
   }
 #endif
 
