@@ -13,8 +13,10 @@
 
 #include <llhttp.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -99,10 +101,106 @@ static constexpr int kAllMethodCount =
 // Parser class — wraps llhttp_t
 // ============================================================================
 
-// Forward declaration -- the full definition appears below Parser.
-class ConnectionsList;
+// Forward declaration of Parser; full definition appears below
+// ConnectionsList. The dependency direction is:
+//   ParserComparator -- needs Parser members (out-of-line, after Parser).
+//   ConnectionsList  -- holds std::set<Parser*, ParserComparator>;
+//                       its inline push/pop need ConnectionsList complete
+//                       at Parser's inline method bodies, so it must be
+//                       defined BEFORE Parser.
+//   Parser           -- holds ConnectionsList* and its inline lifecycle
+//                       methods call ConnectionsList::push/pop.
+class Parser;
+
+// Strict-weak ordering for the std::set<Parser*> instances inside
+// ConnectionsList. Keyed on (lastMessageStart_, pointer), with the
+// special case that idle parsers (lastMessageStart_ == 0) sort before
+// active ones. Mirrors Node's ParserComparator in node_http_parser.cc.
+// Body is defined out-of-line after Parser is complete.
+struct ParserComparator {
+  bool operator()(const Parser *lhs, const Parser *rhs) const;
+};
+
+// ============================================================================
+// ConnectionsList -- tracks server-attached parsers for closeAllConnections,
+// closeIdleConnections, and header/request timeout enforcement.
+//
+// Two ordered sets are maintained:
+//   * all_    -- every parser the server has Initialized with this list.
+//   * active_ -- subset that is currently mid-message (between
+//                on_message_begin and on_message_complete).
+//
+// Both sets are keyed on Parser* with ParserComparator: the sort key is
+// (lastMessageStart_, pointer), with the special case that idle parsers
+// (lastMessageStart_ == 0) sort before active ones. The expired() method
+// relies on this ordering, and any code that mutates lastMessageStart_
+// MUST Pop the parser from both sets before mutating and Push afterwards
+// -- otherwise std::set::erase silently fails to find the entry.
+//
+// We do NOT take napi_refs to the parser JS objects here. Each Parser
+// already holds a strong selfRef_ that keeps its JS object alive, so we
+// can recover the JS object from any Parser* via getJsObject(). This
+// avoids ref bookkeeping when parsers are reordered (Pop/Push on
+// timestamp change).
+// ============================================================================
+
+class ConnectionsList {
+ public:
+  ConnectionsList() = default;
+  ~ConnectionsList() {
+    // Do NOT call napi_delete_reference here -- see Parser destructor.
+  }
+
+  void init(napi_env env, napi_value jsObj) {
+    env_ = env;
+    napi_wrap(env, jsObj, this, pointerCb, nullptr, nullptr);
+    napi_create_reference(env, jsObj, 1, &selfRef_);
+  }
+
+  void push(Parser *parser) {
+    all_.insert(parser);
+  }
+  void pop(Parser *parser) {
+    all_.erase(parser);
+  }
+  void pushActive(Parser *parser) {
+    active_.insert(parser);
+  }
+  void popActive(Parser *parser) {
+    active_.erase(parser);
+  }
+
+  napi_value all(napi_env env);
+  napi_value idle(napi_env env);
+  napi_value active(napi_env env);
+  napi_value
+  expired(napi_env env, uint32_t headersTimeoutMs, uint32_t requestTimeoutMs);
+
+  static ConnectionsList *unwrap(napi_env env, napi_value obj) {
+    void *data;
+    napi_unwrap(env, obj, &data);
+    return static_cast<ConnectionsList *>(data);
+  }
+
+ private:
+  static void pointerCb(napi_env /*env*/, void *data, void * /*hint*/) {
+    delete static_cast<ConnectionsList *>(data);
+  }
+
+  napi_env env_ = nullptr;
+  napi_ref selfRef_ = nullptr;
+  std::set<Parser *, ParserComparator> all_;
+  std::set<Parser *, ParserComparator> active_;
+};
+
+// ============================================================================
+// Parser class -- wraps llhttp_t
+// ============================================================================
 
 class Parser {
+  friend class ConnectionsList;
+  friend struct ParserComparator;
+
  public:
   Parser() {
     memset(&parser_, 0, sizeof(parser_));
@@ -112,7 +210,17 @@ class Parser {
   }
 
   ~Parser() {
-    // Do NOT call napi_delete_reference here — this destructor is called
+    // Defensive: mirror Node's invariant that a Parser is never destroyed
+    // while still referenced from a ConnectionsList. Normally
+    // freeParser() in JS calls parser.remove() before parser.close(), but
+    // protect against a torn-down env or buggy caller leaving a dangling
+    // pointer in the std::set.
+    if (connectionsList_) {
+      connectionsList_->pop(this);
+      connectionsList_->popActive(this);
+      connectionsList_ = nullptr;
+    }
+    // Do NOT call napi_delete_reference here -- this destructor is called
     // from the GC finalizer (pointerCb), and the env may already be
     // destroyed. NAPI refs are cleaned up by the runtime automatically.
   }
@@ -303,10 +411,17 @@ class Parser {
   }
 
   // Optional ConnectionsList this parser is registered with. Used by
-  // http.Server.closeAllConnections() / closeIdleConnections() to enumerate
-  // and forcibly destroy active sockets at server shutdown. Borrowed
-  // pointer -- the JS side keeps the list alive via the server reference.
+  // http.Server.closeAllConnections() / closeIdleConnections() /
+  // checkConnections() (header/request timeouts) to enumerate parsers
+  // attached to the server. Borrowed pointer -- the JS side keeps the
+  // list alive via the server reference.
   ConnectionsList *connectionsList_ = nullptr;
+
+  // uv_hrtime() at which the parser started reading the current message.
+  // Reset to 0 in on_message_complete (parser becomes idle). Used as the
+  // sort key for ConnectionsList's std::set, so it MUST NOT be mutated
+  // while the parser is in either set -- always Pop before mutating.
+  uint64_t lastMessageStart_ = 0;
 
  private:
   // -------------------------------------------------------------------
@@ -350,6 +465,14 @@ class Parser {
   // --- on_message_begin ---
   static int sOnMessageBegin(llhttp_t *p) {
     Parser *self = fromParser(p);
+
+    // Important: Pop from the lists BEFORE resetting lastMessageStart_,
+    // otherwise std::set::erase will fail (the comparator keys on it).
+    if (self->connectionsList_) {
+      self->connectionsList_->pop(self);
+      self->connectionsList_->popActive(self);
+    }
+
     self->headerNread_ = 0;
     self->url_.clear();
     self->statusMessage_.clear();
@@ -358,6 +481,12 @@ class Parser {
     self->haveFlushed_ = false;
     self->headersCompleted_ = false;
     self->chunkExtensionNread_ = 0;
+    self->lastMessageStart_ = uv_hrtime();
+
+    if (self->connectionsList_) {
+      self->connectionsList_->push(self);
+      self->connectionsList_->pushActive(self);
+    }
 
     napi_value jsObj = self->getJsObject();
     if (!jsObj)
@@ -585,6 +714,18 @@ class Parser {
   static int sOnMessageComplete(llhttp_t *p) {
     Parser *self = fromParser(p);
 
+    // Important: Pop BEFORE clearing lastMessageStart_ so std::set::erase
+    // can find the parser. Then re-Push (only into the main list, not
+    // active_) so closeIdleConnections() / Idle() can still find it.
+    if (self->connectionsList_) {
+      self->connectionsList_->pop(self);
+      self->connectionsList_->popActive(self);
+    }
+    self->lastMessageStart_ = 0;
+    if (self->connectionsList_) {
+      self->connectionsList_->push(self);
+    }
+
     // Flush any trailing headers.
     if (self->numFields_ > 0) {
       self->flush();
@@ -763,90 +904,123 @@ class Parser {
   size_t currentBufferLen_ = 0;
 };
 
-// ============================================================================
-// ConnectionsList — tracks active HTTP connections for server timeout
-// ============================================================================
-
-class ConnectionsList {
- public:
-  ConnectionsList() = default;
-  ~ConnectionsList() {
-    // Do NOT call napi_delete_reference here — see Parser destructor.
+// Strict-weak ordering: idle parsers (timestamp 0) sort before active
+// ones; among active parsers, oldest timestamp first; ties broken by
+// pointer. Mirrors Node's ParserComparator at node_http_parser.cc:1050.
+inline bool ParserComparator::operator()(const Parser *lhs, const Parser *rhs)
+    const {
+  if (lhs->lastMessageStart_ == 0 && rhs->lastMessageStart_ == 0) {
+    return lhs < rhs;
+  } else if (lhs->lastMessageStart_ == 0) {
+    return true;
+  } else if (rhs->lastMessageStart_ == 0) {
+    return false;
   }
+  return lhs->lastMessageStart_ < rhs->lastMessageStart_;
+}
 
-  void init(napi_env env, napi_value jsObj) {
-    env_ = env;
-    napi_wrap(env, jsObj, this, pointerCb, nullptr, nullptr);
-    napi_create_reference(env, jsObj, 1, &selfRef_);
+inline napi_value ConnectionsList::all(napi_env env) {
+  napi_value arr;
+  napi_create_array(env, &arr);
+  uint32_t i = 0;
+  for (Parser *p : all_) {
+    napi_value obj = p->getJsObject();
+    if (obj) {
+      napi_set_element(env, arr, i++, obj);
+    }
   }
+  return arr;
+}
 
-  void push(napi_value parserObj) {
-    napi_ref ref;
-    napi_create_reference(env_, parserObj, 1, &ref);
-    parsers_.push_back(ref);
-  }
-
-  void remove(napi_value parserObj) {
-    for (auto it = parsers_.begin(); it != parsers_.end(); ++it) {
-      napi_value val;
-      napi_get_reference_value(env_, *it, &val);
-      bool equal = false;
-      napi_strict_equals(env_, val, parserObj, &equal);
-      if (equal) {
-        napi_delete_reference(env_, *it);
-        parsers_.erase(it);
-        return;
+// idle = parsers in all_ whose lastMessageStart_ == 0 (i.e. between
+// requests on a keep-alive connection). Walks all_ rather than
+// computing all_ \ active_; the two are equivalent given the lifecycle
+// invariants but iterating one set is simpler. Matches Node's Idle().
+inline napi_value ConnectionsList::idle(napi_env env) {
+  napi_value arr;
+  napi_create_array(env, &arr);
+  uint32_t i = 0;
+  for (Parser *p : all_) {
+    if (p->lastMessageStart_ == 0) {
+      napi_value obj = p->getJsObject();
+      if (obj) {
+        napi_set_element(env, arr, i++, obj);
       }
     }
   }
+  return arr;
+}
 
-  napi_value all(napi_env env) {
-    napi_value arr;
-    napi_create_array_with_length(env, parsers_.size(), &arr);
-    for (size_t i = 0; i < parsers_.size(); i++) {
-      napi_value val;
-      napi_get_reference_value(env, parsers_[i], &val);
-      napi_set_element(env, arr, i, val);
+inline napi_value ConnectionsList::active(napi_env env) {
+  napi_value arr;
+  napi_create_array(env, &arr);
+  uint32_t i = 0;
+  for (Parser *p : active_) {
+    napi_value obj = p->getJsObject();
+    if (obj) {
+      napi_set_element(env, arr, i++, obj);
     }
+  }
+  return arr;
+}
+
+// Returns parsers in active_ whose lastMessageStart_ is older than the
+// applicable deadline (headersTimeout while still reading headers,
+// requestTimeout once headersCompleted_ is set). Expired parsers are
+// removed from active_ as a side effect; the JS caller is expected to
+// destroy their sockets, which eventually triggers parser.remove() to
+// pop them from all_. Mirrors Node's Expired() at
+// node_http_parser.cc:1124, including the headers-vs-request swap and
+// the now>timeout underflow guards.
+inline napi_value ConnectionsList::expired(
+    napi_env env,
+    uint32_t headersTimeoutMs,
+    uint32_t requestTimeoutMs) {
+  napi_value arr;
+  napi_create_array(env, &arr);
+
+  uint64_t headersTimeoutNs =
+      static_cast<uint64_t>(headersTimeoutMs) * 1000000ULL;
+  uint64_t requestTimeoutNs =
+      static_cast<uint64_t>(requestTimeoutMs) * 1000000ULL;
+
+  if (headersTimeoutNs == 0 && requestTimeoutNs == 0) {
+    return arr;
+  }
+  if (requestTimeoutNs > 0 && headersTimeoutNs > requestTimeoutNs) {
+    std::swap(headersTimeoutNs, requestTimeoutNs);
+  }
+
+  uint64_t now = uv_hrtime();
+  uint64_t headersDeadline = (headersTimeoutNs > 0 && now > headersTimeoutNs)
+      ? now - headersTimeoutNs
+      : 0;
+  uint64_t requestDeadline = (requestTimeoutNs > 0 && now > requestTimeoutNs)
+      ? now - requestTimeoutNs
+      : 0;
+
+  if (headersDeadline == 0 && requestDeadline == 0) {
     return arr;
   }
 
-  // idle() and active() return all parsers (simplified — no native
-  // timeout tracking in our implementation).
-  napi_value idle(napi_env env) {
-    return all(env);
+  uint32_t i = 0;
+  for (auto it = active_.begin(); it != active_.end();) {
+    Parser *p = *it;
+    bool isExpired = (!p->headersCompleted_ && headersDeadline > 0 &&
+                      p->lastMessageStart_ < headersDeadline) ||
+        (requestDeadline > 0 && p->lastMessageStart_ < requestDeadline);
+    if (isExpired) {
+      napi_value obj = p->getJsObject();
+      if (obj) {
+        napi_set_element(env, arr, i++, obj);
+      }
+      it = active_.erase(it);
+    } else {
+      ++it;
+    }
   }
-
-  napi_value active(napi_env env) {
-    napi_value arr;
-    napi_create_array(env, &arr);
-    return arr;
-  }
-
-  // expired() — simplified, returns empty array.
-  // Server timeout is handled in JS via the ConnectionsList methods
-  // but actual timeout tracking would require timestamps on each parser.
-  napi_value expired(napi_env env, double, double) {
-    napi_value arr;
-    napi_create_array(env, &arr);
-    return arr;
-  }
-
-  static ConnectionsList *unwrap(napi_env env, napi_value obj) {
-    void *data;
-    napi_unwrap(env, obj, &data);
-    return static_cast<ConnectionsList *>(data);
-  }
-
- private:
-  static void pointerCb(napi_env /*env*/, void *data, void * /*hint*/) {
-    delete static_cast<ConnectionsList *>(data);
-  }
-
-  napi_env env_ = nullptr;
-  napi_ref selfRef_ = nullptr;
-  std::vector<napi_ref> parsers_;
-};
+  return arr;
+}
 
 // ============================================================================
 // NAPI method implementations
@@ -905,10 +1079,16 @@ static napi_value ParserInitialize(napi_env env, napi_callback_info info) {
   parser->initialize(type, maxHeaderSize, lenientFlags);
 
   // args[4] = optional ConnectionsList. If provided, register this parser
-  // with the list so that http.Server.closeAllConnections() can find it
-  // and tear down the underlying socket. Server keeps the list alive, so we
-  // store a borrowed pointer.
+  // with the list so that closeAllConnections / closeIdleConnections /
+  // checkConnections (header/request timeouts) can find it. The server
+  // keeps the list alive, so we store a borrowed pointer.
+  //
+  // Set lastMessageStart_ before Push so the comparator orders it as
+  // active (not idle). This also serves as a DoS guard: a connection
+  // that never sends any bytes still has a deadline, matching Node's
+  // behavior at node_http_parser.cc:687.
   parser->connectionsList_ = nullptr;
+  parser->lastMessageStart_ = 0;
   if (argc > 4) {
     napi_valuetype vt;
     napi_typeof(env, args[4], &vt);
@@ -916,7 +1096,9 @@ static napi_value ParserInitialize(napi_env env, napi_callback_info info) {
       auto *list = ConnectionsList::unwrap(env, args[4]);
       if (list) {
         parser->connectionsList_ = list;
-        list->push(jsThis);
+        parser->lastMessageStart_ = uv_hrtime();
+        list->push(parser);
+        list->pushActive(parser);
       }
     }
   }
@@ -991,7 +1173,8 @@ static napi_value ParserRemove(napi_env env, napi_callback_info info) {
 
   Parser *parser = Parser::unwrap(env, jsThis);
   if (parser && parser->connectionsList_) {
-    parser->connectionsList_->remove(jsThis);
+    parser->connectionsList_->pop(parser);
+    parser->connectionsList_->popActive(parser);
     parser->connectionsList_ = nullptr;
   }
 
@@ -1119,11 +1302,13 @@ static napi_value ConnectionsListExpired(
   if (!list)
     return nullptr;
 
-  double headersTimeout = 0, requestTimeout = 0;
+  // JS-side timeouts are non-negative integer milliseconds (Node uses
+  // Uint32::Value()). Convert to nanoseconds inside expired().
+  uint32_t headersTimeout = 0, requestTimeout = 0;
   if (argc > 0)
-    napi_get_value_double(env, args[0], &headersTimeout);
+    napi_get_value_uint32(env, args[0], &headersTimeout);
   if (argc > 1)
-    napi_get_value_double(env, args[1], &requestTimeout);
+    napi_get_value_uint32(env, args[1], &requestTimeout);
 
   return list->expired(env, headersTimeout, requestTimeout);
 }

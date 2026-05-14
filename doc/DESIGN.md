@@ -385,6 +385,24 @@ Data flows through JavaScript: `socket.ondata` → `parser.execute(buffer)` →
 callbacks. The `consume()`/`unconsume()` methods are state flags only -- there
 is no C++-level stream interception.
 
+`ConnectionsList` is the per-server registry consulted by
+`server.closeAllConnections()`, `server.closeIdleConnections()`, and the
+periodic `checkConnections()` interval that backs `headersTimeout` /
+`requestTimeout`. It maintains two ordered sets of `Parser*`:
+
+- `all_` -- every parser the server has Initialized with this list.
+- `active_` -- the subset currently mid-message (between `on_message_begin`
+  and `on_message_complete`).
+
+Both sets sort by `(lastMessageStart_, pointer)`, with idle parsers
+(`lastMessageStart_ == 0`) ordered before active ones. The lifecycle
+invariant is: any code that mutates `lastMessageStart_` must Pop from both
+sets first and Push afterwards, otherwise `std::set::erase` silently fails
+to find the entry. `Initialize`, `on_message_begin`, `on_message_complete`,
+and `Remove` follow this discipline; `Expired()` walks `active_` and
+removes timed-out parsers in place. Mirrors Node's `ConnectionsList` /
+`ParserComparator` 1:1.
+
 #### DNS (`node_cares_wrap.cpp`)
 
 Two resolution paths:
