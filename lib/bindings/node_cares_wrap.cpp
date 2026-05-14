@@ -38,6 +38,54 @@ static constexpr uint32_t DNS_ORDER_IPV4_FIRST = 1;
 static constexpr uint32_t DNS_ORDER_IPV6_FIRST = 2;
 
 // ---------------------------------------------------------------------------
+// Map c-ares status to short Node-style error name (e.g. "ENOTFOUND").
+// Node's DNSException treats numeric codes as libuv errnos -- c-ares errors
+// must be passed to JS as the short string form.
+// ---------------------------------------------------------------------------
+
+static const char *aresErrorCodeName(int status) {
+#define ARES_CODE(name) \
+  case ARES_##name:     \
+    return #name;
+  switch (status) {
+    ARES_CODE(ENODATA)
+    ARES_CODE(EFORMERR)
+    ARES_CODE(ESERVFAIL)
+    ARES_CODE(ENOTFOUND)
+    ARES_CODE(ENOTIMP)
+    ARES_CODE(EREFUSED)
+    ARES_CODE(EBADQUERY)
+    ARES_CODE(EBADNAME)
+    ARES_CODE(EBADFAMILY)
+    ARES_CODE(EBADRESP)
+    ARES_CODE(ECONNREFUSED)
+    ARES_CODE(ETIMEOUT)
+    ARES_CODE(EOF)
+    ARES_CODE(EFILE)
+    ARES_CODE(ENOMEM)
+    ARES_CODE(EDESTRUCTION)
+    ARES_CODE(EBADSTR)
+    ARES_CODE(EBADFLAGS)
+    ARES_CODE(ENONAME)
+    ARES_CODE(EBADHINTS)
+    ARES_CODE(ENOTINITIALIZED)
+    ARES_CODE(ELOADIPHLPAPI)
+    ARES_CODE(EADDRGETNETWORKPARAMS)
+    ARES_CODE(ECANCELLED)
+    default:
+      return "UNKNOWN";
+  }
+#undef ARES_CODE
+}
+
+static napi_value makeAresError(napi_env env, int status) {
+  napi_value err;
+  napi_create_string_utf8(
+      env, aresErrorCodeName(status), NAPI_AUTO_LENGTH, &err);
+  return err;
+}
+
+// ---------------------------------------------------------------------------
 // Helper: extract JS string to std::string
 // ---------------------------------------------------------------------------
 
@@ -1118,9 +1166,10 @@ static void queryCallback(
   napi_get_reference_value(env, req->reqObjRef, &reqObj);
 
   if (status != ARES_SUCCESS) {
-    // Error — call oncomplete(status).
+    // Error -- call oncomplete(errorCodeName). Pass as string so the JS
+    // DNSException treats it as a c-ares code, not a libuv errno.
     napi_value argv[1];
-    napi_create_int32(env, status, &argv[0]);
+    argv[0] = makeAresError(env, status);
     callOncomplete(env, reqObj, 1, argv);
   } else {
     // Parse according to query type.
@@ -1200,7 +1249,7 @@ hostCallback(void *arg, int status, int /*timeouts*/, struct hostent *host) {
 
   if (status != ARES_SUCCESS) {
     napi_value argv[1];
-    napi_create_int32(env, status, &argv[0]);
+    argv[0] = makeAresError(env, status);
     callOncomplete(env, reqObj, 1, argv);
   } else {
     napi_value result;
@@ -1247,9 +1296,7 @@ doQuery(napi_env env, napi_callback_info info, QueryType type, int dnsType) {
 
   ChannelWrap *channel = ChannelWrap::unwrap(env, thisObj);
   if (!channel || !channel->channel()) {
-    napi_value err;
-    napi_create_int32(env, ARES_ENOTINITIALIZED, &err);
-    return err;
+    return makeAresError(env, ARES_ENOTINITIALIZED);
   }
 
   std::string hostname = napiStringToStd(env, argv[1]);
@@ -1320,9 +1367,7 @@ static napi_value getHostByAddrFn(napi_env env, napi_callback_info info) {
 
   ChannelWrap *channel = ChannelWrap::unwrap(env, thisObj);
   if (!channel || !channel->channel()) {
-    napi_value err;
-    napi_create_int32(env, ARES_ENOTINITIALIZED, &err);
-    return err;
+    return makeAresError(env, ARES_ENOTINITIALIZED);
   }
 
   std::string ip = napiStringToStd(env, argv[1]);
@@ -1343,9 +1388,7 @@ static napi_value getHostByAddrFn(napi_env env, napi_callback_info info) {
   } else {
     napi_delete_reference(env, req->reqObjRef);
     delete req;
-    napi_value err;
-    napi_create_int32(env, ARES_ENOTFOUND, &err);
-    return err;
+    return makeAresError(env, ARES_ENOTFOUND);
   }
 
   ares_gethostbyaddr(
