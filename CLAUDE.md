@@ -40,6 +40,34 @@ Before any commit, format C++ code and run tests:
 cmake --build cmake-build-asan --target check-hermes-node
 ```
 
+## Hermes JS Limitations
+
+- No `FinalizationRegistry` (no-op polyfill in primordials.js), no `Atomics`, no `AbortSignal`/`AbortController` globals
+- Async generators: require `-Xasync-generators` flag (enabled in hermes-node)
+- Async generator prototype chain is flat (Hermes bug)
+- Hermes warns about undeclared globals in strict mode IIFEs -- use `var X = globalThis.X`
+
+## Bootstrap Sequence
+
+`hermes-node` binary in `tools/hermes-node/hermes-node.cpp`. Boot order:
+runtime -> event loop -> napi_env -> console -> bindings -> primordials -> process -> module loader -> timers globals -> `globalThis.Buffer` -> debuglog -> user script -> drainJobs -> uv_run -> emit 'exit' -> cleanup
+
+## Module Loader
+
+- `libjs/loader.js`: CJS module loading with shim override (`libjs/shims/` before `libjs-node/`)
+- User scripts loaded via `globalThis.__loadUserScript(filepath)` (NOT `napi_run_script`)
+- `globalThis.require`, `globalThis.primordials`, `globalThis.internalBinding` set by loader
+- Native bindings registered in `hermes-node.cpp` via `registry.registerBinding("name", initFunc)`
+
+## Test Infrastructure
+
+JS tests use LLVM Lit (`test/lit.cfg`), run in parallel via `check-hermes-node-js` target.
+
+- **PASS-check tests** (`test/*.js`): `// RUN: %hermes-node %s | %FileCheck %s` + `// CHECK: PASS`
+- **Node-ported tests** (`test/node-tests/parallel/*.js`): `// RUN: TEST_THREAD_ID=$$ %hermes-node %s`
+- **Primordials test**: `// RUN: cat %source_dir/libjs/primordials.js %s > %t.js && %hermes -Xasync-generators %t.js`
+- Run single test: `python3 cmake-build-asan/bin/hermes-lit test/test-foo.js --param hermes_node=cmake-build-asan/bin/hermes-node --param hermes=cmake-build-asan/bin/hermes --param FileCheck=cmake-build-asan/bin/FileCheck --param source_dir=$(pwd) --param test_exec_root=cmake-build-asan/test`
+
 ## Decisions
 
 - Primordials: thin shim (Option B) — re-export builtins, no tamper-resistance
