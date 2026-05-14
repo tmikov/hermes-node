@@ -10,6 +10,7 @@ all=0
 force=0
 interactive=0
 verbose=0
+check=0
 
 # Process multiple options
 while [ "$#" -gt 0 ]; do
@@ -30,12 +31,17 @@ while [ "$#" -gt 0 ]; do
       verbose=1
       shift
       ;;
+    --check)
+      check=1
+      shift
+      ;;
     *)
-      echo "Usage: $0 [-a] [-f] [-i] [-v]" >&2
-      echo "  -a: Format all files" >&2
-      echo "  -f: Force format files in last commit without prompting" >&2
-      echo "  -i: Interactive mode, show diff and ask before applying changes" >&2
-      echo "  -v: Verbose mode, show additional information about which files are being processed" >&2
+      echo "Usage: $0 [-a] [-f] [-i] [-v] [--check]" >&2
+      echo "  -a:      Format all files" >&2
+      echo "  -f:      Force format files in last commit without prompting" >&2
+      echo "  -i:      Interactive mode, show diff and ask before applying changes" >&2
+      echo "  -v:      Verbose mode, show additional information about which files are being processed" >&2
+      echo "  --check: Dry-run over all files in FORMAT_DIRS; exit non-zero if any need formatting (no files modified)" >&2
       exit 1
       ;;
   esac
@@ -63,6 +69,31 @@ fi
 
 THIS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$THIS_DIR"/../ || exit 1
+
+# --check mode: dry-run clang-format over all FORMAT_DIRS files. Exits 0 if
+# clean, non-zero (and prints offending files) if any would be reformatted.
+# Does not modify any files. Used by CI.
+if (( check )); then
+  check_files=(
+    $(find "${FORMAT_DIRS[@]}" \
+        -name \*.h -print -o -name \*.c -print -o -name \*.cpp -print)
+  )
+  if [ ${#check_files[@]} -eq 0 ]; then
+    echo "No files found in FORMAT_DIRS to check."
+    exit 0
+  fi
+  if (( verbose )); then
+    echo "Checking ${#check_files[@]} files..."
+  fi
+  if "$clang_format" --dry-run --Werror -style=file "${check_files[@]}"; then
+    echo "All files are properly formatted."
+    exit 0
+  else
+    echo "" >&2
+    echo "Formatting issues detected. Run './utils/format.sh -a' to fix." >&2
+    exit 1
+  fi
+fi
 
 # Function to check if a file is in one of the allowed directories
 is_in_format_dirs() {
