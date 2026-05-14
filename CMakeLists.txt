@@ -25,6 +25,9 @@ include(Lit)
 # LLVH source dir for gtest includes (used by add_unittest in Lit.cmake)
 set(LLVH_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/hermes/external/llvh)
 
+# Derive hermes-node version (from -DHERMES_NODE_VERSION, git tag, or fallback).
+include(cmake/version.cmake)
+
 # Match Hermes sanitizer flags for our own targets.
 # Hermes sets these inside its subdirectory scope, so they don't propagate.
 if (HERMES_ENABLE_ADDRESS_SANITIZER)

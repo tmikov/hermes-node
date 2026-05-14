@@ -9,6 +9,10 @@ add_hermes_tool(hermes-node
     hermesNodeRuntime
 )
 
+target_include_directories(hermes-node PRIVATE
+  ${CMAKE_BINARY_DIR}/generated
+)
+
 # hermesNapi was removed from hermesvm_a upstream (54c50a06a).
 # We must whole-archive link it so all NAPI symbols are available.
 if(APPLE)
