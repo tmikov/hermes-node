@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/runtime/hermes_node_runtime.h>
+#include <hermes/node-compat/version.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -25,6 +26,7 @@ static void printUsage(const char *argv0) {
       "  --inspect-brk[=[host:]port]    Enable inspector, break before user code\n"
       "  --inspect-open                 Open the DevTools URL in the system browser\n"
       "  --node-version <version>       Override process.version (e.g. v24.13.0)\n"
+      "  -v, --version                  Print the hermes-node version and exit\n"
       "  -h, --help                     Show this help\n",
       argv0);
 }
@@ -87,7 +89,12 @@ int main(int argc, char **argv) {
   bool hasEvalCode = false;
 
   for (int i = 1; i < argc; ++i) {
-    if (std::strcmp(argv[i], "--help") == 0 ||
+    if (std::strcmp(argv[i], "--version") == 0 ||
+        std::strcmp(argv[i], "-v") == 0) {
+      std::printf("hermes-node %s\n", HERMES_NODE_VERSION_STRING);
+      return 0;
+    } else if (
+        std::strcmp(argv[i], "--help") == 0 ||
         std::strcmp(argv[i], "-h") == 0) {
       printUsage(argv[0]);
       return 0;
