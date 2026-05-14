@@ -1,0 +1,236 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build (linux-x64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake python3 ccache \
+                                  clang-18 lld-18
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-release-linux-${{ github.sha }}
+          restore-keys: |
+            ccache-release-linux-
+
+      - name: Configure ccache
+        run: ccache -M 3G
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DHERMES_NODE_VERSION="${VERSION}"
+
+      - name: Build & test
+        run: cmake --build build --target check-hermes-node
+
+      - name: Version sanity check
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          reported=$(./build/bin/hermes-node --version | awk '{print $2}')
+          if [ "$reported" != "$VERSION" ]; then
+            echo "Version mismatch: binary reports '$reported', tag is '$VERSION'" >&2
+            exit 1
+          fi
+          echo "Version OK: $reported"
+
+      - name: Strip binary
+        run: strip build/bin/hermes-node
+
+      - name: Stage release tree
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAME="hermes-node-${VERSION}-linux-x64"
+          mkdir -p "staging/${NAME}"
+          cp build/bin/hermes-node "staging/${NAME}/"
+          cp LICENSE README.md THIRD_PARTY_LICENSES.md "staging/${NAME}/"
+          echo "STAGING_NAME=${NAME}" >> "$GITHUB_ENV"
+
+      - name: Create tarball
+        shell: bash
+        run: |
+          (cd staging && tar czf "../${STAGING_NAME}.tar.gz" "${STAGING_NAME}")
+          sha256sum "${STAGING_NAME}.tar.gz"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.STAGING_NAME }}
+          path: ${{ env.STAGING_NAME }}.tar.gz
+          if-no-files-found: error
+
+      - name: ccache stats
+        if: always()
+        run: ccache -s
+
+  build-macos-universal:
+    name: Build (macos-universal)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        run: brew install ninja ccache
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-release-macos-${{ github.sha }}
+          restore-keys: |
+            ccache-release-macos-
+
+      - name: Configure ccache
+        run: ccache -M 3G
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DHERMES_NODE_VERSION="${VERSION}"
+
+      - name: Build & test
+        run: cmake --build build --target check-hermes-node
+
+      - name: Verify universal binary slices
+        shell: bash
+        run: |
+          info=$(lipo -info build/bin/hermes-node)
+          echo "$info"
+          echo "$info" | grep -q "x86_64" || { echo "Missing x86_64 slice" >&2; exit 1; }
+          echo "$info" | grep -q "arm64"  || { echo "Missing arm64 slice"  >&2; exit 1; }
+
+      - name: Version sanity check (arm64 slice runs natively on the runner)
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          reported=$(./build/bin/hermes-node --version | awk '{print $2}')
+          if [ "$reported" != "$VERSION" ]; then
+            echo "Version mismatch: binary reports '$reported', tag is '$VERSION'" >&2
+            exit 1
+          fi
+          echo "Version OK: $reported"
+
+      - name: Strip binary
+        run: strip -u -r build/bin/hermes-node
+
+      - name: Ad-hoc codesign
+        run: codesign --sign - --force --options runtime --timestamp=none build/bin/hermes-node
+
+      - name: Stage release tree
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAME="hermes-node-${VERSION}-macos-universal"
+          mkdir -p "staging/${NAME}"
+          cp build/bin/hermes-node "staging/${NAME}/"
+          cp LICENSE README.md THIRD_PARTY_LICENSES.md "staging/${NAME}/"
+          echo "STAGING_NAME=${NAME}" >> "$GITHUB_ENV"
+
+      - name: Create tarball
+        shell: bash
+        run: |
+          (cd staging && tar czf "../${STAGING_NAME}.tar.gz" "${STAGING_NAME}")
+          shasum -a 256 "${STAGING_NAME}.tar.gz"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.STAGING_NAME }}
+          path: ${{ env.STAGING_NAME }}.tar.gz
+          if-no-files-found: error
+
+      - name: ccache stats
+        if: always()
+        run: ccache -s
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-macos-universal]
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: ls -la dist/
+
+      - name: Generate SHA256SUMS
+        shell: bash
+        working-directory: dist
+        run: |
+          sha256sum hermes-node-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Detect pre-release
+        id: prerelease
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            echo "flag=--prerelease" >> "$GITHUB_OUTPUT"
+            echo "Detected pre-release tag: $GITHUB_REF_NAME"
+          else
+            echo "flag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        working-directory: dist
+        run: |
+          # Idempotent: try `release create` first; if the release already
+          # exists for this tag (re-run scenario), upload --clobber instead.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release for $GITHUB_REF_NAME already exists; clobbering assets."
+            gh release upload "$GITHUB_REF_NAME" --clobber \
+              hermes-node-*.tar.gz SHA256SUMS
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes \
+              ${{ steps.prerelease.outputs.flag }} \
+              hermes-node-*.tar.gz SHA256SUMS
+          fi
