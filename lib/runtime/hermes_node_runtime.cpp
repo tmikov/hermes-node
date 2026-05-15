@@ -482,10 +482,17 @@ int runHermesNode(const HermesNodeConfig &config) {
     static_cast<hermes::vm::Runtime *>(data)->drainJobs();
   };
   runtimeState->drainMicrotasksData = vmRuntime;
+  // IMPORTANT: dispatch through HermesRuntime's virtual method, NOT through
+  // vm::Runtime::triggerTimeoutAsyncBreak() directly. The latter is inline in
+  // Runtime.h, and its layout depends on Hermes-private compile defines
+  // (HERMES_MEMORY_INSTRUMENTATION, HERMES_CHECK_NATIVE_STACK, etc.) that this
+  // TU does not see. Inlining it here would compute a wrong field offset and
+  // corrupt unrelated Runtime state. The virtual dispatch ensures the body
+  // executes in Hermes's TU with the correct layout.
   runtimeState->triggerAsyncBreakFn = [](void *data) {
-    static_cast<hermes::vm::Runtime *>(data)->triggerTimeoutAsyncBreak();
+    static_cast<facebook::hermes::HermesRuntime *>(data)->asyncTriggerTimeout();
   };
-  runtimeState->triggerAsyncBreakData = vmRuntime;
+  runtimeState->triggerAsyncBreakData = hermesRT.get();
   runtimeState->inspectorBridgeContext = config.inspectorBridgeContext;
   // Use a no-op finalizer: RuntimeState must outlive the env because GC
   // finalizers (which run during runtime destruction, after env is freed) may
