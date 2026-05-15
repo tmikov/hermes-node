@@ -3,13 +3,30 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build a release for (e.g. v0.0.1).'
+        required: true
+      skip_tests:
+        description: >-
+          Manual override: build artifacts without running the test suite.
+          Use only when a known test failure is blocking a release and the
+          binary is otherwise verified.
+        type: boolean
+        default: false
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 permissions:
   contents: write
+
+# RELEASE_TAG resolves to either the manually-entered tag (workflow_dispatch)
+# or the pushed tag (push). Used everywhere the workflow needs the tag name.
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build-linux:
@@ -19,6 +36,7 @@ jobs:
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.RELEASE_TAG }}
           submodules: recursive
 
       - name: Install toolchain
@@ -41,7 +59,7 @@ jobs:
       - name: Configure CMake
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=clang-18 \
@@ -50,13 +68,18 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DHERMES_NODE_VERSION="${VERSION}"
 
-      - name: Build & test
+      - name: Build & test (gated)
+        if: ${{ inputs.skip_tests != true }}
         run: cmake --build build --target check-hermes-node
+
+      - name: Build only (manual override; tests skipped)
+        if: ${{ inputs.skip_tests == true }}
+        run: cmake --build build --target hermes-node
 
       - name: Version sanity check
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           reported=$(./build/bin/hermes-node --version | awk '{print $2}')
           if [ "$reported" != "$VERSION" ]; then
             echo "Version mismatch: binary reports '$reported', tag is '$VERSION'" >&2
@@ -70,7 +93,7 @@ jobs:
       - name: Stage release tree
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           NAME="hermes-node-${VERSION}-linux-x64"
           mkdir -p "staging/${NAME}"
           cp build/bin/hermes-node "staging/${NAME}/"
@@ -101,6 +124,7 @@ jobs:
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.RELEASE_TAG }}
           submodules: recursive
 
       - name: Install toolchain
@@ -120,7 +144,7 @@ jobs:
       - name: Configure CMake
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
@@ -128,8 +152,13 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DHERMES_NODE_VERSION="${VERSION}"
 
-      - name: Build & test
+      - name: Build & test (gated)
+        if: ${{ inputs.skip_tests != true }}
         run: cmake --build build --target check-hermes-node
+
+      - name: Build only (manual override; tests skipped)
+        if: ${{ inputs.skip_tests == true }}
+        run: cmake --build build --target hermes-node
 
       - name: Verify universal binary slices
         shell: bash
@@ -142,7 +171,7 @@ jobs:
       - name: Version sanity check (arm64 slice runs natively on the runner)
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           reported=$(./build/bin/hermes-node --version | awk '{print $2}')
           if [ "$reported" != "$VERSION" ]; then
             echo "Version mismatch: binary reports '$reported', tag is '$VERSION'" >&2
@@ -159,7 +188,7 @@ jobs:
       - name: Stage release tree
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           NAME="hermes-node-${VERSION}-macos-universal"
           mkdir -p "staging/${NAME}"
           cp build/bin/hermes-node "staging/${NAME}/"
@@ -208,9 +237,9 @@ jobs:
         id: prerelease
         shell: bash
         run: |
-          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+          if [[ "$RELEASE_TAG" == *-* ]]; then
             echo "flag=--prerelease" >> "$GITHUB_OUTPUT"
-            echo "Detected pre-release tag: $GITHUB_REF_NAME"
+            echo "Detected pre-release tag: $RELEASE_TAG"
           else
             echo "flag=" >> "$GITHUB_OUTPUT"
           fi
@@ -222,14 +251,15 @@ jobs:
         working-directory: dist
         run: |
           # Idempotent: try `release create` first; if the release already
-          # exists for this tag (re-run scenario), upload --clobber instead.
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "Release for $GITHUB_REF_NAME already exists; clobbering assets."
-            gh release upload "$GITHUB_REF_NAME" --clobber \
+          # exists for this tag (re-run / manual-override scenario), upload
+          # --clobber instead.
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release for $RELEASE_TAG already exists; clobbering assets."
+            gh release upload "$RELEASE_TAG" --clobber \
               hermes-node-*.tar.gz SHA256SUMS
           else
-            gh release create "$GITHUB_REF_NAME" \
-              --title "$GITHUB_REF_NAME" \
+            gh release create "$RELEASE_TAG" \
+              --title "$RELEASE_TAG" \
               --generate-notes \
               ${{ steps.prerelease.outputs.flag }} \
               hermes-node-*.tar.gz SHA256SUMS
