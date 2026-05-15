@@ -41,7 +41,7 @@ cmake --build cmake-build-asan --target check-hermes-node
 
 ## Hermes JS Limitations
 
-- No `FinalizationRegistry` (no-op polyfill in primordials.js), no `Atomics`, no `AbortSignal`/`AbortController` globals
+- No `Atomics`, no `AbortSignal`/`AbortController` globals (`FinalizationRegistry` is supported natively)
 - Async generators: require `-Xasync-generators` flag (enabled in hermes-node)
 - Async generator prototype chain is flat (Hermes bug)
 - Hermes warns about undeclared globals in strict mode IIFEs -- use `var X = globalThis.X`
@@ -58,6 +58,16 @@ runtime -> event loop -> napi_env -> console -> bindings -> primordials -> proce
 - `globalThis.require`, `globalThis.primordials`, `globalThis.internalBinding` set by loader
 - Native bindings registered in `hermes-node.cpp` via `registry.registerBinding("name", initFunc)`
 
+## Native Addons
+
+Node-API (N-API) native addons are supported. V8-API addons (`v8.h`, NAN) are not (no V8).
+
+- `process.dlopen(module, filename[, flags])` in `lib/process/node_process.cpp`: `dlopen()` -> look up `napi_register_module_v1` (modern) -> fall back to deprecated `napi_module_register()`.
+- `tools/hermes-node/CMakeLists.txt` exports NAPI symbols from the binary (`-rdynamic` equivalent) so dlopen'd addons can resolve them at link time.
+- `.node` extension resolved by the CJS loader (`lib/bindings/node_file.cpp`).
+- `os.dlopen` constants defined in `lib/bindings/node_constants.cpp`.
+- Hermes side: `hermes_napi_load_module()` in `hermes/API/napi/hermes_napi.cpp` handles the in-process module registration table.
+
 ## Test Infrastructure
 
 JS tests use LLVM Lit (`test/lit.cfg`), run in parallel via `check-hermes-node-js` target.
@@ -73,7 +83,7 @@ JS tests use LLVM Lit (`test/lit.cfg`), run in parallel via `check-hermes-node-j
 - Event loop: single libuv loop, `uv_run(UV_RUN_DEFAULT)`, standalone CLI only
 - Async hooks: stubbed (no-op)
 - Node version: v24.13.0 LTS
-- JS loaded from disk at runtime
+- Built-in JS (`libjs/`, `libjs-node/`, shims) is compiled to Hermes bytecode at build time and embedded into the binary; only the user's script is parsed at run time
 - **C++ porting philosophy**: Keep our native binding implementations as close to Node's as reasonable. When Node uses a third-party library (simdutf, Ada, llhttp, c-ares, etc.), vendor and use that same library rather than hand-rolling equivalent functionality. This ensures behavioral parity, gets us battle-tested optimizations, and makes future porting easier since our code structure mirrors Node's.
 
 ## Progress Tracking
