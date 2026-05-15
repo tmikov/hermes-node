@@ -10,7 +10,6 @@
 #include "napi/hermes_napi.h"
 
 #include "hermes/Public/RuntimeConfig.h"
-#include "hermes/VM/Runtime.h"
 #include "hermes/hermes.h"
 
 #ifdef HERMES_ENABLE_DEBUGGER
@@ -302,7 +301,7 @@ static napi_status installConsole(napi_env env) {
 /// Data passed to the uv_check_t callback for draining microtasks and ticks.
 struct TickDrainData {
   napi_env env;
-  hermes::vm::Runtime *runtime;
+  facebook::hermes::HermesRuntime *runtime;
   napi_ref tickCallbackRef;
 };
 
@@ -313,8 +312,10 @@ static void drainTicksImpl(TickDrainData *data) {
   napi_handle_scope scope;
   napi_open_handle_scope(data->env, &scope);
 
-  // Drain microtasks first.
-  data->runtime->drainJobs();
+  // Drain microtasks first. Use the JSI virtual method so the body executes
+  // in Hermes's TU with the correct layout (see ODR note near the
+  // triggerAsyncBreakFn lambda below).
+  data->runtime->drainMicrotasks(-1);
 
   // Call the JS tick callback (runNextTicks) if set.
   if (data->tickCallbackRef) {
@@ -456,8 +457,6 @@ int runHermesNode(const HermesNodeConfig &config) {
                       .withES6BlockScoping(true)
                       .build();
   auto hermesRT = facebook::hermes::makeHermesRuntime(rtConfig);
-  auto *vmRuntime =
-      static_cast<hermes::vm::Runtime *>(hermesRT->getVMRuntimeUnsafe());
 
   // 2. Create libuv event loop adapter.
   UvEventLoop eventLoop;
@@ -473,22 +472,24 @@ int runHermesNode(const HermesNodeConfig &config) {
   // 3. Create napi_env with host integration.
   eventLoop.getHost()->fatal_exception = onFatalException;
 
-  napi_env env = hermes_napi_create_env(vmRuntime, eventLoop.getHost());
+  // IMPORTANT: pass the opaque VM-runtime pointer to NAPI but use HermesRuntime
+  // (JSI) for any other runtime interaction. vm::Runtime is declared in
+  // Hermes-internal headers whose layout depends on private compile defines
+  // (HERMES_MEMORY_INSTRUMENTATION, HERMES_CHECK_NATIVE_STACK, etc.) that
+  // Hermes's CMake add_definitions() leaks only within its subdirectory scope.
+  // Including those headers here would silently miscompute field offsets and
+  // corrupt unrelated Runtime state. The JSI / IHermes virtual methods
+  // dispatch into Hermes's TU where the layout is correct.
+  napi_env env = hermes_napi_create_env(
+      hermesRT->getVMRuntimeUnsafe(), eventLoop.getHost());
 
   // Allocate and install per-instance state for bindings.
   auto *runtimeState = new RuntimeState();
   runtimeState->loop = eventLoop.getLoop();
   runtimeState->drainMicrotasksFn = [](void *data) {
-    static_cast<hermes::vm::Runtime *>(data)->drainJobs();
+    static_cast<facebook::hermes::HermesRuntime *>(data)->drainMicrotasks(-1);
   };
-  runtimeState->drainMicrotasksData = vmRuntime;
-  // IMPORTANT: dispatch through HermesRuntime's virtual method, NOT through
-  // vm::Runtime::triggerTimeoutAsyncBreak() directly. The latter is inline in
-  // Runtime.h, and its layout depends on Hermes-private compile defines
-  // (HERMES_MEMORY_INSTRUMENTATION, HERMES_CHECK_NATIVE_STACK, etc.) that this
-  // TU does not see. Inlining it here would compute a wrong field offset and
-  // corrupt unrelated Runtime state. The virtual dispatch ensures the body
-  // executes in Hermes's TU with the correct layout.
+  runtimeState->drainMicrotasksData = hermesRT.get();
   runtimeState->triggerAsyncBreakFn = [](void *data) {
     static_cast<facebook::hermes::HermesRuntime *>(data)->asyncTriggerTimeout();
   };
@@ -978,7 +979,7 @@ int runHermesNode(const HermesNodeConfig &config) {
   // 12. Set up event loop check and prepare handles for tick draining.
   uv_check_t checkHandle;
   uv_prepare_t prepareHandle;
-  TickDrainData tickDrainData{env, vmRuntime, tickCallbackRef};
+  TickDrainData tickDrainData{env, hermesRT.get(), tickCallbackRef};
   bool tickHandlesActive = false;
 
   if (exitCode == 0 && tickCallbackRef) {
@@ -1129,7 +1130,7 @@ int runHermesNode(const HermesNodeConfig &config) {
 
   // 14. Run event loop.
   if (exitCode == 0) {
-    vmRuntime->drainJobs();
+    hermesRT->drainMicrotasks(-1);
 
     if (tickCallbackRef) {
       napi_value tickCb;

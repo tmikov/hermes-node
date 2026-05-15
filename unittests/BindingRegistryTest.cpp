@@ -10,7 +10,7 @@
 #include "napi/hermes_napi.h"
 
 #include "hermes/Public/RuntimeConfig.h"
-#include "hermes/VM/Runtime.h"
+#include "hermes/hermes.h"
 
 #include <gtest/gtest.h>
 
@@ -19,9 +19,15 @@
 using namespace hermes::node_compat;
 
 /// Test fixture that creates a Hermes Runtime and napi_env.
+///
+/// We use facebook::hermes::HermesRuntime (JSI) rather than vm::Runtime
+/// because vm::Runtime is declared in Hermes-internal headers whose layout
+/// depends on private compile defines that Hermes's CMake propagates only
+/// within its own subdirectory scope. See hermes_node_runtime.cpp for
+/// details.
 class BindingRegistryTest : public ::testing::Test {
  protected:
-  std::shared_ptr<hermes::vm::Runtime> rt_;
+  std::unique_ptr<facebook::hermes::HermesRuntime> rt_;
   napi_env env_ = nullptr;
   napi_handle_scope scope_ = nullptr;
 
@@ -32,8 +38,8 @@ class BindingRegistryTest : public ::testing::Test {
                                         .withMaxHeapSize(1 << 19)
                                         .build())
                       .build();
-    rt_ = hermes::vm::Runtime::create(config);
-    env_ = hermes_napi_create_env(rt_.get());
+    rt_ = facebook::hermes::makeHermesRuntime(config);
+    env_ = hermes_napi_create_env(rt_->getVMRuntimeUnsafe());
     ASSERT_EQ(napi_open_handle_scope(env_, &scope_), napi_ok);
   }
 

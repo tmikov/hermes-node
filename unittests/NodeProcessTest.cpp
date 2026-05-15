@@ -10,7 +10,7 @@
 #include "napi/hermes_napi.h"
 
 #include "hermes/Public/RuntimeConfig.h"
-#include "hermes/VM/Runtime.h"
+#include "hermes/hermes.h"
 
 #include <uv.h>
 
@@ -26,9 +26,12 @@
 using namespace hermes::node_compat;
 
 /// Test fixture that creates a Hermes Runtime, napi_env, and a NodeProcess.
+///
+/// Uses HermesRuntime (JSI) rather than vm::Runtime; see
+/// hermes_node_runtime.cpp for the ODR rationale.
 class NodeProcessTest : public ::testing::Test {
  protected:
-  std::shared_ptr<hermes::vm::Runtime> rt_;
+  std::unique_ptr<facebook::hermes::HermesRuntime> rt_;
   napi_env env_ = nullptr;
   napi_handle_scope scope_ = nullptr;
   NodeProcess proc_;
@@ -41,8 +44,8 @@ class NodeProcessTest : public ::testing::Test {
                                         .withMaxHeapSize(1 << 20)
                                         .build())
                       .build();
-    rt_ = hermes::vm::Runtime::create(config);
-    env_ = hermes_napi_create_env(rt_.get());
+    rt_ = facebook::hermes::makeHermesRuntime(config);
+    env_ = hermes_napi_create_env(rt_->getVMRuntimeUnsafe());
     ASSERT_EQ(napi_open_handle_scope(env_, &scope_), napi_ok);
 
     proc_.setArgv({"hermes-node", "test-script.js", "--flag"});
