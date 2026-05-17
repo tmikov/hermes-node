@@ -247,6 +247,10 @@ jobs:
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The publish job does not checkout the repo (it only downloads
+          # artifacts), so `gh` cannot discover the remote from a .git dir.
+          # GH_REPO tells the CLI which repository to target explicitly.
+          GH_REPO: ${{ github.repository }}
         shell: bash
         working-directory: dist
         run: |
