@@ -75,6 +75,7 @@ internal/streams/destroy
 internal/streams/duplex
 internal/streams/duplexpair
 internal/streams/end-of-stream
+internal/streams/fast-utf8-stream
 internal/streams/from
 internal/streams/legacy
 internal/streams/operators
