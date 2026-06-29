@@ -171,6 +171,20 @@ namespaceNames.forEach(function(name) {
   copyPropsRenamed(globalThis[name], primordials, name);
 });
 
+// Atomics.wait fallback. Hermes has no Atomics, but internal/streams/
+// fast-utf8-stream uses AtomicsWait purely as a synchronous sleep during busy
+// writes. Since hermes-node is single-threaded no other agent can ever notify,
+// so the faithful main-thread behavior is to sleep for the timeout and return
+// 'timed-out'. Back it with the native uv_sleep-based util binding.
+if (typeof primordials.AtomicsWait !== 'function') {
+  primordials.AtomicsWait = function AtomicsWait(typedArray, index, value, timeout) {
+    if (typedArray[index] !== value) return 'not-equal';
+    var ms = Number(timeout);
+    if (ms > 0 && ms < Infinity) internalBinding('util').sleep(ms);
+    return 'timed-out';
+  };
+}
+
 // ---------------------------------------------------------------------------
 // V8-specific Error APIs polyfill
 // ---------------------------------------------------------------------------

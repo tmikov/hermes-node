@@ -220,5 +220,11 @@ fs.rmSync(tmpDir, { recursive: true });
 assert(!fs.existsSync(tmpDir), 'rmSync removes directory recursively');
 passed++;
 
+// --- Utf8Stream getter resolves ---
+assert(typeof fs.Utf8Stream === 'function', 'fs.Utf8Stream getter resolves');
+var fsCopy = Object.assign({}, fs);
+assert(fsCopy.Utf8Stream === fs.Utf8Stream, 'Object.assign over fs does not throw');
+passed++;
+
 console.log('All ' + passed + ' fs sync tests passed');
 console.log('PASS');
