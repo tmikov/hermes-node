@@ -43,6 +43,8 @@ TEST(UvEventLoop, GetHost) {
   EXPECT_NE(el->post_work, nullptr);
   EXPECT_NE(el->cancel_work, nullptr);
   EXPECT_NE(el->post_task, nullptr);
+  EXPECT_NE(el->ref_loop, nullptr);
+  EXPECT_NE(el->unref_loop, nullptr);
   EXPECT_NE(el->data, nullptr);
   EXPECT_NE(el->uv_loop, nullptr);
   ASSERT_EQ(loop.run(), 0);
@@ -241,6 +243,135 @@ TEST(UvEventLoop, PostTaskMultiple) {
   }
 
   ASSERT_EQ(loop.close(), 0);
+}
+
+//===========================================================================
+// ref_loop / unref_loop tests
+//===========================================================================
+
+TEST(UvEventLoop, RefLoopKeepsLoopAlive) {
+  UvEventLoop loop;
+  ASSERT_EQ(loop.init(), 0);
+  hermes_napi_host *el = loop.getHost();
+
+  // An idle loop with nothing posted is not alive.
+  EXPECT_EQ(uv_loop_alive(loop.getLoop()), 0);
+
+  el->ref_loop(el->data);
+  EXPECT_NE(uv_loop_alive(loop.getLoop()), 0);
+
+  el->unref_loop(el->data);
+  EXPECT_EQ(uv_loop_alive(loop.getLoop()), 0);
+
+  ASSERT_EQ(loop.run(), 0);
+  ASSERT_EQ(loop.close(), 0);
+}
+
+TEST(UvEventLoop, RefLoopFromMultipleEnvs) {
+  UvEventLoop loop;
+  ASSERT_EQ(loop.init(), 0);
+  hermes_napi_host *el = loop.getHost();
+
+  // Distinct envs sharing a host may each hold an unmatched ref.
+  el->ref_loop(el->data);
+  el->ref_loop(el->data);
+  EXPECT_NE(uv_loop_alive(loop.getLoop()), 0);
+
+  // The loop stays alive until the last ref is released.
+  el->unref_loop(el->data);
+  EXPECT_NE(uv_loop_alive(loop.getLoop()), 0);
+
+  el->unref_loop(el->data);
+  EXPECT_EQ(uv_loop_alive(loop.getLoop()), 0);
+
+  ASSERT_EQ(loop.run(), 0);
+  ASSERT_EQ(loop.close(), 0);
+}
+
+TEST(UvEventLoop, RefLoopSurvivesTaskDrain) {
+  UvEventLoop loop;
+  ASSERT_EQ(loop.init(), 0);
+  hermes_napi_host *el = loop.getHost();
+
+  TaskTestData td;
+  el->ref_loop(el->data);
+  el->post_task(el->data, &td, taskCallback);
+
+  // Draining the task queue must not drop the outstanding loop ref.
+  loop.runOnce();
+  EXPECT_TRUE(td.called);
+  EXPECT_NE(uv_loop_alive(loop.getLoop()), 0);
+
+  el->unref_loop(el->data);
+  EXPECT_EQ(uv_loop_alive(loop.getLoop()), 0);
+
+  ASSERT_EQ(loop.run(), 0);
+  ASSERT_EQ(loop.close(), 0);
+}
+
+namespace {
+
+struct ForeignProducerData {
+  hermes_napi_host *host = nullptr;
+  TaskTestData task;
+};
+
+/// Mirrors what a referenced thread-safe function does once its dispatch
+/// reaches the loop thread: run the callback, then drop the loop ref.
+void foreignTaskCallback(void *data) {
+  auto *fd = static_cast<ForeignProducerData *>(data);
+  fd->task.called = true;
+  fd->task.threadId = std::this_thread::get_id();
+  fd->host->unref_loop(fd->host->data);
+}
+
+} // namespace
+
+TEST(UvEventLoop, RefLoopKeepsLoopAliveForForeignTask) {
+  UvEventLoop loop;
+  ASSERT_EQ(loop.init(), 0);
+  hermes_napi_host *el = loop.getHost();
+
+  ForeignProducerData fd;
+  fd.host = el;
+
+  // The ref is taken on the loop thread, before the producer starts. It is
+  // the only thing keeping the loop alive -- there is no timer here -- so
+  // without it run() would return before the task is posted.
+  el->ref_loop(el->data);
+
+  std::thread t([&]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    el->post_task(el->data, &fd, foreignTaskCallback);
+  });
+
+  loop.run();
+  t.join();
+
+  EXPECT_TRUE(fd.task.called);
+  EXPECT_EQ(fd.task.threadId, std::this_thread::get_id());
+  EXPECT_EQ(uv_loop_alive(loop.getLoop()), 0);
+
+  ASSERT_EQ(loop.close(), 0);
+}
+
+TEST(UvEventLoop, HostCallbacksSafeAfterClose) {
+  UvEventLoop loop;
+  ASSERT_EQ(loop.init(), 0);
+  hermes_napi_host *el = loop.getHost();
+
+  // A thread-safe function refs the loop while it is still running.
+  el->ref_loop(el->data);
+  ASSERT_EQ(loop.close(), 0);
+
+  // napi_env teardown runs when the Runtime is destroyed, which is after
+  // close(), and releases that ref. It must not touch the closed loop.
+  el->unref_loop(el->data);
+
+  // A task posted after close can never run, so it is dropped.
+  TaskTestData td;
+  el->post_task(el->data, &td, taskCallback);
+  EXPECT_FALSE(td.called);
 }
 
 //===========================================================================

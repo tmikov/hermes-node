@@ -18,7 +18,8 @@ namespace node_compat {
 ///
 /// This adapter owns a uv_loop_t and provides the operations that
 /// Hermes NAPI needs: post_work (background thread work), cancel_work,
-/// post_task (main-thread callbacks), and uv_loop access.
+/// post_task (main-thread callbacks), ref_loop/unref_loop (keeping the
+/// loop alive for referenced thread-safe functions), and uv_loop access.
 ///
 /// Usage:
 ///   UvEventLoop loop;
@@ -27,6 +28,18 @@ namespace node_compat {
 ///   // ... register bindings, bootstrap JS ...
 ///   loop.run();   // blocks until no more active handles/requests
 ///   loop.close();
+///
+/// The UvEventLoop object must outlive the Runtime that owns the env, even
+/// though close() is called first: env teardown runs from ~Runtime and can
+/// still invoke the host vtable (see close()).
+///
+/// Threading: init(), run(), runOnce() and close() must all be called on one
+/// thread -- the loop thread, captured by init(). Of the host callbacks,
+/// post_task may be called from any thread, since that is how a thread-safe
+/// function dispatches into JS, and post_work follows Node in accepting
+/// off-thread callers. ref_loop and unref_loop are loop-thread only, which
+/// matches Node's own requirement on the thread-safe function ref APIs that
+/// reach them. Debug builds assert on violations.
 class UvEventLoop {
  public:
   UvEventLoop();
