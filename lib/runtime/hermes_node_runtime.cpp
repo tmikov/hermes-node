@@ -1288,7 +1288,8 @@ int runHermesNode(const HermesNodeConfig &config) {
   delete bridgeCtx;
 #endif
 
-  hermes_napi_destroy_env(env);
+  // The env is owned by the Runtime and is torn down when the Runtime is
+  // destroyed.
   hermesRT.reset();
   delete runtimeState;
 
