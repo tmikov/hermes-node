@@ -38,24 +38,53 @@ namespace node_compat {
 static void (*s_triggerAsyncBreak)(void *) = nullptr;
 static void *s_triggerAsyncBreakData = nullptr;
 
+/// Cancel of an async break executing JS has not yet observed. Returns
+/// whether a request was pending. See RuntimeState::cancelAsyncBreakFn.
+static bool (*s_cancelAsyncBreak)(void *) = nullptr;
+static void *s_cancelAsyncBreakData = nullptr;
+
 /// Whether the SIGINT watchdog is currently active.
 static std::atomic<bool> s_sigintWatching{false};
 
-/// Whether a SIGINT was received while the watchdog was active.
+/// Whether a SIGINT was received while the watchdog was active and has not
+/// yet been delivered. Delivery-once: converting the interrupt into a thrown
+/// ERR_SCRIPT_EXECUTION_INTERRUPTED clears it, so stopSigintWatchdog() only
+/// reports signals that no script evaluation consumed.
 static std::atomic<bool> s_sigintReceived{false};
+
+/// Number of vm script evaluations currently on the stack (nested via
+/// hermes_run_bytecode reentering JS which may call runInContext again).
+/// The SIGINT async break is only triggered while this is nonzero: the
+/// signal's scope is the script evaluation the watchdog is armed around,
+/// not whatever JS happens to execute next.
+static std::atomic<int> s_vmScriptDepth{0};
 
 /// Previous SIGINT handler, restored when the watchdog stops.
 static struct sigaction s_previousSigaction;
 
 /// SIGINT signal handler. Called from the signal handler context.
-/// Must be async-signal-safe: only sets atomic flags and calls
+/// Must be async-signal-safe: only reads/sets atomic flags and calls
 /// the async break callback (which is documented as safe from any thread
 /// or signal handler).
 static void sigintHandler(int /*signo*/) {
   s_sigintReceived.store(true, std::memory_order_relaxed);
-  if (s_triggerAsyncBreak) {
+  // Only interrupt when a vm script is actually executing. Outside one, the
+  // signal stays latched: a script starting later delivers it at entry, and
+  // stopSigintWatchdog() reports it otherwise (the REPL then emits
+  // 'SIGINT'). An ungated break here would detonate at the next async break
+  // check in *any* JS as an uncatchable TimeoutError.
+  if (s_vmScriptDepth.load(std::memory_order_relaxed) > 0 &&
+      s_triggerAsyncBreak) {
     s_triggerAsyncBreak(s_triggerAsyncBreakData);
   }
+}
+
+/// Throw the catchable error that represents a SIGINT-interrupted script.
+static void throwScriptInterrupted(napi_env env) {
+  napi_throw_error(
+      env,
+      "ERR_SCRIPT_EXECUTION_INTERRUPTED",
+      "Script execution was interrupted by `SIGINT`");
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +239,27 @@ static napi_value contextifyScriptRunInContext(
   napi_get_value_external(env, external, &data);
   auto *compiled = static_cast<CompiledScript *>(data);
 
+  // Enter the interruptible region, then check for an already-pending
+  // SIGINT. The order matters against the signal handler's record-then-test:
+  // a signal arriving before the increment is seen by the check below; one
+  // arriving after it triggers an async break inside the script. Either way
+  // it is delivered, with no window in between.
+  s_vmScriptDepth.fetch_add(1, std::memory_order_relaxed);
+  if (s_sigintWatching.load(std::memory_order_relaxed) &&
+      s_sigintReceived.load(std::memory_order_relaxed)) {
+    // The interrupt request precedes this evaluation, so cancel the work
+    // rather than starting it: deliver the catchable error at entry without
+    // running the script. Also clear any unconsumed async break -- the
+    // signal may have raced a previous script's completion.
+    s_vmScriptDepth.fetch_sub(1, std::memory_order_relaxed);
+    s_sigintReceived.store(false, std::memory_order_relaxed);
+    if (s_cancelAsyncBreak)
+      s_cancelAsyncBreak(s_cancelAsyncBreakData);
+    throwScriptInterrupted(env);
+    napi_close_handle_scope(env, scope);
+    return nullptr;
+  }
+
   // Execute the cached bytecode.
   napi_value result;
   napi_status st = hermes_run_bytecode(
@@ -222,16 +272,31 @@ static napi_value contextifyScriptRunInContext(
       nullptr, // flags: defaults
       &result);
 
+  s_vmScriptDepth.fetch_sub(1, std::memory_order_relaxed);
+
+  // Cancel any async break the script did not consume (a SIGINT that raced
+  // its completion). Without this the request stays pending in the runtime
+  // and would terminate the next, unrelated JS execution. The return value
+  // also tells us whether a failure below was the interrupt firing (request
+  // consumed by the interpreter -> not pending anymore) or the script's own
+  // exception with the signal still undelivered. Gated on the watchdog being
+  // active so we only ever discard breaks the watchdog itself caused.
+  bool breakWasPending = false;
+  if (s_sigintWatching.load(std::memory_order_relaxed) && s_cancelAsyncBreak)
+    breakWasPending = s_cancelAsyncBreak(s_cancelAsyncBreakData);
+
   if (st != napi_ok) {
-    // Check if this failure was caused by a SIGINT-triggered async break.
-    if (s_sigintReceived.load(std::memory_order_relaxed)) {
+    if (s_sigintReceived.load(std::memory_order_relaxed) && !breakWasPending) {
+      // The interpreter consumed the SIGINT break: the pending exception is
+      // the uncatchable TimeoutError it raised. Convert it into a catchable
+      // error and mark the signal delivered.
+      s_sigintReceived.store(false, std::memory_order_relaxed);
       napi_value exc;
       napi_get_and_clear_last_exception(env, &exc);
-      napi_throw_error(
-          env,
-          "ERR_SCRIPT_EXECUTION_INTERRUPTED",
-          "Script execution was interrupted by `SIGINT`");
+      throwScriptInterrupted(env);
     }
+    // Otherwise the script failed on its own; propagate its exception
+    // unchanged. A still-latched SIGINT is reported by stopSigintWatchdog().
     napi_close_handle_scope(env, scope);
     return nullptr;
   }
@@ -348,6 +413,8 @@ static napi_value startSigintWatchdogCb(
     if (rtState && rtState->triggerAsyncBreakFn) {
       s_triggerAsyncBreak = rtState->triggerAsyncBreakFn;
       s_triggerAsyncBreakData = rtState->triggerAsyncBreakData;
+      s_cancelAsyncBreak = rtState->cancelAsyncBreakFn;
+      s_cancelAsyncBreakData = rtState->cancelAsyncBreakData;
     }
 
     if (!s_triggerAsyncBreak) {
@@ -391,6 +458,12 @@ static napi_value stopSigintWatchdogCb(
 
     hadPendingSigint = s_sigintReceived.load(std::memory_order_relaxed);
     s_sigintReceived.store(false, std::memory_order_relaxed);
+
+    // Discard any async break the interpreter never consumed (a SIGINT that
+    // raced a script's completion window) so it cannot leak into unrelated
+    // JS after the watchdog is gone.
+    if (s_cancelAsyncBreak)
+      s_cancelAsyncBreak(s_cancelAsyncBreakData);
   }
 
   napi_value result;

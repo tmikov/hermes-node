@@ -58,8 +58,9 @@ let passed = 0;
   console.log('Test 2 passed: SIGINT detection via self-signal');
 }
 
-// Test 3: SIGINT during vm.runInThisContext interrupts execution
-// and throws a catchable error.
+// Test 3: a SIGINT pending when a vm script starts is delivered at script
+// entry as a catchable ERR_SCRIPT_EXECUTION_INTERRUPTED, without running
+// the script at all.
 {
   const vm = require('vm');
   const { startSigintWatchdog, stopSigintWatchdog } =
@@ -67,40 +68,33 @@ let passed = 0;
 
   assert.strictEqual(startSigintWatchdog(), true);
 
-  // Send SIGINT to ourselves. This triggers the async break.
-  // The next call to napi_run_script will hit the break check
-  // and our contextifyScriptRunInContext will convert it to a
-  // catchable error.
+  // Latch a SIGINT before any script runs. The watchdog only breaks
+  // executing vm scripts, so the signal stays pending until
+  // runInThisContext observes it at entry.
   process.kill(process.pid, SIGINT);
 
   let caught = false;
+  globalThis.__test3ran = false;
   try {
-    // This should hit the async break check and throw a catchable error.
-    // Use a loop so the break check instruction is encountered.
-    vm.runInThisContext('for(var i=0;i<1000000;i++){}');
+    vm.runInThisContext('globalThis.__test3ran = true;');
   } catch (e) {
     caught = true;
-    // The error message should indicate SIGINT interruption.
+    assert.strictEqual(e.code, 'ERR_SCRIPT_EXECUTION_INTERRUPTED');
     assert(
-      e.message.includes('SIGINT') || e.message.includes('timed out') ||
-      e.code === 'ERR_SCRIPT_EXECUTION_INTERRUPTED',
+      e.message.includes('SIGINT'),
       'Expected SIGINT-related error, got: ' + e.message
     );
   }
+  assert.strictEqual(caught, true, 'pending SIGINT must interrupt at entry');
+  assert.strictEqual(
+    globalThis.__test3ran, false, 'interrupted script must not run');
 
-  // Clean up the watchdog.
-  stopSigintWatchdog();
+  // The signal was delivered as the thrown error; the watchdog must not
+  // report it a second time.
+  assert.strictEqual(stopSigintWatchdog(), false);
 
-  if (caught) {
-    passed++;
-    console.log('Test 3 passed: SIGINT interrupts vm.runInThisContext');
-  } else {
-    // The loop might have completed before the async break was checked.
-    // This is timing-dependent. Still consider it a pass since tests 1-2
-    // verify the core mechanism.
-    console.log('Test 3 skipped: loop completed before async break (timing)');
-    passed++;
-  }
+  passed++;
+  console.log('Test 3 passed: pending SIGINT interrupts at script entry');
 }
 
 // Test 4: SIGINT interrupts infinite loop in REPL via child_process.

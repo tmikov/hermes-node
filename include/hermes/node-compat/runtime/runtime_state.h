@@ -33,6 +33,12 @@ struct RuntimeState {
   void (*triggerAsyncBreakFn)(void *) = nullptr;
   void *triggerAsyncBreakData = nullptr;
 
+  // Cancel an async break requested via triggerAsyncBreakFn that executing
+  // JS has not yet observed. Returns whether a request was pending. JS
+  // thread only (it races the interpreter's consumption otherwise).
+  bool (*cancelAsyncBreakFn)(void *) = nullptr;
+  void *cancelAsyncBreakData = nullptr;
+
   // Stream base shared typed array (replaces s_streamBaseState).
   int32_t *streamBaseState = nullptr;
 
