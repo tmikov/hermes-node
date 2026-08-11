@@ -99,6 +99,7 @@ internal/worker/js_transferable
 net
 os
 path
+process
 querystring
 stream
 stream/promises
