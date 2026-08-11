@@ -87,6 +87,7 @@ set(HERMES_NODE_LIT_PARAMS
   hermes_node=${HERMES_TOOLS_OUTPUT_DIR}/hermes-node
   hermes=${HERMES_TOOLS_OUTPUT_DIR}/hermes
   FileCheck=${HERMES_TOOLS_OUTPUT_DIR}/FileCheck
+  not=${HERMES_TOOLS_OUTPUT_DIR}/not
   source_dir=${CMAKE_CURRENT_SOURCE_DIR}
   test_exec_root=${CMAKE_CURRENT_BINARY_DIR}/test
   hello_addon=$<TARGET_FILE:hello_addon>

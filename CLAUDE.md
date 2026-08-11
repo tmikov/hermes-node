@@ -75,7 +75,8 @@ JS tests use LLVM Lit (`test/lit.cfg`), run in parallel via `check-hermes-node-j
 - **PASS-check tests** (`test/*.js`): `// RUN: %hermes-node %s | %FileCheck %s` + `// CHECK: PASS`
 - **Node-ported tests** (`test/node-tests/parallel/*.js`): `// RUN: TEST_THREAD_ID=$$ %hermes-node %s`
 - **Primordials test**: `// RUN: cat %source_dir/libjs/primordials.js %s > %t.js && %hermes -Xasync-generators %t.js`
-- Run single test: `python3 cmake-build-asan/bin/hermes-lit test/test-foo.js --param hermes_node=cmake-build-asan/bin/hermes-node --param hermes=cmake-build-asan/bin/hermes --param FileCheck=cmake-build-asan/bin/FileCheck --param source_dir=$(pwd) --param test_exec_root=cmake-build-asan/test`
+- **Expected-failure tests**: `%not` runs a command that must exit non-zero, e.g. `// RUN: %not %hermes-node %s 2>&1 | %FileCheck %s`
+- Run single test (paths must be absolute): `python3 cmake-build-asan/bin/hermes-lit $(pwd)/test/test-foo.js --param hermes_node=$(pwd)/cmake-build-asan/bin/hermes-node --param hermes=$(pwd)/cmake-build-asan/bin/hermes --param FileCheck=$(pwd)/cmake-build-asan/bin/FileCheck --param not=$(pwd)/cmake-build-asan/bin/not --param source_dir=$(pwd) --param test_exec_root=$(pwd)/cmake-build-asan/test`
 
 ## Decisions
 
