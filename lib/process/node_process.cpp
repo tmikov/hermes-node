@@ -42,6 +42,10 @@
 namespace hermes {
 namespace node_compat {
 
+/// The Node.js release whose lib/*.js files are bundled. process.version and
+/// process.versions.node both derive from this, so they cannot drift apart.
+static constexpr const char *kBundledNodeVersion = "24.13.0";
+
 // ============================================================================
 // process.env implementation
 //
@@ -831,12 +835,15 @@ napi_status NodeProcess::create(napi_env env, napi_value *result) {
   NAPI_RETURN_IF_NOT_OK(setStringProp(env, process, "arch", "unknown"));
 #endif
 
-  // process.version
-  NAPI_RETURN_IF_NOT_OK(setStringProp(
-      env,
-      process,
-      "version",
-      version_.empty() ? "v0.1.0-hermes" : version_.c_str()));
+  // process.version, and process.versions.node below, which Node keeps as the
+  // same string modulo the leading "v".
+  std::string version =
+      version_.empty() ? std::string("v") + kBundledNodeVersion : version_;
+  std::string versionNode =
+      version.compare(0, 1, "v") == 0 ? version.substr(1) : version;
+
+  NAPI_RETURN_IF_NOT_OK(
+      setStringProp(env, process, "version", version.c_str()));
 
   // process.versions
   {
@@ -845,7 +852,8 @@ napi_status NodeProcess::create(napi_env env, napi_value *result) {
     NAPI_RETURN_IF_NOT_OK(setStringProp(env, versions, "hermes", "0.1.0"));
     NAPI_RETURN_IF_NOT_OK(
         setStringProp(env, versions, "uv", uv_version_string()));
-    NAPI_RETURN_IF_NOT_OK(setStringProp(env, versions, "node", "24.13.0"));
+    NAPI_RETURN_IF_NOT_OK(
+        setStringProp(env, versions, "node", versionNode.c_str()));
     NAPI_RETURN_IF_NOT_OK(setStringProp(env, versions, "openssl", "picohash"));
     NAPI_RETURN_IF_NOT_OK(setProp(env, process, "versions", versions));
   }

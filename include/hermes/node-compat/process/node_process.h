@@ -44,7 +44,8 @@ class NodeProcess {
   void setExecPath(std::string execPath);
 
   /// Override the reported process.version string. Must be called before
-  /// create(). If not set, defaults to "v0.1.0-hermes".
+  /// create(). If not set, defaults to the bundled Node.js version.
+  /// process.versions.node follows it with any leading "v" removed.
   void setVersion(std::string version);
 
   /// Create the process object and return it.

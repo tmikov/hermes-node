@@ -177,7 +177,8 @@ TEST_F(NodeProcessTest, ArchIsString) {
 
 TEST_F(NodeProcessTest, VersionIsString) {
   std::string version = evalString("process.version");
-  EXPECT_EQ(version, "v0.1.0-hermes");
+  EXPECT_EQ(version, "v24.13.0");
+  EXPECT_EQ(version, "v" + evalString("process.versions.node"));
 }
 
 TEST_F(NodeProcessTest, VersionsObject) {
