@@ -7,6 +7,7 @@
 const {
   ArrayPrototypePush,
   AtomicsWait,
+  DateNow,
   Int32Array,
   MathMax,
   Number,
@@ -50,7 +51,12 @@ const {
 const BUSY_WRITE_TIMEOUT = 100;
 const kEmptyBuffer = Buffer.allocUnsafe(0);
 
-const kNil = new Int32Array(constructSharedArrayBuffer(4));
+// Hermes has no SharedArrayBuffer or Atomics, so the Atomics.wait sleep below
+// is unavailable and the buffer it waits on cannot even be constructed. Build
+// it only when Atomics is present; sleep() busy-waits otherwise.
+const kNil = AtomicsWait !== undefined ?
+  new Int32Array(constructSharedArrayBuffer(4)) :
+  null;
 
 function sleep(ms) {
   // Also filters out NaN, non-number types, including empty strings, but allows bigints
@@ -61,6 +67,14 @@ function sleep(ms) {
     }
     throw new ERR_INVALID_ARG_VALUE.RangeError('ms', ms,
                                                'must be a number greater than 0 and less than Infinity');
+  }
+
+  if (AtomicsWait === undefined) {
+    // Only reached on the EAGAIN/EBUSY retry path of a synchronous write, so
+    // spinning here costs nothing in the common case.
+    const deadline = DateNow() + Number(ms);
+    while (DateNow() < deadline);
+    return;
   }
 
   AtomicsWait(kNil, 0, 0, Number(ms));
