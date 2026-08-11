@@ -78,6 +78,12 @@ JS tests use LLVM Lit (`test/lit.cfg`), run in parallel via `check-hermes-node-j
 - **Expected-failure tests**: `%not` runs a command that must exit non-zero, e.g. `// RUN: %not %hermes-node %s 2>&1 | %FileCheck %s`
 - Run single test (paths must be absolute): `python3 cmake-build-asan/bin/hermes-lit $(pwd)/test/test-foo.js --param hermes_node=$(pwd)/cmake-build-asan/bin/hermes-node --param hermes=$(pwd)/cmake-build-asan/bin/hermes --param FileCheck=$(pwd)/cmake-build-asan/bin/FileCheck --param not=$(pwd)/cmake-build-asan/bin/not --param source_dir=$(pwd) --param test_exec_root=$(pwd)/cmake-build-asan/test`
 
+Unit tests (GTest) are discovered and run by Lit too (`unittests/lit.cfg`), via
+the `check-hermes-node-unit` target. `check-hermes-node` runs both suites, so a
+failing unit test fails the build.
+
+- Run one binary directly: `cmake-build-asan/unittests/NodeProcessTest --gtest_filter=...`
+
 ## Decisions
 
 - Primordials: thin shim (Option B) — re-export builtins, no tamper-resistance

@@ -99,8 +99,15 @@ add_lit_testsuite(check-hermes-node-js "Running hermes-node JS tests"
   DEPENDS hermes hermes-node hello_addon
 )
 
+# Unit tests (GTest, discovered and run by Lit)
+add_lit_testsuite(check-hermes-node-unit "Running hermes-node unit tests"
+  ${CMAKE_CURRENT_SOURCE_DIR}/unittests
+  PARAMS unittests_dir=${CMAKE_CURRENT_BINARY_DIR}/unittests
+  DEPENDS NodeCompatUnitTests
+)
+
 # check-hermes-node target: run all tests (unit tests + JS tests)
 add_custom_target(check-hermes-node
-  DEPENDS NodeCompatUnitTests check-hermes-node-js
+  DEPENDS check-hermes-node-unit check-hermes-node-js
   COMMENT "Running hermes-node-compat tests"
 )
