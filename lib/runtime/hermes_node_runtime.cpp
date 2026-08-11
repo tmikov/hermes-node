@@ -1157,7 +1157,15 @@ int runHermesNode(const HermesNodeConfig &config) {
         printAndClearException(env);
     }
 
-    eventLoop.run();
+    // uv_run() returns as soon as nothing keeps the loop alive, but a
+    // callback in that last iteration may well have scheduled a tick, a
+    // microtask, or a fresh handle. Node drains those and re-checks
+    // liveness before winding down; doing the same here is what keeps work
+    // scheduled from the final callback from being dropped on the floor.
+    do {
+      eventLoop.run();
+      drainTicksImpl(&tickDrainData);
+    } while (uv_loop_alive(eventLoop.getLoop()));
   }
 
   // 15. Emit 'exit' event on process object.
