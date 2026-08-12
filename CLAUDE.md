@@ -16,6 +16,7 @@ Node.js API compatibility layer for Hermes. Ports Node's native bindings to Node
 - C++ libraries: `lib/<name>/` with own `CMakeLists.txt`
 - Public headers: `include/hermes/node-compat/<name>/`
 - Vendored unmodified deps: `external/$lib/$lib` (outer dir has README + wrapper CMake, inner dir is upstream source)
+- `external/hermes-parser-native/` is a temporary vendored copy of the Hermes native parser addon, not a submodule-style unmodified dep; it has its own README covering provenance, re-sync steps, and when to delete it
 - Vendored Node JS (will be modified): `libjs-node/`
 - Our JS: `libjs/`
 - Examples: `examples/` — each subdirectory has its own `package.json` + `package-lock.json`; `node_modules/` is gitignored (users run `npm install`)
@@ -83,6 +84,12 @@ the `check-hermes-node-unit` target. `check-hermes-node` runs both suites, so a
 failing unit test fails the build.
 
 - Run one binary directly: `cmake-build-asan/unittests/NodeProcessTest --gtest_filter=...`
+
+`check-hermes-node-examples` runs the examples under `examples/` and is
+**not** part of `check-hermes-node`: examples need a network `npm install`,
+while the default suite stays offline. Run it against `cmake-build-release`
+(it skips under an ASAN build -- the bundler example is too slow under ASAN
+to be useful as a check).
 
 ## Decisions
 
