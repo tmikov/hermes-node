@@ -1091,6 +1091,55 @@ int runHermesNode(const HermesNodeConfig &config) {
   }
 #endif
 
+  // 12c. Preload --require modules, before any user code runs.
+  //
+  // Module._preloadModules is Node's own entry point for this: it resolves
+  // each request against a dummy parent module in the current directory, so
+  // relative paths, bare package names, and requires made *by* a preloaded
+  // module all behave as they do in Node.
+  if (exitCode == 0 && !config.requireModules.empty()) {
+    napi_value cjsLoader;
+    if (loader.require(env, "internal/modules/cjs/loader", &cjsLoader) !=
+        napi_ok) {
+      std::fprintf(
+          stderr, "Error: failed to load internal/modules/cjs/loader\n");
+      printAndClearException(env);
+      exitCode = 1;
+    } else {
+      napi_value moduleCtor, preloadFn;
+      napi_get_named_property(env, cjsLoader, "Module", &moduleCtor);
+      napi_get_named_property(env, moduleCtor, "_preloadModules", &preloadFn);
+
+      napi_valuetype preloadType;
+      napi_typeof(env, preloadFn, &preloadType);
+      if (preloadType != napi_function) {
+        std::fprintf(stderr, "Error: Module._preloadModules is unavailable\n");
+        exitCode = 1;
+      } else {
+        napi_value requests;
+        napi_create_array_with_length(
+            env, config.requireModules.size(), &requests);
+        for (size_t i = 0; i < config.requireModules.size(); ++i) {
+          napi_value request;
+          napi_create_string_utf8(
+              env,
+              config.requireModules[i].c_str(),
+              NAPI_AUTO_LENGTH,
+              &request);
+          napi_set_element(env, requests, static_cast<uint32_t>(i), request);
+        }
+
+        napi_value preloadResult;
+        if (napi_call_function(
+                env, moduleCtor, preloadFn, 1, &requests, &preloadResult) !=
+            napi_ok) {
+          printAndClearException(env);
+          exitCode = 1;
+        }
+      }
+    }
+  }
+
   // 13. Load and execute the user script, eval code, or start the REPL.
   if (exitCode == 0) {
     if (!config.scriptPath.empty()) {

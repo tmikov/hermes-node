@@ -25,6 +25,10 @@ struct HermesNodeConfig {
   /// process.argv values. First element should be the binary name.
   std::vector<std::string> argv;
 
+  /// Modules to require before the script, eval code, or REPL runs, in the
+  /// order given. Resolved like require() from the current directory.
+  std::vector<std::string> requireModules;
+
   /// Override process.version. Empty = use default.
   std::string nodeVersion;
 

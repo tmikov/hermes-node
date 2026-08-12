@@ -26,6 +26,7 @@ static void printUsage(const char *argv0) {
       "  --inspect-brk[=[host:]port]    Enable inspector, break before user code\n"
       "  --inspect-open                 Open the DevTools URL in the system browser\n"
       "  --node-version <version>       Override process.version (e.g. v24.13.0)\n"
+      "  -r, --require <module>         Preload a module before the script (repeatable)\n"
       "  -v, --version                  Print the hermes-node version and exit\n"
       "  -h, --help                     Show this help\n",
       argv0);
@@ -133,6 +134,14 @@ int main(int argc, char **argv) {
         return 1;
       }
       config.nodeVersion = argv[++i];
+    } else if (
+        std::strcmp(argv[i], "-r") == 0 ||
+        std::strcmp(argv[i], "--require") == 0) {
+      if (i + 1 >= argc) {
+        std::fprintf(stderr, "Error: %s requires a value\n", argv[i]);
+        return 1;
+      }
+      config.requireModules.push_back(argv[++i]);
     } else if (std::strcmp(argv[i], "--") == 0) {
       if (i + 1 < argc && !hasEvalCode) {
         scriptArgIndex = i + 1;
