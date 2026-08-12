@@ -1,0 +1,47 @@
+{
+  "manifestVersion": 1,
+  "generatedAt": "2026-08-10T01:53:50.967Z",
+  "files": {
+    "HermesAST.js.flow": "d88f0c47a68de0cb10146c7a41d7dd365f8a7d96207891631dd49004400e9625",
+    "HermesASTAdapter.js": "d96495e77f06e1061a36b69d6820a3f8f501ede96a176bcf7be766322aa66745",
+    "HermesParser.js": "b2efb8608a2553322a2dc67b5e37b76b5ff4f1c7b0dd6390e4ee0a0a125c7773",
+    "HermesParserAddon.js": "336c43337d2a5a98bf08d1d831e3eda1e676676c018c3abb442c6fcd34a25369",
+    "HermesParserDecodeUTF8String.js": "5ebc7d829b554830e2048018d8f032f4ea143790911d97f1755faae7eeac5ac1",
+    "HermesParserDeserializer.js": "d6ae775df742be218875434770c0da65b314570d0e585a65fe251b4d4e18d367",
+    "HermesParserKindHash.js": "579f693e5d0fddfa08e4fbc91e660ae4d793fc5d0be05d7d6665fec1465ff417",
+    "HermesParserNodeDeserializers.js": "9c123abd43f7219a5710d8227d454fe20ed9c4f3ca09add0a03119bc0ac8d125",
+    "HermesParserNodeDeserializers.js.flow": "e4ce4cc5e2f699ff01bdf37673b3003ed40bdf251604025d3e1ec692f9eb49d9",
+    "HermesToESTreeAdapter.js": "bc978bbdd884b38e12b7df866c4f3e96232efc922ee54928ed4350c0fd943a35",
+    "ParserOptions.js": "d9974c2cae53758167d9f6fd184609c0ac2d47ce73ef9243c0ae67e52684c885",
+    "babel/TransformESTreeToBabel.js": "718bed12566bada2cd5cea1d7f125b6bcc30cfea61c1fbf06692209e4193a1e9",
+    "estree/StripFlowTypes.js": "ee3af225bacbd1ae79b633f5f40878b2c2c21a498a2ee951904b985f130064a0",
+    "estree/StripFlowTypesForBabel.js": "5b3b87de0f225def5f71ef7725505f5d4b905da67b2e73dafc4dcedecb28b1e6",
+    "estree/TransformComponentSyntax.js": "e8336be8661fdd12f2204f3247725fb0e950109c586bf0a477da9ca193fe28b7",
+    "estree/TransformEnumSyntax.js": "7e62c0793b68d2792430d5024342e956987979a1bce312bbb8c5c43514acbbec",
+    "estree/TransformMatchSyntax.js": "f2735bb1a8a2c57a14b4f9c0159b0509f20d604188a5e083cf69c75d08b02e58",
+    "estree/TransformRecordSyntax.js": "af23e394102171e465cad46754464ca9cb9a3fb3c6edfafde7a5b188ac4f38c5",
+    "generated/ESTreeVisitorKeys.js": "e39302343085ecbcbdaee15d2a0e5e54cf4855d605abd06f21af518a5d8bbb0c",
+    "generated/ESTreeVisitorKeys.js.flow": "cc7e4b727d7eab3c0b764a927eb283159732162f8a9ac5c2cb609297a51812b3",
+    "generated/ParserVisitorKeys.js": "e1a2308daee2ab901dd689c956b4c8aa9ff6157a52f867cf2d95037e0b1143a0",
+    "generated/ParserVisitorKeys.js.flow": "1f8200beb1be66cf173419e1ccd1b0e9f51836009503f0eeb537cfe184e2e7af",
+    "getModuleDocblock.js": "62087f829c36065d845d393137ad4816b459abb6a65ce0ff5f955ea75478e293",
+    "index.js": "4ea4e30be4a591c809d0083db2d2c2b5d23be12134562809abb59cf280580167",
+    "transform/SimpleTransform.js": "1f00cd5222d16b53ec22176e6dc9eea9538088d69ebd925ac3b9b2056e17053c",
+    "transform/astArrayMutationHelpers.js": "30e2c7730a7ad5d4c272b88655c433e59767c2ca36943aa7f18b340fc019acd1",
+    "transform/astNodeMutationHelpers.js": "d6c6d8a99b86cbcb4dcc678c9d773553cb7dcbb0d56df841ae9a4de94b486fcb",
+    "traverse/SimpleTraverser.js": "f3ac5a574a965a38acee5e6053800500ab185422448941714a99e38f6aa3c25f",
+    "traverse/getVisitorKeys.js": "93a40ab2e91dc2be608964e23b24c55941b1a8613b9bafe3ff984a8e2f3ba36f",
+    "utils/Builders.js": "0f71f9ad9fd7f180f86f1ff68aab140b97081c16bb3674c290fd9a9d0492f7c5",
+    "utils/GenID.js": "8252fd83e0f65f24e6b14e54da633dbe24b41473f4dfa4d6370f7040fc771fa3",
+    "utils/createSyntaxError.js": "b36273d9c36692c894459fa4f5d473fe936dfc2828db0427001c9e12e67d68df",
+    "utils/isReservedWord.js": "1921f62505650b113c275a8e15ecefbf6797102863ec30fbdecb72ab4b1e89b3",
+    "utils/mutateESTreeASTForPrettier.js": "874557615cae9aef633ba2b18c23c45800f12147224158e675d2eaded65c2a61"
+  },
+  "prebuilds": {
+    "linux-x64/hermes-parser.node": {
+      "sha256": "8fbb24c111720fba6c055dad1c873ffffeb49e9e0fadd45781c462892b47207c",
+      "size": 1139704,
+      "mtime": "2026-08-10T01:53:50.933Z"
+    }
+  }
+}

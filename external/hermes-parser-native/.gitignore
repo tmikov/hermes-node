@@ -1,0 +1,6 @@
+# The addon is copied here by the build (see CMakeLists.txt) so the
+# package's own loader finds it without an environment variable.
+package/prebuilds/
+
+# Only needed when regenerating dist/ (see scripts/).
+scripts/node_modules/

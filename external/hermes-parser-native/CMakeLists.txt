@@ -49,3 +49,34 @@ if (APPLE)
   target_link_options(hermes-parser-napi PRIVATE
     "SHELL:-undefined dynamic_lookup")
 endif ()
+
+# The package's loader (package/dist/HermesParserAddon.js) looks first at
+# package/prebuilds/<platform>-<arch>/hermes-parser.node. Putting the build
+# output there lets the vendored package behave exactly like a published
+# one, so the example needs no environment variable.
+#
+# The directory is gitignored. Note that several build directories write to
+# the same place, so the last build wins; anything that cares which addon it
+# loads should set HERMES_PARSER_NATIVE_ADDON explicitly.
+if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  set(HPN_PLATFORM "darwin")
+else ()
+  set(HPN_PLATFORM "linux")
+endif ()
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+  set(HPN_ARCH "arm64")
+else ()
+  set(HPN_ARCH "x64")
+endif ()
+
+set(HPN_PREBUILD_DIR
+  ${CMAKE_CURRENT_SOURCE_DIR}/package/prebuilds/${HPN_PLATFORM}-${HPN_ARCH})
+
+add_custom_command(TARGET hermes-parser-napi POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${HPN_PREBUILD_DIR}
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          $<TARGET_FILE:hermes-parser-napi>
+          ${HPN_PREBUILD_DIR}/hermes-parser.node
+  COMMENT "Staging hermes-parser.node into the vendored package"
+  VERBATIM
+)
