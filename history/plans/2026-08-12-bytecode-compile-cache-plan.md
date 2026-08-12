@@ -825,9 +825,17 @@ TEST(CompileCacheTest, DefaultRootFallsBackToHome) {
 }
 
 TEST(CompileCacheTest, DefaultRootIsEmptyWithoutHome) {
+  // GoogleTest runs every test in one process, so HOME must be restored or
+  // later tests inherit its absence.
+  const char *savedHome = ::getenv("HOME");
+  std::string home = savedHome ? savedHome : "";
   ::unsetenv("XDG_CACHE_HOME");
   ::unsetenv("HOME");
+
   EXPECT_TRUE(compileCacheDefaultRoot().empty());
+
+  if (!home.empty())
+    ::setenv("HOME", home.c_str(), 1);
 }
 
 TEST(CompileCacheTest, PruneKeepsTheThreeMostRecentPlusCurrent) {
@@ -1912,6 +1920,10 @@ Create `test/compile-cache-typescript.ts`:
 // RUN: rm -rf %t.cache
 // RUN: %hermes-node --compile-cache=%t.cache %s > %t.cold.txt
 // RUN: %FileCheck %s < %t.cold.txt
+// The TypeScript path goes through compileAndRunCallback, so the cold run
+// must leave an entry behind. This is what fails before the change: output
+// equality alone holds either way.
+// RUN: find %t.cache -type f | wc -l | %FileCheck --check-prefix=POPULATED %s
 // RUN: %hermes-node --compile-cache=%t.cache %s > %t.warm.txt
 // RUN: diff %t.cold.txt %t.warm.txt
 
@@ -1924,6 +1936,7 @@ console.log('PASS');
 
 // CHECK: hello world
 // CHECK: PASS
+// POPULATED-NOT: {{^0$}}
 ```
 
 Do not touch the `config.excludes` list in `test/lit.cfg`. It names
@@ -1942,9 +1955,10 @@ python3 cmake-build-asan/bin/hermes-lit $(pwd)/test/compile-cache-typescript.ts 
   --param test_exec_root=$(pwd)/cmake-build-asan/test
 ```
 
-Expected: PASS. The test passes before the change because it only asserts
-output equality, which already holds. It is here as a regression guard: run it
-again after Step 4 and it must still pass.
+Expected: FAIL at the `POPULATED` check -- the cold run leaves the cache
+directory empty, because `compileAndRunCallback` does not consult the cache
+yet. The `hello world` / `PASS` checks and the `diff` already pass; the
+cache-population check is what makes this a failing test.
 
 - [ ] **Step 3: Add includes and link the library**
 
