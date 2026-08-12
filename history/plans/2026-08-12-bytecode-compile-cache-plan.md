@@ -775,6 +775,37 @@ bool dirExists(const std::string &path) {
   return ::stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+/// Saves an environment variable on construction and restores it on
+/// destruction. GoogleTest runs every test in one process, so a test that
+/// changes the environment must put it back -- otherwise the next test
+/// reads the mutated value as if it were the original.
+///
+/// Declare one before any TempDir it interacts with: destructors run in
+/// reverse order, so the TempDir is removed first and the variable is
+/// restored afterwards.
+class EnvGuard {
+ public:
+  explicit EnvGuard(const char *name) : name_(name) {
+    if (const char *v = ::getenv(name)) {
+      had_ = true;
+      value_ = v;
+    }
+  }
+  ~EnvGuard() {
+    if (had_)
+      ::setenv(name_, value_.c_str(), 1);
+    else
+      ::unsetenv(name_);
+  }
+  EnvGuard(const EnvGuard &) = delete;
+  EnvGuard &operator=(const EnvGuard &) = delete;
+
+ private:
+  const char *name_;
+  bool had_ = false;
+  std::string value_;
+};
+
 /// Create \p name under \p root with an mtime \p ageSeconds in the past, so
 /// pruning order is deterministic instead of depending on creation speed.
 ///
@@ -811,14 +842,17 @@ TEST(CompileCacheTest, MakeDirsIsIdempotent) {
 }
 
 TEST(CompileCacheTest, DefaultRootHonoursXdgCacheHome) {
+  EnvGuard xdgGuard("XDG_CACHE_HOME");
+  EnvGuard homeGuard("HOME");
   TempDir dir;
   ::setenv("XDG_CACHE_HOME", dir.path().c_str(), 1);
   EXPECT_EQ(
       dir.path() + "/hermes-node/compile-cache", compileCacheDefaultRoot());
-  ::unsetenv("XDG_CACHE_HOME");
 }
 
 TEST(CompileCacheTest, DefaultRootFallsBackToHome) {
+  EnvGuard xdgGuard("XDG_CACHE_HOME");
+  EnvGuard homeGuard("HOME");
   TempDir dir;
   ::unsetenv("XDG_CACHE_HOME");
   ::setenv("HOME", dir.path().c_str(), 1);
@@ -828,17 +862,11 @@ TEST(CompileCacheTest, DefaultRootFallsBackToHome) {
 }
 
 TEST(CompileCacheTest, DefaultRootIsEmptyWithoutHome) {
-  // GoogleTest runs every test in one process, so HOME must be restored or
-  // later tests inherit its absence.
-  const char *savedHome = ::getenv("HOME");
-  std::string home = savedHome ? savedHome : "";
+  EnvGuard xdgGuard("XDG_CACHE_HOME");
+  EnvGuard homeGuard("HOME");
   ::unsetenv("XDG_CACHE_HOME");
   ::unsetenv("HOME");
-
   EXPECT_TRUE(compileCacheDefaultRoot().empty());
-
-  if (!home.empty())
-    ::setenv("HOME", home.c_str(), 1);
 }
 
 TEST(CompileCacheTest, PruneKeepsCurrentPlusThreeMostRecent) {
