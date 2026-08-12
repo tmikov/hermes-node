@@ -1159,13 +1159,37 @@ int runHermesNode(const HermesNodeConfig &config) {
         exitCode = 1;
       }
     } else if (!config.evalCode.empty()) {
-      napi_value evalScript;
-      napi_create_string_utf8(
-          env, config.evalCode.c_str(), NAPI_AUTO_LENGTH, &evalScript);
-      napi_value evalResult;
-      if (napi_run_script(env, evalScript, &evalResult) != napi_ok) {
-        printAndClearException(env);
+      // Give the code a real Node require (extension dispatch, node_modules
+      // resolution from the current directory) before evaluating it. It is
+      // still evaluated as a script, so it runs at global scope as Node's -e
+      // does. See __setupEvalContext in libjs/loader.js.
+      napi_value setupEvalFn;
+      napi_get_named_property(env, global, "__setupEvalContext", &setupEvalFn);
+
+      napi_valuetype setupEvalType;
+      napi_typeof(env, setupEvalFn, &setupEvalType);
+      if (setupEvalType != napi_function) {
+        std::fprintf(stderr, "Error: __setupEvalContext is unavailable\n");
         exitCode = 1;
+      } else {
+        napi_value setupResult;
+        if (napi_call_function(
+                env, global, setupEvalFn, 0, nullptr, &setupResult) !=
+            napi_ok) {
+          printAndClearException(env);
+          exitCode = 1;
+        }
+      }
+
+      if (exitCode == 0) {
+        napi_value evalScript;
+        napi_create_string_utf8(
+            env, config.evalCode.c_str(), NAPI_AUTO_LENGTH, &evalScript);
+        napi_value evalResult;
+        if (napi_run_script(env, evalScript, &evalResult) != napi_ok) {
+          printAndClearException(env);
+          exitCode = 1;
+        }
       }
     } else if (config.enableRepl) {
       const char *replCode =

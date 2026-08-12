@@ -241,6 +241,46 @@
         CJSModule._load(p.resolve(filepath), null, true);
       };
 
+      // Prepare the scope that -e / --eval code runs in, before the C++
+      // bootstrap evaluates it as a plain script.
+      //
+      // The point is `require`. By default eval code sees globalThis.require,
+      // this bootstrap loader, which resolves embedded module ids and
+      // otherwise just reads the path off disk and compiles it as JavaScript
+      // source. Requiring an addon that way handed the compiler a shared
+      // library ("unrecognized Unicode character \u7f", the first byte of the
+      // ELF magic); requiring a .json file handed it JSON. Replacing it with a
+      // require built for a module named "[eval]" in the current directory
+      // gives Node's behavior: dispatch by extension (.node via
+      // process.dlopen, .json via JSON.parse) and node_modules resolution
+      // rooted at the cwd. Internal module ids still resolve, because
+      // __initCJS wraps Module._load with a fallback to this loader.
+      //
+      // The code is still evaluated as a script rather than wrapped in a
+      // module function, because Node's -e runs at global scope: `var x = 1`
+      // is expected to leave globalThis.x set, and wrapping it would not.
+      globalThis.__setupEvalContext = function() {
+        var CJSModule = requireModule('internal/modules/cjs/loader').Module;
+        var p = requireModule('path');
+        var cwd = process.cwd();
+        var absolute = p.join(cwd, '[eval]');
+
+        // Matching Node exactly: module.id is the bare "[eval]" while
+        // module.filename is absolute, and the __filename / __dirname the
+        // code sees are "[eval]" and "." rather than real paths. Resolution
+        // still happens from the cwd, via module.paths and the absolute
+        // filename handed to createRequire.
+        var mod = new CJSModule('[eval]', null);
+        mod.filename = absolute;
+        mod.paths = CJSModule._nodeModulePaths(cwd);
+
+        globalThis.require = CJSModule.createRequire(absolute);
+        globalThis.module = mod;
+        globalThis.exports = mod.exports;
+        globalThis.__filename = '[eval]';
+        globalThis.__dirname = '.';
+      };
+
       // Initialize Node's CJS loader so Module.builtinModules and other
       // static properties are available before the REPL or user code runs.
       // Also installs fallback resolution and TypeScript support.
