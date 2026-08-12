@@ -727,7 +727,13 @@ module.exports = {builds: [createConfig('simple'), createConfig('music')]};
 
 - [ ] **Step 5: Write package.json**
 
-Create `examples/flow-bundler/package.json`. The dependency list is the bundler's own, minus `flow-bin` (a large binary the bundler does not use) and `hermes-eslint` (unused here), plus the three transform plugins `build.config.js` resolves by name:
+Create `examples/flow-bundler/package.json`. The dependency list is the bundler's own, minus `flow-bin` (a large binary the bundler does not use) and `hermes-eslint` (unused here), plus the three transform plugins `build.config.js` resolves by name.
+
+**Do not remove `hermes-estree` as redundant.** It is the vendored package's own
+and only dependency, and npm 11 defaults to `install-links=false`, which
+symlinks a `file:` dependency without installing its transitive dependencies.
+Declaring it here is what makes a plain `npm install` work; without it the run
+fails with `Cannot find module 'hermes-estree'`.
 
 ```json
 {
@@ -1031,7 +1037,7 @@ Create `external/hermes-parser-native/README.md` covering, in this order:
 2. **Provenance** — source repository `tmikov/hermes`, branch `parser-native`, the commit SHA from Step 1, and the two source paths copied (`tools/hermes-parser-native` → `napi/`, `tools/hermes-parser/js/hermes-parser-native` → `package/`).
 3. **How to re-sync** — recopy the two directories, rerun `cmake --build <dir> --target hermes-parser-native-dist`, rerun the tests.
 4. **Divergences from upstream** — `dist/` is committed here and ignored there; `__tests__`, `__test_utils__`, `__benchmarks__` and `yarn.lock` are not copied; the wrapper `CMakeLists.txt` replaces `napi/CMakeLists.txt`; `scripts/regen-dist.sh` plus its own `package.json` and `babel.config.js` replace upstream's `build-native.sh`, which assumes the Hermes JS workspace; the unit test target is singular.
-5. **Limitations** — builds for the host platform only, `linux-x64` being the only one exercised; `dist/` is generated code, regenerate with the opt-in target after editing `src/`.
+5. **Limitations** — builds for the host platform only, `linux-x64` being the only one exercised; `dist/` is generated code, regenerate with the opt-in target after editing `src/`; and a consumer depending on this package through a `file:` path must either declare `hermes-estree` itself or install with `--install-links=true`, because npm 11 defaults to `install-links=false` and symlinks the package without installing its transitive dependencies. `examples/flow-bundler/package.json` takes the first route.
 6. **The Sema landmine** — with the current submodule pin, `CheckImplicitReturn.cpp:248` asserts on any `try { } catch { } finally { }` in parsed input, because the split that would prevent it is gated on `compile_` at `SemanticResolver.cpp:794` and the parser path runs with `compile=false`. Assertions-enabled builds abort on such input; Release builds are unaffected because `resolveASTForParser` runs only the resolver and never reads the result. The example's own inputs contain none. The fix is on the `sema-implicit-return-fixes` branch, intended for upstream.
 7. **When to delete this directory** — when `hermes-node` supports WebAssembly: `git rm -r external/hermes-parser-native unittests/HermesParserNative`, repoint the example's dependency at `hermes-parser` from npm, and drop the `POST_BUILD` copy, the `hermes-parser-native-dist` target, and the two `add_subdirectory` lines.
 
