@@ -52,3 +52,5 @@ target_link_libraries(CAresIntegrationTest cares_a)
 
 add_node_compat_unittest(LlhttpIntegrationTest LlhttpIntegrationTest.cpp)
 target_link_libraries(LlhttpIntegrationTest llhttp_a)
+
+add_subdirectory(HermesParserNative)
