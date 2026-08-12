@@ -2042,12 +2042,17 @@ At the top of `lib/module-loader/module_loader.cpp`, add:
 #include <napi/hermes_napi_compile.h>
 ```
 
-In `lib/module-loader/CMakeLists.txt`, add:
+In `lib/module-loader/CMakeLists.txt`, add the whole call -- this target does
+not currently have one. `uv_a` is needed because `runtime_state.h`, pulled in
+for `RuntimeState::compileCache`, includes `<uv.h>` directly:
 
 ```cmake
 target_link_libraries(hermesNodeModuleLoader
   PRIVATE
     hermesNodeCompileCache
+    # runtime_state.h (pulled in for RuntimeState::compileCache) includes
+    # uv.h directly.
+    uv_a
 )
 ```
 
