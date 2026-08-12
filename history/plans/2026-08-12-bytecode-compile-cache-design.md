@@ -338,11 +338,7 @@ available for a paranoid mode; it runs automatically only under
 1. Compute `key = crc32(kind, filename)` and `sourceCrc32` / `sourceSize` over
    the source string the caller passed -- unwrapped for `kCommonJS`, wrapped
    for the loader kinds, per the table above.
-2. Look up `key` in the in-memory store. A match with an equal `sourceCrc32`
-   returns immediately. This alone makes the duplicate compile observed in the
-   bundler run (`@babel/parser/lib/index.js`, compiled twice in one process)
-   free the second time.
-3. Open `<root>/v1/<generation>/<ab>/<key>`, read 24 bytes, and check in
+2. Open `<root>/v1/<generation>/<ab>/<key>`, read 24 bytes, and check in
    cheapest-first order: magic, header version, `sourceSize`, `sourceCrc32`.
    Bytecode version, compile flags and wrapper shape are *not* rechecked -- the
    generation directory already established them for every entry inside it.
@@ -369,7 +365,19 @@ cache.
    the same bytes and needs no locking.
 3. Run from the heap buffer already in hand, with a finalizer calling
    `hermes_free_bytecode`. What was just written is never read back.
-4. Record the entry in the in-memory store.
+
+### No in-memory store
+
+Node keeps a `compiler_cache_store_` map so a second request for the same
+module skips the file read, and so `Persist()` can tell which entries changed.
+We have neither need. Write-through means the first compile of a path has
+already written its entry, so a second require in the same process takes the
+ordinary disk hit -- about four syscalls. Against that, an in-memory layer
+would have to hand the *same* mapping to `hermes_run_bytecode` twice, firing
+its `finalize_cb` twice on one region and double-`munmap`ing it, unless the
+mapping were refcounted. The duplicate compile observed in the bundler run
+(`@babel/parser/lib/index.js`, compiled twice in one process) is already
+handled by the disk entry the first compile wrote.
 
 ### Error handling
 
