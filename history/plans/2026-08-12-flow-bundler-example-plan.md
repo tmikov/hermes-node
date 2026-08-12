@@ -895,6 +895,16 @@ fi
 ran=0
 skipped=0
 
+# The bundler takes over ten minutes under ASAN, which makes it useless as
+# a check. Sanitizer coverage of the addon comes from the unit tests in
+# check-hermes-node instead.
+if [ -f "$BUILD_DIR/CMakeCache.txt" ] &&
+   grep -q "^HERMES_ENABLE_ADDRESS_SANITIZER:BOOL=ON" "$BUILD_DIR/CMakeCache.txt"; then
+  echo "SKIP all examples: $BUILD_DIR is an ASAN build (too slow)."
+  echo "Use a Release build: cmake --build cmake-build-release --target check-hermes-node-examples"
+  exit 0
+fi
+
 for runner in "$HERE"/*/run.sh; do
   [ -f "$runner" ] || continue
   dir="$(dirname "$runner")"
@@ -939,7 +949,9 @@ cmake --build cmake-build-release --target check-hermes-node-examples 2>&1 | tai
 
 Expected: `RUN  flow-bundler`, then `PASS: 6 bundles match expected/`, then `examples: 1 ran, 0 skipped`.
 
-- [ ] **Step 4: Verify the skip path**
+- [ ] **Step 4: Verify both skip paths**
+
+Not-installed:
 
 ```bash
 mv examples/flow-bundler/node_modules /tmp/fb-node-modules
@@ -948,6 +960,18 @@ mv /tmp/fb-node-modules examples/flow-bundler/node_modules
 ```
 
 Expected: `SKIP flow-bundler: not installed ...` and `examples: 0 ran, 1 skipped`, exit 0.
+
+ASAN build:
+
+```bash
+cmake -B cmake-build-asan
+cmake --build cmake-build-asan --target check-hermes-node-examples 2>&1 | tail -3
+```
+
+Expected: `SKIP all examples: ... is an ASAN build (too slow).` and exit 0, in
+well under a minute. If it starts bundling instead, the CMakeCache grep in
+Step 1 does not match this repository's variable name — check
+`grep ADDRESS_SANITIZER cmake-build-asan/CMakeCache.txt`.
 
 - [ ] **Step 5: Verify the default suite is unaffected**
 
