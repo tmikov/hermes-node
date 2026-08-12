@@ -49,6 +49,7 @@ add_subdirectory(external/picohash)
 add_subdirectory(external/zlib)
 add_subdirectory(external/brotli)
 add_subdirectory(external/zstd)
+add_subdirectory(external/hermes-parser-native)
 
 # Our C++ libraries
 add_subdirectory(lib/embedded-modules)
