@@ -1467,11 +1467,33 @@ In `test/lit.cfg`, add after the `config.test_exec_root` assignment:
 # The compile cache is on by default. Off for the suite as a whole so tests
 # never share state through the user's real cache directory and ordering does
 # not become a variable; the compile-cache tests opt back in explicitly with
-# their own directory.
+# their own directory, through the %hermes-node-cc substitution below.
+#
+# lit's ShTest replaces the environment rather than merging with the ambient
+# one, which is why PATH and HOME have to be passed through explicitly.
 config.environment['HERMES_NODE_DISABLE_COMPILE_CACHE'] = '1'
 config.environment['PATH'] = os.environ.get('PATH', '')
 config.environment['HOME'] = os.environ.get('HOME', '')
 ```
+
+Then add the opt-in substitution. It MUST be appended **before** `%hermes-node`,
+because lit applies substitutions in list order and `%hermes-node` is a prefix
+of `%hermes-node-cc` -- registering the short name first would rewrite
+`%hermes-node-cc` into `<path-to-binary>-cc`. The existing "longer names first"
+comment in the file is about exactly this hazard.
+
+```python
+# Tests that exercise the compile cache run it through this substitution,
+# which clears the suite-wide disable above. Anything using plain
+# %hermes-node still runs with the cache off.
+config.substitutions.append(
+    ('%hermes-node-cc',
+     'env -u HERMES_NODE_DISABLE_COMPILE_CACHE ' + hermes_node))
+config.substitutions.append(('%hermes-node', hermes_node))
+```
+
+The existing `config.substitutions.append(('%hermes-node', hermes_node))` line
+is replaced by the pair above, not duplicated.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -1487,14 +1509,14 @@ Create `test/compile-cache-enable.js`:
 // when it is disabled. Detection is through the filesystem because the cache
 // is deliberately not observable from JavaScript.
 
-// RUN: rm -rf %t.cache %t.off
-// RUN: %hermes-node --compile-cache=%t.cache %s | %FileCheck %s
+// RUN: rm -rf %t.cache %t.off %t.env
+// RUN: %hermes-node-cc --compile-cache=%t.cache %s | %FileCheck %s
 // RUN: test -d %t.cache/v1
-// RUN: %hermes-node --no-compile-cache --compile-cache=%t.off %s | %FileCheck %s
+// RUN: %hermes-node-cc --no-compile-cache --compile-cache=%t.off %s | %FileCheck %s
 // RUN: test ! -d %t.off
 // RUN: env HERMES_NODE_DISABLE_COMPILE_CACHE=1 %hermes-node --compile-cache=%t.off %s | %FileCheck %s
 // RUN: test ! -d %t.off
-// RUN: env HERMES_NODE_COMPILE_CACHE=%t.env %hermes-node %s | %FileCheck %s
+// RUN: env -u HERMES_NODE_DISABLE_COMPILE_CACHE HERMES_NODE_COMPILE_CACHE=%t.env %hermes-node %s | %FileCheck %s
 // RUN: test -d %t.env/v1
 
 'use strict';
@@ -1657,6 +1679,18 @@ target_compile_definitions(hermesNodeRuntime PRIVATE
 )
 ```
 
+`HERMES_NODE_VERSION_STRING` comes from the generated header
+`hermes/node-compat/version.h`, which this target did not previously consume.
+Add its directory to `target_include_directories` and depend on the generator,
+mirroring what `tools/hermes-node/CMakeLists.txt` already does:
+
+```cmake
+    ${CMAKE_BINARY_DIR}/generated
+```
+```cmake
+add_dependencies(hermesNodeRuntime hermes-node-version)
+```
+
 - [ ] **Step 8: Run the test to verify it passes**
 
 ```bash
@@ -1718,13 +1752,13 @@ Create `test/compile-cache-cjs.js`:
 
 // RUN: rm -rf %t.cache %t.dir && mkdir -p %t.dir
 // RUN: echo 'module.exports = function () { return "first"; };' > %t.dir/dep.js
-// RUN: %hermes-node --compile-cache=%t.cache %s %t.dir/dep.js > %t.cold.txt
+// RUN: %hermes-node-cc --compile-cache=%t.cache %s %t.dir/dep.js > %t.cold.txt
 // RUN: %FileCheck --check-prefix=FIRST %s < %t.cold.txt
 // RUN: find %t.cache -type f | wc -l | %FileCheck --check-prefix=POPULATED %s
-// RUN: %hermes-node --compile-cache=%t.cache %s %t.dir/dep.js > %t.warm.txt
+// RUN: %hermes-node-cc --compile-cache=%t.cache %s %t.dir/dep.js > %t.warm.txt
 // RUN: diff %t.cold.txt %t.warm.txt
 // RUN: echo 'module.exports = function () { return "second"; };' > %t.dir/dep.js
-// RUN: %hermes-node --compile-cache=%t.cache %s %t.dir/dep.js | %FileCheck --check-prefix=SECOND %s
+// RUN: %hermes-node-cc --compile-cache=%t.cache %s %t.dir/dep.js | %FileCheck --check-prefix=SECOND %s
 
 'use strict';
 
@@ -1956,13 +1990,13 @@ Create `test/compile-cache-typescript.ts`:
 // warm run produces identical output.
 
 // RUN: rm -rf %t.cache
-// RUN: %hermes-node --compile-cache=%t.cache %s > %t.cold.txt
+// RUN: %hermes-node-cc --compile-cache=%t.cache %s > %t.cold.txt
 // RUN: %FileCheck %s < %t.cold.txt
 // The TypeScript path goes through compileAndRunCallback, so the cold run
 // must leave an entry behind. This is what fails before the change: output
 // equality alone holds either way.
 // RUN: find %t.cache -type f | wc -l | %FileCheck --check-prefix=POPULATED %s
-// RUN: %hermes-node --compile-cache=%t.cache %s > %t.warm.txt
+// RUN: %hermes-node-cc --compile-cache=%t.cache %s > %t.warm.txt
 // RUN: diff %t.cold.txt %t.warm.txt
 
 function greet(name: string): string {
@@ -2173,14 +2207,14 @@ Create `test/compile-cache-corrupt.js`:
 
 // RUN: rm -rf %t.cache %t.dir && mkdir -p %t.dir
 // RUN: echo 'module.exports = 7;' > %t.dir/dep.js
-// RUN: %hermes-node --compile-cache=%t.cache %s %t.dir/dep.js | %FileCheck %s
+// RUN: %hermes-node-cc --compile-cache=%t.cache %s %t.dir/dep.js | %FileCheck %s
 // Overwrite every payload byte after the 24-byte header with zeroes, leaving
 // the header (and so our validation) intact.
 // RUN: for f in $(find %t.cache -type f); do \
 // RUN:   head -c 24 "$f" > "$f.hdr" && \
 // RUN:   head -c $(stat -c%s "$f") /dev/zero | tail -c +25 >> "$f.hdr" && \
 // RUN:   mv "$f.hdr" "$f"; done
-// RUN: %hermes-node --compile-cache=%t.cache %s %t.dir/dep.js | %FileCheck %s
+// RUN: %hermes-node-cc --compile-cache=%t.cache %s %t.dir/dep.js | %FileCheck %s
 
 'use strict';
 
@@ -2207,9 +2241,9 @@ Create `test/compile-cache-syntax-error.js`:
 
 // RUN: rm -rf %t.cache %t.dir && mkdir -p %t.dir
 // RUN: echo 'function ( { oops' > %t.dir/bad.js
-// RUN: %not %hermes-node --compile-cache=%t.cache %s %t.dir/bad.js 2>&1 \
+// RUN: %not %hermes-node-cc --compile-cache=%t.cache %s %t.dir/bad.js 2>&1 \
 // RUN:   | %FileCheck %s
-// RUN: %not %hermes-node --compile-cache=%t.cache %s %t.dir/bad.js 2>&1 \
+// RUN: %not %hermes-node-cc --compile-cache=%t.cache %s %t.dir/bad.js 2>&1 \
 // RUN:   | %FileCheck %s
 
 'use strict';
@@ -2233,8 +2267,10 @@ Create `test/compile-cache-inspect.js`:
 // The cache is not enabled under --inspect, so that debugging keeps the
 // napi_run_script path, which compiles with full debug info.
 
+// The -cc substitution matters here: with the suite-wide disable still in
+// effect this test would pass for the wrong reason, asserting nothing.
 // RUN: rm -rf %t.cache
-// RUN: %hermes-node --inspect --compile-cache=%t.cache %s | %FileCheck %s
+// RUN: %hermes-node-cc --inspect --compile-cache=%t.cache %s | %FileCheck %s
 // RUN: test ! -d %t.cache
 
 'use strict';
