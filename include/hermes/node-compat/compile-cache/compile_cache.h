@@ -124,5 +124,69 @@ void compileCachePruneGenerations(
     const std::string &keepName,
     size_t keepCount);
 
+/// Number of old generations kept when a new one is created. Three rather
+/// than one because version strings come from git tags, so two checkouts at
+/// different commits produce different generations; keeping only the current
+/// one would make alternating between them pay full compile cost each time.
+inline constexpr size_t kCompileCacheGenerationsKept = 3;
+
+/// On-disk bytecode cache. One instance per runtime, owned by RuntimeState.
+///
+/// Every operation is best effort: a failure anywhere degrades to "compile
+/// from source" and never surfaces to the program being run.
+class CompileCache {
+ public:
+  CompileCache() = default;
+  CompileCache(const CompileCache &) = delete;
+  CompileCache &operator=(const CompileCache &) = delete;
+
+  /// Create <root>/v1/<generationName>/, prune old generations, and enable
+  /// the cache. Returns false if the directory could not be created, in
+  /// which case every later call is a no-op.
+  bool enable(const std::string &root, const std::string &generationName);
+
+  bool enabled() const {
+    return enabled_;
+  }
+
+  /// "<root>/v1/<generationName>". Empty when not enabled.
+  const std::string &generationDir() const {
+    return generationDir_;
+  }
+
+  /// Emit hit/miss tracing to stderr. Driven by
+  /// HERMES_NODE_DEBUG_NATIVE=COMPILE_CACHE.
+  void setTracing(bool on) {
+    tracing_ = on;
+  }
+
+  /// Fill \p entry's identity from (\p source, \p filename, \p kind) and try
+  /// to load it. Returns true on a hit, in which case the caller owns
+  /// entry.mapping. Returns false on a miss with the identity fields still
+  /// populated, ready to be passed to save().
+  bool lookup(
+      CompileCacheEntry &entry,
+      const std::string &source,
+      const std::string &filename,
+      CompileCacheKind kind);
+
+  /// Persist a freshly compiled entry. Creates the fanout directory as
+  /// needed. Failures are ignored.
+  void save(
+      const CompileCacheEntry &entry,
+      const uint8_t *bytecode,
+      size_t bytecodeSize);
+
+  /// Delete an entry whose bytecode failed to run.
+  void invalidate(const CompileCacheEntry &entry);
+
+ private:
+  void trace(const char *what, const std::string &filename) const;
+
+  bool enabled_ = false;
+  bool tracing_ = false;
+  std::string generationDir_;
+};
+
 } // namespace node_compat
 } // namespace hermes

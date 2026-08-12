@@ -412,3 +412,145 @@ TEST(CompileCacheTest, PruneToleratesMissingRoot) {
   compileCachePruneGenerations(dir.path() + "/absent", "gen-current", 3);
   EXPECT_FALSE(dirExists(dir.path() + "/absent"));
 }
+
+TEST(CompileCacheTest, DisabledUntilEnabled) {
+  CompileCache cache;
+  EXPECT_FALSE(cache.enabled());
+
+  CompileCacheEntry entry;
+  EXPECT_FALSE(cache.lookup(
+      entry, "var a = 1;", "/a/b.js", CompileCacheKind::kCommonJS));
+  EXPECT_FALSE(entry.hit());
+}
+
+TEST(CompileCacheTest, EnableCreatesVersionedGenerationDir) {
+  TempDir dir;
+  CompileCache cache;
+  ASSERT_TRUE(cache.enable(dir.path(), "0.3.0-x86_64-bc99-3f9c21ab"));
+  EXPECT_TRUE(cache.enabled());
+  EXPECT_EQ(
+      dir.path() + "/v1/0.3.0-x86_64-bc99-3f9c21ab", cache.generationDir());
+  EXPECT_TRUE(dirExists(cache.generationDir()));
+}
+
+TEST(CompileCacheTest, EnableFailsOnUnwritableRoot) {
+  CompileCache cache;
+  EXPECT_FALSE(cache.enable("/proc/nonexistent/cache", "gen"));
+  EXPECT_FALSE(cache.enabled());
+}
+
+TEST(CompileCacheTest, EnableFailsOnEmptyRoot) {
+  CompileCache cache;
+  EXPECT_FALSE(cache.enable("", "gen"));
+  EXPECT_FALSE(cache.enabled());
+}
+
+TEST(CompileCacheTest, SaveThenLookupHits) {
+  TempDir dir;
+  CompileCache cache;
+  ASSERT_TRUE(cache.enable(dir.path(), "gen"));
+
+  std::string source = "module.exports = 42;";
+  auto payload = fakePayload(777, 5);
+
+  CompileCacheEntry miss;
+  EXPECT_FALSE(
+      cache.lookup(miss, source, "/x/y.js", CompileCacheKind::kCommonJS));
+  cache.save(miss, payload.data(), payload.size());
+
+  CompileCacheEntry hit;
+  ASSERT_TRUE(
+      cache.lookup(hit, source, "/x/y.js", CompileCacheKind::kCommonJS));
+  ASSERT_TRUE(hit.hit());
+  EXPECT_EQ(payload.size(), hit.bytecodeSize);
+  EXPECT_EQ(0, memcmp(payload.data(), hit.bytecode, payload.size()));
+  hit.mapping->destroy();
+}
+
+TEST(CompileCacheTest, LookupMissesAfterSourceChanges) {
+  TempDir dir;
+  CompileCache cache;
+  ASSERT_TRUE(cache.enable(dir.path(), "gen"));
+  auto payload = fakePayload(64, 1);
+
+  CompileCacheEntry first;
+  cache.lookup(first, "var a = 1;", "/x/y.js", CompileCacheKind::kCommonJS);
+  cache.save(first, payload.data(), payload.size());
+
+  CompileCacheEntry second;
+  EXPECT_FALSE(cache.lookup(
+      second, "var a = 2222;", "/x/y.js", CompileCacheKind::kCommonJS));
+}
+
+TEST(CompileCacheTest, KindsDoNotShareEntries) {
+  TempDir dir;
+  CompileCache cache;
+  ASSERT_TRUE(cache.enable(dir.path(), "gen"));
+  std::string source = "var a = 1;";
+  auto payload = fakePayload(64, 1);
+
+  CompileCacheEntry cjs;
+  cache.lookup(cjs, source, "/x/y.js", CompileCacheKind::kCommonJS);
+  cache.save(cjs, payload.data(), payload.size());
+
+  // Same file, same source text, different entry point: must not hit.
+  CompileCacheEntry wrapped;
+  EXPECT_FALSE(cache.lookup(
+      wrapped, source, "/x/y.js", CompileCacheKind::kLoaderWrapped));
+}
+
+TEST(CompileCacheTest, EntriesGoInFanoutSubdirectories) {
+  TempDir dir;
+  CompileCache cache;
+  ASSERT_TRUE(cache.enable(dir.path(), "gen"));
+  auto payload = fakePayload(64, 1);
+
+  CompileCacheEntry entry;
+  cache.lookup(entry, "var a = 1;", "/x/y.js", CompileCacheKind::kCommonJS);
+  cache.save(entry, payload.data(), payload.size());
+
+  // <generationDir>/<2 hex chars>/<8 hex chars>
+  std::string rel = entry.cacheFilePath.substr(cache.generationDir().size());
+  ASSERT_EQ(12u, rel.size()) << entry.cacheFilePath;
+  EXPECT_EQ('/', rel[0]);
+  EXPECT_EQ('/', rel[3]);
+}
+
+TEST(CompileCacheTest, InvalidateRemovesTheEntry) {
+  TempDir dir;
+  CompileCache cache;
+  ASSERT_TRUE(cache.enable(dir.path(), "gen"));
+  auto payload = fakePayload(64, 1);
+
+  CompileCacheEntry entry;
+  cache.lookup(entry, "var a = 1;", "/x/y.js", CompileCacheKind::kCommonJS);
+  cache.save(entry, payload.data(), payload.size());
+
+  CompileCacheEntry hit;
+  ASSERT_TRUE(
+      cache.lookup(hit, "var a = 1;", "/x/y.js", CompileCacheKind::kCommonJS));
+  hit.mapping->destroy();
+
+  cache.invalidate(hit);
+
+  CompileCacheEntry gone;
+  EXPECT_FALSE(
+      cache.lookup(gone, "var a = 1;", "/x/y.js", CompileCacheKind::kCommonJS));
+}
+
+TEST(CompileCacheTest, EnablePrunesOldGenerations) {
+  TempDir dir;
+  std::string versioned = dir.path() + "/v1";
+  makeAgedDir(versioned, "gen-a", 10);
+  makeAgedDir(versioned, "gen-b", 20);
+  makeAgedDir(versioned, "gen-c", 30);
+  makeAgedDir(versioned, "gen-d", 40);
+
+  CompileCache cache;
+  ASSERT_TRUE(cache.enable(dir.path(), "gen-new"));
+
+  // gen-new plus the 3 newest others.
+  EXPECT_EQ(4u, countDirEntries(versioned));
+  EXPECT_TRUE(dirExists(versioned + "/gen-new"));
+  EXPECT_FALSE(dirExists(versioned + "/gen-d"));
+}

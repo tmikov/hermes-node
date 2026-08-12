@@ -288,5 +288,92 @@ void compileCachePruneGenerations(
     removeTree(others[i].second);
 }
 
+bool CompileCache::enable(
+    const std::string &root,
+    const std::string &generationName) {
+  if (root.empty() || generationName.empty())
+    return false;
+
+  // v1/ is a structure escape hatch: a fundamentally different layout later
+  // becomes v2/ and can coexist with this one.
+  std::string versionedRoot = root + "/v1";
+  std::string generationDir = versionedRoot + "/" + generationName;
+
+  bool existed = false;
+  {
+    struct stat st {};
+    existed = ::stat(generationDir.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+  }
+
+  if (!compileCacheMakeDirs(generationDir))
+    return false;
+
+  // Prune only when a generation was actually created, so a normal startup
+  // never scans the cache root.
+  if (!existed) {
+    compileCachePruneGenerations(
+        versionedRoot, generationName, kCompileCacheGenerationsKept);
+  }
+
+  generationDir_ = generationDir;
+  enabled_ = true;
+  return true;
+}
+
+void CompileCache::trace(const char *what, const std::string &filename) const {
+  if (tracing_)
+    std::fprintf(stderr, "[compile cache] %s %s\n", what, filename.c_str());
+}
+
+bool CompileCache::lookup(
+    CompileCacheEntry &entry,
+    const std::string &source,
+    const std::string &filename,
+    CompileCacheKind kind) {
+  if (!enabled_)
+    return false;
+
+  entry.key = compileCacheKey(filename, kind);
+  entry.sourceCrc = compileCacheCrc32(source.data(), source.size());
+  entry.sourceSize = static_cast<uint32_t>(source.size());
+
+  char rel[16];
+  std::snprintf(
+      rel, sizeof(rel), "/%02x/%08x", (entry.key >> 24) & 0xff, entry.key);
+  entry.cacheFilePath = generationDir_ + rel;
+
+  if (compileCacheReadEntry(entry)) {
+    trace("hit ", filename);
+    return true;
+  }
+  trace("miss", filename);
+  return false;
+}
+
+void CompileCache::save(
+    const CompileCacheEntry &entry,
+    const uint8_t *bytecode,
+    size_t bytecodeSize) {
+  if (!enabled_ || entry.cacheFilePath.empty())
+    return;
+
+  // Create the fanout directory. Cheap enough to attempt every time; mkdir
+  // on an existing directory is a single failed syscall.
+  size_t slash = entry.cacheFilePath.rfind('/');
+  if (slash != std::string::npos)
+    compileCacheMakeDirs(entry.cacheFilePath.substr(0, slash));
+
+  if (!compileCacheWriteEntry(
+          entry.cacheFilePath, entry, bytecode, bytecodeSize))
+    trace("save-failed", entry.cacheFilePath);
+}
+
+void CompileCache::invalidate(const CompileCacheEntry &entry) {
+  if (!enabled_ || entry.cacheFilePath.empty())
+    return;
+  ::unlink(entry.cacheFilePath.c_str());
+  trace("invalidated", entry.cacheFilePath);
+}
+
 } // namespace node_compat
 } // namespace hermes
