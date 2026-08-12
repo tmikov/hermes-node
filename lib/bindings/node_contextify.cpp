@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/bindings/node_contextify.h>
+#include <hermes/node-compat/compile-cache/compile_cache.h>
 #include <hermes/node-compat/runtime/runtime_state.h>
 #include <napi/hermes_napi.h>
 #include <napi/hermes_napi_compile.h>
@@ -623,35 +624,114 @@ static napi_value compileFunctionForCJSLoaderCb(
   if (argc > 1)
     filename = napiGetString(env, argv[1]);
 
-  // Wrap the source in a function with CJS parameters, matching Node's
-  // GetCJSParameters: exports, require, module, __filename, __dirname.
-  // No newline after the opening `{` so user line N maps to wrapped line N
-  // (the debugger reports line numbers based on the wrapped source).
-  std::string wrappedSource;
-  wrappedSource.reserve(content.size() + filename.size() + 128);
-  wrappedSource += kCJSWrapperPrefix;
-  wrappedSource += content;
-  wrappedSource += "\n})";
-  if (!filename.empty()) {
-    wrappedSource += "\n//# sourceURL=";
-    wrappedSource += filename;
-    wrappedSource += "\n";
+  CompileCache *cache = nullptr;
+  if (auto *state = getRuntimeState(env))
+    cache = state->compileCache;
+
+  napi_value fn = nullptr;
+  CompileCacheEntry entry;
+
+  // The hashed string is the raw content: the wrapper below is a constant
+  // folded into the generation name, so it need not be hashed per entry.
+  bool hit = cache != nullptr &&
+      cache->lookup(entry, content, filename, CompileCacheKind::kCommonJS);
+
+  if (hit) {
+    hermes_bytecode_flags bcFlags{};
+    bcFlags.struct_size = sizeof(bcFlags);
+    napi_status runStatus = hermes_run_bytecode(
+        env,
+        entry.bytecode,
+        entry.bytecodeSize,
+        CacheMapping::finalizer,
+        entry.mapping,
+        filename.empty() ? nullptr : filename.c_str(),
+        &bcFlags,
+        &fn);
+    if (runStatus != napi_ok) {
+      // A cache file that passed our header checks but that Hermes will not
+      // load must not surface as a SyntaxError in valid user code. Clear the
+      // pending exception, drop the entry, and compile from source. The
+      // mapping was consumed by hermes_run_bytecode.
+      napi_value ignored;
+      napi_get_and_clear_last_exception(env, &ignored);
+      cache->invalidate(entry);
+      entry.mapping = nullptr;
+      entry.bytecode = nullptr;
+      hit = false;
+      fn = nullptr;
+    }
   }
 
-  // Evaluate the wrapper expression to get the function.
-  // Using napi_run_script (which handles buffer lifetime internally)
-  // rather than hermes_compile_to_bytecode + hermes_run_bytecode,
-  // since the returned function continues to reference the bytecode.
-  napi_value sourceStr;
-  napi_create_string_utf8(
-      env, wrappedSource.c_str(), wrappedSource.size(), &sourceStr);
+  if (!hit) {
+    // Wrap the source in a function with CJS parameters, matching Node's
+    // GetCJSParameters: exports, require, module, __filename, __dirname.
+    // No newline after the opening `{` so user line N maps to wrapped line N
+    // (the debugger reports line numbers based on the wrapped source).
+    std::string wrappedSource;
+    wrappedSource.reserve(content.size() + filename.size() + 128);
+    wrappedSource += kCJSWrapperPrefix;
+    wrappedSource += content;
+    wrappedSource += "\n})";
+    if (!filename.empty()) {
+      wrappedSource += "\n//# sourceURL=";
+      wrappedSource += filename;
+      wrappedSource += "\n";
+    }
 
-  napi_value fn;
-  napi_status runStatus = napi_run_script(env, sourceStr, &fn);
-  if (runStatus != napi_ok) {
-    // Compilation failed (SyntaxError). The exception is already pending.
-    napi_close_handle_scope(env, scope);
-    return nullptr;
+    if (cache != nullptr) {
+      // Compile to a buffer we can both persist and run.
+      hermes_compile_flags cflags{};
+      cflags.struct_size = sizeof(cflags);
+      uint8_t *bytecodeData = nullptr;
+      size_t bytecodeSize = 0;
+      napi_status compileStatus = hermes_compile_to_bytecode(
+          env,
+          reinterpret_cast<const uint8_t *>(wrappedSource.c_str()),
+          // +1 for the terminating '\0' that c_str() guarantees, so
+          // hermes_compile_to_bytecode can wrap the buffer zero-copy
+          // instead of making an internal null-terminated copy.
+          wrappedSource.size() + 1,
+          filename.empty() ? nullptr : filename.c_str(),
+          &cflags,
+          &bytecodeData,
+          &bytecodeSize);
+      if (compileStatus != napi_ok) {
+        // A real SyntaxError in the user's source. Propagate it.
+        napi_close_handle_scope(env, scope);
+        return nullptr;
+      }
+
+      cache->save(entry, bytecodeData, bytecodeSize);
+
+      hermes_bytecode_flags bcFlags{};
+      bcFlags.struct_size = sizeof(bcFlags);
+      napi_status runStatus = hermes_run_bytecode(
+          env,
+          bytecodeData,
+          bytecodeSize,
+          [](const uint8_t *data, size_t, void *) {
+            hermes_free_bytecode(const_cast<uint8_t *>(data));
+          },
+          nullptr,
+          filename.empty() ? nullptr : filename.c_str(),
+          &bcFlags,
+          &fn);
+      if (runStatus != napi_ok) {
+        napi_close_handle_scope(env, scope);
+        return nullptr;
+      }
+    } else {
+      // No cache: the original path, unchanged.
+      napi_value sourceStr;
+      napi_create_string_utf8(
+          env, wrappedSource.c_str(), wrappedSource.size(), &sourceStr);
+      napi_status runStatus = napi_run_script(env, sourceStr, &fn);
+      if (runStatus != napi_ok) {
+        napi_close_handle_scope(env, scope);
+        return nullptr;
+      }
+    }
   }
 
   // Build result: { function, sourceMapURL, sourceURL,
