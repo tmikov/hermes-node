@@ -112,3 +112,14 @@ add_custom_target(check-hermes-node
   DEPENDS check-hermes-node-unit check-hermes-node-js
   COMMENT "Running hermes-node-compat tests"
 )
+
+# Examples are not part of check-hermes-node: they need a network install of
+# Babel and friends, while the default suite stays offline. Examples that
+# have not been installed are skipped rather than failed.
+add_custom_target(check-hermes-node-examples
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/examples/run-examples.sh
+          ${CMAKE_CURRENT_BINARY_DIR}
+  DEPENDS hermes-node hermes-parser-napi
+  COMMENT "Running hermes-node examples"
+  VERBATIM
+)
