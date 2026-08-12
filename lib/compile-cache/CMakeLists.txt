@@ -10,16 +10,12 @@ add_hermes_library(hermesNodeCompileCache STATIC
 target_include_directories(hermesNodeCompileCache
   PUBLIC
     ${PROJECT_SOURCE_DIR}/include
-  PRIVATE
-    ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi
-    ${PROJECT_SOURCE_DIR}/hermes/include
-    ${PROJECT_SOURCE_DIR}/hermes/API
-    ${CMAKE_BINARY_DIR}/generated
 )
 
+# This library talks to the filesystem through raw POSIX calls, not libuv,
+# and never includes a Hermes header. zlib, for CRC32, is its only
+# dependency -- keep it that way.
 target_link_libraries(hermesNodeCompileCache
-  PUBLIC
-    uv_a
   PRIVATE
     zlib_a
 )
