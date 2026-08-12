@@ -25,20 +25,10 @@ if ! command -v npm >/dev/null; then
   exit 1
 fi
 
-# package.json's "overrides" block pins most of the @babel/* transitive
-# closure, not just the direct devDependencies. Babel's own generated
-# helper code (e.g. whether an exported `const` gets folded into its
-# declaration, whether blank lines from src/ survive into dist/) changed
-# across @babel/generator, @babel/traverse and friends between the 7.16.x
-# family this was built against and later 7.x releases, even though all of
-# those are semver-compatible. Caret ranges alone let npm pull whatever is
-# newest today, which reliably reproduces *working* output but not the
-# committed dist/ byte-for-byte. If a regeneration from an unmodified src/
-# ever stops being byte-identical to the committed dist/ (aside from
-# build-manifest.json's generatedAt/prebuilds fields), the fix is almost
-# always a version that drifted out from under one of these pins, not the
-# plugin list in babel.config.js.
-(cd "$THIS_DIR" && npm install --no-audit --no-fund)
+# npm ci, not npm install: with a committed lockfile, `npm install` will
+# silently re-resolve and rewrite it if package.json and the lockfile ever
+# drift, which defeats reproducible output. `npm ci` fails loudly instead.
+(cd "$THIS_DIR" && npm ci --no-audit --no-fund)
 
 # Regenerate the hash that guards against ESTree.def drift.
 node "$THIS_DIR/genKindHash.js" "$INCLUDE_PATH"
