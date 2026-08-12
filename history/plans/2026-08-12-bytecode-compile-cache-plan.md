@@ -250,16 +250,12 @@ add_hermes_library(hermesNodeCompileCache STATIC
 target_include_directories(hermesNodeCompileCache
   PUBLIC
     ${PROJECT_SOURCE_DIR}/include
-  PRIVATE
-    ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi
-    ${PROJECT_SOURCE_DIR}/hermes/include
-    ${PROJECT_SOURCE_DIR}/hermes/API
-    ${CMAKE_BINARY_DIR}/generated
 )
 
+# This library talks to the filesystem through raw POSIX calls, not libuv,
+# and never includes a Hermes header. zlib, for CRC32, is its only
+# dependency -- keep it that way.
 target_link_libraries(hermesNodeCompileCache
-  PUBLIC
-    uv_a
   PRIVATE
     zlib_a
 )
@@ -756,6 +752,7 @@ Append to `unittests/CompileCacheTest.cpp`:
 
 ```cpp
 #include <dirent.h>
+#include <sys/time.h>
 
 namespace {
 
@@ -780,15 +777,21 @@ bool dirExists(const std::string &path) {
 
 /// Create \p name under \p root with an mtime \p ageSeconds in the past, so
 /// pruning order is deterministic instead of depending on creation speed.
+///
+/// Sets the mtime directly rather than shelling out to `touch -d`, whose
+/// relative-time syntax ("40 seconds ago") is a GNU extension and is not
+/// accepted by the BSD touch on macOS, which CI also builds.
 void makeAgedDir(
     const std::string &root,
     const std::string &name,
     int ageSeconds) {
   std::string path = root + "/" + name;
   ASSERT_TRUE(compileCacheMakeDirs(path));
-  std::string cmd = "touch -d '" + std::to_string(ageSeconds) +
-      " seconds ago' " + path;
-  ASSERT_EQ(0, ::system(cmd.c_str()));
+  struct timeval times[2];
+  ASSERT_EQ(0, ::gettimeofday(&times[0], nullptr));
+  times[0].tv_sec -= ageSeconds;
+  times[1] = times[0];
+  ASSERT_EQ(0, ::utimes(path.c_str(), times));
 }
 
 } // namespace
@@ -838,7 +841,7 @@ TEST(CompileCacheTest, DefaultRootIsEmptyWithoutHome) {
     ::setenv("HOME", home.c_str(), 1);
 }
 
-TEST(CompileCacheTest, PruneKeepsTheThreeMostRecentPlusCurrent) {
+TEST(CompileCacheTest, PruneKeepsCurrentPlusThreeMostRecent) {
   TempDir dir;
   makeAgedDir(dir.path(), "gen-current", 0);
   makeAgedDir(dir.path(), "gen-1s", 1);
@@ -849,12 +852,14 @@ TEST(CompileCacheTest, PruneKeepsTheThreeMostRecentPlusCurrent) {
 
   compileCachePruneGenerations(dir.path(), "gen-current", 3);
 
-  // gen-current is never pruned; of the rest the 2 newest survive, so 3
-  // directories remain in total.
+  // keepCount counts the OTHERS kept, not the total: keepName is never
+  // pruned, and the 3 most recently modified others survive alongside it,
+  // so 4 directories remain.
+  EXPECT_EQ(4u, countDirEntries(dir.path()));
   EXPECT_TRUE(dirExists(dir.path() + "/gen-current"));
   EXPECT_TRUE(dirExists(dir.path() + "/gen-1s"));
   EXPECT_TRUE(dirExists(dir.path() + "/gen-10s"));
-  EXPECT_FALSE(dirExists(dir.path() + "/gen-100s"));
+  EXPECT_TRUE(dirExists(dir.path() + "/gen-100s"));
   EXPECT_FALSE(dirExists(dir.path() + "/gen-1000s"));
 }
 
@@ -874,14 +879,19 @@ TEST(CompileCacheTest, PruneRemovesGenerationContents) {
   makeAgedDir(dir.path(), "gen-a", 10);
   makeAgedDir(dir.path(), "gen-b", 20);
   makeAgedDir(dir.path(), "gen-c", 30);
-  makeAgedDir(dir.path(), "gen-d", 40);
+
   // Give the oldest a populated fanout directory; pruning must remove it
   // recursively, not fail on a non-empty directory.
+  //
+  // Populate it BEFORE ageing it. Creating an entry inside a directory
+  // updates that directory's own mtime, so ageing first and writing second
+  // would reset gen-d to the newest generation and it would survive.
   ASSERT_TRUE(compileCacheMakeDirs(dir.path() + "/gen-d/ab"));
   {
     std::ofstream f(dir.path() + "/gen-d/ab/deadbeef", std::ios::binary);
     f << "payload";
   }
+  makeAgedDir(dir.path(), "gen-d", 40);
 
   compileCachePruneGenerations(dir.path(), "gen-current", 3);
 
