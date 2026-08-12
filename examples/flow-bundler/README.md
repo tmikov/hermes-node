@@ -85,3 +85,9 @@ without the committed `package-lock.json` -- e.g. after deleting it -- will
 resolve newer releases and four of the six bundles will stop matching
 `expected/` for reasons that have nothing to do with `hermes-parser`. Keep
 `package-lock.json` committed and unmodified.
+
+There is exactly one sanctioned reason to touch it: retiring the vendored
+`hermes-parser-native` package, which requires repointing the `file:`
+dependency the lockfile records twice. The recipe for that -- including what
+the resulting lockfile diff is allowed to contain -- is "When to delete this
+directory" in `external/hermes-parser-native/README.md`.

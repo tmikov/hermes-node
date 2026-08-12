@@ -244,15 +244,19 @@ In `external/hermes-parser-native/README.md`:
 
 ### 7. Removal path
 
-When `hermes-node` supports WebAssembly:
+When `hermes-node` supports WebAssembly, the outline is: drop the CMake
+references first, then `git rm` the two directories, then repoint the example's
+dependency from the `file:` path to `hermes-parser` from npm.
 
-1. `git rm -r external/hermes-parser-native unittests/HermesParserNative`
-2. Change the example's dependency from the `file:` path to `hermes-parser` from
-   npm
-3. Delete the `POST_BUILD` copy, the `hermes-parser-native-dist` target, and the
-   two `add_subdirectory` lines
+The example survives, but **not unchanged**: it names the addon in `run.sh`, in
+`package.json`, in `package-lock.json` (twice) and in `.npmrc`. (Corrected after
+the final review, which found the original "the example itself survives
+unchanged" false and the step order able to strand a mid-sequence CMake
+reconfigure.)
 
-The example itself survives unchanged.
+The operative, step-by-step recipe is "When to delete this directory" in
+`external/hermes-parser-native/README.md`. It is the one that is maintained;
+this section is a historical sketch.
 
 ## Testing
 

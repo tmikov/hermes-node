@@ -16,24 +16,36 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 BUILD_DIR="${1:-$ROOT/cmake-build-release}"
 
 HERMES_NODE="$BUILD_DIR/bin/hermes-node"
-ADDON="$BUILD_DIR/external/hermes-parser-native/hermes-parser.node"
 
-for f in "$HERMES_NODE" "$ADDON"; do
-  if [ ! -x "$f" ] && [ ! -f "$f" ]; then
-    echo "ERROR: missing $f -- build it first:" 1>&2
-    echo "  cmake --build $BUILD_DIR --target hermes-node hermes-parser-napi" 1>&2
-    exit 1
-  fi
-done
+if [ ! -x "$HERMES_NODE" ] && [ ! -f "$HERMES_NODE" ]; then
+  echo "ERROR: missing $HERMES_NODE -- build it first:" 1>&2
+  echo "  cmake --build $BUILD_DIR --target hermes-node" 1>&2
+  exit 1
+fi
 
 if [ ! -d "$HERE/node_modules" ]; then
   echo "ERROR: run 'npm install' in $HERE first." 1>&2
   exit 1
 fi
 
+# --- BEGIN vendored native parser addon ------------------------------------
+# Delete everything between these two markers when the vendored addon goes
+# away and this example switches to the published hermes-parser package. See
+# "When to delete this directory" in
+# external/hermes-parser-native/README.md; that recipe refers to these
+# markers, so keep them in sync with it.
+ADDON="$BUILD_DIR/external/hermes-parser-native/hermes-parser.node"
+
+if [ ! -f "$ADDON" ]; then
+  echo "ERROR: missing $ADDON -- build it first:" 1>&2
+  echo "  cmake --build $BUILD_DIR --target hermes-node hermes-parser-napi" 1>&2
+  exit 1
+fi
+
 # Pin the addon to the build directory being tested rather than relying on
 # the package's prebuilds/ lookup, which several build directories share.
 export HERMES_PARSER_NATIVE_ADDON="$ADDON"
+# --- END vendored native parser addon --------------------------------------
 
 rm -rf "$HERE/out"
 "$HERMES_NODE" -r "$HERE/babel-register.js" \

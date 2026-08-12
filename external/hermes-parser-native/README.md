@@ -145,16 +145,74 @@ pulled into `parser-native` or into this vendored copy.
 ## When to delete this directory
 
 Once `hermes-node` supports WebAssembly, this vendored copy is no longer
-needed:
+needed. `examples/flow-bundler` stays, but it does **not** survive untouched:
+it names the addon and the `file:` dependency in four places, listed below.
 
-1. `git rm -r external/hermes-parser-native unittests/HermesParserNative`.
-   This removes the `POST_BUILD` step that copies the built addon into
-   `package/prebuilds/` and the `hermes-parser-native-dist` target along
-   with it, since both live in `external/hermes-parser-native/CMakeLists.txt`.
-2. Repoint `examples/flow-bundler`'s `hermes-parser` dependency at the
-   published `hermes-parser` package on npm instead of the `file:` path.
-3. Remove the two now-dangling `add_subdirectory` lines that referenced the
-   deleted directories: `add_subdirectory(external/hermes-parser-native)` in
-   the top-level `CMakeLists.txt`, and `add_subdirectory(HermesParserNative)`
-   in `unittests/CMakeLists.txt`. Also drop the `hermes-parser-napi`
-   dependency of the `check-hermes-node-examples` target.
+Do the CMake edits before the `git rm`, so that no reconfigure in the middle
+of the sequence dies with `add_subdirectory given source ... which is not an
+existing directory`. Better still, treat steps 1 to 6 as one change and build
+nothing until the end.
+
+1. Remove the CMake references, in this order and before deleting anything:
+   - `add_subdirectory(external/hermes-parser-native)` in the top-level
+     `CMakeLists.txt`;
+   - `add_subdirectory(HermesParserNative)` in `unittests/CMakeLists.txt`,
+     along with the `HermesParserKindHashSyncTest` block just above it
+     (`add_node_compat_unittest`, its `target_include_directories` and its
+     `target_compile_definitions`);
+   - the `hermes-parser-napi` entry in the `DEPENDS` of the
+     `check-hermes-node-examples` target in the top-level `CMakeLists.txt`.
+2. `git rm -r external/hermes-parser-native unittests/HermesParserNative` and
+   `git rm unittests/HermesParserKindHashSyncTest.cpp`. This takes the
+   `POST_BUILD` step that stages the addon into `package/prebuilds/` and the
+   `hermes-parser-native-dist` target with it, since both live in
+   `external/hermes-parser-native/CMakeLists.txt`.
+3. In `examples/flow-bundler/run.sh`, delete the whole block between the
+   `# --- BEGIN vendored native parser addon` and
+   `# --- END vendored native parser addon` marker lines, markers included.
+   It resolves the built `.node` file, hard-fails if it is missing with a
+   message naming the now-deleted `hermes-parser-napi` target, and exports
+   `HERMES_PARSER_NATIVE_ADDON`. Leaving it in place makes
+   `check-hermes-node-examples` fail rather than skip: `run-examples.sh` runs
+   under `set -e`.
+4. In `examples/flow-bundler/package.json`, repoint the `hermes-parser`
+   dependency from `file:../../external/hermes-parser-native/package` at a
+   published version on npm.
+5. In `examples/flow-bundler/.npmrc`, delete the `install-links=true` line
+   and the comment block above it. Its entire justification is the `file:`
+   dependency. Keep `legacy-peer-deps=true`, which is about the
+   `prettier@2.8.8` pin and is unrelated.
+6. Regenerate `examples/flow-bundler/package-lock.json`. It carries the
+   `file:` path twice -- once in the root `packages[""]` dependency map, and
+   once as a `node_modules/hermes-parser` entry whose `"name"` is
+   `hermes-parser-native` and whose `"resolved"` is the `file:` path.
+   Repointing `package.json` alone leaves the lockfile describing the deleted
+   directory. Regenerate it with a plain `npm install` in
+   `examples/flow-bundler/`, which re-resolves the changed dependency and
+   leaves every other pin in the lockfile alone.
+
+   **Check the lockfile diff before committing it.** The example's expected
+   bundles are byte-exact and depend on the pinned `@babel/generator` and
+   `@babel/helpers` versions, not only on the parser; a re-resolution that
+   moves them makes four of the six bundles mismatch for reasons that have
+   nothing to do with parsing. The diff should touch only the
+   `hermes-parser` and `hermes-estree` entries. See "A note on
+   reproducibility" in `examples/flow-bundler/README.md`; this step is the
+   one sanctioned exception to that file's "keep `package-lock.json`
+   committed and unmodified".
+7. Re-verify the example end to end before committing:
+   ```sh
+   cmake --build cmake-build-release --target hermes-node
+   (cd examples/flow-bundler && rm -rf node_modules && npm ci)
+   ./examples/flow-bundler/run.sh cmake-build-release
+   ```
+   It must still print `PASS: 6 bundles match expected/`.
+8. Update the prose that still describes a vendored addon:
+   - `CLAUDE.md`, the bullet about `external/hermes-parser-native/`;
+   - `examples/README.md`, the `flow-bundler/` paragraph;
+   - `examples/flow-bundler/README.md`, which mentions the vendored addon in
+     its opening paragraph, in the `babel.config.js`/`package.json`/`.npmrc`
+     layout bullets, and in the `hermes-parser-napi` build command under
+     "Running it";
+   - `history/plans/2026-08-12-flow-bundler-example-design.md` and its plan
+     are historical records; leave them.
