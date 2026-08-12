@@ -25,3 +25,10 @@ Same thing using `fs/promises` and async/await.
 Loads `bufferutil`, a real npm package with a prebuilt native NAPI addon
 (`.node` shared library). Demonstrates WebSocket frame masking/unmasking.
 Requires `npm install` in the directory first.
+
+## flow-bundler/
+
+Runs the Hermes benchmark suite's Flow bundler end to end under
+hermes-node, parsing with the vendored native `hermes-parser` addon, and
+checks its output against committed expected bundles. Requires `npm
+install` in the directory first; see `flow-bundler/README.md`.
