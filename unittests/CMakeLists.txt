@@ -53,4 +53,24 @@ target_link_libraries(CAresIntegrationTest cares_a)
 add_node_compat_unittest(LlhttpIntegrationTest LlhttpIntegrationTest.cpp)
 target_link_libraries(LlhttpIntegrationTest llhttp_a)
 
+# Checks that the node-kind hash committed in the vendored
+# hermes-parser-native JavaScript package still matches the one the addon
+# derives from the hermes/ submodule's ESTree.def. It lives here rather than
+# in unittests/HermesParserNative/, whose sources are a verbatim copy from the
+# fork and stay copyable in one directory operation.
+add_node_compat_unittest(HermesParserKindHashSyncTest
+  HermesParserKindHashSyncTest.cpp
+)
+target_include_directories(HermesParserKindHashSyncTest PRIVATE
+  ${PROJECT_SOURCE_DIR}/external/hermes-parser-native/napi
+  ${PROJECT_SOURCE_DIR}/hermes/include
+)
+# The committed JavaScript is read at run time rather than transcribed into
+# the test, so the test cannot pass against a number that is no longer in the
+# file it names.
+target_compile_definitions(HermesParserKindHashSyncTest PRIVATE
+  HPN_KIND_HASH_SRC_JS="${PROJECT_SOURCE_DIR}/external/hermes-parser-native/package/src/HermesParserKindHash.js"
+  HPN_KIND_HASH_DIST_JS="${PROJECT_SOURCE_DIR}/external/hermes-parser-native/package/dist/HermesParserKindHash.js"
+)
+
 add_subdirectory(HermesParserNative)

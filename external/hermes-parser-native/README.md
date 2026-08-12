@@ -45,11 +45,40 @@ To pick up upstream changes from the `parser-native` branch:
    ```
    This target is opt-in (not part of `ALL`) because it needs `npm` and
    Babel; a normal build of this repository needs no JavaScript toolchain.
-3. Rerun the tests: `HermesParserNativeTest` (via `check-hermes-node`, which
-   builds and runs it as part of the unit test suite) and, if the change
+3. Rerun the tests: `HermesParserNativeTest` and
+   `HermesParserKindHashSyncTest` (via `check-hermes-node`, which builds and
+   runs both as part of the unit test suite) and, if the change
    could affect parse output, `examples/flow-bundler`
    (`check-hermes-node-examples` in a Release build).
 4. Update the commit SHA in this file and commit the result.
+
+## After bumping the `hermes/` submodule
+
+The addon derives a hash of the node-kind table from the submodule's
+`include/hermes/AST/ESTree.def` at compile time (`napi/KindHash.h`) and
+stamps it into every serialized parse result. The JavaScript side carries
+its own copy of that number in `package/src/HermesParserKindHash.js` (and in
+the transpiled `package/dist/HermesParserKindHash.js`), generated
+independently by `scripts/genKindHash.js`, and refuses to deserialize a
+result whose stamp disagrees. So a submodule bump that adds, removes,
+reorders or reshapes an ESTree node desyncs the vendored package from the
+addon, and the package stops parsing anything with a "node-kind table
+mismatch" error.
+
+`unittests/HermesParserKindHashSyncTest.cpp` catches that offline: it
+recomputes the hash from the submodule's definitions and requires the
+committed JavaScript to contain that exact number. It runs as part of
+`check-hermes-node`, needs no network and no JavaScript toolchain. When it
+fails after a submodule bump, rerun
+
+```sh
+cmake --build cmake-build-asan --target hermes-parser-native-dist
+```
+
+which regenerates `package/src/HermesParserKindHash.js` first and then all
+of `package/dist/` from `package/src/`, and commit both.
+
+## How regeneration stays reproducible
 
 `scripts/regen-dist.sh` runs `npm ci`, not `npm install`, against a
 committed `package-lock.json` whose `overrides` block pins roughly 105
