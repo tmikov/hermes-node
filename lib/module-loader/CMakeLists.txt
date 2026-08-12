@@ -18,3 +18,11 @@ target_include_directories(hermesNodeModuleLoader PUBLIC
   # Hermes include root (hermes_napi.h includes "hermes/napi/node_api.h").
   ${PROJECT_SOURCE_DIR}/hermes/include
 )
+
+target_link_libraries(hermesNodeModuleLoader
+  PRIVATE
+    hermesNodeCompileCache
+    # runtime_state.h (pulled in for RuntimeState::compileCache) includes
+    # uv.h directly.
+    uv_a
+)
