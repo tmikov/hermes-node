@@ -501,7 +501,10 @@ if ! command -v npm >/dev/null; then
   exit 1
 fi
 
-(cd "$THIS_DIR" && npm install --no-audit --no-fund)
+# npm ci, not npm install: with a committed lockfile, `npm install` will
+# silently re-resolve and rewrite it if package.json and the lockfile ever
+# drift, which defeats reproducible output. `npm ci` fails loudly instead.
+(cd "$THIS_DIR" && npm ci --no-audit --no-fund)
 
 # Regenerate the hash that guards against ESTree.def drift.
 node "$THIS_DIR/genKindHash.js" "$INCLUDE_PATH"
