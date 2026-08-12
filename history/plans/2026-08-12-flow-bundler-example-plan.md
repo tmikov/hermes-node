@@ -344,6 +344,13 @@ Expected: the file exists, and `git status` shows nothing (it is ignored).
 
 - [ ] **Step 5: Verify the package loads and parses under hermes-node**
 
+Use a script file, not `hermes-node -e`. Requiring anything that pulls in a
+`.node` addon from eval mode hits a pre-existing hermes-node bug: eval-mode
+`require` has no `.node` handling and tries to compile the shared library as
+JavaScript, giving `SyntaxError: unrecognized Unicode character \u7f` (the
+first byte of the ELF magic). This reproduces with the unrelated
+`hello_addon.node` too, so it is not caused by anything in this plan.
+
 ```bash
 mkdir -p /tmp/hpn-check && cd /tmp/hpn-check
 cat > package.json <<'EOF'
@@ -351,11 +358,13 @@ cat > package.json <<'EOF'
   "dependencies": { "hermes-parser": "file:/home/tmikov/work/hermes-node-compat/external/hermes-parser-native/package" } }
 EOF
 npm install --no-audit --no-fund
-/home/tmikov/work/hermes-node-compat/cmake-build-asan/bin/hermes-node -e '
-  const {parse} = require("hermes-parser");
-  const ast = parse("const x: number = 1;", {flow: "all"});
-  console.log("PASS", ast.body[0].type, ast.body[0].declarations[0].id.typeAnnotation != null);
-'
+cat > check.js <<'EOF'
+const {parse} = require('hermes-parser');
+const ast = parse('const x: number = 1;', {flow: 'all'});
+console.log('PASS', ast.body[0].type,
+            ast.body[0].declarations[0].id.typeAnnotation != null);
+EOF
+/home/tmikov/work/hermes-node-compat/cmake-build-asan/bin/hermes-node check.js
 cd - && rm -rf /tmp/hpn-check
 ```
 
