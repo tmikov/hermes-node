@@ -351,6 +351,12 @@ JavaScript, giving `SyntaxError: unrecognized Unicode character \u7f` (the
 first byte of the ELF magic). This reproduces with the unrelated
 `hello_addon.node` too, so it is not caused by anything in this plan.
 
+**Fixed after this plan was executed**, in "Give -e code a real require
+instead of the bootstrap loader": eval code now gets a require built for a
+module named `[eval]` in the current directory, so `.node` and `.json` both
+resolve. The script-file form above still works and is left as written; the
+warning is kept for the record of why it was there.
+
 ```bash
 mkdir -p /tmp/hpn-check && cd /tmp/hpn-check
 cat > package.json <<'EOF'
