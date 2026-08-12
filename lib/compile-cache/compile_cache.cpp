@@ -9,15 +9,19 @@
 
 #include <zlib.h>
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace hermes {
 namespace node_compat {
@@ -198,6 +202,90 @@ bool compileCacheReadEntry(CompileCacheEntry &entry) {
   entry.bytecode = static_cast<const uint8_t *>(base) + sizeof(EntryHeader);
   entry.bytecodeSize = header.bytecodeSize;
   return true;
+}
+
+namespace {
+
+/// Recursively delete \p path. Best effort.
+void removeTree(const std::string &path) {
+  DIR *d = ::opendir(path.c_str());
+  if (d != nullptr) {
+    while (struct dirent *e = ::readdir(d)) {
+      if (::strcmp(e->d_name, ".") == 0 || ::strcmp(e->d_name, "..") == 0)
+        continue;
+      std::string child = path + "/" + e->d_name;
+      struct stat st {};
+      if (::lstat(child.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
+        removeTree(child);
+      else
+        ::unlink(child.c_str());
+    }
+    ::closedir(d);
+  }
+  ::rmdir(path.c_str());
+}
+
+} // namespace
+
+std::string compileCacheDefaultRoot() {
+  if (const char *xdg = ::getenv("XDG_CACHE_HOME")) {
+    if (xdg[0] != '\0')
+      return std::string(xdg) + "/hermes-node/compile-cache";
+  }
+  if (const char *home = ::getenv("HOME")) {
+    if (home[0] != '\0')
+      return std::string(home) + "/.cache/hermes-node/compile-cache";
+  }
+  return std::string();
+}
+
+bool compileCacheMakeDirs(const std::string &path) {
+  if (path.empty())
+    return false;
+  // Create each component in turn, tolerating EEXIST so concurrent
+  // processes racing to create the same directory both succeed.
+  for (size_t i = 1; i <= path.size(); ++i) {
+    if (i != path.size() && path[i] != '/')
+      continue;
+    std::string component = path.substr(0, i);
+    if (::mkdir(component.c_str(), 0755) != 0 && errno != EEXIST)
+      return false;
+  }
+  struct stat st {};
+  return ::stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+void compileCachePruneGenerations(
+    const std::string &versionedRoot,
+    const std::string &keepName,
+    size_t keepCount) {
+  DIR *d = ::opendir(versionedRoot.c_str());
+  if (d == nullptr)
+    return;
+
+  std::vector<std::pair<time_t, std::string>> others;
+  while (struct dirent *e = ::readdir(d)) {
+    if (::strcmp(e->d_name, ".") == 0 || ::strcmp(e->d_name, "..") == 0)
+      continue;
+    if (keepName == e->d_name)
+      continue;
+    std::string child = versionedRoot + "/" + e->d_name;
+    struct stat st {};
+    if (::lstat(child.c_str(), &st) != 0 || !S_ISDIR(st.st_mode))
+      continue;
+    others.emplace_back(st.st_mtime, child);
+  }
+  ::closedir(d);
+
+  if (others.size() <= keepCount)
+    return;
+
+  // Most recently modified first; everything past keepCount goes.
+  std::sort(others.begin(), others.end(), [](const auto &a, const auto &b) {
+    return a.first > b.first;
+  });
+  for (size_t i = keepCount; i < others.size(); ++i)
+    removeTree(others[i].second);
 }
 
 } // namespace node_compat

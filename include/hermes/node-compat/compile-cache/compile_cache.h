@@ -104,5 +104,25 @@ bool compileCacheWriteEntry(
 /// source size or CRC, or a payload shorter than the header claims.
 bool compileCacheReadEntry(CompileCacheEntry &entry);
 
+/// Default cache root: $XDG_CACHE_HOME/hermes-node/compile-cache, falling
+/// back to $HOME/.cache/hermes-node/compile-cache. Returns an empty string
+/// when neither variable is set, which disables the cache.
+std::string compileCacheDefaultRoot();
+
+/// mkdir -p. Returns true if the directory exists afterwards.
+bool compileCacheMakeDirs(const std::string &path);
+
+/// Delete generation directories under \p versionedRoot, keeping
+/// \p keepName plus the \p keepCount most recently modified others.
+///
+/// Best effort: failures are ignored. Safe to run while another process is
+/// using a directory being removed -- on POSIX, unlinking a mapped file
+/// removes only the directory entry, and the inode survives until the last
+/// mapping is dropped.
+void compileCachePruneGenerations(
+    const std::string &versionedRoot,
+    const std::string &keepName,
+    size_t keepCount);
+
 } // namespace node_compat
 } // namespace hermes
