@@ -48,5 +48,61 @@ std::string compileCacheGenerationName(
     uint32_t bytecodeVersion,
     uint32_t configCrc);
 
+/// A mapped cache file.
+///
+/// Ownership is normally transferred to Hermes by passing `finalizer` and
+/// the CacheMapping pointer as the finalize callback and hint of
+/// hermes_run_bytecode; Hermes then calls finalizer when the RuntimeModule
+/// dies. On paths that never reach Hermes, call destroy() instead.
+struct CacheMapping {
+  void *base = nullptr;
+  size_t length = 0;
+
+  /// hermes_run_bytecode finalize_cb. \p hint is the CacheMapping.
+  static void finalizer(const uint8_t *data, size_t size, void *hint);
+
+  /// Unmap and delete this mapping.
+  void destroy();
+};
+
+/// One cache entry, in flight. Filled by the caller with the identifying
+/// fields, then completed by compileCacheReadEntry on a hit.
+struct CompileCacheEntry {
+  /// Identity, set before lookup.
+  uint32_t key = 0;
+  uint32_t sourceCrc = 0;
+  uint32_t sourceSize = 0;
+  std::string cacheFilePath;
+
+  /// Set on a hit. The caller takes ownership of `mapping`.
+  CacheMapping *mapping = nullptr;
+  const uint8_t *bytecode = nullptr;
+  uint32_t bytecodeSize = 0;
+
+  bool hit() const {
+    return mapping != nullptr;
+  }
+};
+
+/// Size of the entry header. A multiple of 8, so a page-aligned mmap base
+/// plus this offset satisfies Hermes's BYTECODE_ALIGNMENT (4).
+inline constexpr size_t kCompileCacheHeaderSize = 24;
+
+/// Write \p bytecode to \p path with a header describing \p entry. Writes a
+/// temp file and renames it, so a concurrent reader never sees a partial
+/// entry. Returns false on any failure; failure is not an error, the caller
+/// simply goes uncached.
+bool compileCacheWriteEntry(
+    const std::string &path,
+    const CompileCacheEntry &entry,
+    const uint8_t *bytecode,
+    size_t bytecodeSize);
+
+/// Try to fill \p entry from its cacheFilePath. Returns true and sets
+/// mapping/bytecode/bytecodeSize on a hit. Returns false for every kind of
+/// miss: absent file, short file, bad magic, wrong header version, changed
+/// source size or CRC, or a payload shorter than the header claims.
+bool compileCacheReadEntry(CompileCacheEntry &entry);
+
 } // namespace node_compat
 } // namespace hermes
