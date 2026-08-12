@@ -80,3 +80,14 @@ add_custom_command(TARGET hermes-parser-napi POST_BUILD
   COMMENT "Staging hermes-parser.node into the vendored package"
   VERBATIM
 )
+
+# Regenerating dist/ from src/ needs npm and Babel. Deliberately excluded
+# from ALL: dist/ is committed so that a normal build needs no JavaScript
+# toolchain. Run explicitly after editing src/, then commit the result.
+add_custom_target(hermes-parser-native-dist
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/regen-dist.sh
+          ${PROJECT_SOURCE_DIR}/hermes/include
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  COMMENT "Regenerating vendored hermes-parser-native dist/"
+  VERBATIM
+)
