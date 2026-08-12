@@ -13,6 +13,10 @@ target_include_directories(hermes-node PRIVATE
   ${CMAKE_BINARY_DIR}/generated
 )
 
+# version.h is re-derived on every build (see cmake/version.cmake); this orders
+# that ahead of the compile that includes it.
+add_dependencies(hermes-node hermes-node-version)
+
 # hermesNapi was removed from hermesvm_a upstream (54c50a06a).
 # We must whole-archive link it so all NAPI symbols are available.
 if(APPLE)
