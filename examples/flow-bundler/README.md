@@ -25,11 +25,14 @@ WebAssembly parser does.
   upstream by `node` running the WebAssembly `hermes-parser`. The bundles
   embed no paths, so relocating the sources into this directory does not
   change them.
-- `babel.config.js`, `babel-register.js`, `build.config.js` -- written fresh
-  rather than copied. The upstream `babel.config.js` was copied and only its
-  `NODE_MODULES` comment updated, since the path was already correct by
-  construction. `babel-register.js` and `build.config.js` could not be
-  copied: both resolve paths relative to their own directory in the Hermes
+- `babel.config.js` -- copied verbatim, license header included, with one
+  explanatory comment added above the `NODE_MODULES` line; nothing else
+  changed, since that path was already correct by construction. Note that
+  upstream's header for this file is shorter than the MIT header the rest of
+  the copied sources carry: copyright line and `@format`, no license
+  paragraph. It is reproduced as-is rather than "completed".
+- `babel-register.js`, `build.config.js` -- written fresh rather than
+  copied. Both resolve paths relative to their own directory in the Hermes
   tree, which no longer applies here, and both carry a
   "Confidential and proprietary" header in the upstream tree.
 - `package.json` / `package-lock.json` -- the bundler's own dependency list,

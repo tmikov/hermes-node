@@ -50,14 +50,38 @@ if (APPLE)
     "SHELL:-undefined dynamic_lookup")
 endif ()
 
-# The package's loader (package/dist/HermesParserAddon.js) looks first at
-# package/prebuilds/<platform>-<arch>/hermes-parser.node. Putting the build
-# output there lets the vendored package behave exactly like a published
-# one, so the example needs no environment variable.
+# Stage the built addon into package/prebuilds/<platform>-<arch>/, which is
+# the last of the three locations the package's loader
+# (package/dist/HermesParserAddon.js) tries, in this order:
 #
-# The directory is gitignored. Note that several build directories write to
-# the same place, so the last build wins; anything that cares which addon it
-# loads should set HERMES_PARSER_NATIVE_ADDON explicitly.
+#   1. $HERMES_PARSER_NATIVE_ADDON, if set and non-empty.
+#   2. A hardcoded <package>/../../../../../cmake-build-debug/tools/
+#      hermes-parser-native/hermes-parser.node. That path only resolves
+#      inside the fork's Hermes tree; this repository never produces a
+#      tools/hermes-parser-native/ directory, so it is dead here.
+#   3. package/prebuilds/<platform>-<arch>/hermes-parser.node.
+#
+# So this step is what makes step 3 work, and step 3 is the only one that
+# works in this repository without help from the caller. Nothing on this
+# branch actually takes it: examples/flow-bundler/run.sh sets
+# HERMES_PARSER_NATIVE_ADDON unconditionally, precisely so that it tests the
+# build directory it was given rather than whatever was staged last. The step
+# is kept anyway, because it is what lets anything that is *not* run.sh -- a
+# scratch script, a manual `require('hermes-parser')`, an npm consumer of the
+# vendored package -- load the addon with no environment variable at all.
+#
+# Two hazards, neither of which affects run.sh:
+#
+# - This writes into the source tree, not the build tree, and every build
+#   directory writes to the same path. The last build to run wins, and a
+#   read-only source checkout cannot build at all. Anything that cares which
+#   addon it loads should set HERMES_PARSER_NATIVE_ADDON explicitly.
+# - examples/flow-bundler/.npmrc sets install-links=true, so npm *copies* the
+#   package at install time. An installed consumer therefore holds a snapshot
+#   of whatever was in prebuilds/ when `npm install` ran, not a live link to
+#   it.
+#
+# The prebuilds/ directory is gitignored.
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   set(HPN_PLATFORM "darwin")
 else ()

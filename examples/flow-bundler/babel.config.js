@@ -1,13 +1,12 @@
 /**
  * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the MIT license found in the
- * LICENSE file in the root directory of this source tree.
- *
  * @format
  */
 
-// Copied from the Hermes flow-bundler. Unchanged except for this comment:
+// Copied from the Hermes flow-bundler, header included and verbatim (it is
+// shorter than the usual MIT header upstream uses; the file is MIT-licensed
+// along with the rest of that repository). Unchanged except for this comment:
 // __dirname is now this example directory, so NODE_MODULES resolves to the
 // node_modules created by `npm install` here.
 const path = require('path');

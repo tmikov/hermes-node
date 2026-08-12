@@ -126,9 +126,16 @@ It builds as part of the normal build.
 
 A `POST_BUILD` step copies the result to
 `package/prebuilds/<platform>-<arch>/hermes-parser.node`, which is gitignored.
-That is the first location the package's own loader checks, so the example needs
-no environment variable and the vendored package behaves exactly like a
-published one.
+That is the *last* of the three locations the package's own loader checks
+(`HERMES_PARSER_NATIVE_ADDON`, then a hardcoded fork-only development path that
+never resolves here, then `prebuilds/`), and the only one that works in this
+repository without help from the caller, so the vendored package behaves like a
+published one for any ad-hoc consumer. The example is not such a consumer:
+`run.sh` sets `HERMES_PARSER_NATIVE_ADDON` unconditionally so that it tests the
+build directory it was given rather than whatever was staged last. (Corrected
+after the final review; the original text said `prebuilds/` was checked first
+and that the staging is what lets the example need no environment variable.
+Neither was true.)
 
 ### 3. Regenerating `dist/`
 
@@ -196,8 +203,13 @@ little verification value for their size.
 proprietary": `flow-bundler/babel-register.js` and
 `MiniReact/no-objects/build.config.js`. Neither is copied. Both are files the
 example must author fresh anyway for the path reasons above. Everything actually
-copied — 21 fixture sources, 8 bundler sources, `babel.config.js` — carries the
-standard MIT header, as does the generated output derived from them.
+copied is MIT: the 21 fixture sources and the bundler sources carry the standard
+MIT header, as does the generated output derived from them. `babel.config.js` is
+the one exception to the *header*, not to the licence: upstream gives it a
+copyright line and `@format` with no licence paragraph, and it is copied with
+that header verbatim rather than "completed" to the standard one. (Corrected
+after the final review, which found that the copy had gained an MIT clause the
+original does not have.)
 
 **Accepted cost.** This forks the bundler; it will not pick up upstream fixes.
 The README records the source commit. Given the arrangement is temporary, this
@@ -254,6 +266,11 @@ The example itself survives unchanged.
   `unittests/HermesParserNative/` and registered with the existing
   GTest-under-Lit suite, so they run under `check-hermes-node` with no network
   and no JavaScript toolchain.
+- `unittests/HermesParserKindHashSyncTest.cpp` — added after the final review —
+  recomputes the ESTree node-kind hash from the `hermes/` submodule and requires
+  the committed `package/{src,dist}/HermesParserKindHash.js` to contain it, so a
+  submodule bump that desyncs the vendored package fails offline instead of only
+  in the opt-in example.
 
 ## Verification of the claims above
 
