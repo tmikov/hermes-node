@@ -61,13 +61,16 @@
 #include <hermes/node-compat/bindings/node_util.h>
 #include <hermes/node-compat/bindings/node_uv.h>
 #include <hermes/node-compat/bindings/node_zlib.h>
+#include <hermes/node-compat/compile-cache/compile_cache.h>
 #include <hermes/node-compat/embedded-modules/embedded_modules.h>
 #include <hermes/node-compat/event-loop/uv_event_loop.h>
 #include <hermes/node-compat/inspector/inspector_bridge.h>
 #include <hermes/node-compat/module-loader/module_loader.h>
 #include <hermes/node-compat/process/node_process.h>
 #include <hermes/node-compat/runtime/runtime_state.h>
+#include <hermes/node-compat/version.h>
 
+#include <hermes/BCGen/HBC/BytecodeVersion.h>
 #include <uv.h>
 
 #include <cstdio>
@@ -449,6 +452,58 @@ static std::string generateSessionId() {
 namespace hermes {
 namespace node_compat {
 
+namespace {
+
+/// Build and enable the compile cache for this runtime, or return nullptr.
+///
+/// Disabled under --inspect / --inspect-brk: cached bytecode is compiled by
+/// hermes_compile_to_bytecode, which has no debug flag and always produces
+/// DebugInfoSetting::THROWING, while napi_run_script compiles at
+/// DebugInfoSetting::ALL under HERMES_ENABLE_DEBUGGER. Bypassing here rather
+/// than at each compile site keeps debugger behaviour unchanged by
+/// construction.
+CompileCache *createCompileCache(const HermesNodeConfig &config) {
+  if (config.disableCompileCache || config.inspect || config.inspectBrk)
+    return nullptr;
+  if (const char *off = ::getenv("HERMES_NODE_DISABLE_COMPILE_CACHE")) {
+    if (off[0] != '\0' && std::strcmp(off, "0") != 0)
+      return nullptr;
+  }
+
+  std::string root = config.compileCacheDir;
+  if (root.empty()) {
+    if (const char *fromEnv = ::getenv("HERMES_NODE_COMPILE_CACHE"))
+      root = fromEnv;
+  }
+  if (root.empty())
+    root = compileCacheDefaultRoot();
+  if (root.empty())
+    return nullptr;
+
+  // Everything that invalidates every entry at once goes in the generation
+  // name: the wrapper text applied natively, and the compile flags.
+  uint32_t configCrc =
+      compileCacheCrc32(kCJSWrapperPrefix, sizeof(kCJSWrapperPrefix) - 1);
+
+  auto cache = std::make_unique<CompileCache>();
+  if (!cache->enable(
+          root,
+          compileCacheGenerationName(
+              HERMES_NODE_VERSION_STRING,
+              HERMES_NODE_CACHE_ARCH,
+              hermes::hbc::BYTECODE_VERSION,
+              configCrc))) {
+    return nullptr;
+  }
+
+  if (const char *dbg = ::getenv("HERMES_NODE_DEBUG_NATIVE"))
+    cache->setTracing(std::strstr(dbg, "COMPILE_CACHE") != nullptr);
+
+  return cache.release();
+}
+
+} // namespace
+
 int runHermesNode(const HermesNodeConfig &config) {
   // 1. Create Hermes runtime with microtask queue enabled.
   auto rtConfig = hermes::vm::RuntimeConfig::Builder()
@@ -508,6 +563,7 @@ int runHermesNode(const HermesNodeConfig &config) {
     runtimeState->cancelAsyncBreakData = cancelIface;
   }
   runtimeState->inspectorBridgeContext = config.inspectorBridgeContext;
+  runtimeState->compileCache = createCompileCache(config);
   // Use a no-op finalizer: RuntimeState must outlive the env because GC
   // finalizers (which run during runtime destruction, after env is freed) may
   // still reference it via cached rtState_ pointers. We delete it manually
@@ -1385,6 +1441,7 @@ int runHermesNode(const HermesNodeConfig &config) {
   // The env is owned by the Runtime and is torn down when the Runtime is
   // destroyed.
   hermesRT.reset();
+  delete runtimeState->compileCache;
   delete runtimeState;
 
   return exitCode;

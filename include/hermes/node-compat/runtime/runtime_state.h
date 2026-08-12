@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <hermes/node-compat/compile-cache/compile_cache.h>
 #include <node_api.h>
 #include <uv.h>
 
@@ -59,6 +60,10 @@ struct RuntimeState {
   // Opaque pointer to InspectorBridgeContext for cross-thread CDP messaging.
   // Null for the user runtime, set for the inspector runtime.
   void *inspectorBridgeContext = nullptr;
+
+  // On-disk bytecode cache. Owned here; deleted with RuntimeState. Null when
+  // the cache could not be enabled or was disabled.
+  CompileCache *compileCache = nullptr;
 };
 
 /// Retrieve the per-env RuntimeState. Returns nullptr if not set.

@@ -24,6 +24,8 @@ static void printUsage(const char *argv0) {
       "  -e, --eval <code>              Evaluate code\n"
       "  --inspect[=[host:]port]        Enable inspector (default 127.0.0.1:9229)\n"
       "  --inspect-brk[=[host:]port]    Enable inspector, break before user code\n"
+      "  --compile-cache=<dir>          Bytecode cache directory\n"
+      "  --no-compile-cache             Disable the bytecode cache\n"
       "  --inspect-open                 Open the DevTools URL in the system browser\n"
       "  --node-version <version>       Override process.version (e.g. v24.13.0)\n"
       "  -r, --require <module>         Preload a module before the script (repeatable)\n"
@@ -128,6 +130,10 @@ int main(int argc, char **argv) {
     } else if (std::strcmp(argv[i], "--inspect-open") == 0) {
       config.inspect = true;
       config.inspectOpen = true;
+    } else if (std::strncmp(argv[i], "--compile-cache=", 16) == 0) {
+      config.compileCacheDir = argv[i] + 16;
+    } else if (std::strcmp(argv[i], "--no-compile-cache") == 0) {
+      config.disableCompileCache = true;
     } else if (std::strcmp(argv[i], "--node-version") == 0) {
       if (i + 1 >= argc) {
         std::fprintf(stderr, "Error: --node-version requires a value\n");

@@ -51,6 +51,12 @@ struct HermesNodeConfig {
   /// listening (implies inspect).
   bool inspectOpen = false;
 
+  /// Compile cache root directory. Empty = use the default XDG location.
+  std::string compileCacheDir;
+
+  /// Disable the on-disk compile cache entirely.
+  bool disableCompileCache = false;
+
   /// Opaque pointer to the inspector bridge context for cross-thread CDP
   /// messaging. Null for the user runtime (normal operation). Set when this
   /// runtime is the inspector runtime running on the IO thread.
