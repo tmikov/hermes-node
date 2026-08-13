@@ -191,6 +191,7 @@ static napi_value compileAndRunCallback(napi_env env, napi_callback_info info) {
     napi_get_and_clear_last_exception(env, &ignored);
     cache->invalidate(entry);
     entry.mapping = nullptr;
+    entry.bytecode = nullptr;
     result = nullptr;
   }
 
