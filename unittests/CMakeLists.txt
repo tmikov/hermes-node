@@ -43,6 +43,13 @@ target_link_libraries(ModuleLoaderTest
 add_node_compat_unittest(CompileCacheTest CompileCacheTest.cpp)
 target_link_libraries(CompileCacheTest hermesNodeCompileCache)
 
+add_node_compat_unittest(CompileCacheRunTest CompileCacheRunTest.cpp)
+target_link_libraries(CompileCacheRunTest
+  hermesNodeCompileCacheRun
+  hermesNapi
+  hermesvm_a
+)
+
 add_node_compat_unittest(NodeProcessTest NodeProcessTest.cpp)
 target_link_libraries(NodeProcessTest
   hermesNodeProcess

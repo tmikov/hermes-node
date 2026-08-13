@@ -341,7 +341,12 @@ bool CompileCache::enable(
 
 void CompileCache::trace(const char *what, std::string_view filename) const {
   if (tracing_)
-    std::fprintf(stderr, "[compile cache] %s %.*s\n", what, static_cast<int>(filename.size()), filename.data());
+    std::fprintf(
+        stderr,
+        "[compile cache] %s %.*s\n",
+        what,
+        static_cast<int>(filename.size()),
+        filename.data());
 }
 
 bool CompileCache::lookup(
