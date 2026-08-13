@@ -879,12 +879,12 @@ target_include_directories(hermesNodeCompileCacheRun
 target_link_libraries(hermesNodeCompileCacheRun
   PUBLIC
     hermesNodeCompileCache
-    # hermes_compile_to_bytecode / hermes_free_bytecode live here. PUBLIC is
-    # required, not stylistic: this is a STATIC library, and CMake does not
-    # propagate a PRIVATE dependency of a static library into
-    # INTERFACE_LINK_LIBRARIES, so a consumer linking only this target would
-    # get an undefined reference. lib/runtime links hermesNapiCompile PUBLIC
-    # for the same reason.
+    # hermes_compile_to_bytecode / hermes_free_bytecode live here. PRIVATE
+    # would also link correctly -- CMake propagates a PRIVATE dependency of a
+    # static library through INTERFACE_LINK_LIBRARIES wrapped in
+    # $<LINK_ONLY:>, precisely so transitive linking works without usage
+    # requirements leaking. PUBLIC is chosen only to match how lib/runtime
+    # links the same target, and keeps consumers' link lines explicit.
     hermesNapiCompile
 )
 ```

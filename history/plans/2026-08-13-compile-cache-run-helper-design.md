@@ -292,8 +292,12 @@ the kind makes that violable by a typo.
 compiled output and so has no bearing on cache identity. It is derived here
 only because it too is a fixed property of each call site.
 
-The `switch` has no `default:`, so adding a kind fails to compile until its
-flags are stated.
+The `switch` has no `default:`, so adding a kind raises a `-Wswitch`
+diagnostic. That is a warning, not an error: `-Werror` is off in this project,
+so the diagnostic alone would let a new kind fall through and silently receive
+non-TypeScript, non-persistent flags -- exactly the cross-contamination the
+derivation exists to prevent. The fallthrough therefore asserts and aborts
+rather than returning a plausible default.
 
 ### Storage API widening
 
