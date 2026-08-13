@@ -69,6 +69,33 @@ Node-API (N-API) native addons are supported. V8-API addons (`v8.h`, NAN) are no
 - `os.dlopen` constants defined in `lib/bindings/node_constants.cpp`.
 - Hermes side: `hermes_napi_load_module()` in `hermes/API/napi/hermes_napi.cpp` handles the in-process module registration table.
 
+## Compile Cache
+
+Compiled bytecode for user and `node_modules` JavaScript is cached on disk,
+on by default. Built-in JS is unaffected (already embedded as bytecode).
+
+- Root: `$XDG_CACHE_HOME/hermes-node/compile-cache`, else
+  `~/.cache/hermes-node/compile-cache`. Layout `v1/<generation>/<ab>/<key>`.
+- Controls: `--compile-cache=<dir>`, `--no-compile-cache`,
+  `HERMES_NODE_COMPILE_CACHE`, `HERMES_NODE_DISABLE_COMPILE_CACHE`,
+  `HERMES_NODE_DEBUG_NATIVE=COMPILE_CACHE`. No `NODE_*` variables.
+- Disabled under `--inspect` / `--inspect-brk`: cache entries are compiled at
+  `DebugInfoSetting::THROWING`, the debugger needs `ALL`.
+- Not observable from JavaScript. `module.enableCompileCache()` still reports
+  `FAILED` and `getCompileCacheDir()` still returns `undefined`, deliberately.
+- `test/lit.cfg` sets `HERMES_NODE_DISABLE_COMPILE_CACHE=1` for the whole
+  suite; compile-cache tests opt in with their own directory under `%t`.
+- Implementation: `lib/compile-cache/`, consulted from
+  `node_contextify.cpp` (`compileFunctionForCJSLoaderCb`) and
+  `module_loader.cpp` (`compileAndRunCallback`).
+- Cache key is the module's absolute path, not its content, so it dedupes
+  repeated compiles of the same file across separate module graphs (e.g.
+  multiple bundler runs in one process). Measured on the flow-bundler
+  example (`examples/flow-bundler`, ~2841 `require()` calls, ~1506 distinct
+  files): warm runs were consistently 36-48% faster than cold, depending
+  on OS file-cache state, with the cache landing at ~16 MB / ~1506 entries.
+  See `history/plans/progress-compile-cache.md` for the full numbers.
+
 ## Test Infrastructure
 
 JS tests use LLVM Lit (`test/lit.cfg`), run in parallel via `check-hermes-node-js` target.
