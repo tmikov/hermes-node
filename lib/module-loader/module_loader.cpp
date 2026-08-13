@@ -178,7 +178,8 @@ static napi_value compileAndRunCallback(napi_env env, napi_callback_info info) {
 
   if (cache != nullptr) {
     if (compileCacheRun(
-            env, *cache, kind, sourceBuf, "", "", url.c_str(), &result) != napi_ok)
+            env, *cache, kind, sourceBuf, "", "", url.c_str(), &result) !=
+        napi_ok)
       return nullptr;
     return result;
   }

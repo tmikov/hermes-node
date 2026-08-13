@@ -235,6 +235,46 @@ TEST_F(CompileCacheRunTest, CorruptEntryRecompilesLeavingNoPendingException) {
       << "swallowing a cached-bytecode failure left an exception pending";
 }
 
+TEST_F(CompileCacheRunTest, WrapperIsNotPartOfTheCacheKey) {
+  // The helper hashes the source alone and compiles source+wrapper. That is
+  // what lets the wrapper text live in the generation directory name rather
+  // than being hashed per entry, so two calls differing only in wrapper must
+  // reuse one entry rather than creating two.
+  TempDir dir;
+  CompileCache cache;
+  ASSERT_TRUE(cache.enable(dir.path(), "gen"));
+
+  std::string source = "40 + 2";
+  BorrowedStringSourceBuffer buf(source);
+  napi_value result = nullptr;
+
+  ASSERT_EQ(
+      napi_ok,
+      compileCacheRun(
+          env_,
+          cache,
+          CompileCacheKind::kLoaderWrapped,
+          buf,
+          "(",
+          ")",
+          "/x/y.js",
+          &result));
+  ASSERT_EQ(
+      napi_ok,
+      compileCacheRun(
+          env_,
+          cache,
+          CompileCacheKind::kLoaderWrapped,
+          buf,
+          "((",
+          "))",
+          "/x/y.js",
+          &result));
+
+  // One entry, not two: the differing wrappers did not change the key.
+  EXPECT_FALSE(soleEntryPath(dir.path()).empty());
+}
+
 TEST_F(CompileCacheRunTest, RealSyntaxErrorPropagatesWithExceptionPending) {
   TempDir dir;
   CompileCache cache;

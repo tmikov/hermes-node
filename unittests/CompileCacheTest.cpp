@@ -614,6 +614,24 @@ TEST(CompileCacheTest, KeyAcceptsANonOwningView) {
       compileCacheKey(view, CompileCacheKind::kCommonJS));
 }
 
+TEST(CompileCacheTest, KeyStaysKindDistinctForAnEmptyFilename) {
+  // zlib's crc32 returns 0 outright for a NULL buffer rather than leaving
+  // the accumulated value alone, so an empty filename must not be allowed
+  // to discard the kind byte and collapse every kind onto one key.
+  uint32_t cjs =
+      compileCacheKey(std::string_view(), CompileCacheKind::kCommonJS);
+  uint32_t wrapped =
+      compileCacheKey(std::string_view(), CompileCacheKind::kLoaderWrapped);
+  uint32_t wrappedTs =
+      compileCacheKey(std::string_view(), CompileCacheKind::kLoaderWrappedTS);
+  EXPECT_NE(cjs, wrapped);
+  EXPECT_NE(wrapped, wrappedTs);
+  EXPECT_NE(cjs, wrappedTs);
+  EXPECT_NE(0u, cjs);
+  // An empty std::string and a default-constructed view must agree.
+  EXPECT_EQ(cjs, compileCacheKey(std::string(), CompileCacheKind::kCommonJS));
+}
+
 TEST(CompileCacheTest, GenerationNameAcceptsNonOwningViews) {
   const char rawVersion[] = "0.3.0ZZZ";
   const char rawArch[] = "x86_64ZZZ";

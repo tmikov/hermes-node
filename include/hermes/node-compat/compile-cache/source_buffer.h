@@ -72,7 +72,7 @@ class SourceBuffer {
     // lies fails here, rather than silently extending the compiled text by
     // one byte or reading out of bounds deep inside Hermes.
     assert(
-        (!nulTerminated || data[size] == '\0') &&
+        (!nulTerminated || (data != nullptr && data[size] == '\0')) &&
         "isNulTerminated set but data[size] is not 0");
   }
 
@@ -83,7 +83,9 @@ class SourceBuffer {
 };
 
 /// Borrows a std::string. c_str() guarantees the terminator; the assert in
-/// the base checks it rather than assuming it.
+/// the base checks it rather than assuming it. The borrowed string must
+/// outlive this buffer and must not be mutated or reallocated while this
+/// buffer is in use, since only its data() pointer is captured.
 class BorrowedStringSourceBuffer final : public SourceBuffer {
  public:
   explicit BorrowedStringSourceBuffer(const std::string &s)

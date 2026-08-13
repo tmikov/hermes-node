@@ -40,10 +40,16 @@ uint32_t compileCacheKey(std::string_view filename, CompileCacheKind kind) {
   auto kindByte = static_cast<uint8_t>(kind);
   uLong crc = crc32(0L, Z_NULL, 0);
   crc = crc32(crc, reinterpret_cast<const Bytef *>(&kindByte), 1);
-  crc = crc32(
-      crc,
-      reinterpret_cast<const Bytef *>(filename.data()),
-      static_cast<uInt>(filename.size()));
+  // zlib's crc32 returns 0 outright for a NULL buffer rather than leaving
+  // the accumulated value alone, so an empty view (data() == nullptr) would
+  // otherwise discard the kind byte above and collapse every kind onto the
+  // same key.
+  if (!filename.empty()) {
+    crc = crc32(
+        crc,
+        reinterpret_cast<const Bytef *>(filename.data()),
+        static_cast<uInt>(filename.size()));
+  }
   return static_cast<uint32_t>(crc);
 }
 
@@ -341,12 +347,15 @@ bool CompileCache::enable(
 
 void CompileCache::trace(const char *what, std::string_view filename) const {
   if (tracing_)
+    // filename.data() may be null for a default-constructed view; passing
+    // that through %.*s is undefined behavior even with zero precision, so
+    // substitute a valid empty string in that case.
     std::fprintf(
         stderr,
         "[compile cache] %s %.*s\n",
         what,
         static_cast<int>(filename.size()),
-        filename.data());
+        filename.data() != nullptr ? filename.data() : "");
 }
 
 bool CompileCache::lookup(

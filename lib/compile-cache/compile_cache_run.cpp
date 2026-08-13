@@ -10,6 +10,8 @@
 #include <napi/hermes_napi.h>
 #include <napi/hermes_napi_compile.h>
 
+#include <cassert>
+#include <cstdlib>
 #include <optional>
 #include <string>
 
@@ -46,8 +48,11 @@ KindFlags flagsFor(CompileCacheKind kind) {
       return {/*enableTS*/ true, /*persistent*/ true};
   }
   // Unreachable for a valid enum value. The switch has no default so that
-  // adding a kind is a compile diagnostic until its flags are stated.
-  return {false, false};
+  // adding a kind produces a -Wswitch diagnostic; this abort is the backstop,
+  // because -Werror is off and enable_ts silently defaulting to false would
+  // key TypeScript bytecode under a non-TypeScript kind.
+  assert(false && "unhandled CompileCacheKind");
+  std::abort();
 }
 
 } // namespace
@@ -62,8 +67,11 @@ napi_status compileCacheRun(
     const char *sourceUrl,
     napi_value *result) {
   const KindFlags flags = flagsFor(kind);
+  // Use an empty-but-non-null view rather than a default-constructed one:
+  // compileCacheKey/trace treat a null data() as "no filename" in ways that
+  // are easy to get subtly wrong, so keep data() valid even when empty.
   const std::string_view filename =
-      sourceUrl ? std::string_view(sourceUrl) : std::string_view();
+      sourceUrl ? std::string_view(sourceUrl) : std::string_view("");
 
   CompileCacheEntry entry;
 
