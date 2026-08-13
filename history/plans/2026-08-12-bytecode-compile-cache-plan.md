@@ -2245,9 +2245,17 @@ Create `test/compile-cache-syntax-error.js`:
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the root directory of this source tree.
 //
-// A genuine SyntaxError in the user's source is still reported, and reports
-// the same file both cold and warm. Only failures on the cached-bytecode path
-// are swallowed.
+// A genuine SyntaxError in the user's source is still reported, and the two
+// runs produce byte-identical output. Only failures on the cached-bytecode
+// path are swallowed.
+//
+// Note what is and is not warm here. The failing file is never cached at
+// all: save() is only reached after hermes_compile_to_bytecode succeeds, so
+// a file that will not compile leaves no entry behind and misses on every
+// run. What the second run exercises is the entry script, which did compile
+// and is a genuine cache hit. So this guards against the cache changing how
+// a compile error surfaces, not against a stale cached error being replayed
+// -- the latter cannot happen because no such entry is ever written.
 
 // RUN: rm -rf %t.cache %t.dir && mkdir -p %t.dir
 // RUN: echo 'function ( { oops' > %t.dir/bad.js
