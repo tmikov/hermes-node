@@ -114,8 +114,9 @@ Out of scope:
 
 A new library `lib/compile-cache/` with public header
 `include/hermes/node-compat/compile-cache/compile_cache.h`, following the
-project's `lib/<name>/` + own `CMakeLists.txt` convention. It links `uv_a` for
-filesystem access (as Node's `compile_cache.cc` does) and `zlib_a` for CRC32.
+project's `lib/<name>/` + own `CMakeLists.txt` convention. Its only dependency
+is `zlib_a`, for CRC32. Node's `compile_cache.cc` reaches the filesystem
+through libuv; this library calls POSIX directly and does not link `uv_a`.
 
 The cache is entirely native and invisible to JavaScript, mirroring Node, where
 `CompileCacheHandler` is C++ and is consulted inside `compileFunctionForCJSLoader`.
@@ -375,7 +376,10 @@ cache.
 
 1. Build the wrapped source exactly as today and call
    `hermes_compile_to_bytecode`.
-2. Write `<ab>/<key>.<pid>.tmp` -- header then bytecode -- and `rename()` it
+2. Write `<ab>/<key>.<pid>.<counter>.tmp` -- header then bytecode -- where
+   `<counter>` comes from a process-wide atomic. The pid alone is not enough:
+   `runHermesNode` is documented thread-safe, so two runtimes in one process
+   could otherwise open the same temp path and interleave. Then `rename()` it
    into place. `rename` is atomic on POSIX, so a concurrent reader sees the
    complete old file or the complete new one. Two processes compiling the same
    module both write valid identical content, so a lost race overwrites with
