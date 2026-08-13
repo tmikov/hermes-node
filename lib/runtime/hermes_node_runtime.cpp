@@ -463,14 +463,25 @@ namespace {
 /// than at each compile site keeps debugger behaviour unchanged by
 /// construction.
 CompileCache *createCompileCache(const HermesNodeConfig &config) {
-  if (config.disableCompileCache || config.inspect || config.inspectBrk)
+  // The inspector's own runtime never caches, whatever its config says. It
+  // only evaluates require('inspector-server'), which is embedded in the
+  // binary as precompiled bytecode, so it has nothing to compile and nothing
+  // to gain -- but it does inherit the process-wide cache settings, so
+  // without this it would create a directory (and prune generations) at
+  // whatever root the user selected. Keying on what the runtime IS, rather
+  // than on a flag its construction site must remember to set, is what keeps
+  // this correct as HermesNodeProcessConfig grows.
+  if (config.inspectorBridgeContext != nullptr)
+    return nullptr;
+
+  if (config.process.disableCompileCache || config.inspect || config.inspectBrk)
     return nullptr;
   if (const char *off = ::getenv("HERMES_NODE_DISABLE_COMPILE_CACHE")) {
     if (off[0] != '\0' && std::strcmp(off, "0") != 0)
       return nullptr;
   }
 
-  std::string root = config.compileCacheDir;
+  std::string root = config.process.compileCacheDir;
   if (root.empty()) {
     if (const char *fromEnv = ::getenv("HERMES_NODE_COMPILE_CACHE"))
       root = fromEnv;
@@ -664,17 +675,17 @@ int runHermesNode(const HermesNodeConfig &config) {
     };
 
     // Build inspector config and launch the inspector thread.
+    //
+    // Process-wide settings are inherited wholesale; everything else is left
+    // default-constructed on purpose. See HermesNodeProcessConfig for why the
+    // two groups are separated -- in short, copying this config outright
+    // would run the user's script a second time on this thread, re-run every
+    // -r preload, and start a recursive inspector.
     HermesNodeConfig inspectorConfig;
+    inspectorConfig.process = config.process;
     inspectorConfig.evalCode = "require('inspector-server');";
     inspectorConfig.argv = {"hermes-node-inspector"};
     inspectorConfig.inspectorBridgeContext = bridgeCtx;
-    // This runtime only ever evaluates the inspector-server bootstrap; all
-    // built-in JS is already embedded as precompiled bytecode, so there is
-    // nothing for it to compile and nothing to gain from a cache. Disable it
-    // explicitly rather than inheriting the parent config, since a default-
-    // constructed HermesNodeConfig would otherwise enable a cache of its own
-    // at the default root, ignoring --no-compile-cache/--compile-cache.
-    inspectorConfig.disableCompileCache = true;
 
     inspectorThread = std::thread([bridgeCtx, inspectorConfig]() {
       runHermesNode(inspectorConfig);
@@ -806,8 +817,8 @@ int runHermesNode(const HermesNodeConfig &config) {
       nodeArgv.push_back("hermes-node");
     }
     proc.setArgv(std::move(nodeArgv));
-    if (!config.nodeVersion.empty())
-      proc.setVersion(config.nodeVersion.c_str());
+    if (!config.process.nodeVersion.empty())
+      proc.setVersion(config.process.nodeVersion.c_str());
 
     char execBuf[4096];
     size_t execSize = sizeof(execBuf);

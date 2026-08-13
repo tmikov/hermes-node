@@ -13,8 +13,43 @@
 namespace hermes {
 namespace node_compat {
 
+/// Settings that describe the process rather than any one runtime, shared by
+/// every runtime hermes-node starts -- including the second runtime that
+/// hosts the inspector.
+///
+/// The split from HermesNodeConfig is deliberate and load-bearing: a field
+/// here is inherited by every runtime automatically, a field in
+/// HermesNodeConfig is inherited by none. Neither default is safe for both
+/// groups, and both directions have already gone wrong. Inheriting
+/// scriptPath would run the user's program a second time on the inspector
+/// thread, because scriptPath takes precedence over evalCode where the
+/// runtime decides what to execute; inheriting requireModules would re-run
+/// every -r preload; inheriting inspect would start a recursive inspector.
+/// Conversely, NOT inheriting the compile-cache settings meant the inspector
+/// runtime silently enabled a cache of its own at the default root, ignoring
+/// --no-compile-cache and --compile-cache.
+///
+/// So: put a setting here only if every runtime in the process should share
+/// it. Anything describing what a particular runtime runs, or how its
+/// debugger is wired up, belongs in HermesNodeConfig.
+struct HermesNodeProcessConfig {
+  /// Override process.version. Empty = use default.
+  std::string nodeVersion;
+
+  /// Compile cache root directory. Empty = use the default XDG location.
+  std::string compileCacheDir;
+
+  /// Disable the on-disk compile cache entirely.
+  bool disableCompileCache = false;
+};
+
 /// Configuration for a hermes-node runtime instance.
 struct HermesNodeConfig {
+  /// Settings shared with every other runtime this process starts. Copied
+  /// wholesale into the inspector runtime's config; see
+  /// HermesNodeProcessConfig for why this is separated out.
+  HermesNodeProcessConfig process;
+
   /// Script file to execute. Empty = no script file.
   std::string scriptPath;
 
@@ -28,9 +63,6 @@ struct HermesNodeConfig {
   /// Modules to require before the script, eval code, or REPL runs, in the
   /// order given. Resolved like require() from the current directory.
   std::vector<std::string> requireModules;
-
-  /// Override process.version. Empty = use default.
-  std::string nodeVersion;
 
   /// Start the REPL when no scriptPath and no evalCode are provided.
   bool enableRepl = false;
@@ -50,12 +82,6 @@ struct HermesNodeConfig {
   /// Open the DevTools URL in the system browser once the inspector is
   /// listening (implies inspect).
   bool inspectOpen = false;
-
-  /// Compile cache root directory. Empty = use the default XDG location.
-  std::string compileCacheDir;
-
-  /// Disable the on-disk compile cache entirely.
-  bool disableCompileCache = false;
 
   /// Opaque pointer to the inspector bridge context for cross-thread CDP
   /// messaging. Null for the user runtime (normal operation). Set when this

@@ -131,15 +131,15 @@ int main(int argc, char **argv) {
       config.inspect = true;
       config.inspectOpen = true;
     } else if (std::strncmp(argv[i], "--compile-cache=", 16) == 0) {
-      config.compileCacheDir = argv[i] + 16;
+      config.process.compileCacheDir = argv[i] + 16;
     } else if (std::strcmp(argv[i], "--no-compile-cache") == 0) {
-      config.disableCompileCache = true;
+      config.process.disableCompileCache = true;
     } else if (std::strcmp(argv[i], "--node-version") == 0) {
       if (i + 1 >= argc) {
         std::fprintf(stderr, "Error: --node-version requires a value\n");
         return 1;
       }
-      config.nodeVersion = argv[++i];
+      config.process.nodeVersion = argv[++i];
     } else if (
         std::strcmp(argv[i], "-r") == 0 ||
         std::strcmp(argv[i], "--require") == 0) {
