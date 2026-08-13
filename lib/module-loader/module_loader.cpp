@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <hermes/node-compat/compile-cache/compile_cache.h>
+#include <hermes/node-compat/compile-cache/compile_cache_run.h>
 #include <hermes/node-compat/embedded-modules/embedded_modules.h>
 #include <hermes/node-compat/module-loader/module_loader.h>
 #include <hermes/node-compat/runtime/runtime_state.h>
@@ -165,84 +165,29 @@ static napi_value compileAndRunCallback(napi_env env, napi_callback_info info) {
   if (auto *state = getRuntimeState(env))
     cache = state->compileCache;
 
+  // The caller has already wrapped this source in JavaScript, so there is
+  // no wrapper to add here and the buffer reaches the compiler untouched.
+  BorrowedStringSourceBuffer sourceBuf(source);
   napi_value result = nullptr;
-  CompileCacheEntry entry;
-  std::string filename(urlBuf, urlLen);
-
-  if (cache != nullptr && cache->lookup(entry, source, filename, kind)) {
-    hermes_bytecode_flags bcFlags{};
-    bcFlags.struct_size = sizeof(bcFlags);
-    // Persistent: modules loaded this way live for the process lifetime.
-    bcFlags.persistent = true;
-    if (hermes_run_bytecode(
-            env,
-            entry.bytecode,
-            entry.bytecodeSize,
-            CacheMapping::finalizer,
-            entry.mapping,
-            urlBuf,
-            &bcFlags,
-            &result) == napi_ok) {
-      return result;
-    }
-    // Unloadable cache file: clear the exception it raised, drop the entry,
-    // and fall through to compiling from source. The mapping was consumed.
-    napi_value ignored;
-    napi_get_and_clear_last_exception(env, &ignored);
-    cache->invalidate(entry);
-    entry.mapping = nullptr;
-    entry.bytecode = nullptr;
-    result = nullptr;
-  }
 
   if (cache != nullptr) {
-    hermes_compile_flags cflags{};
-    cflags.struct_size = sizeof(cflags);
-    cflags.enable_ts = enableTS;
-    uint8_t *bytecodeData = nullptr;
-    size_t bytecodeSize = 0;
-    if (hermes_compile_to_bytecode(
-            env,
-            reinterpret_cast<const uint8_t *>(source.c_str()),
-            sourceLen + 1, // includes the trailing '\0' for zero-copy
-            urlBuf,
-            &cflags,
-            &bytecodeData,
-            &bytecodeSize) != napi_ok) {
-      return nullptr; // Real compile error; the exception is pending.
-    }
-
-    cache->save(entry, bytecodeData, bytecodeSize);
-
-    hermes_bytecode_flags bcFlags{};
-    bcFlags.struct_size = sizeof(bcFlags);
-    bcFlags.persistent = true;
-    if (hermes_run_bytecode(
-            env,
-            bytecodeData,
-            bytecodeSize,
-            [](const uint8_t *data, size_t, void *) {
-              hermes_free_bytecode(const_cast<uint8_t *>(data));
-            },
-            nullptr,
-            urlBuf,
-            &bcFlags,
-            &result) != napi_ok) {
+    if (compileCacheRun(
+            env, *cache, kind, sourceBuf, "", "", urlBuf, &result) != napi_ok)
       return nullptr;
-    }
     return result;
   }
 
-  // No cache: the original path, unchanged.
+  // No cache: compile and run through hermes_run_script, as before.
   hermes_run_script_flags flags{};
   flags.struct_size = sizeof(flags);
   flags.enable_ts = enableTS;
+  // Persistent: modules loaded this way live for the process lifetime.
   flags.persistent = true;
 
   if (hermes_run_script(
           env,
-          reinterpret_cast<const uint8_t *>(source.c_str()),
-          sourceLen + 1, // includes trailing '\0' for zero-copy
+          reinterpret_cast<const uint8_t *>(sourceBuf.data()),
+          sourceBuf.readableSize(),
           nullptr,
           nullptr,
           urlBuf,

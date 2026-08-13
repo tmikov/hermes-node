@@ -21,7 +21,7 @@ target_include_directories(hermesNodeModuleLoader PUBLIC
 
 target_link_libraries(hermesNodeModuleLoader
   PRIVATE
-    hermesNodeCompileCache
+    hermesNodeCompileCacheRun
     # runtime_state.h (pulled in for RuntimeState::compileCache) includes
     # uv.h directly.
     uv_a
