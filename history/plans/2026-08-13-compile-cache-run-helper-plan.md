@@ -15,7 +15,7 @@
 - Always build with Clang, never GCC. `cmake-build-asan` (Debug + ASAN) is already configured -- do not re-run cmake configure by hand.
 - Copyright header on every new file: `Copyright (c) Tzvetan Mikov.` (NOT Meta Platforms), followed by the MIT license paragraph used by every other file in this repository.
 - Commit messages: ASCII only, no emojis.
-- `git add` your changes first, then run `./utils/format.sh -f` -- it only formats tracked or staged files.
+- `git add` your changes first, then run `./utils/format.sh -f`. **Then run `./utils/format.sh --check` and confirm it reports "All files are properly formatted" before committing.** `-f` is fire-and-forget and its own usage text describes it as formatting files in the *last commit*, so it can silently miss an edit made after you ran it. `--check` is a dry run over the whole tree and is what CI runs, so it is the only verification that matches the gate.
 - Run `cmake --build cmake-build-asan --target check-hermes-node` before committing. Baseline is 129 unit tests and 153 JS tests passing.
 - Never `git add hermes` -- the submodule pin must not change.
 - No changes under `libjs/`, `libjs-node/`, or `libjs/shims/`. Files under `test/` and `unittests/` are in scope.
