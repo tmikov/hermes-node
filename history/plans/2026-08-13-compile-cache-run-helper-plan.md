@@ -1250,11 +1250,12 @@ After Task 6, all of the following must hold:
 - [ ] No file under `test/` was edited. The seven compile-cache lit tests pass unchanged; that is the evidence this was behaviour-preserving.
 - [ ] No bare terminator arithmetic remains on a call into Hermes: every length passed to `hermes_compile_to_bytecode` or `hermes_run_script` comes from `SourceBuffer::readableSize()`. Check with
       `grep -n "readableSize\|size() + 1\|Len + 1" lib/module-loader/module_loader.cpp lib/bindings/node_contextify.cpp`.
-      One `+ 1` legitimately survives, at the `napi_get_value_string_utf8`
-      call that reads the source in: that is napi's own buffer-size
-      convention, where the argument is the capacity including room for the
-      terminator, and has nothing to do with the Hermes convention this
-      change centralises. Do not "fix" it.
+      Two `+ 1`s legitimately survive, both on `napi_get_value_string_utf8`
+      calls -- one reading the source, one reading the sourceURL after
+      Task 6. That is napi's own buffer-size convention, where the argument
+      is the capacity including room for the terminator, and it has nothing
+      to do with the Hermes convention this change centralises. Do not
+      "fix" either.
 - [ ] `lib/compile-cache/CMakeLists.txt` still links `zlib_a` and nothing else into `hermesNodeCompileCache`, and `CompileCacheTest` still links only that target.
 - [ ] `rm -rf ~/.cache/hermes-node && cmake --build cmake-build-asan --target check-hermes-node && test ! -d ~/.cache/hermes-node`.
 - [ ] `./examples/flow-bundler/run.sh cmake-build-release` prints `PASS: 6 bundles match expected/` after `cmake --build cmake-build-release --target hermes-node`.
