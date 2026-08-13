@@ -668,6 +668,13 @@ int runHermesNode(const HermesNodeConfig &config) {
     inspectorConfig.evalCode = "require('inspector-server');";
     inspectorConfig.argv = {"hermes-node-inspector"};
     inspectorConfig.inspectorBridgeContext = bridgeCtx;
+    // This runtime only ever evaluates the inspector-server bootstrap; all
+    // built-in JS is already embedded as precompiled bytecode, so there is
+    // nothing for it to compile and nothing to gain from a cache. Disable it
+    // explicitly rather than inheriting the parent config, since a default-
+    // constructed HermesNodeConfig would otherwise enable a cache of its own
+    // at the default root, ignoring --no-compile-cache/--compile-cache.
+    inspectorConfig.disableCompileCache = true;
 
     inspectorThread = std::thread([bridgeCtx, inspectorConfig]() {
       runHermesNode(inspectorConfig);
