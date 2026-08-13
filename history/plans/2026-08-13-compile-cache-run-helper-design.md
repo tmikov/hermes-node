@@ -59,7 +59,8 @@ terminator into the size.
 
 In scope:
 
-- A `SourceBuffer` type: `hermes::Buffer` plus a terminator flag.
+- A `SourceBuffer` type: a read-only source range that knows whether a NUL
+  follows its contents.
 - A `compileCacheRun` helper holding the cache-enabled sequence once.
 - Both call sites rewritten to use it.
 - Widening the storage API's hashed-value parameters to `std::string_view`.
@@ -98,11 +99,26 @@ mapping ownership -- is wholly inside the cache-enabled branch.
 
 ### `SourceBuffer`
 
-New header `include/hermes/node-compat/compile-cache/source_buffer.h`,
-belonging to the run library (which links Hermes anyway).
+New header `include/hermes/node-compat/compile-cache/source_buffer.h`. It is
+header-only and needs no Hermes header, so it belongs to the storage library
+and needs no target of its own.
+
+It does **not** derive from `hermes::Buffer`. That looked necessary because
+the Hermes compiler proper takes `std::unique_ptr<Buffer>`, but we never reach
+that API. `hermes_compile_to_bytecode` takes `const uint8_t *, size_t` and
+builds its own buffer, wrapping our pointer non-owningly when it is terminated
+and copying when it is not. Inheriting therefore buys nothing at the only
+boundary we cross, while costing three things: it would drag Hermes headers
+into the type, which is what keeps `CompileCacheTest` from testing it; it
+would put the casts in the wrong places, since `hermes::Buffer` holds
+`const uint8_t *` while source is text -- deriving means casting at every
+construction and every hash, whereas holding `const char *` means one cast at
+the single point where the buffer is handed to Hermes; and it would couple our
+type to the submodule for no gain.
 
 ```cpp
-/// A hermes::Buffer that records whether a NUL byte follows its contents.
+/// A read-only source range that records whether a NUL byte follows its
+/// contents.
 ///
 /// SIZE NEVER COUNTS THE TERMINATOR. size() is the length of the source text
 /// alone; when isNulTerminated() is true the NUL lives at data()[size()],
@@ -115,15 +131,31 @@ belonging to the run library (which links Hermes anyway).
 /// Hermes compiles zero-copy from a terminated buffer and copies internally
 /// otherwise. A memory-mapped file satisfies it for free, since the kernel
 /// zero-fills the tail of the final page, except when the file length is an
-/// exact multiple of the page size. hermes::Buffer cannot express the
-/// distinction, which is why the NAPI layer works around it with
-/// WeirdZeroTerminatedBuffer (hermes_napi.cpp:620).
+/// exact multiple of the page size. Neither const std::string & nor
+/// std::string_view can express the distinction -- the first demands an
+/// owning terminated heap string, the second discards the information -- and
+/// hermes::Buffer cannot either, which is why the NAPI layer works around it
+/// with WeirdZeroTerminatedBuffer (hermes_napi.cpp:620).
 ///
-/// Accessors stay non-virtual, inherited from hermes::Buffer. Only
-/// destruction is polymorphic, because ownership is the only thing that
-/// differs between a mapping, a heap block and a std::string.
-class SourceBuffer : public hermes::Buffer {
+/// Only destruction is virtual, because ownership is the only thing that
+/// differs between a mapping, a heap block and a std::string. The accessors
+/// read members directly.
+class SourceBuffer {
  public:
+  virtual ~SourceBuffer() = default;
+
+  SourceBuffer(const SourceBuffer &) = delete;
+  SourceBuffer &operator=(const SourceBuffer &) = delete;
+
+  const char *data() const {
+    return data_;
+  }
+
+  /// Length of the source text, never counting the terminator.
+  size_t size() const {
+    return size_;
+  }
+
   /// True when data()[size()] is readable and is '\0'.
   bool isNulTerminated() const {
     return nulTerminated_;
@@ -134,12 +166,12 @@ class SourceBuffer : public hermes::Buffer {
   /// otherwise. APIs that want the terminator counted in the length they are
   /// given take this instead of size().
   size_t readableSize() const {
-    return nulTerminated_ ? size() + 1 : size();
+    return nulTerminated_ ? size_ + 1 : size_;
   }
 
  protected:
-  SourceBuffer(const uint8_t *data, size_t size, bool nulTerminated)
-      : hermes::Buffer(data, size), nulTerminated_(nulTerminated) {
+  SourceBuffer(const char *data, size_t size, bool nulTerminated)
+      : data_(data), size_(size), nulTerminated_(nulTerminated) {
     assert((data != nullptr || size == 0) && "null data with nonzero size");
     // Reads the byte the caller just promised is readable. A caller that
     // lies fails here, rather than silently extending the compiled text by
@@ -150,9 +182,16 @@ class SourceBuffer : public hermes::Buffer {
   }
 
  private:
+  const char *const data_;
+  const size_t size_;
   const bool nulTerminated_;
 };
 ```
+
+If we ever bypass NAPI and hand an owning buffer straight to
+`createBCProviderFromSrc`, that needs a small `hermes::Buffer` adapter written
+at that boundary -- which is where it belongs, rather than baked into this
+type.
 
 `readableSize()` exists so no call site decides. An unconditional `size() + 1`
 is wrong for an unterminated buffer, and a conditional at each call site is
@@ -166,10 +205,7 @@ One concrete subclass now, because it is what both callers hold:
 class BorrowedStringSourceBuffer final : public SourceBuffer {
  public:
   explicit BorrowedStringSourceBuffer(const std::string &s)
-      : SourceBuffer(
-            reinterpret_cast<const uint8_t *>(s.data()),
-            s.size(),
-            true) {}
+      : SourceBuffer(s.data(), s.size(), true) {}
 };
 ```
 
@@ -281,10 +317,10 @@ so every existing caller and all 35 unit tests compile unchanged.
 
 It is also what lets the helper hash a `SourceBuffer` without copying: it
 bridges the two at one point, passing
-`std::string_view(reinterpret_cast<const char *>(source.data()), source.size())`
-to `lookup`. Note `size()`, not `readableSize()` -- the terminator is not part
-of the source text and must not be hashed, or a terminated and an unterminated
-buffer holding identical text would key to different entries.
+`std::string_view(source.data(), source.size())` to `lookup`. Note `size()`,
+not `readableSize()` -- the terminator is not part of the source text and must
+not be hashed, or a terminated and an unterminated buffer holding identical
+text would key to different entries.
 
 ### The sourceURL truncation fix
 
@@ -301,8 +337,9 @@ helper's parameter stays `const char *`.
 
 A second target in `lib/compile-cache/CMakeLists.txt`:
 
-- `hermesNodeCompileCache` -- unchanged. Storage: CRC32, keys, entry files,
-  generations. Links `zlib_a` and nothing else, and includes no Hermes header.
+- `hermesNodeCompileCache` -- storage: CRC32, keys, entry files, generations,
+  and now the header-only `SourceBuffer`. Still links `zlib_a` and nothing
+  else, and still includes no Hermes header.
 - `hermesNodeCompileCacheRun` -- new. Execution: binds storage to Hermes.
   Links `hermesNodeCompileCache` publicly for the types, plus the Hermes NAPI
   headers privately.
@@ -339,13 +376,12 @@ one.
 `CompileCacheTest` unit tests. This is a behaviour-preserving refactor; those
 passing untouched is the evidence.
 
-**Add `SourceBuffer` tests to `CompileCacheRunTest`**, not to
-`CompileCacheTest`: that `readableSize()` returns `size() + 1` when terminated
-and `size()` when not, and that `BorrowedStringSourceBuffer` reports
-termination. These need no runtime, but `SourceBuffer` derives from
-`hermes::Buffer` and so needs the Hermes headers, which `CompileCacheTest`
-deliberately does not have -- keeping it free of them is the reason for the
-two-target split in the first place.
+**Add `SourceBuffer` tests to `CompileCacheTest`**: that `readableSize()`
+returns `size() + 1` when terminated and `size()` when not, that
+`BorrowedStringSourceBuffer` reports termination, and that a zero-length
+buffer with a null pointer is accepted. These need no runtime and no Hermes
+header, which is precisely why the type does not derive from
+`hermes::Buffer`; they belong with the other pure tests.
 
 ## Known limitations
 
