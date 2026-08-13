@@ -10,7 +10,7 @@
 // RUN: echo 'module.exports = function () { return "first"; };' > %t.dir/dep.js
 // RUN: %hermes-node-cc --compile-cache=%t.cache %s %t.dir/dep.js > %t.cold.txt
 // RUN: %FileCheck --check-prefix=FIRST %s < %t.cold.txt
-// RUN: find %t.cache -type f | wc -l | %FileCheck --check-prefix=POPULATED %s
+// RUN: find %t.cache -type f | wc -l | tr -d ' ' | %FileCheck --check-prefix=POPULATED %s
 // RUN: %hermes-node-cc --compile-cache=%t.cache %s %t.dir/dep.js > %t.warm.txt
 // RUN: diff %t.cold.txt %t.warm.txt
 // RUN: echo 'module.exports = function () { return "second"; };' > %t.dir/dep.js

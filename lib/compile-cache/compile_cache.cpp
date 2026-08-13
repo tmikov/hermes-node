@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -111,6 +112,12 @@ bool readAll(int fd, void *data, size_t size) {
   return true;
 }
 
+/// Distinguishes concurrent writers of the same entry. getpid() alone is not
+/// enough: runHermesNode is documented thread-safe, so two runtimes in one
+/// process can write the same entry concurrently and would otherwise share a
+/// temp path.
+std::atomic<uint64_t> g_tempCounter{0};
+
 } // namespace
 
 void CacheMapping::destroy() {
@@ -133,8 +140,12 @@ bool compileCacheWriteEntry(
   if (bytecodeSize > UINT32_MAX)
     return false;
 
-  // Unique temp name so concurrent writers never collide.
-  std::string tmp = path + "." + std::to_string(::getpid()) + ".tmp";
+  // Unique temp name so concurrent writers never collide. pid alone is not
+  // enough -- two runtimes on two threads of one process share a pid -- so a
+  // monotonic counter makes it thread-unique too.
+  std::string tmp = path + "." + std::to_string(::getpid()) + "." +
+      std::to_string(g_tempCounter.fetch_add(1, std::memory_order_relaxed)) +
+      ".tmp";
 
   int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
   if (fd < 0)

@@ -186,12 +186,17 @@ naming schemes for one feature only creates confusion.
 
 | Control | Effect |
 | --- | --- |
-| `--compile-cache=<dir>` / `--no-compile-cache` | CLI, highest precedence |
+| `--compile-cache=<dir>` / `--no-compile-cache` | CLI, sets the cache root or disables it |
 | `HERMES_NODE_COMPILE_CACHE=<dir>` | Override the cache root |
 | `HERMES_NODE_DISABLE_COMPILE_CACHE=1` | Off |
 | `HERMES_NODE_DEBUG_NATIVE=COMPILE_CACHE` | Per-module hit/miss/reason tracing |
 | `--inspect` / `--inspect-brk` | Off (see above) |
 | default | On, at the XDG root |
+
+Any disable wins over any directory selection, from either source: the code
+checks `HERMES_NODE_DISABLE_COMPILE_CACHE` before considering
+`--compile-cache=<dir>`, so the environment disable overrides an explicit CLI
+directory, not the other way around.
 
 Default root: `$XDG_CACHE_HOME/hermes-node/compile-cache`, falling back to
 `~/.cache/hermes-node/compile-cache`. Chosen over `tmpdir` because the whole
@@ -242,11 +247,16 @@ cache even while the cache is active.
   later becomes `v2/` and can coexist.
 - `<generation>` is `<version>-<arch>-bc<BYTECODE_VERSION>-<configCrc>`, e.g.
   `0.3.0-x86_64-bc96-3f9c21ab`. Readable, so the active generation is
-  answerable by looking. `configCrc` covers the exact CJS wrapper text applied
-  by `compileFunctionForCJSLoaderCb` and the `hermes_compile_flags` bit
-  patterns used by every kind. It does not need to cover the JS-side wrapper
-  used by the loader kinds: that text is part of the hashed source for those
-  entries.
+  answerable by looking. `configCrc` hashes only `kCJSWrapperPrefix`, the CJS
+  wrapper text applied by `compileFunctionForCJSLoaderCb`; it does not cover
+  the `hermes_compile_flags` bit patterns, and it does not need to cover the
+  JS-side wrapper used by the loader kinds, since that text is part of the
+  hashed source for those entries. In practice the exposure from not hashing
+  the compile flags is small: the `<version>` component comes from
+  `git describe --tags --always --dirty`, so any committed change to the
+  flags rotates the generation anyway. The gap is a dirty working tree, where
+  `-dirty` is constant across edits and so does not by itself force a new
+  generation.
 - `<ab>` is the first byte of the key in hex, giving 256-way fanout.
 - `<key>` is `crc32(kind, filename)` in hex.
 
@@ -320,6 +330,13 @@ performance case for a faster hash does not survive the numbers -- CRC32 over
 A key collision costs thrash (two paths evicting each other), not correctness.
 A content collision requires the same path to hold two different sources of
 identical length whose CRC32 also matches -- the risk Node already ships.
+
+The scale of the thrash risk: with a 32-bit key, the chance of any colliding
+pair is about 0.03% at the ~1500 entries of one project, rising to roughly
+29% at 50k entries accumulated across many projects on one machine (the cache
+is user-global). A colliding pair evicts each other on every run, silently --
+each is a correct cache miss followed by a correct recompile and overwrite,
+just paid repeatedly instead of once.
 
 **No payload hash, deliberately.** Node stores and verifies a hash over the
 blob because V8 will not validate a code cache itself. Hermes validates for us:
@@ -421,9 +438,13 @@ through `~/.cache` and turn ordering into a variable. This also guarantees
 `check-hermes-node` never writes to the user's real cache.
 
 **End to end**: `examples/flow-bundler` is the workload that produced the
-3.15 s figure. Assert that the cache directory is populated and that output
-still matches `expected/`, rather than asserting a wall-clock threshold, which
-would be flaky in CI.
+3.15 s figure. An automated assertion that the cache directory is populated
+was not implemented; the coverage is instead the Task 9 measurement, taken
+manually against `expected/` output. `check-hermes-node-examples` does not
+set `HERMES_NODE_DISABLE_COMPILE_CACHE` or redirect `XDG_CACHE_HOME` the way
+the lit suite does, so it writes to the developer's real cache directory --
+this is intentional, since the point of this suite is to exercise the
+shipping default rather than an isolated one.
 
 ## Expected outcome
 
@@ -456,3 +477,10 @@ a median npm `.js` file of 586 bytes.
   inspect the cache from JavaScript; only CLI flags and environment variables
   control it.
 - **Debug builds and `--inspect` get no caching**, by design.
+- **No eviction, size cap or TTL.** Entries are never reclaimed except by
+  generation pruning (see above), which only removes whole superseded
+  generations, not individual stale entries. An entry for a deleted
+  `node_modules` tree persists until the generation rotates. There is no
+  supported way to clear the cache: `flushCompileCache()` is a deliberate
+  no-op (see "The JavaScript API") and there is no CLI equivalent. Users clear
+  it by removing the cache directory.
