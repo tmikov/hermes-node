@@ -136,16 +136,22 @@ static napi_value compileAndRunCallback(napi_env env, napi_callback_info info) {
   if (status != napi_ok)
     return nullptr;
 
-  // Get the sourceUrl string.
-  char urlBuf[4096];
+  // Get the sourceUrl string. Sized to the actual length rather than a fixed
+  // buffer: napi_get_value_string_utf8 silently truncates when the value does
+  // not fit, and the result becomes the cache key's filename, so a truncated
+  // URL would let two long paths share one entry.
   size_t urlLen = 0;
-  status =
-      napi_get_value_string_utf8(env, argv[1], urlBuf, sizeof(urlBuf), &urlLen);
+  status = napi_get_value_string_utf8(env, argv[1], nullptr, 0, &urlLen);
   if (status != napi_ok) {
     napi_throw_type_error(
         env, nullptr, "compileAndRun: sourceUrl must be a string");
     return nullptr;
   }
+  std::string url(urlLen, '\0');
+  status =
+      napi_get_value_string_utf8(env, argv[1], &url[0], urlLen + 1, nullptr);
+  if (status != napi_ok)
+    return nullptr;
 
   // Check optional enableTS flag (must be a boolean if provided).
   bool enableTS = false;
@@ -172,7 +178,7 @@ static napi_value compileAndRunCallback(napi_env env, napi_callback_info info) {
 
   if (cache != nullptr) {
     if (compileCacheRun(
-            env, *cache, kind, sourceBuf, "", "", urlBuf, &result) != napi_ok)
+            env, *cache, kind, sourceBuf, "", "", url.c_str(), &result) != napi_ok)
       return nullptr;
     return result;
   }
@@ -190,7 +196,7 @@ static napi_value compileAndRunCallback(napi_env env, napi_callback_info info) {
           sourceBuf.readableSize(),
           nullptr,
           nullptr,
-          urlBuf,
+          url.c_str(),
           &flags,
           &result) != napi_ok) {
     return nullptr;
