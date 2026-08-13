@@ -879,8 +879,21 @@ target_include_directories(hermesNodeCompileCacheRun
 target_link_libraries(hermesNodeCompileCacheRun
   PUBLIC
     hermesNodeCompileCache
+    # hermes_compile_to_bytecode / hermes_free_bytecode live here. PUBLIC is
+    # required, not stylistic: this is a STATIC library, and CMake does not
+    # propagate a PRIVATE dependency of a static library into
+    # INTERFACE_LINK_LIBRARIES, so a consumer linking only this target would
+    # get an undefined reference. lib/runtime links hermesNapiCompile PUBLIC
+    # for the same reason.
+    hermesNapiCompile
 )
 ```
+
+Note that `hermesNapi` is deliberately NOT linked here even though the code
+calls `napi_get_and_clear_last_exception` and `hermes_run_bytecode`. That
+library is whole-archive-linked at each leaf instead -- by
+`tools/hermes-node/CMakeLists.txt` and by every unit test target -- and
+`hermesNodeModuleLoader` already follows the same convention.
 
 - [ ] **Step 6: Register the test**
 
