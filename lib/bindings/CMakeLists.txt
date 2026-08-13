@@ -57,7 +57,7 @@ target_link_libraries(hermesNodeBindings
   PUBLIC
     uv_a
   PRIVATE
-    hermesNodeCompileCache
+    hermesNodeCompileCacheRun
     simdutf
     ada
     cares_a
