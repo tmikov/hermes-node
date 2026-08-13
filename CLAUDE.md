@@ -88,13 +88,16 @@ on by default. Built-in JS is unaffected (already embedded as bytecode).
 - Implementation: `lib/compile-cache/`, consulted from
   `node_contextify.cpp` (`compileFunctionForCJSLoaderCb`) and
   `module_loader.cpp` (`compileAndRunCallback`).
-- Cache key is the module's absolute path, not its content, so it dedupes
-  repeated compiles of the same file across separate module graphs (e.g.
-  multiple bundler runs in one process). Measured on the flow-bundler
-  example (`examples/flow-bundler`, ~2841 `require()` calls, ~1506 distinct
-  files): warm runs were consistently 36-48% faster than cold, depending
-  on OS file-cache state, with the cache landing at ~16 MB / ~1506 entries.
-  See `history/plans/progress-compile-cache.md` for the full numbers.
+- Cache key is derived from the module's absolute path, not its content, so
+  re-requiring the same path reuses the same entry across separate module
+  graphs (e.g. multiple bundler runs in one process). Each entry also stores
+  a CRC32 and byte length of the source, checked on every lookup, so an
+  edited file misses (and is rewritten) rather than serving stale bytecode.
+- Measured on the flow-bundler example (`examples/flow-bundler`, ~2841
+  compile-cache consults, ~1506 distinct files): warm runs were consistently
+  36-48% faster than cold, depending on OS file-cache state, with the cache
+  landing at ~16 MB / ~1506 entries. See
+  `history/plans/progress-compile-cache.md` for the full numbers.
 
 ## Test Infrastructure
 

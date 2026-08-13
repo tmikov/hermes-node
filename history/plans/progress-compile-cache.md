@@ -18,8 +18,10 @@ Tracks progress on `history/plans/2026-08-12-bytecode-compile-cache-plan.md`
 | Task 8 | (folded into review rounds for Tasks 5-7; no separate task file) | done |
 | Task 9 | Measure and document | done |
 
-All nine tasks are complete. No production code changed in Task 9 -- only
-this progress file and a new `CLAUDE.md` section.
+All nine tasks are complete. The measurement and documentation work in
+Task 9 itself changed no production code -- only this progress file and a
+new `CLAUDE.md` section. Task 9's own investigation did surface a real bug
+(see "Bug found" below), which a separate follow-up commit fixed.
 
 ## Task 9: Measurement
 
@@ -49,8 +51,17 @@ find /tmp/hncc-bench -type f | wc -l
 
 ### Results (actual, not predicted)
 
-Two measurement passes were taken because the first pass showed unusually
-high variance; see "Deviations and concerns" below.
+The cold/warm protocol was run four times total (see the task-9 report,
+`.superpowers/sdd/2026-08-12-bytecode-compile-cache-plan/task-9-report.md`,
+for full transcripts of all four as Runs A-D): the exact brief commands
+were run twice -- once at the very start of the session (true cold OS
+file cache) and once again, as the final recorded pass, after the OS file
+cache had been warmed by earlier runs -- plus two more rounds of
+controlled trials in between to chase down why the first pass showed
+unusually high variance. The two below ("final clean pass" and "very
+first invocation") are the two literal-brief-protocol runs; the three
+controlled trials that follow are the extra rounds; see "Deviations and
+concerns" below for why the variance happened.
 
 **Literal brief protocol, final clean pass** (OS file cache already warm
 from earlier passes in the same session -- this is the steady-state number
@@ -98,6 +109,16 @@ coincidence.
 warm): consistently **~5.95-6.0 s**, matching the historical pre-cache
 baseline of ~6.3 s well.
 
+Note that the cold figure is not a no-cache baseline. The cache is
+write-through, so `save()` runs synchronously right after each miss:
+within one run, the ~1335 repeat compiles (~2841 consults against ~1506
+distinct paths, see "Cache entry count" below) are served from entries
+already written earlier in that same run, including during the cold run
+itself, whose cache directory starts empty but does not stay empty.
+Cold-vs-warm therefore measures the cross-run benefit alone and
+understates the cache's total effect relative to running with no cache at
+all.
+
 ### Correctness check
 
 ```
@@ -136,9 +157,12 @@ PASS: 6 bundles match expected/
   purely disk-cache-avoidance. This is existing, intentional behavior from
   earlier tasks (not something Task 9 changed), but it means the cold-vs-
   no-cache gap should not be read as "the cache write itself is free" --
-  it conflates two effects. The cold-vs-warm comparison (both at the same
-  debug-info level) is the clean one and is what's reported above as
-  the headline number.
+  it conflates two effects. The cold-vs-warm comparison, both at the same
+  debug-info level, isolates that one confound -- though as noted above
+  it has its own caveat (cold already contains a same-run cache benefit
+  for repeat paths), so it is a clearer comparison than cold-vs-no-cache,
+  not a wholly clean one. It's what's reported above as the headline
+  number.
 - **Cache entry count (1506-1507) is well under the ~2841 predicted.**
   Investigated: 2841 is the total number of `compileFunctionForCJSLoader`
   invocations logged across the run (the bundler builds 6 separate output
@@ -157,13 +181,28 @@ PASS: 6 bundles match expected/
   checked manually at commit time via `git status`, which showed no
   changes under `libjs/`, `libjs-node/`, or `hermes/`.
 
-### Bug found: `~/.cache/hermes-node` is NOT left absent (verification checklist item fails)
+### Bug found and fixed: `~/.cache/hermes-node` was not left absent (verification checklist item)
 
 The plan's verification checklist requires: "`rm -rf ~/.cache/hermes-node &&
 cmake --build cmake-build-asan --target check-hermes-node` leaves
-`~/.cache/hermes-node` absent." This does **not** hold on this branch.
-`check-hermes-node` still passes (281/281 tests green), but the directory
-is recreated during the run regardless.
+`~/.cache/hermes-node` absent." At the time this was found, that did
+**not** hold on this branch. `check-hermes-node` still passed (281/281
+tests green), but the directory was recreated during the run regardless.
+
+**This has since been fixed in commit `180b670`** ("Disable compile cache
+in the inspector's second runtime"), by a separate agent following up on
+this finding. The fix sets `inspectorConfig.disableCompileCache = true;`
+explicitly in `lib/runtime/hermes_node_runtime.cpp`, since the inspector's
+second runtime only ever evaluates `require('inspector-server')` and all
+built-in JS is already embedded as precompiled bytecode -- there is
+nothing for it to gain from a cache. `test/compile-cache-inspect.js` was
+also strengthened to point the default cache root at a temp
+`XDG_CACHE_HOME` and assert nothing appears there, so the test now
+exercises the inspector runtime's own config instead of only checking the
+parent's `--compile-cache` directory (which is what let the original
+regression slip past that test). The root-cause investigation below is
+kept as a record of what was found and how; the "Not fixed" framing that
+originally followed it no longer applies.
 
 **Root cause** (found by bisecting which test caused it, then by a
 temporary diagnostic `fprintf` in `createCompileCache` -- reverted before
@@ -212,20 +251,23 @@ per-`HermesNodeConfig`) is the one thing that normally prevents it -- and
 `test/compile-cache-inspect.js` is the only test in the suite that
 deliberately clears that variable (via the `%hermes-node-cc`
 substitution) while also passing `--inspect`, in order to test the
-documented "cache is disabled under --inspect" behavior. That test still
-passes because it only asserts its own `%t.cache` stays absent, which it
-does; it does not check the real default location, so it does not catch
-this. Confirmed via `strace -f -e trace=mkdir,mkdirat` that the mkdir
+documented "cache is disabled under --inspect" behavior. At the time,
+that test passed anyway, because it only asserted its own `%t.cache`
+stayed absent, which it did; it did not check the real default location,
+so it did not catch this (this is exactly what `180b670` strengthened it
+to do). Confirmed via `strace -f -e trace=mkdir,mkdirat` that the mkdir
 sequence terminates at exactly `~/.cache/hermes-node/compile-cache/v1/
 <generation>`, and bisected to this one test file by running each
 `compile-cache-*.js` test individually against a freshly wiped
 `~/.cache/hermes-node`.
 
-**Not fixed**: this task is documentation-only per the plan's Global
-Constraints ("Task 9 ... changes no production code"). The diagnostic
-`fprintf` used to confirm the root cause was reverted; `git diff` on
-`lib/runtime/hermes_node_runtime.cpp` is empty. This is flagged as a
-concern for a follow-up fix, not addressed here.
+Task 9 itself is documentation-only per the plan's Global Constraints
+("Task 9 ... changes no production code"), so the fix was not made as
+part of this task: the diagnostic `fprintf` used to confirm the root
+cause was reverted before the Task 9 commit, leaving
+`lib/runtime/hermes_node_runtime.cpp` unchanged in that commit. It was
+flagged as a concern for a follow-up fix, and `180b670` is that follow-up
+(see above).
 
 Full raw command transcripts are in
 `.superpowers/sdd/2026-08-12-bytecode-compile-cache-plan/task-9-report.md`.
