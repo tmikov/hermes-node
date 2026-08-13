@@ -554,3 +554,51 @@ TEST(CompileCacheTest, EnablePrunesOldGenerations) {
   EXPECT_TRUE(dirExists(versioned + "/gen-new"));
   EXPECT_FALSE(dirExists(versioned + "/gen-d"));
 }
+
+#include <hermes/node-compat/compile-cache/source_buffer.h>
+
+namespace {
+
+/// Minimal concrete SourceBuffer for tests. The base constructor is
+/// protected, so an unterminated buffer needs a subclass to build one.
+class TestSourceBuffer final : public SourceBuffer {
+ public:
+  TestSourceBuffer(const char *data, size_t size, bool nulTerminated)
+      : SourceBuffer(data, size, nulTerminated) {}
+};
+
+} // namespace
+
+TEST(CompileCacheTest, SourceBufferFromStringIsTerminated) {
+  std::string s = "var a = 1;";
+  BorrowedStringSourceBuffer buf(s);
+  EXPECT_EQ(s.data(), buf.data());
+  EXPECT_EQ(s.size(), buf.size());
+  EXPECT_TRUE(buf.isNulTerminated());
+  // size() never counts the terminator; readableSize() does when there is one.
+  EXPECT_EQ(s.size() + 1, buf.readableSize());
+}
+
+TEST(CompileCacheTest, SourceBufferUnterminatedReadableSizeIsSize) {
+  // A range covering only part of a larger string: no terminator follows the
+  // last byte, so readableSize() must not claim one.
+  std::string backing = "abcdefgh";
+  TestSourceBuffer buf(backing.data(), 4, false);
+  EXPECT_FALSE(buf.isNulTerminated());
+  EXPECT_EQ(4u, buf.size());
+  EXPECT_EQ(4u, buf.readableSize());
+}
+
+TEST(CompileCacheTest, SourceBufferAcceptsEmpty) {
+  TestSourceBuffer buf(nullptr, 0, false);
+  EXPECT_EQ(0u, buf.size());
+  EXPECT_EQ(0u, buf.readableSize());
+}
+
+TEST(CompileCacheTest, SourceBufferEmptyStringIsTerminated) {
+  std::string empty;
+  BorrowedStringSourceBuffer buf(empty);
+  EXPECT_EQ(0u, buf.size());
+  EXPECT_TRUE(buf.isNulTerminated());
+  EXPECT_EQ(1u, buf.readableSize());
+}
