@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace hermes {
@@ -35,7 +36,7 @@ uint32_t compileCacheCrc32(const void *data, size_t size) {
       crc32(crc, static_cast<const Bytef *>(data), static_cast<uInt>(size)));
 }
 
-uint32_t compileCacheKey(const std::string &filename, CompileCacheKind kind) {
+uint32_t compileCacheKey(std::string_view filename, CompileCacheKind kind) {
   auto kindByte = static_cast<uint8_t>(kind);
   uLong crc = crc32(0L, Z_NULL, 0);
   crc = crc32(crc, reinterpret_cast<const Bytef *>(&kindByte), 1);
@@ -47,13 +48,20 @@ uint32_t compileCacheKey(const std::string &filename, CompileCacheKind kind) {
 }
 
 std::string compileCacheGenerationName(
-    const std::string &version,
-    const std::string &arch,
+    std::string_view version,
+    std::string_view arch,
     uint32_t bytecodeVersion,
     uint32_t configCrc) {
   char buf[64];
   std::snprintf(buf, sizeof(buf), "-bc%u-%08x", bytecodeVersion, configCrc);
-  return version + "-" + arch + buf;
+
+  std::string result;
+  result.reserve(version.size() + arch.size() + sizeof(buf));
+  result.append(version);
+  result += '-';
+  result.append(arch);
+  result += buf;
+  return result;
 }
 
 namespace {
@@ -331,15 +339,15 @@ bool CompileCache::enable(
   return true;
 }
 
-void CompileCache::trace(const char *what, const std::string &filename) const {
+void CompileCache::trace(const char *what, std::string_view filename) const {
   if (tracing_)
-    std::fprintf(stderr, "[compile cache] %s %s\n", what, filename.c_str());
+    std::fprintf(stderr, "[compile cache] %s %.*s\n", what, (int)filename.size(), filename.data());
 }
 
 bool CompileCache::lookup(
     CompileCacheEntry &entry,
-    const std::string &source,
-    const std::string &filename,
+    std::string_view source,
+    std::string_view filename,
     CompileCacheKind kind) {
   if (!enabled_)
     return false;

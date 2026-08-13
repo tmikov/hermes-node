@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace hermes {
 namespace node_compat {
@@ -36,15 +37,15 @@ uint32_t compileCacheCrc32(const void *data, size_t size);
 /// Cache key for a module: CRC-32 over the kind byte followed by the
 /// filename. Depends only on the path, never on content, so editing a file
 /// rewrites its one entry rather than leaving a new one behind.
-uint32_t compileCacheKey(const std::string &filename, CompileCacheKind kind);
+uint32_t compileCacheKey(std::string_view filename, CompileCacheKind kind);
 
 /// Name of the generation directory, e.g. "0.3.0-x86_64-bc99-3f9c21ab".
 /// Readable on purpose: the active generation should be answerable by
 /// looking. \p configCrc covers the native CJS wrapper text and the
 /// compile-flag bit patterns.
 std::string compileCacheGenerationName(
-    const std::string &version,
-    const std::string &arch,
+    std::string_view version,
+    std::string_view arch,
     uint32_t bytecodeVersion,
     uint32_t configCrc);
 
@@ -166,8 +167,8 @@ class CompileCache {
   /// populated, ready to be passed to save().
   bool lookup(
       CompileCacheEntry &entry,
-      const std::string &source,
-      const std::string &filename,
+      std::string_view source,
+      std::string_view filename,
       CompileCacheKind kind);
 
   /// Persist a freshly compiled entry. Creates the fanout directory as
@@ -181,7 +182,7 @@ class CompileCache {
   void invalidate(const CompileCacheEntry &entry);
 
  private:
-  void trace(const char *what, const std::string &filename) const;
+  void trace(const char *what, std::string_view filename) const;
 
   bool enabled_ = false;
   bool tracing_ = false;

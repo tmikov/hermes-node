@@ -602,3 +602,26 @@ TEST(CompileCacheTest, SourceBufferEmptyStringIsTerminated) {
   EXPECT_TRUE(buf.isNulTerminated());
   EXPECT_EQ(1u, buf.readableSize());
 }
+
+TEST(CompileCacheTest, KeyAcceptsANonOwningView) {
+  // The widening is real only if a view that is not backed by a std::string
+  // produces the same key. A char array with no terminator inside the range
+  // would not compile against a const std::string & parameter.
+  const char raw[] = "/a/b/c.jsXXXX";
+  std::string_view view(raw, 9); // "/a/b/c.js"
+  EXPECT_EQ(
+      compileCacheKey(std::string("/a/b/c.js"), CompileCacheKind::kCommonJS),
+      compileCacheKey(view, CompileCacheKind::kCommonJS));
+}
+
+TEST(CompileCacheTest, GenerationNameAcceptsNonOwningViews) {
+  const char rawVersion[] = "0.3.0ZZZ";
+  const char rawArch[] = "x86_64ZZZ";
+  EXPECT_EQ(
+      "0.3.0-x86_64-bc99-3f9c21ab",
+      compileCacheGenerationName(
+          std::string_view(rawVersion, 5),
+          std::string_view(rawArch, 6),
+          99,
+          0x3f9c21ab));
+}
