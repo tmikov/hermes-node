@@ -36,25 +36,54 @@ package gates behavior on it.
 
 ### Two caveats
 
-**1. Startup is slow today.**
+**1. The first run pays for compilation; later runs don't.**
 
-Your script and any non-builtin modules it requires are compiled on every
-run. Hermes is a full AOT compiler: parsing is fast, but its optimization
-passes were built to run once at production-build time, so paying that
-cost on every startup makes cold start feel sluggish compared to Node.
-The built-in Node JS modules are pre-compiled at build time and embedded
-in the binary, so they only pay this cost once.
+Hermes is an AOT compiler, not a JIT. Your script and every non-builtin
+module it requires get compiled to bytecode before they run, and the
+optimizer that makes that bytecode fast was meant to run once at build time,
+not on every startup. (Built-in Node modules escape this. They're compiled
+when the binary is built and embedded in it.)
 
-Bytecode caching for user scripts and an AOT pre-compilation path are on the
-roadmap. They're not done. Right now the focus is API coverage; perf comes
-after.
+So the bytecode goes to disk, in `~/.cache/hermes-node/compile-cache` by
+default, and later runs reuse it. Since it gets reused, optimizing it is
+worth the wait, and optimization is on by default whenever the cache is.
+Turn the cache off and optimization goes off too, so a one-shot run isn't
+punished for it.
+
+The `examples/flow-bundler` workload requires about 1500 distinct files:
+
+| | wall clock |
+|---|---|
+| `--no-compile-cache` | 6.0 s |
+| first run, populating the cache | 7.4 s |
+| every run after that | 2.05 s |
+
+First run costs about 23% extra. Every run after is roughly 3x faster. It
+starts paying at run two, so the only losing case is code you run exactly
+once.
+
+Read that table carefully, though: the rows differ in two settings, not one,
+because the two move together by default. Pin `--optimize` and the parts
+separate. Optimizing alone adds about 3.0 s to the first run and saves about
+0.67 s on each one after (`--optimize=off` gives 4.5 s then 2.8 s, against
+7.4 s then 2.05 s with it on).
+
+It's still not where it should be. Each module compiles as its own unit, so
+the optimizer never sees across a file boundary and can't inline between
+files. Thousands of tiny `node_modules` files is about the worst input you
+can hand it; the same code rolled into one bundle optimizes much better.
+Improving that is on the roadmap.
+
+The cache key is the file path plus a checksum of the source, so editing one
+file recompiles that file and leaves the rest of the tree alone. See
+[Compile cache](#compile-cache) for the controls.
 
 **2. Hermes isn't V8.**
 
-Even with caching and pre-compilation, `hermes-node` won't match V8's
-TurboFan on hot untyped JavaScript. Hermes is a bytecode interpreter (with
-a small arm64 JIT) designed for fast startup, predictable memory, and small
-footprint. Long-running untyped workloads are V8's home turf, not Hermes's.
+`hermes-node` won't match V8's TurboFan on hot untyped JavaScript, cache or
+no cache. Hermes is a bytecode interpreter (with a small arm64 JIT) built
+for fast startup, predictable memory, and a small footprint. Long-running
+untyped workloads are V8's home turf, not Hermes's.
 
 That said, `hermes-node` is built directly on Hermes, so future Hermes
 capabilities flow through to it. When
@@ -208,6 +237,35 @@ Typical debug-from-scratch invocation:
 That pauses your script on line 1, opens your browser to the DevTools URL,
 and leaves you ready to set breakpoints.
 
+## Compile cache
+
+On by default. Compiled bytecode for your script and anything under
+`node_modules` goes in `$XDG_CACHE_HOME/hermes-node/compile-cache`, or
+`~/.cache/hermes-node/compile-cache` if that variable isn't set. Built-in
+modules are unaffected, since they're already bytecode inside the binary.
+
+| | |
+|---|---|
+| `--compile-cache=<dir>` | Use a different directory |
+| `--no-compile-cache` | Turn it off |
+| `--optimize=on\|off\|default` | Override the optimizer. `default` is on with the cache, off without |
+| `HERMES_NODE_COMPILE_CACHE=<dir>` | Same as `--compile-cache` |
+| `HERMES_NODE_DISABLE_COMPILE_CACHE=1` | Same as `--no-compile-cache` |
+| `HERMES_NODE_DEBUG_NATIVE=COMPILE_CACHE` | Log every hit and miss to stderr |
+
+There are no `NODE_*` equivalents. `NODE_COMPILE_CACHE`,
+`module.enableCompileCache()` and `getCompileCacheDir()` do nothing here, on
+purpose: this cache holds Hermes bytecode, not V8 code cache data, and
+pretending otherwise would only mislead code that checks.
+
+`--inspect` and `--inspect-brk` turn the cache off. Cached entries are
+compiled without the full debug info the debugger needs to set breakpoints
+anywhere, so `--optimize=on` is rejected alongside the inspector too.
+
+A stale entry can't produce wrong results. Each one stores the length and
+checksum of the source it came from, and a mismatch counts as a miss.
+Deleting the cache directory is always safe.
+
 ## Command-line options
 
 ```
@@ -217,8 +275,13 @@ Options:
   -e, --eval <code>              Evaluate code
   --inspect[=[host:]port]        Enable inspector (default 127.0.0.1:9229)
   --inspect-brk[=[host:]port]    Enable inspector, break before user code
+  --compile-cache=<dir>          Bytecode cache directory
+  --no-compile-cache             Disable the bytecode cache
+  --optimize=<default|on|off>    Optimize compiled code. default is on
+                                 with the cache, off without it
   --inspect-open                 Open the DevTools URL in the system browser
   --node-version <version>       Override process.version (e.g. v24.13.0)
+  -r, --require <module>         Preload a module before the script (repeatable)
   -v, --version                  Print the hermes-node version and exit
   -h, --help                     Show this help
 ```
@@ -260,8 +323,9 @@ This list will move; check the issue tracker for current state.
 
 ## Limitations
 
-- **Startup time.** Every run compiles your script from source. Built-in
-  modules are pre-compiled and embedded; your code isn't.
+- **First-run compilation.** Code that isn't in the compile cache yet has to
+  be compiled, with optimizations, before it runs. See
+  [Compile cache](#compile-cache).
 - **No JIT exposed.** Hermes has an arm64 JIT but `hermes-node` doesn't
   wire it up today.
 - **Subset of Node.** Whether a package works depends on which core modules
@@ -279,8 +343,8 @@ This list will move; check the issue tracker for current state.
 
 In rough priority order:
 
-- Bytecode cache for user scripts (fix the startup-time problem)
-- AOT pre-compilation flow for `node_modules` trees
+- AOT pre-compilation flow for `node_modules` trees, so even the first run
+  doesn't have to compile
 - More bindings: `crypto`, `tls`
 - Filling in gaps in already-supported modules
 
