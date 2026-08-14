@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,24 @@ namespace node_compat {
 /// So: put a setting here only if every runtime in the process should share
 /// it. Anything describing what a particular runtime runs, or how its
 /// debugger is wired up, belongs in HermesNodeConfig.
+/// Whether to run the optimization pipeline when compiling JavaScript.
+enum class OptimizeMode : uint8_t {
+  /// On when the compile cache is active, off when it is not.
+  ///
+  /// Optimizing costs compile time and buys execution speed, so it only pays
+  /// when the result is kept. With a cache the compile happens once and every
+  /// later run gets the faster bytecode; without one it would be paid on
+  /// every run and thrown away, and the uncached path exists precisely to
+  /// minimise start-up latency.
+  kDefault,
+  /// Always optimize. Rejected together with --inspect: optimizing requires
+  /// the compile API, which emits DebugInfoSetting::THROWING rather than the
+  /// ALL the debugger needs to set breakpoints.
+  kOn,
+  /// Never optimize.
+  kOff,
+};
+
 struct HermesNodeProcessConfig {
   /// Override process.version. Empty = use default.
   std::string nodeVersion;
@@ -41,6 +60,9 @@ struct HermesNodeProcessConfig {
 
   /// Disable the on-disk compile cache entirely.
   bool disableCompileCache = false;
+
+  /// Whether compiled JavaScript is run through the optimization pipeline.
+  OptimizeMode optimize = OptimizeMode::kDefault;
 };
 
 /// Configuration for a hermes-node runtime instance.

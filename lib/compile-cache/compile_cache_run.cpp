@@ -59,7 +59,8 @@ KindFlags flagsFor(CompileCacheKind kind) {
 
 napi_status compileCacheRun(
     napi_env env,
-    CompileCache &cache,
+    CompileCache *cache,
+    bool optimize,
     CompileCacheKind kind,
     const SourceBuffer &source,
     std::string_view wrapPrefix,
@@ -78,7 +79,8 @@ napi_status compileCacheRun(
   // Hash size(), never readableSize(): the terminator is not part of the
   // source text. Hashing it would key identical text to different entries
   // depending on whether its buffer happened to be terminated.
-  if (cache.lookup(
+  if (cache != nullptr &&
+      cache->lookup(
           entry,
           std::string_view(source.data(), source.size()),
           filename,
@@ -104,7 +106,7 @@ napi_status compileCacheRun(
     // the pointers are nulled rather than destroyed.
     napi_value ignored;
     napi_get_and_clear_last_exception(env, &ignored);
-    cache.invalidate(entry);
+    cache->invalidate(entry);
     entry.mapping = nullptr;
     entry.bytecode = nullptr;
     *result = nullptr;
@@ -129,6 +131,11 @@ napi_status compileCacheRun(
   hermes_compile_flags cflags{};
   cflags.struct_size = sizeof(cflags);
   cflags.enable_ts = flags.enableTS;
+  // Optimizing trades compile time for execution speed, so it only pays when
+  // the result is kept. The caller resolves that; the cache's generation name
+  // must reflect it, or optimized and unoptimized bytecode compiled from
+  // identical source would share an entry.
+  cflags.optimize = optimize;
   uint8_t *bytecodeData = nullptr;
   size_t bytecodeSize = 0;
   napi_status compileStatus = hermes_compile_to_bytecode(
@@ -144,7 +151,8 @@ napi_status compileCacheRun(
     return compileStatus;
   }
 
-  cache.save(entry, bytecodeData, bytecodeSize);
+  if (cache != nullptr)
+    cache->save(entry, bytecodeData, bytecodeSize);
 
   hermes_bytecode_flags bcFlags{};
   bcFlags.struct_size = sizeof(bcFlags);

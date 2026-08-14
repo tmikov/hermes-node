@@ -168,23 +168,37 @@ static napi_value compileAndRunCallback(napi_env env, napi_callback_info info) {
                                    : CompileCacheKind::kLoaderWrapped;
 
   CompileCache *cache = nullptr;
-  if (auto *state = getRuntimeState(env))
+  bool optimize = false;
+  if (auto *state = getRuntimeState(env)) {
     cache = state->compileCache;
+    optimize = state->optimizeCompiles;
+  }
 
   // The caller has already wrapped this source in JavaScript, so there is
   // no wrapper to add here and the buffer reaches the compiler untouched.
   BorrowedStringSourceBuffer sourceBuf(source);
   napi_value result = nullptr;
 
-  if (cache != nullptr) {
+  // The helper handles a null cache, which is how the optimizing path works
+  // with no cache: only the compile API can be told to optimize, so
+  // hermes_run_script below cannot serve that case.
+  if (cache != nullptr || optimize) {
     if (compileCacheRun(
-            env, *cache, kind, sourceBuf, "", "", url.c_str(), &result) !=
-        napi_ok)
+            env,
+            cache,
+            optimize,
+            kind,
+            sourceBuf,
+            "",
+            "",
+            url.c_str(),
+            &result) != napi_ok)
       return nullptr;
     return result;
   }
 
-  // No cache: compile and run through hermes_run_script, as before.
+  // No cache and no optimization: compile and run through hermes_run_script,
+  // as before. That path is tuned for low start-up latency.
   hermes_run_script_flags flags{};
   flags.struct_size = sizeof(flags);
   flags.enable_ts = enableTS;

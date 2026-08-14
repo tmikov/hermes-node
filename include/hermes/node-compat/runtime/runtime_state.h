@@ -64,6 +64,16 @@ struct RuntimeState {
   // On-disk bytecode cache. Owned here; deleted with RuntimeState. Null when
   // the cache could not be enabled or was disabled.
   CompileCache *compileCache = nullptr;
+
+  // Whether to run the optimization pipeline when compiling. Resolved once at
+  // bootstrap from OptimizeMode and whether the cache is active; see
+  // resolveOptimize() in hermes_node_runtime.cpp.
+  //
+  // When this is true and compileCache is null, the compile entry points must
+  // still route through compileCacheRun (which accepts a null cache) rather
+  // than napi_run_script/hermes_run_script, because only the compile API can
+  // be told to optimize.
+  bool optimizeCompiles = false;
 };
 
 /// Retrieve the per-env RuntimeState. Returns nullptr if not set.

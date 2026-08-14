@@ -625,8 +625,11 @@ static napi_value compileFunctionForCJSLoaderCb(
     filename = napiGetString(env, argv[1]);
 
   CompileCache *cache = nullptr;
-  if (auto *state = getRuntimeState(env))
+  bool optimize = false;
+  if (auto *state = getRuntimeState(env)) {
     cache = state->compileCache;
+    optimize = state->optimizeCompiles;
+  }
 
   // Wrap the source in a function with CJS parameters, matching Node's
   // GetCJSParameters: exports, require, module, __filename, __dirname.
@@ -645,11 +648,15 @@ static napi_value compileFunctionForCJSLoaderCb(
   const char *sourceUrl = filename.empty() ? nullptr : filename.c_str();
   napi_value fn = nullptr;
 
-  if (cache != nullptr) {
+  // The helper handles a null cache, which is how the optimizing path works
+  // with no cache: only the compile API can be told to optimize, so
+  // napi_run_script below cannot serve that case.
+  if (cache != nullptr || optimize) {
     BorrowedStringSourceBuffer sourceBuf(content);
     if (compileCacheRun(
             env,
-            *cache,
+            cache,
+            optimize,
             CompileCacheKind::kCommonJS,
             sourceBuf,
             kCJSWrapperPrefix,
@@ -660,10 +667,11 @@ static napi_value compileFunctionForCJSLoaderCb(
       return nullptr;
     }
   } else {
-    // No cache: compile and run through napi_run_script, as before. This
-    // path is deliberately not shared -- napi_run_script compiles with
-    // debug info under HERMES_ENABLE_DEBUGGER, which is why the cache is
-    // disabled under --inspect.
+    // No cache and no optimization: compile and run through napi_run_script,
+    // as before. This path is deliberately not shared -- napi_run_script
+    // compiles with debug info under HERMES_ENABLE_DEBUGGER, which is why the
+    // cache is disabled under --inspect, and it is tuned for low start-up
+    // latency rather than execution speed.
     std::string wrappedSource;
     wrappedSource.reserve(
         sizeof(kCJSWrapperPrefix) + content.size() + wrapSuffix.size());

@@ -462,6 +462,26 @@ namespace {
 /// DebugInfoSetting::ALL under HERMES_ENABLE_DEBUGGER. Bypassing here rather
 /// than at each compile site keeps debugger behaviour unchanged by
 /// construction.
+/// Whether compiles should run the optimization pipeline.
+///
+/// kDefault ties it to whether the result is kept: optimizing costs compile
+/// time and buys execution speed, so with a cache it is paid once and repaid
+/// on every later run, while without one it would be paid on every run and
+/// thrown away. hermes_run_script, the uncached path, is tuned for low
+/// start-up latency, so leaving it unoptimized is the point rather than a
+/// limitation.
+bool resolveOptimize(const HermesNodeConfig &config, bool cacheActive) {
+  switch (config.process.optimize) {
+    case OptimizeMode::kOff:
+      return false;
+    case OptimizeMode::kOn:
+      return true;
+    case OptimizeMode::kDefault:
+      return cacheActive;
+  }
+  return cacheActive;
+}
+
 CompileCache *createCompileCache(const HermesNodeConfig &config) {
   // The inspector's own runtime never caches, whatever its config says. It
   // only evaluates require('inspector-server'), which is embedded in the
@@ -493,8 +513,20 @@ CompileCache *createCompileCache(const HermesNodeConfig &config) {
 
   // Everything that invalidates every entry at once goes in the generation
   // name: the wrapper text applied natively, and the compile flags.
+  //
+  // The optimization setting is a compile flag in the strongest sense -- it
+  // changes the bytecode produced from identical source -- so it must be in
+  // here. Without it, a run with --optimize=off would serve optimized entries
+  // written by an earlier default run, and vice versa, from the same keys.
   uint32_t configCrc =
       compileCacheCrc32(kCJSWrapperPrefix, sizeof(kCJSWrapperPrefix) - 1);
+  {
+    // Resolved against cacheActive=true: reaching here means a cache is being
+    // created, which is exactly the condition kDefault keys on.
+    const char optimizeByte =
+        resolveOptimize(config, /*cacheActive*/ true) ? 'O' : 'o';
+    configCrc = compileCacheCrc32(&optimizeByte, 1) ^ configCrc;
+  }
 
   auto cache = std::make_unique<CompileCache>();
   if (!cache->enable(
@@ -575,6 +607,8 @@ int runHermesNode(const HermesNodeConfig &config) {
   }
   runtimeState->inspectorBridgeContext = config.inspectorBridgeContext;
   runtimeState->compileCache = createCompileCache(config);
+  runtimeState->optimizeCompiles =
+      resolveOptimize(config, runtimeState->compileCache != nullptr);
   // Use a no-op finalizer: RuntimeState must outlive the env because GC
   // finalizers (which run during runtime destruction, after env is freed) may
   // still reference it via cached rtState_ pointers. We delete it manually

@@ -21,6 +21,17 @@ namespace node_compat {
 /// when a valid entry exists and compiling, persisting and running it
 /// otherwise.
 ///
+/// \p cache may be null, in which case the source is compiled and run without
+/// any lookup or save. That is not a degenerate case: it is how the optimizing
+/// path works when no cache is active, since only the compile API can be told
+/// to optimize -- hermes_run_script cannot. Routing it here rather than
+/// open-coding compile-and-run at each call site is what keeps the sequence
+/// singular.
+///
+/// \p optimize runs the full optimization pipeline. It must be reflected in
+/// the cache's generation name, because optimized and unoptimized bytecode
+/// compiled from identical source must never share an entry.
+///
 /// What gets compiled is always what gets hashed, plus the caller's wrapper:
 /// \p source is hashed and forms the body, and \p wrapPrefix / \p wrapSuffix
 /// are concatenated around it before compiling. That invariant is what lets
@@ -43,7 +54,8 @@ namespace node_compat {
 /// SyntaxError in valid user code.
 napi_status compileCacheRun(
     napi_env env,
-    CompileCache &cache,
+    CompileCache *cache,
+    bool optimize,
     CompileCacheKind kind,
     const SourceBuffer &source,
     std::string_view wrapPrefix,

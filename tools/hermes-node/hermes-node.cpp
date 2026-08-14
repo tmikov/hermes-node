@@ -26,6 +26,8 @@ static void printUsage(const char *argv0) {
       "  --inspect-brk[=[host:]port]    Enable inspector, break before user code\n"
       "  --compile-cache=<dir>          Bytecode cache directory\n"
       "  --no-compile-cache             Disable the bytecode cache\n"
+      "  --optimize=<default|on|off>    Optimize compiled code. default is on\n"
+      "                                 with the cache, off without it\n"
       "  --inspect-open                 Open the DevTools URL in the system browser\n"
       "  --node-version <version>       Override process.version (e.g. v24.13.0)\n"
       "  -r, --require <module>         Preload a module before the script (repeatable)\n"
@@ -134,6 +136,21 @@ int main(int argc, char **argv) {
       config.process.compileCacheDir = argv[i] + 16;
     } else if (std::strcmp(argv[i], "--no-compile-cache") == 0) {
       config.process.disableCompileCache = true;
+    } else if (std::strncmp(argv[i], "--optimize=", 11) == 0) {
+      const char *value = argv[i] + 11;
+      if (std::strcmp(value, "default") == 0) {
+        config.process.optimize = hermes::node_compat::OptimizeMode::kDefault;
+      } else if (std::strcmp(value, "on") == 0) {
+        config.process.optimize = hermes::node_compat::OptimizeMode::kOn;
+      } else if (std::strcmp(value, "off") == 0) {
+        config.process.optimize = hermes::node_compat::OptimizeMode::kOff;
+      } else {
+        std::fprintf(
+            stderr,
+            "Error: --optimize expects default, on or off (got '%s')\n",
+            value);
+        return 1;
+      }
     } else if (std::strcmp(argv[i], "--node-version") == 0) {
       if (i + 1 >= argc) {
         std::fprintf(stderr, "Error: --node-version requires a value\n");
@@ -163,6 +180,25 @@ int main(int argc, char **argv) {
       argvStartIndex = i;
       break;
     }
+  }
+
+  // Validated after the loop, not inside it, so the two flags can appear in
+  // either order.
+  //
+  // Optimizing requires the compile API, which emits
+  // DebugInfoSetting::THROWING; the debugger needs ALL to set breakpoints
+  // anywhere. Rather than silently degrade debugging, refuse the pair. The
+  // default mode already resolves to off under --inspect, because --inspect
+  // disables the cache, so only an explicit --optimize=on lands here.
+  if (config.process.optimize == hermes::node_compat::OptimizeMode::kOn &&
+      (config.inspect || config.inspectBrk)) {
+    std::fprintf(
+        stderr,
+        "Error: --optimize=on cannot be combined with --inspect or "
+        "--inspect-brk.\n"
+        "Optimized code is compiled without the full debug info the debugger "
+        "needs to set breakpoints.\n");
+    return 1;
   }
 
   // Build process.argv: [binary, script-or-arg1, ...].

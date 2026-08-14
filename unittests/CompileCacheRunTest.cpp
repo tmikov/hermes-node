@@ -130,15 +130,24 @@ class CompileCacheRunTest : public ::testing::Test {
   }
 
   /// Run \p source with no wrapper under kLoaderWrapped, which is the kind
-  /// whose caller hands over already-wrapped text.
+  /// whose caller hands over already-wrapped text. \p cache may be null.
   napi_status run(
-      CompileCache &cache,
+      CompileCache *cache,
       const std::string &source,
       const char *url,
-      napi_value *out) {
+      napi_value *out,
+      bool optimize = false) {
     BorrowedStringSourceBuffer buf(source);
     return compileCacheRun(
-        env_, cache, CompileCacheKind::kLoaderWrapped, buf, "", "", url, out);
+        env_,
+        cache,
+        optimize,
+        CompileCacheKind::kLoaderWrapped,
+        buf,
+        "",
+        "",
+        url,
+        out);
   }
 
   /// The double value of \p v, or NaN if it is not a number.
@@ -156,7 +165,7 @@ TEST_F(CompileCacheRunTest, MissCompilesPersistsAndRuns) {
   ASSERT_TRUE(cache.enable(dir.path(), "gen"));
 
   napi_value result = nullptr;
-  ASSERT_EQ(napi_ok, run(cache, "40 + 2", "/x/y.js", &result));
+  ASSERT_EQ(napi_ok, run(&cache, "40 + 2", "/x/y.js", &result));
   EXPECT_DOUBLE_EQ(42.0, asNumber(result));
   EXPECT_FALSE(clearException());
 
@@ -178,8 +187,8 @@ TEST_F(CompileCacheRunTest, HitRunsBytecodeFromTheEntry) {
   ASSERT_TRUE(cacheB.enable(dirB.path(), "gen"));
 
   napi_value ignored = nullptr;
-  ASSERT_EQ(napi_ok, run(cacheA, "40 + 2", "/x/y.js", &ignored));
-  ASSERT_EQ(napi_ok, run(cacheB, "40 + 3", "/x/y.js", &ignored));
+  ASSERT_EQ(napi_ok, run(&cacheA, "40 + 2", "/x/y.js", &ignored));
+  ASSERT_EQ(napi_ok, run(&cacheB, "40 + 3", "/x/y.js", &ignored));
 
   std::string entryA = soleEntryPath(dirA.path());
   std::string entryB = soleEntryPath(dirB.path());
@@ -202,7 +211,7 @@ TEST_F(CompileCacheRunTest, HitRunsBytecodeFromTheEntry) {
   writeFile(entryA, swapped);
 
   napi_value result = nullptr;
-  ASSERT_EQ(napi_ok, run(cacheA, "40 + 2", "/x/y.js", &result));
+  ASSERT_EQ(napi_ok, run(&cacheA, "40 + 2", "/x/y.js", &result));
   EXPECT_DOUBLE_EQ(43.0, asNumber(result))
       << "expected the entry's bytecode to run, not a recompile of the source";
   EXPECT_FALSE(clearException());
@@ -214,7 +223,7 @@ TEST_F(CompileCacheRunTest, CorruptEntryRecompilesLeavingNoPendingException) {
   ASSERT_TRUE(cache.enable(dir.path(), "gen"));
 
   napi_value ignored = nullptr;
-  ASSERT_EQ(napi_ok, run(cache, "40 + 2", "/x/y.js", &ignored));
+  ASSERT_EQ(napi_ok, run(&cache, "40 + 2", "/x/y.js", &ignored));
 
   // Zero the payload, leaving our own header valid so the failure lands on
   // the Hermes bytecode path rather than being rejected as a bad header.
@@ -227,7 +236,7 @@ TEST_F(CompileCacheRunTest, CorruptEntryRecompilesLeavingNoPendingException) {
   writeFile(entry, bytes);
 
   napi_value result = nullptr;
-  EXPECT_EQ(napi_ok, run(cache, "40 + 2", "/x/y.js", &result));
+  EXPECT_EQ(napi_ok, run(&cache, "40 + 2", "/x/y.js", &result));
   EXPECT_DOUBLE_EQ(42.0, asNumber(result));
   // The swallow must leave nothing pending. A stale pending exception would
   // corrupt the NEXT unrelated napi call, which is invisible end to end.
@@ -252,7 +261,8 @@ TEST_F(CompileCacheRunTest, WrapperIsNotPartOfTheCacheKey) {
       napi_ok,
       compileCacheRun(
           env_,
-          cache,
+          &cache,
+          /*optimize*/ false,
           CompileCacheKind::kLoaderWrapped,
           buf,
           "(",
@@ -263,7 +273,8 @@ TEST_F(CompileCacheRunTest, WrapperIsNotPartOfTheCacheKey) {
       napi_ok,
       compileCacheRun(
           env_,
-          cache,
+          &cache,
+          /*optimize*/ false,
           CompileCacheKind::kLoaderWrapped,
           buf,
           "((",
@@ -281,7 +292,7 @@ TEST_F(CompileCacheRunTest, RealSyntaxErrorPropagatesWithExceptionPending) {
   ASSERT_TRUE(cache.enable(dir.path(), "gen"));
 
   napi_value result = nullptr;
-  EXPECT_NE(napi_ok, run(cache, "function ( { oops", "/x/bad.js", &result));
+  EXPECT_NE(napi_ok, run(&cache, "function ( { oops", "/x/bad.js", &result));
 
   bool pending = false;
   ASSERT_EQ(napi_ok, napi_is_exception_pending(env_, &pending));
@@ -297,4 +308,71 @@ TEST_F(CompileCacheRunTest, RealSyntaxErrorPropagatesWithExceptionPending) {
       napi_ok,
       napi_get_value_string_utf8(env_, nameVal, name, sizeof(name), &nameLen));
   EXPECT_STREQ("SyntaxError", name);
+}
+
+TEST_F(CompileCacheRunTest, NullCacheCompilesAndRunsWithoutPersisting) {
+  // The optimizing path with no cache active passes a null cache. That must
+  // compile and run normally, and must not touch the filesystem: only the
+  // compile API can be told to optimize, so this is the route --optimize=on
+  // takes when the cache is disabled.
+  TempDir dir;
+
+  napi_value result = nullptr;
+  ASSERT_EQ(
+      napi_ok, run(nullptr, "40 + 2", "/x/y.js", &result, /*optimize*/ true));
+  EXPECT_DOUBLE_EQ(42.0, asNumber(result));
+  EXPECT_FALSE(clearException());
+
+  // Nothing was written anywhere.
+  EXPECT_TRUE(soleEntryPath(dir.path()).empty());
+}
+
+TEST_F(CompileCacheRunTest, NullCacheStillPropagatesRealSyntaxErrors) {
+  // The swallow-and-recompile rule only covers cached bytecode. With no cache
+  // there is nothing to swallow, and a genuine compile error must surface.
+  napi_value result = nullptr;
+  EXPECT_NE(
+      napi_ok,
+      run(nullptr,
+          "function ( { oops",
+          "/x/bad.js",
+          &result,
+          /*optimize*/ true));
+
+  bool pending = false;
+  ASSERT_EQ(napi_ok, napi_is_exception_pending(env_, &pending));
+  EXPECT_TRUE(pending) << "a genuine compile error must not be swallowed";
+  clearException();
+}
+
+TEST_F(CompileCacheRunTest, OptimizedAndUnoptimizedEntriesDoNotCollide) {
+  // Within one generation the optimize setting is fixed, so this asserts the
+  // narrower property the helper is responsible for: the same source under
+  // the same key yields a usable entry either way. Keeping the two settings
+  // in separate generations is the runtime's job -- createCompileCache folds
+  // the resolved optimize bool into the generation name.
+  TempDir dirOpt;
+  TempDir dirPlain;
+  CompileCache optCache;
+  CompileCache plainCache;
+  ASSERT_TRUE(optCache.enable(dirOpt.path(), "gen-O"));
+  ASSERT_TRUE(plainCache.enable(dirPlain.path(), "gen-o"));
+
+  napi_value a = nullptr, b = nullptr;
+  ASSERT_EQ(
+      napi_ok, run(&optCache, "40 + 2", "/x/y.js", &a, /*optimize*/ true));
+  ASSERT_EQ(
+      napi_ok, run(&plainCache, "40 + 2", "/x/y.js", &b, /*optimize*/ false));
+  EXPECT_DOUBLE_EQ(42.0, asNumber(a));
+  EXPECT_DOUBLE_EQ(42.0, asNumber(b));
+
+  // Each wrote its own entry, and re-reading each yields the right answer.
+  napi_value a2 = nullptr, b2 = nullptr;
+  ASSERT_EQ(
+      napi_ok, run(&optCache, "40 + 2", "/x/y.js", &a2, /*optimize*/ true));
+  ASSERT_EQ(
+      napi_ok, run(&plainCache, "40 + 2", "/x/y.js", &b2, /*optimize*/ false));
+  EXPECT_DOUBLE_EQ(42.0, asNumber(a2));
+  EXPECT_DOUBLE_EQ(42.0, asNumber(b2));
+  EXPECT_FALSE(clearException());
 }
