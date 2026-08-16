@@ -35,6 +35,7 @@ target_link_libraries(hermesNodeRuntime
     hermesNodeModuleLoader
     hermesNodeProcess
     hermesNodeInspector
+    hermesNodeBundleBuild
     hermesNapiCompile
     hermesvm_a
   PRIVATE

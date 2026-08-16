@@ -75,6 +75,18 @@ struct HermesNodeConfig {
   /// Script file to execute. Empty = no script file.
   std::string scriptPath;
 
+  /// When non-empty, run in AOT bundle producer mode instead of executing
+  /// scriptPath: walk the require() graph reachable from scriptPath, compile
+  /// it, and write a single-file bundle to this path (see
+  /// hermes/node-compat/bundle/bundle_build.h). scriptPath is still the
+  /// entry point in this mode; it is just not itself run.
+  std::string buildBundlePath;
+
+  /// Narrate the --build-bundle walk to stderr (discovery, resolution,
+  /// skips, per-module compile stats, totals). No effect outside bundle
+  /// producer mode; never changes the bytes buildBundle writes.
+  bool verbose = false;
+
   /// Inline JS code to eval after bootstrap, before event loop.
   /// Useful for programmatic use (e.g. inspector runtime).
   std::string evalCode;

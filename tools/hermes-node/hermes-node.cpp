@@ -26,6 +26,10 @@ static void printUsage(const char *argv0) {
       "  --inspect-brk[=[host:]port]    Enable inspector, break before user code\n"
       "  --compile-cache=<dir>          Bytecode cache directory\n"
       "  --no-compile-cache             Disable the bytecode cache\n"
+      "  --build-bundle=<file>          Compile the script and its requires "
+      "into <file>\n"
+      "  --verbose                      With --build-bundle, narrate the "
+      "walk to stderr\n"
       "  --optimize=<default|on|off>    Optimize compiled code. default is on\n"
       "                                 with the cache, off without it\n"
       "  --inspect-open                 Open the DevTools URL in the system browser\n"
@@ -134,6 +138,10 @@ int main(int argc, char **argv) {
       config.inspectOpen = true;
     } else if (std::strncmp(argv[i], "--compile-cache=", 16) == 0) {
       config.process.compileCacheDir = argv[i] + 16;
+    } else if (std::strncmp(argv[i], "--build-bundle=", 15) == 0) {
+      config.buildBundlePath = argv[i] + 15;
+    } else if (std::strcmp(argv[i], "--verbose") == 0) {
+      config.verbose = true;
     } else if (std::strcmp(argv[i], "--no-compile-cache") == 0) {
       config.process.disableCompileCache = true;
     } else if (std::strncmp(argv[i], "--optimize=", 11) == 0) {

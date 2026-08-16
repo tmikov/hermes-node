@@ -43,3 +43,41 @@ target_link_libraries(hermesNodeBundle PRIVATE
   # disagree on what "architecture" means.
   hermesNodeCacheArch
 )
+
+# Build layer: static discovery of require() calls, using the Hermes parser.
+# Kept as a separate target from hermesNodeBundle so that BundleFormatTest and
+# any other consumer of the format layer alone stays free of the Hermes VM
+# link dependency; only producer-side code that needs to scan and compile
+# sources links this one.
+add_hermes_library(hermesNodeBundleBuild STATIC
+  require_scanner.cpp
+  bundle_resolve.cpp
+  bundle_build.cpp
+)
+
+target_include_directories(hermesNodeBundleBuild
+  PUBLIC
+    ${PROJECT_SOURCE_DIR}/include
+    # bundle_build.h includes <node_api.h>, so consumers of that header need
+    # this path too -- it cannot be PRIVATE. Matches
+    # hermesNodeCompileCacheRun's identical need (lib/compile-cache).
+    ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/hermes/include
+    ${PROJECT_SOURCE_DIR}/hermes/API
+)
+
+target_link_libraries(hermesNodeBundleBuild
+  PUBLIC
+    hermesNodeBundle
+    # hermes_compile_to_bytecode / hermes_free_bytecode, used only inside
+    # bundle_build.cpp -- bundle_build.h does not include Hermes NAPI compile
+    # headers, so PUBLIC is not required for a consumer to compile against
+    # this target. Kept PUBLIC anyway to mirror hermesNodeCompileCacheRun's
+    # choice (see its CMakeLists.txt for the reasoning): PRIVATE would link
+    # identically, since CMake still forwards a static library's PRIVATE
+    # dependencies via $<LINK_ONLY:> for linking purposes.
+    hermesNapiCompile
+  PRIVATE
+    hermesvm_a
+)

@@ -53,6 +53,12 @@ target_link_libraries(CompileCacheRunTest
 add_node_compat_unittest(BundleFormatTest BundleFormatTest.cpp)
 target_link_libraries(BundleFormatTest hermesNodeBundle)
 
+add_node_compat_unittest(RequireScannerTest RequireScannerTest.cpp)
+target_link_libraries(RequireScannerTest hermesNodeBundleBuild)
+
+add_node_compat_unittest(BundleResolveTest BundleResolveTest.cpp)
+target_link_libraries(BundleResolveTest hermesNodeBundleBuild)
+
 add_node_compat_unittest(NodeProcessTest NodeProcessTest.cpp)
 target_link_libraries(NodeProcessTest
   hermesNodeProcess

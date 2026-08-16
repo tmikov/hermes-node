@@ -61,6 +61,7 @@
 #include <hermes/node-compat/bindings/node_util.h>
 #include <hermes/node-compat/bindings/node_uv.h>
 #include <hermes/node-compat/bindings/node_zlib.h>
+#include <hermes/node-compat/bundle/bundle_build.h>
 #include <hermes/node-compat/compile-cache/compile_cache.h>
 #include <hermes/node-compat/embedded-modules/embedded_modules.h>
 #include <hermes/node-compat/event-loop/uv_event_loop.h>
@@ -1248,9 +1249,20 @@ int runHermesNode(const HermesNodeConfig &config) {
     }
   }
 
-  // 13. Load and execute the user script, eval code, or start the REPL.
+  // 13. Load and execute the user script, eval code, or start the REPL --
+  // or, in AOT bundle producer mode, build the bundle instead of running
+  // anything.
   if (exitCode == 0) {
-    if (!config.scriptPath.empty()) {
+    if (!config.buildBundlePath.empty()) {
+      if (config.scriptPath.empty()) {
+        std::fprintf(
+            stderr, "Error: --build-bundle requires a script argument\n");
+        exitCode = 1;
+      } else {
+        exitCode = buildBundle(
+            env, config.scriptPath, config.buildBundlePath, config.verbose);
+      }
+    } else if (!config.scriptPath.empty()) {
       napi_value loadUserScriptFn;
       napi_get_named_property(
           env, global, "__loadUserScript", &loadUserScriptFn);
