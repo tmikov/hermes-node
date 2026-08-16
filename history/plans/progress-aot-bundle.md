@@ -529,3 +529,17 @@ Two things learned in the process, both recorded in the tests:
   testing the recursion guard.
 
 Build time over the ~1500-file Babel example is unchanged at ~1.1 s.
+
+**Follow-up the same day: the escape warning over-reported.** Checked
+against `examples/yargs-cli`, which reported five escapes; four were
+`typeof require` or an equality comparison against it, and one was real
+(`require: require` stored on an object, later called with computed
+arguments). Testing whether require exists yields a boolean and can load
+nothing, and the idiom is in essentially every UMD-flavored file a package
+ships, so the warning was 80% noise on the first real tree it met.
+
+The scan now accounts for `require` as the operand of `typeof`, `!` or
+`void`, and on either side of `==`/`!=`/`===`/`!==`. Only equality:
+`f(require)`, `var r = require` and `'' + require` still count, because
+each of those can hand the value on. Both examples now report exactly one
+escape, and each is genuine.

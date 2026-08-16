@@ -106,6 +106,31 @@ class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
     ESTree::visitESTreeChildren(*this, node);
   }
 
+  // `typeof require`, and `!require`: the operand is tested, not retained.
+  // The first of these is the standard "am I running under CommonJS?"
+  // guard, and it appears in essentially every UMD-flavored file in a
+  // package's build output -- reporting it would make this warning mostly
+  // noise. `void require` discards outright, which is the same story.
+  void visit(ESTree::UnaryExpressionNode *node) {
+    llvh::StringRef op = node->_operator->str();
+    if (op == "typeof" || op == "!" || op == "void")
+      accountFor(node->_argument);
+    ESTree::visitESTreeChildren(*this, node);
+  }
+
+  // `require === null`, `typeof require === 'undefined'`, and the rest of
+  // the same guard family: an equality test yields a boolean and cannot
+  // hand the value anywhere. Only equality, deliberately -- `a + require`
+  // or `f(require)` do let it out, and those are the ones worth a warning.
+  void visit(ESTree::BinaryExpressionNode *node) {
+    llvh::StringRef op = node->_operator->str();
+    if (op == "==" || op == "!=" || op == "===" || op == "!==") {
+      accountFor(node->_left);
+      accountFor(node->_right);
+    }
+    ESTree::visitESTreeChildren(*this, node);
+  }
+
   // Every remaining appearance of the identifier. Reached after the visits
   // above have run on the enclosing node -- RecursiveVisitor descends into
   // children only once the parent's overload has, so an identifier that is

@@ -131,6 +131,31 @@ TEST(RequireScannerTest, DoesNotRecordAccountedForUses) {
   EXPECT_TRUE(scanGaps("var x = 1;").empty());
 }
 
+TEST(RequireScannerTest, DoesNotRecordGuardsAgainstRequire) {
+  // "Am I running under CommonJS?" -- the value is tested, never retained,
+  // so nothing can be loaded through it. This idiom is in essentially every
+  // UMD-flavored file a package ships, and reporting it made the warning
+  // mostly noise: of the five escapes yargs reported before this, four were
+  // these and one was real.
+  EXPECT_TRUE(scanGaps("if (typeof require === 'undefined') { x(); }").empty());
+  EXPECT_TRUE(scanGaps("if (typeof require !== 'function') { x(); }").empty());
+  EXPECT_TRUE(
+      scanGaps("var a = null === require || void 0 === require;").empty());
+  EXPECT_TRUE(scanGaps("if (!require) { x(); }").empty());
+
+  // What yargs actually does with it, and what makes the difference:
+  // stored on an object, from which anything can call it later.
+  auto gaps = scanGaps("module.exports = { require: require };");
+  ASSERT_EQ(gaps.size(), 1u);
+  EXPECT_EQ(gaps[0].kind, RequireGapKind::kEscapedValue);
+
+  // Only equality tests are excused. Anything that can hand the value on
+  // still counts, whatever it looks like.
+  EXPECT_EQ(scanGaps("f(require);").size(), 1u);
+  EXPECT_EQ(scanGaps("var r = require;").size(), 1u);
+  EXPECT_EQ(scanGaps("var s = '' + require;").size(), 1u);
+}
+
 TEST(RequireScannerTest, DoesNotRecordGapsForAShadowedRequire) {
   // Not our require, so neither its computed calls nor its escapes are
   // holes in our container.

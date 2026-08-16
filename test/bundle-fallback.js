@@ -72,6 +72,20 @@
 // RUN: %hermes-node --build-bundle=%t.prop/app.bundle %t.prop/cli.js 2>&1 | %FileCheck --check-prefix=PROP --implicit-check-not="require used as a value" %s
 // PROP: bundle root:
 
+// Testing whether require exists is not using it: `typeof require` and an
+// equality comparison against it yield a boolean and can load nothing. The
+// idiom is in essentially every UMD-flavored file a package ships, so
+// reporting it drowns the real ones -- yargs reported five escapes before
+// this and one of them was real.
+// RUN: rm -rf %t.guard && mkdir -p %t.guard
+// RUN: echo "module.exports = { v: 3 };" > %t.guard/dep.js
+// RUN: echo "if (typeof require !== 'undefined' && null !== require) { console.log('GUARD', require('./dep').v); }" > %t.guard/cli.js
+// RUN: %hermes-node --build-bundle=%t.guard/app.bundle %t.guard/cli.js 2>&1 | %FileCheck --check-prefix=GUARD --implicit-check-not="require used as a value" %s
+// GUARD: bundle root:
+// RUN: rm -f %t.guard/cli.js %t.guard/dep.js
+// RUN: %hermes-node --bundle=%t.guard/app.bundle | %FileCheck --check-prefix=GUARDEXEC %s
+// GUARDEXEC: GUARD 3
+
 // A module that declares its own `require` is not talking about the
 // module's require: its specifiers were only ever meaningful inside
 // whatever bundle produced it, and looking for them on disk is how a
