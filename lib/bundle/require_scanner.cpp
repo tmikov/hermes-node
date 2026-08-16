@@ -11,6 +11,7 @@
 #include "hermes/AST/ESTree.h"
 #include "hermes/AST/RecursiveVisitor.h"
 #include "hermes/Parser/JSParser.h"
+#include "hermes/Support/SourceErrorManager.h"
 
 #include "llvh/Support/Casting.h"
 #include "llvh/Support/SourceMgr.h"
@@ -23,7 +24,8 @@ namespace node_compat {
 namespace {
 
 /// Walks the whole AST looking for calls of the shape `require(<literal>)`,
-/// collecting the literal into `*out_` (deduplicated, first-seen order).
+/// collecting the literal into `*out_` (deduplicated, first-seen order), and
+/// the position of every other `require()` call into `*computed_`.
 ///
 /// Inherits hermes::ESTree::RecursionDepthTracker rather than the brief's
 /// trivial always-true stub: RecursiveVisitor.h documents
@@ -34,7 +36,11 @@ namespace {
 /// correctly, so there is no reason to hand-roll a weaker version.
 class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
  public:
-  explicit RequireVisitor(std::vector<std::string> *out) : out_(out) {}
+  RequireVisitor(
+      std::vector<std::string> *out,
+      std::vector<ComputedRequire> *computed,
+      SourceErrorManager *sm)
+      : out_(out), computed_(computed), sm_(sm) {}
 
   /// Called by RecursionDepthTracker once the nesting limit is hit. Once
   /// this fires, RecursionDepthTracker::incRecursionDepth() keeps returning
@@ -96,8 +102,10 @@ class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
       // A template literal is a literal only when it has no substitutions.
       // The grammar guarantees quasis.size() == expressions.size() + 1, so
       // "no substitutions" is exactly "exactly one quasi".
-      if (!tmpl->_expressions.empty() || tmpl->_quasis.empty())
+      if (!tmpl->_expressions.empty() || tmpl->_quasis.empty()) {
+        recordComputed(node);
         return;
+      }
       auto *elem =
           llvh::cast<ESTree::TemplateElementNode>(&tmpl->_quasis.front());
       // _cooked is null when the quasi has an invalid escape; _raw is
@@ -108,6 +116,7 @@ class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
           elem->_cooked != nullptr ? elem->_cooked : elem->_raw;
       value = text->str().str();
     } else {
+      recordComputed(node);
       return;
     }
 
@@ -115,7 +124,25 @@ class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
       out_->push_back(std::move(value));
   }
 
+  /// Records the position of \p node as a require() this scan could not
+  /// follow. Not deduplicated: two computed require() calls are two holes in
+  /// the container even when they compute the same string, and the position
+  /// is the whole value of the record.
+  template <typename CallNodeT>
+  void recordComputed(CallNodeT *node) {
+    if (computed_ == nullptr)
+      return;
+    SourceErrorManager::SourceCoords coords;
+    if (!sm_->findBufferLineAndLoc(node->getStartLoc(), coords))
+      return;
+    computed_->push_back(
+        {static_cast<uint32_t>(coords.line),
+         static_cast<uint32_t>(coords.col)});
+  }
+
   std::vector<std::string> *out_;
+  std::vector<ComputedRequire> *computed_;
+  SourceErrorManager *sm_;
   bool overflowed_ = false;
 };
 
@@ -154,7 +181,8 @@ bool scanRequires(
     std::string_view source,
     bool enableTS,
     std::vector<std::string> *out,
-    std::string *error) {
+    std::string *error,
+    std::vector<ComputedRequire> *computed) {
   error->clear();
 
   // JSParser's StringRef constructor hands the bytes to
@@ -182,7 +210,7 @@ bool scanRequires(
     return false;
   }
 
-  RequireVisitor visitor(out);
+  RequireVisitor visitor(out, computed, &context->getSourceErrorManager());
   ESTree::visitESTreeNodeNoReplace(visitor, *program);
   if (visitor.overflowed()) {
     *error = "hermes-node bundle: source is too deeply nested to scan";

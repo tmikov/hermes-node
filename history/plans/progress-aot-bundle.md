@@ -461,3 +461,29 @@ Directions, none of them chosen:
 - Accept it and document it, on the grounds that a static bundler cannot
   see a dynamic require and every ecosystem bundler solves this with
   configuration.
+
+### Partly addressed 2026-08-16: the build now says how much it could not see
+
+The scanner records the position of every `require()` whose argument is not
+a literal (`ComputedRequire` in `require_scanner.h`), and the producer
+reports the count by default and the positions under `--verbose`. That is
+the cheap half of the first direction above: it does not close the gap, but
+the container no longer looks complete when it is not. Webpack's "Critical
+dependency: the request of a dependency is an expression" is the same
+warning.
+
+It reaches less than expected. Bundling `examples/babel-parser/transform.js`
+warns about 4 computed calls, all in `browserslist`, and about **none** of
+the preset loads that actually make that bundle non-self-contained. Babel
+does not write `require(expr)`; it writes
+
+```js
+module = (0, _rewriteStackTrace.endHiddenCallStack)(require)(filepath);
+```
+
+`require` escapes as a first-class value, so there is no `require(...)` call
+in the source to warn about. Catching that means warning when the identifier
+`require` is used anywhere other than as a call callee (or as the object of
+a member expression, which covers `require.resolve` and `require.cache`).
+Webpack warns about this shape too, separately. Not implemented; it is the
+next increment and it is what would have flagged the Babel case.

@@ -123,3 +123,18 @@
 // RUN: %hermes-node --build-bundle=%t.nc/plain.hbb %t.nc/cli.js 2>&1 | %FileCheck --check-prefix=STUBQUIET --implicit-check-not="stub " %s
 // STUBQUIET: warning: cannot compile {{.*}}dyn.cjs
 // RUN: cmp %t.nc/app.hbb %t.nc/plain.hbb
+
+// A require() the scanner cannot follow is counted in the default output
+// (test/bundle-fallback.js) and located here. Two of them in one file, so
+// this fails if only the first is recorded -- the positions are the whole
+// point, and one line saying "there are some" is what the summary already
+// does. Deliberately not deduplicated: two computed calls are two holes
+// even when they compute the same string.
+// RUN: rm -rf %t.dyn && mkdir -p %t.dyn
+// RUN: echo "const a = 'x'; require('./' + a); require(a + '.js'); console.log('V', 1);" > %t.dyn/cli.js
+// RUN: %hermes-node --build-bundle=%t.dyn/app.hbb --verbose %t.dyn/cli.js 2>&1 | %FileCheck --check-prefix=DYN %s
+// DYN: dynamic {{.*}}cli.js:1:16
+// DYN: dynamic {{.*}}cli.js:1:35
+// RUN: %hermes-node --build-bundle=%t.dyn/plain.hbb %t.dyn/cli.js 2>&1 | %FileCheck --check-prefix=DYNQUIET --implicit-check-not=dynamic %s
+// DYNQUIET: warning: 2 computed require() calls in 1 file
+// RUN: cmp %t.dyn/app.hbb %t.dyn/plain.hbb

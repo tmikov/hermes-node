@@ -29,6 +29,25 @@
 // MISS: [bundle] miss: ./dyn from cli.js
 // MISS-NOT: miss: path
 
+// The build says so as well, and before any of that: the scanner knows it
+// gave up on this require(), and saying nothing about it is what let a
+// container with a hole in it look complete. Counted rather than listed by
+// default (a large tree has many, and burying the actionable warnings under
+// them would cost more than the positions are worth); the positions are
+// under --verbose, pinned in test/bundle-verbose.js. The plural forms are
+// asserted here because a count of one is the common case and "1 calls" is
+// what a missing agreement looks like.
+// RUN: %hermes-node --build-bundle=%t.tree/again.bundle %t.tree/cli.js 2>&1 | %FileCheck --check-prefix=DYNWARN %s
+// DYNWARN: warning: 1 computed require() call in 1 file: not packaged, resolved from disk at run time
+
+// A literal require() is followed, so it must never be counted as one: a
+// warning that fires for every module would say nothing.
+// RUN: rm -rf %t.static && mkdir -p %t.static
+// RUN: echo "module.exports = { v: 1 };" > %t.static/dep.js
+// RUN: echo "console.log('STATIC', require('./dep').v);" > %t.static/cli.js
+// RUN: %hermes-node --build-bundle=%t.static/app.bundle %t.static/cli.js 2>&1 | %FileCheck --check-prefix=NODYN --implicit-check-not="computed require" %s
+// NODYN: bundle root:
+
 // A module must not exist twice, once from the container and once from disk.
 // The fallback resolves through Node's loader, which checks Module._cache, so
 // a bundled module has to be published there under its filename -- and

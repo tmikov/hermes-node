@@ -55,6 +55,52 @@ TEST(RequireScannerTest, IgnoresRequireWithNoArguments) {
   EXPECT_EQ(scan("require(); require('a');"), (std::vector<std::string>{"a"}));
 }
 
+// The positions of the require() calls the scan had to give up on. Every
+// one of them is a module missing from the container, so the producer
+// reports them; see lib/bundle/bundle_build.cpp.
+std::vector<ComputedRequire> scanComputed(const char *src) {
+  std::vector<std::string> out;
+  std::vector<ComputedRequire> computed;
+  std::string error;
+  EXPECT_TRUE(scanRequires(src, false, &out, &error, &computed)) << error;
+  return computed;
+}
+
+TEST(RequireScannerTest, RecordsComputedRequirePositions) {
+  // Both shapes the scan gives up on: an argument that is not a literal at
+  // all, and a template literal with a substitution in it. The second one
+  // is on its own line and indented, so a position taken from the wrong
+  // node (the argument, say, rather than the call) does not match.
+  auto sites = scanComputed("require(name);\n  require(`t${x}`);");
+  ASSERT_EQ(sites.size(), 2u);
+  EXPECT_EQ(sites[0].line, 1u);
+  EXPECT_EQ(sites[0].column, 1u);
+  EXPECT_EQ(sites[1].line, 2u);
+  EXPECT_EQ(sites[1].column, 3u);
+}
+
+TEST(RequireScannerTest, DoesNotRecordLiteralOrNonRequireCalls) {
+  // A literal require() is followed, so it is not a gap. Neither is
+  // require.resolve(), obj.require(), or a require() naming nothing at all
+  // -- the last of these computes no specifier to miss.
+  EXPECT_TRUE(scanComputed("require('a'); require(`b`);").empty());
+  EXPECT_TRUE(
+      scanComputed("require.resolve(x); obj.require(y); require();").empty());
+}
+
+TEST(RequireScannerTest, DoesNotDeduplicateComputedRequires) {
+  // Two computed calls are two modules missing from the container even when
+  // they compute the same string, and the position is what identifies each.
+  EXPECT_EQ(scanComputed("require(x);\nrequire(x);").size(), 2u);
+}
+
+TEST(RequireScannerTest, ComputedRequiresAreOptional) {
+  // The out-parameter defaults to null, and the specifier scan is unchanged
+  // when a caller does not ask for the positions.
+  EXPECT_EQ(
+      scan("require(name); require('ok');"), (std::vector<std::string>{"ok"}));
+}
+
 TEST(RequireScannerTest, AcceptsTemplateLiteralWithNoSubstitutions) {
   // `foo` is a literal string; treating it as one avoids a silent miss.
   EXPECT_EQ(scan("require(`foo`);"), (std::vector<std::string>{"foo"}));

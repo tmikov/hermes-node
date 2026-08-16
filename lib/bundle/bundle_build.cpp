@@ -368,6 +368,16 @@ class BuildReporter {
     std::fprintf(stderr, "stub    %s (%s)\n", path.c_str(), reason.c_str());
   }
 
+  /// One require() the scanner could not follow, at its source position.
+  /// The default build reports only how many there were, because a large
+  /// tree has many and drowning the actionable warnings in them would cost
+  /// more than the positions are worth; this is where the positions live.
+  void computedRequire(const std::string &path, uint32_t line, uint32_t col) {
+    if (!enabled_)
+      return;
+    std::fprintf(stderr, "dynamic %s:%u:%u\n", path.c_str(), line, col);
+  }
+
   void compiled(
       uint32_t index,
       const std::string &identity,
@@ -519,6 +529,8 @@ int buildBundle(
   std::vector<std::string> paths{absEntry};
   std::unordered_map<std::string, uint32_t> pathIndex{{absEntry, 0}};
   std::unordered_map<std::string, FileInfo> files;
+  size_t computedRequires = 0;
+  size_t filesWithComputedRequires = 0;
   reporter.discovered(0, absEntry);
 
   for (size_t i = 0; i < paths.size(); ++i) {
@@ -551,8 +563,9 @@ int buildBundle(
     bool isTS = hasExtension(path, ".ts");
 
     std::vector<std::string> specifiers;
+    std::vector<ComputedRequire> computed;
     std::string parseError;
-    if (!scanRequires(source, isTS, &specifiers, &parseError)) {
+    if (!scanRequires(source, isTS, &specifiers, &parseError, &computed)) {
       // The entry is the one file the program is certain to load, so a
       // build that cannot read it has produced nothing runnable and fails.
       // Every other file may never be reached at run time, and packaging it
@@ -577,6 +590,20 @@ int buildBundle(
       info.payload = makeThrowingStub(path, parseError);
       files.emplace(path, std::move(info));
       continue;
+    }
+
+    // A require() whose argument the program computes names nothing this
+    // build can follow, so its target is absent from the container and
+    // answered by the run-time fallback -- correct wherever the source tree
+    // is still there, and a hole in the bundle the moment it is not. The
+    // walk cannot close it; what it can do is stop being silent about it.
+    // Counted here and reported once at the end: a large tree has many, and
+    // a line each would bury the warnings a user can act on.
+    if (!computed.empty()) {
+      computedRequires += computed.size();
+      ++filesWithComputedRequires;
+      for (const ComputedRequire &site : computed)
+        reporter.computedRequire(path, site.line, site.column);
     }
 
     // Pass A: resolve and classify every specifier, reporting (and, for a
@@ -677,6 +704,19 @@ int buildBundle(
   // shared by every visited file's directory. The consumer (Task 6) needs
   // this to know which directory a disk-fallback path (e.g. for a skipped
   // native addon) is relative to.
+  // Once, after the walk, rather than per site during it -- and naming
+  // --verbose, because that is where the positions are.
+  if (computedRequires != 0) {
+    std::fprintf(
+        stderr,
+        "warning: %zu computed require() %s in %zu %s: not packaged, "
+        "resolved from disk at run time (--verbose lists them)\n",
+        computedRequires,
+        computedRequires == 1 ? "call" : "calls",
+        filesWithComputedRequires,
+        filesWithComputedRequires == 1 ? "file" : "files");
+  }
+
   std::string root = commonAncestor(paths);
   std::printf("bundle root: %s\n", root.c_str());
   fs::path rootPath(root);

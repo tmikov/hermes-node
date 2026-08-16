@@ -125,7 +125,13 @@ runs it, with no compilation and no source tree needed at run time.
   the identity's extension.
 - Skipped files, and specifiers only a computed `require()` can reach, fall
   back to disk through the original `Module._load`. Log the fallbacks with
-  `HERMES_NODE_DEBUG_NATIVE=BUNDLE`.
+  `HERMES_NODE_DEBUG_NATIVE=BUNDLE`. The producer warns at build time too:
+  the scanner records the position of every `require()` whose argument is
+  not a literal, and the build prints how many there were and in how many
+  files. `--verbose` lists each position (`dynamic <file>:<line>:<col>`).
+  This does not catch `require` passed around as a value -- `@babel/core`
+  does exactly that, which is why the Babel example warns about none of the
+  four presets it loads.
 - The static walk reaches code the run never does, so two things it finds
   there warn instead of failing the build. A specifier that resolves to
   nothing (an optional-dependency probe) is left out of the edge table and
