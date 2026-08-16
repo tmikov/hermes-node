@@ -208,11 +208,33 @@ after code depends on it.
 
 | Situation | Behavior |
 | --- | --- |
-| Literal specifier will not resolve (build) | Hard error naming importer and specifier -- except a vendored package name (`ws`), which warns and is left to the copy embedded in the binary |
+| Literal specifier will not resolve (build) | Warn naming importer and specifier, leave out of the edge table, hand to the run-time loader -- except a vendored package name (`ws`), which warns with its own reason and is left to the copy embedded in the binary |
 | Resolves to `.node` or other non-JS/JSON (build) | Warn, skip, leave to runtime fallback |
+| Required file the parser or compiler rejects (build) | Warn, package a module that throws the same `SyntaxError` when required |
+| Entry point does not parse or compile (build) | Hard error |
 | `require` misses the edge table (runtime) | Fall back to disk resolution and compilation; log under `HERMES_NODE_DEBUG_NATIVE=BUNDLE` |
 | Generation or format version mismatch | Hard error, no fallback |
 | Truncated or corrupt container | Hard error, from the structural checks |
+
+**Changed after implementation, 2026-08-16.** The first row was a hard
+error as designed, and the parse/compile row did not exist because a file
+the compiler rejected simply failed the build. Both are warnings now. The
+reason is the same for each: the static walk over-approximates what the
+program loads, so it reaches code the run never does, and both situations
+are ordinary in packages that run correctly. An unresolvable literal
+`require()` is how a package probes for an optional dependency, and the
+`MODULE_NOT_FOUND` it throws is caught by the code that wrote it. A file
+this engine cannot compile is usually a branch for another module system --
+`import()` inside a `.cjs` file is the case that forced this -- sitting
+behind a condition the run never takes. Refusing to build either one meant
+refusing to bundle a program that runs. Both now reproduce what running
+from disk does at the moment the program asks: the loader's own
+`MODULE_NOT_FOUND`, or the compiler's own `SyntaxError` from a packaged
+stub that throws it. Found by bundling `examples/babel-parser/transform.js`
+(`@babel/core` does all three things); see `test/bundle-tolerant.js`.
+
+The entry point is the one file the program is certain to load, so a build
+that cannot compile it has produced nothing runnable and still fails.
 
 "Corrupt" in that last row means what `BundleReader::open` can see: magic,
 version, generation, and every offset, length, alignment and index. The

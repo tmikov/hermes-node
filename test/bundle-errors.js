@@ -3,17 +3,29 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the root directory of this source tree.
 //
-// Hard-error paths around --build-bundle and --bundle: an unresolvable
-// require() at build time, a corrupt or truncated container at run time, and
+// Hard-error paths around --build-bundle and --bundle: an entry point the
+// build cannot compile, a corrupt or truncated container at run time, and
 // argument combinations that are mutually exclusive with --bundle. None of
 // these should ever silently fall back to something else -- a bundle is a
 // deliverable, and a bad one should say what is wrong with it.
+//
+// What is NOT here: a require() that resolves to nothing, and a required
+// file this engine cannot compile. Both are warnings, because neither stops
+// the program from running. See test/bundle-tolerant.js.
 
-// Unresolvable specifier is a hard build error.
+// The entry is the one file the program is certain to load, so a build that
+// cannot read it has produced nothing runnable and fails. Both phases that
+// can reject it are pinned: the scan that collects require() calls, and the
+// compile that follows the walk. Everywhere else these two are warnings, so
+// a regression that made them uniform would go unnoticed without this.
 // RUN: rm -rf %t.tree && mkdir -p %t.tree
-// RUN: echo "require('nope-not-here');" > %t.tree/cli.js
-// RUN: %not %hermes-node --build-bundle=%t.b %t.tree/cli.js 2>&1 | %FileCheck --check-prefix=UNRESOLVED %s
-// UNRESOLVED: cannot resolve 'nope-not-here'
+// RUN: echo "function ( {" > %t.tree/unparseable.js
+// RUN: %not %hermes-node --build-bundle=%t.b %t.tree/unparseable.js 2>&1 | %FileCheck --check-prefix=ENTRYPARSE %s
+// ENTRYPARSE: error: failed to parse {{.*}}unparseable.js
+
+// RUN: echo "module.exports = function (f) { return import(f); };" > %t.tree/uncompilable.js
+// RUN: %not %hermes-node --build-bundle=%t.b %t.tree/uncompilable.js 2>&1 | %FileCheck --check-prefix=ENTRYCOMPILE %s
+// ENTRYCOMPILE: error: failed to compile {{.*}}uncompilable.js
 
 // A corrupt container is a hard error, not a fallback.
 // RUN: echo "console.log('ok');" > %t.tree/ok.js

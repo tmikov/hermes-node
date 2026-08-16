@@ -126,6 +126,16 @@ runs it, with no compilation and no source tree needed at run time.
 - Skipped files, and specifiers only a computed `require()` can reach, fall
   back to disk through the original `Module._load`. Log the fallbacks with
   `HERMES_NODE_DEBUG_NATIVE=BUNDLE`.
+- The static walk reaches code the run never does, so two things it finds
+  there warn instead of failing the build. A specifier that resolves to
+  nothing (an optional-dependency probe) is left out of the edge table and
+  handed to the run-time loader, which throws the same `MODULE_NOT_FOUND` a
+  disk run throws. A file the parser or compiler rejects (`import()` inside
+  a `.cjs`, and other branches meant for another module system) is packaged
+  as a module that throws the same `SyntaxError` -- when required, and only
+  then, so a program that never loads it is unaffected and the container
+  stays self-contained. The **entry** is the exception and is still a hard
+  error, being the one file the program is certain to load.
 - A bundled module's `require` comes from Node's `makeRequireFunction`; only
   `require.resolve` is overridden (edge table first, then
   `Module._resolveFilename`), and it skips the edge table when the caller
@@ -153,8 +163,8 @@ runs it, with no compilation and no source tree needed at run time.
   lacks the debug info the debugger needs), and with `--build-bundle` or
   `-e`/`--eval`. A positional argument in bundle mode belongs to the bundled
   program, not to hermes-node.
-- Tests: `test/bundle-{build,run,require,errors,fallback,yargs}.js` plus
-  `BundleFormatTest`, `BundleResolveTest`, `RequireScannerTest`.
+- Tests: `test/bundle-{build,run,require,errors,fallback,tolerant,yargs}.js`
+  plus `BundleFormatTest`, `BundleResolveTest`, `RequireScannerTest`.
   `bundle-yargs.js` is gated on the `examples-installed` lit feature
   (`test/lit.cfg`), set when `examples/yargs-cli/node_modules` exists, so the
   offline default suite reports it UNSUPPORTED rather than failing.

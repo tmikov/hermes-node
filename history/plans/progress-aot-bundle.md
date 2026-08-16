@@ -417,3 +417,47 @@ review as strictly better than the old silent wrong value; the common
 idiom (`require('pkg')` alongside `require.resolve('pkg')`, which is what
 `examples/bufferutil-addon/mask.js` does) is fully covered. Recording
 `require.resolve` specifiers as edges would close it and is additive.
+
+## Open: a bundle is not self-contained when specifiers are computed
+
+Recorded 2026-08-16, from bundling `examples/babel-parser/transform.js`.
+**Not fixed -- to be discussed.**
+
+The static walk is an under-approximation of what the program loads. Every
+specifier that only a computed `require()` can reach is missing from the
+container, and the disk fallback covers it, so the bundle runs correctly
+wherever the source tree is still present. What it does not do is say so.
+The build reports nothing, `--dump` shows a container that looks complete,
+and the gap appears only when the tree is gone -- which is the situation a
+bundle exists for.
+
+The Babel case is the archetype: `transform.js` requires only
+`@babel/core`, and Babel resolves preset and plugin names at run time from
+its configuration. `@babel/preset-env` and its whole subtree are therefore
+never discovered. The bundle builds without complaint, runs correctly with
+`node_modules` in place, and dies with `Cannot find module
+'@babel/preset-env'` once it is removed. `HERMES_NODE_DEBUG_NATIVE=BUNDLE`
+is the only thing that reports it, and only at run time, on the run that
+happens to take the fallback.
+
+This is the opposite direction from the two build-time failures fixed on
+2026-08-16 (an unresolvable specifier and an uncompilable file, both of
+which were fatal for programs that run fine). Those were over-approximation
+punished as error; this is under-approximation passed over in silence.
+
+Directions, none of them chosen:
+
+- Report it at build time. The producer already knows nothing about these
+  specifiers, so the honest version is a run-time-shaped answer: a
+  `--verify` pass that runs the entry from the container with the tree
+  hidden and reports every fallback as a gap.
+- Record `require.resolve` specifiers as edges (see the limitation above),
+  which would close the subset that is resolved statically but required
+  dynamically. It does not reach the Babel case, where the name comes from
+  configuration.
+- An explicit include list on the producer (`--include=<specifier>`), which
+  makes the program's dynamic dependencies a declared input rather than
+  something to be inferred.
+- Accept it and document it, on the grounds that a static bundler cannot
+  see a dynamic require and every ecosystem bundler solves this with
+  configuration.

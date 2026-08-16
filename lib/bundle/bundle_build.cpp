@@ -93,17 +93,16 @@ void stripShebang(std::string *source) {
     source->erase(0, nl);
 }
 
-/// Prints the exception pending on \p env (if any), prefixed with \p path,
-/// and clears it. Used for hermes_compile_to_bytecode failures, which leave
-/// the compile error as a pending JS exception rather than returning text
-/// directly (see hermes_napi_compile.h).
-void printCompileError(napi_env env, const std::string &path) {
+/// Returns the text of the exception pending on \p env, and clears it.
+/// hermes_compile_to_bytecode reports a failure as a pending JS exception
+/// rather than returning text (see hermes_napi_compile.h), and that text is
+/// needed twice: in the build warning, and inside the stub the failure
+/// produces (see makeThrowingStub).
+std::string takeCompileErrorText(napi_env env) {
   bool pending = false;
   napi_is_exception_pending(env, &pending);
-  if (!pending) {
-    std::fprintf(stderr, "error: failed to compile %s\n", path.c_str());
-    return;
-  }
+  if (!pending)
+    return "compilation failed";
   napi_value exc;
   napi_get_and_clear_last_exception(env, &exc);
   napi_value msg;
@@ -111,12 +110,72 @@ void printCompileError(napi_env env, const std::string &path) {
   char buf[4096];
   size_t len = 0;
   napi_get_value_string_utf8(env, msg, buf, sizeof(buf), &len);
-  std::fprintf(
-      stderr,
-      "error: failed to compile %s: %.*s\n",
-      path.c_str(),
-      static_cast<int>(len),
-      buf);
+  return std::string(buf, len);
+}
+
+/// Escapes \p s for use inside a double-quoted JavaScript string literal.
+///
+/// Bytes at 0x80 and above are passed through unchanged: the input is the
+/// UTF-8 text of a path or a compiler diagnostic, and the source this is
+/// spliced into is read as UTF-8 too.
+std::string quoteForJSString(std::string_view s) {
+  std::string out;
+  out.reserve(s.size());
+  for (unsigned char c : s) {
+    switch (c) {
+      case '"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      case '\r':
+        out += "\\r";
+        break;
+      case '\t':
+        out += "\\t";
+        break;
+      default:
+        if (c < 0x20) {
+          char esc[7];
+          std::snprintf(esc, sizeof(esc), "\\u%04x", c);
+          out += esc;
+        } else {
+          out += static_cast<char>(c);
+        }
+    }
+  }
+  return out;
+}
+
+/// The source of the module that stands in for \p path when this build
+/// cannot turn it into bytecode -- because the parser or the compiler
+/// rejected it with \p error.
+///
+/// Requiring such a file from disk throws a SyntaxError at exactly this
+/// point, when the loader compiles it, so the stub throws one too. Carrying
+/// the failure into the container rather than failing the build is what lets
+/// a program be bundled when it never loads the offending file: real
+/// packages ship files for other runtimes and other module systems
+/// (`import()` inside a `.cjs` file is the case that motivated this) behind
+/// branches the run never takes. The path is in the message because a
+/// bundled module has no source file for a stack trace to name.
+std::string makeThrowingStub(
+    const std::string &path,
+    const std::string &error) {
+  // takeCompileErrorText returns the exception's toString(), which already
+  // begins with its class name; the stub supplies that name itself, so
+  // leaving the prefix in would read "SyntaxError: x.js: SyntaxError: ...".
+  // The warning keeps the full text, where nothing else names the class.
+  constexpr std::string_view kPrefix = "SyntaxError: ";
+  std::string_view message(error);
+  if (message.substr(0, kPrefix.size()) == kPrefix)
+    message.remove_prefix(kPrefix.size());
+  return "throw new SyntaxError(\"" +
+      quoteForJSString(path + ": " + std::string(message)) + "\");\n";
 }
 
 /// What the producer does with a file the resolver handed back.
@@ -298,6 +357,15 @@ class BuildReporter {
       return;
     std::fprintf(
         stderr, "skip    '%s' (%s)\n", specifier.c_str(), reason.c_str());
+  }
+
+  /// A file packaged as a module that throws when required, because this
+  /// build could not turn it into bytecode. Reported against the file
+  /// rather than a specifier: the same file may be reached by several.
+  void stubbed(const std::string &path, const std::string &reason) {
+    if (!enabled_)
+      return;
+    std::fprintf(stderr, "stub    %s (%s)\n", path.c_str(), reason.c_str());
   }
 
   void compiled(
@@ -485,12 +553,30 @@ int buildBundle(
     std::vector<std::string> specifiers;
     std::string parseError;
     if (!scanRequires(source, isTS, &specifiers, &parseError)) {
+      // The entry is the one file the program is certain to load, so a
+      // build that cannot read it has produced nothing runnable and fails.
+      // Every other file may never be reached at run time, and packaging it
+      // as a module that throws when required reproduces what running from
+      // disk does: nothing at all unless something requires it, and the
+      // same SyntaxError if something does. See makeThrowingStub.
+      if (i == 0) {
+        std::fprintf(
+            stderr,
+            "error: failed to parse %s: %s\n",
+            path.c_str(),
+            parseError.c_str());
+        return 1;
+      }
       std::fprintf(
           stderr,
-          "error: failed to parse %s: %s\n",
+          "warning: cannot parse %s (%s); packaged as a module that throws "
+          "when required\n",
           path.c_str(),
           parseError.c_str());
-      return 1;
+      reporter.stubbed(path, "does not parse");
+      info.payload = makeThrowingStub(path, parseError);
+      files.emplace(path, std::move(info));
+      continue;
     }
 
     // Pass A: resolve and classify every specifier, reporting (and, for a
@@ -525,12 +611,25 @@ int buildBundle(
           reporter.skipped(specifier, reason);
           continue;
         }
+        // Nothing on disk to package, and nothing this build can say about
+        // whether that is a defect: an unresolvable literal require() is
+        // how a package probes for an optional dependency, and the
+        // MODULE_NOT_FOUND it throws is caught and handled by the program
+        // that wrote it. Leaving the specifier out of the edge table hands
+        // it to the run-time loader, which resolves it against the
+        // filesystem and throws exactly that error when it is still absent
+        // -- the same outcome as running from disk, and a successful load
+        // when the dependency has since been installed. Failing the build
+        // here would refuse to bundle a program that runs fine.
+        std::string reason("cannot be resolved, left to the run-time loader");
         std::fprintf(
             stderr,
-            "error: cannot resolve '%s' from %s\n",
+            "warning: not packaging '%s' from %s (%s)\n",
             specifier.c_str(),
-            path.c_str());
-        return 1;
+            path.c_str(),
+            reason.c_str());
+        reporter.skipped(specifier, reason);
+        continue;
       }
       if (classifyFile(*resolved) == Packageability::kSkip) {
         std::string reason = formatSkipReason(*resolved);
@@ -620,8 +719,47 @@ int buildBundle(
         &bytecodeSize);
     auto compileEnd = std::chrono::steady_clock::now();
     if (status != napi_ok) {
-      printCompileError(env, path);
-      return 1;
+      // The pending exception has to be taken before anything else is
+      // compiled on this env, and it is the text both the warning and the
+      // stub carry. Entry handling matches the parse failure above.
+      std::string error = takeCompileErrorText(env);
+      if (i == 0) {
+        std::fprintf(
+            stderr,
+            "error: failed to compile %s: %s\n",
+            path.c_str(),
+            error.c_str());
+        return 1;
+      }
+      std::fprintf(
+          stderr,
+          "warning: cannot compile %s (%s); packaged as a module that throws "
+          "when required\n",
+          path.c_str(),
+          error.c_str());
+      reporter.stubbed(path, "does not compile");
+
+      wrapped.assign(kWrapperPrefix);
+      wrapped.append(makeThrowingStub(path, error));
+      wrapped.append(kWrapperSuffix);
+      // The stub is plain JavaScript whatever the file's extension was.
+      cflags.enable_ts = false;
+      status = hermes_compile_to_bytecode(
+          env,
+          reinterpret_cast<const uint8_t *>(wrapped.data()),
+          wrapped.size() + 1,
+          path.c_str(),
+          &cflags,
+          &bytecodeData,
+          &bytecodeSize);
+      if (status != napi_ok) {
+        std::fprintf(
+            stderr,
+            "error: internal: the stub for %s does not compile: %s\n",
+            path.c_str(),
+            takeCompileErrorText(env).c_str());
+        return 1;
+      }
     }
 
     reporter.compiled(

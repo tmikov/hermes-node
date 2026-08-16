@@ -109,3 +109,17 @@
 
 // The artifact must not depend on the diagnostics.
 // RUN: cmp %t.tree/app.hbb %t.tree/plain.hbb
+
+// A file the compiler rejects is packaged as a module that throws (see
+// test/bundle-tolerant.js for what that module does); the narration reports
+// it as a stub. The warning is default output and appears either way, the
+// `stub` line is verbose-only, and the container is the same either way.
+// RUN: rm -rf %t.nc && mkdir -p %t.nc
+// RUN: echo "module.exports = function (f) { return import(f); };" > %t.nc/dyn.cjs
+// RUN: echo "if (globalThis.never) { require('./dyn.cjs'); } console.log('V', 1);" > %t.nc/cli.js
+// RUN: %hermes-node --build-bundle=%t.nc/app.hbb --verbose %t.nc/cli.js 2>&1 | %FileCheck --check-prefix=STUB %s
+// STUB: warning: cannot compile {{.*}}dyn.cjs
+// STUB: stub {{.*}}dyn.cjs (does not compile)
+// RUN: %hermes-node --build-bundle=%t.nc/plain.hbb %t.nc/cli.js 2>&1 | %FileCheck --check-prefix=STUBQUIET --implicit-check-not="stub " %s
+// STUBQUIET: warning: cannot compile {{.*}}dyn.cjs
+// RUN: cmp %t.nc/app.hbb %t.nc/plain.hbb
