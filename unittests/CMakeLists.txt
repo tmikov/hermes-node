@@ -50,6 +50,9 @@ target_link_libraries(CompileCacheRunTest
   hermesvm_a
 )
 
+add_node_compat_unittest(BundleFormatTest BundleFormatTest.cpp)
+target_link_libraries(BundleFormatTest hermesNodeBundle)
+
 add_node_compat_unittest(NodeProcessTest NodeProcessTest.cpp)
 target_link_libraries(NodeProcessTest
   hermesNodeProcess

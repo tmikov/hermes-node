@@ -25,10 +25,6 @@ if(HERMES_ENABLE_DEBUGGER)
   target_compile_definitions(hermesNodeRuntime PRIVATE HERMES_ENABLE_DEBUGGER)
 endif()
 
-target_compile_definitions(hermesNodeRuntime PRIVATE
-  HERMES_NODE_CACHE_ARCH="${CMAKE_SYSTEM_PROCESSOR}"
-)
-
 target_link_libraries(hermesNodeRuntime
   PUBLIC
     hermesNodeEmbeddedModules
@@ -41,4 +37,9 @@ target_link_libraries(hermesNodeRuntime
     hermesNodeInspector
     hermesNapiCompile
     hermesvm_a
+  PRIVATE
+    # HERMES_NODE_CACHE_ARCH, single-sourced (see top-level CMakeLists.txt)
+    # so this and lib/bundle's generation tag can never disagree on what
+    # "architecture" means.
+    hermesNodeCacheArch
 )

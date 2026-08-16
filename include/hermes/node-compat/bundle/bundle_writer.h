@@ -1,0 +1,86 @@
+/*
+ * Copyright (c) Tzvetan Mikov.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+#ifndef HERMES_NODE_COMPAT_BUNDLE_BUNDLE_WRITER_H
+#define HERMES_NODE_COMPAT_BUNDLE_BUNDLE_WRITER_H
+
+#include <hermes/node-compat/bundle/bundle_format.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace hermes {
+namespace node_compat {
+
+/// Accumulates modules and edges, then serializes one container.
+///
+/// Deliberately free of Hermes and napi headers so the format can be unit
+/// tested with no runtime, exactly as CompileCache is.
+class BundleWriter {
+ public:
+  /// Copies \p payload. Returns the new module's index.
+  uint32_t addModule(
+      std::string_view identity,
+      ModuleKind kind,
+      std::string_view payload);
+
+  /// Records that \p importer resolved \p specifier to \p target.
+  void addEdge(uint32_t importer, std::string_view specifier, uint32_t target);
+
+  void setEntry(uint32_t moduleIndex);
+
+  /// Returns the serialized container. Sorts the edge table by
+  /// (importer, specifier bytes) as the reader's binary search requires.
+  /// That sort is not stable, which is unobservable: the producer records
+  /// one edge per (importer, specifier) pair, because scanRequires()
+  /// deduplicates the specifiers of a single file (see require_scanner.h),
+  /// so no two edges ever compare equal.
+  /// Returns an empty vector if no module was ever added.
+  std::vector<uint8_t> serialize(uint32_t generationTag);
+
+  /// How many distinct strings the string table holds. Module identities and
+  /// edge specifiers share one interning table, so this is neither the
+  /// module count nor the edge count, and a shared specifier or an identity
+  /// that equals a specifier is counted once.
+  ///
+  /// Only complete after serialize(): identities are interned as modules are
+  /// added, but specifiers are not interned until serialize() lays out the
+  /// table. The header records the table's byte size, not its entry count,
+  /// so this is the only place the count exists.
+  size_t stringCount() const;
+
+ private:
+  /// Interns \p s, returning its byte offset within the string table.
+  uint32_t internString(std::string_view s);
+
+  struct PendingModule {
+    uint32_t identityString;
+    ModuleKind kind;
+    std::string payload;
+  };
+  struct PendingEdge {
+    uint32_t importer;
+    std::string specifier;
+    uint32_t target;
+  };
+
+  std::vector<PendingModule> modules_;
+  std::vector<PendingEdge> edges_;
+  std::map<std::string, uint32_t, std::less<>> internTable_;
+  std::string stringBytes_;
+  uint32_t entry_ = 0;
+  bool hasEntry_ = false;
+};
+
+} // namespace node_compat
+} // namespace hermes
+
+#endif

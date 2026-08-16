@@ -51,12 +51,25 @@ add_subdirectory(external/brotli)
 add_subdirectory(external/zstd)
 add_subdirectory(external/hermes-parser-native)
 
+# Target architecture string used to key on-disk generation schemes: the
+# compile cache's generation directory name (lib/runtime) and the AOT
+# bundle's generation tag (lib/bundle). Single-sourced here as an INTERFACE
+# library so the two features cannot silently diverge on what
+# "architecture" means -- e.g. if the derivation is later normalized for a
+# new cross-compile target, both consumers pick that up together instead of
+# one lagging behind and admitting bundles built for different hardware.
+add_library(hermesNodeCacheArch INTERFACE)
+target_compile_definitions(hermesNodeCacheArch INTERFACE
+  HERMES_NODE_CACHE_ARCH="${CMAKE_SYSTEM_PROCESSOR}"
+)
+
 # Our C++ libraries
 add_subdirectory(lib/embedded-modules)
 add_subdirectory(lib/event-loop)
 add_subdirectory(lib/binding-registry)
 add_subdirectory(lib/module-loader)
 add_subdirectory(lib/compile-cache)
+add_subdirectory(lib/bundle)
 add_subdirectory(lib/process)
 add_subdirectory(lib/bindings)
 add_subdirectory(lib/inspector)
