@@ -62,6 +62,7 @@
 #include <hermes/node-compat/bindings/node_uv.h>
 #include <hermes/node-compat/bindings/node_zlib.h>
 #include <hermes/node-compat/bundle/bundle_build.h>
+#include <hermes/node-compat/bundle/bundle_run.h>
 #include <hermes/node-compat/compile-cache/compile_cache.h>
 #include <hermes/node-compat/embedded-modules/embedded_modules.h>
 #include <hermes/node-compat/event-loop/uv_event_loop.h>
@@ -544,6 +545,76 @@ CompileCache *createCompileCache(const HermesNodeConfig &config) {
     cache->setTracing(std::strstr(dbg, "COMPILE_CACHE") != nullptr);
 
   return cache.release();
+}
+
+/// Bundle consumer mode: map the container, install the bundle-aware
+/// Module._load wrapper, and run the bundle's entry module. Returns the
+/// process exit code.
+///
+/// Every failure before user code starts is fatal and reported here rather
+/// than falling back to running something else. A bundle is a deliverable:
+/// if it cannot be mapped, does not validate, or was built by a different
+/// hermes-node, silently recompiling from a source tree that may not even
+/// be present is worse than refusing to start.
+int runBundle(
+    napi_env env,
+    ModuleLoader &loader,
+    const std::string &bundlePath) {
+  std::string error;
+  if (!openBundle(bundlePath, &error)) {
+    std::fprintf(stderr, "error: %s\n", error.c_str());
+    return 1;
+  }
+
+  napi_value bundleObject;
+  if (installBundleGlobals(env, &bundleObject) != napi_ok) {
+    std::fprintf(stderr, "Error: failed to install the bundle natives\n");
+    printAndClearException(env);
+    return 1;
+  }
+
+  // Node's CJS loader is what the wrapper hooks -- user code and everything
+  // under node_modules goes through it, so hooking it covers resolution and
+  // file reading at once. `path` turns the bundle root and a module identity
+  // into the __filename / __dirname a bundled module sees.
+  napi_value cjsLoader;
+  napi_value pathModule;
+  if (loader.require(env, "internal/modules/cjs/loader", &cjsLoader) !=
+          napi_ok ||
+      loader.require(env, "path", &pathModule) != napi_ok) {
+    std::fprintf(stderr, "Error: failed to load the CommonJS loader\n");
+    printAndClearException(env);
+    return 1;
+  }
+  napi_value moduleCtor;
+  napi_get_named_property(env, cjsLoader, "Module", &moduleCtor);
+
+  napi_value installFn;
+  if (runEmbeddedModule(env, "bundle-loader", &installFn) != napi_ok) {
+    std::fprintf(stderr, "Error: failed to execute bundle-loader\n");
+    printAndClearException(env);
+    return 1;
+  }
+
+  napi_value global;
+  napi_get_global(env, &global);
+
+  // installBundleLoader(Module, bundle, path) -> runEntry()
+  napi_value installArgs[3] = {moduleCtor, bundleObject, pathModule};
+  napi_value runEntryFn;
+  if (napi_call_function(env, global, installFn, 3, installArgs, &runEntryFn) !=
+      napi_ok) {
+    printAndClearException(env);
+    return 1;
+  }
+
+  napi_value result;
+  if (napi_call_function(env, global, runEntryFn, 0, nullptr, &result) !=
+      napi_ok) {
+    printAndClearException(env);
+    return 1;
+  }
+  return 0;
 }
 
 } // namespace
@@ -1251,9 +1322,11 @@ int runHermesNode(const HermesNodeConfig &config) {
 
   // 13. Load and execute the user script, eval code, or start the REPL --
   // or, in AOT bundle producer mode, build the bundle instead of running
-  // anything.
+  // anything, or, in consumer mode, run the bundle's entry module.
   if (exitCode == 0) {
-    if (!config.buildBundlePath.empty()) {
+    if (!config.bundlePath.empty()) {
+      exitCode = runBundle(env, loader, config.bundlePath);
+    } else if (!config.buildBundlePath.empty()) {
       if (config.scriptPath.empty()) {
         std::fprintf(
             stderr, "Error: --build-bundle requires a script argument\n");

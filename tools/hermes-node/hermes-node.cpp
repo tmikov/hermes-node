@@ -30,6 +30,7 @@ static void printUsage(const char *argv0) {
       "into <file>\n"
       "  --verbose                      With --build-bundle, narrate the "
       "walk to stderr\n"
+      "  --bundle=<file>                Run an application from a bundle file\n"
       "  --optimize=<default|on|off>    Optimize compiled code. default is on\n"
       "                                 with the cache, off without it\n"
       "  --inspect-open                 Open the DevTools URL in the system browser\n"
@@ -142,6 +143,8 @@ int main(int argc, char **argv) {
       config.buildBundlePath = argv[i] + 15;
     } else if (std::strcmp(argv[i], "--verbose") == 0) {
       config.verbose = true;
+    } else if (std::strncmp(argv[i], "--bundle=", 9) == 0) {
+      config.bundlePath = argv[i] + 9;
     } else if (std::strcmp(argv[i], "--no-compile-cache") == 0) {
       config.process.disableCompileCache = true;
     } else if (std::strncmp(argv[i], "--optimize=", 11) == 0) {
@@ -209,15 +212,57 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // Same reasoning, same shape: a bundle's bytecode was produced by
+  // hermes_compile_to_bytecode, which emits DebugInfoSetting::THROWING, and
+  // there is no source to recompile from with ALL.
+  if (!config.bundlePath.empty() && (config.inspect || config.inspectBrk)) {
+    std::fprintf(
+        stderr,
+        "Error: --bundle cannot be combined with --inspect or --inspect-brk.\n"
+        "Bundled code is compiled without the full debug info the debugger "
+        "needs to set breakpoints.\n");
+    return 1;
+  }
+
+  // --bundle runs a container that was already built; --build-bundle builds
+  // one. Consuming and producing in the same invocation is not a mode either
+  // flag was designed for, and silently picking one would hide the mistake
+  // rather than reject it.
+  if (!config.bundlePath.empty() && !config.buildBundlePath.empty()) {
+    std::fprintf(
+        stderr, "Error: --bundle cannot be combined with --build-bundle.\n");
+    return 1;
+  }
+
+  // --bundle runs the entry module the container was built from; -e/--eval
+  // supplies a different program to run instead. There is no entry point
+  // left for the bundle to provide once eval code wins, so the two never
+  // combine.
+  if (!config.bundlePath.empty() && hasEvalCode) {
+    std::fprintf(
+        stderr, "Error: --bundle cannot be combined with -e or --eval.\n");
+    return 1;
+  }
+
   // Build process.argv: [binary, script-or-arg1, ...].
   config.argv.push_back(argv[0]);
+  // In bundle mode the bundle is the program, so it occupies the slot the
+  // script path would: process.argv[1] is the bundle path exactly as given,
+  // and anything after `--` follows it the way a script's arguments do.
+  if (!config.bundlePath.empty())
+    config.argv.push_back(config.bundlePath);
   for (int i = argvStartIndex; i < argc; ++i)
     config.argv.push_back(argv[i]);
 
-  if (!hasEvalCode && scriptArgIndex < argc) {
-    config.scriptPath = argv[scriptArgIndex];
-  } else if (!hasEvalCode) {
-    config.enableRepl = true;
+  // In bundle mode the bundle supplies the entry point, so a positional
+  // argument is one of the program's own arguments rather than a script to
+  // run, and there is nothing to start a REPL for.
+  if (config.bundlePath.empty()) {
+    if (!hasEvalCode && scriptArgIndex < argc) {
+      config.scriptPath = argv[scriptArgIndex];
+    } else if (!hasEvalCode) {
+      config.enableRepl = true;
+    }
   }
 
   return runHermesNode(config);

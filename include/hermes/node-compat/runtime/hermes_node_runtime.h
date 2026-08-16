@@ -87,6 +87,14 @@ struct HermesNodeConfig {
   /// producer mode; never changes the bytes buildBundle writes.
   bool verbose = false;
 
+  /// When non-empty, run in AOT bundle consumer mode: map the container at
+  /// this path (see hermes/node-compat/bundle/bundle_run.h), install the
+  /// bundle-aware Module._load wrapper, and execute the bundle's entry
+  /// module instead of a script from disk. scriptPath is not used in this
+  /// mode; process.argv[1] is this path, exactly as given on the command
+  /// line.
+  std::string bundlePath;
+
   /// Inline JS code to eval after bootstrap, before event loop.
   /// Useful for programmatic use (e.g. inspector runtime).
   std::string evalCode;

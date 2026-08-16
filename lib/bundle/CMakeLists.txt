@@ -81,3 +81,31 @@ target_link_libraries(hermesNodeBundleBuild
   PRIVATE
     hermesvm_a
 )
+
+# Run layer: maps a container and executes bytecode straight out of it. Kept
+# separate from hermesNodeBundleBuild for the same reason that one is kept
+# separate from hermesNodeBundle: running a bundle needs neither the parser
+# nor the compiler, only hermes_run_bytecode.
+add_hermes_library(hermesNodeBundleRun STATIC
+  bundle_run.cpp
+)
+
+target_include_directories(hermesNodeBundleRun
+  PUBLIC
+    ${PROJECT_SOURCE_DIR}/include
+    # bundle_run.h includes <node_api.h>, so consumers of that header need
+    # this path too -- it cannot be PRIVATE.
+    ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/hermes/include
+    ${PROJECT_SOURCE_DIR}/hermes/API
+)
+
+target_link_libraries(hermesNodeBundleRun
+  PUBLIC
+    hermesNodeBundle
+    # hermes_run_bytecode, used only inside bundle_run.cpp. PUBLIC so the
+    # dependency stays visible on this target's link interface, matching
+    # hermesNodeCompileCacheRun's choice for hermesNapiCompile.
+    hermesNapi
+)
