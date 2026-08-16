@@ -7,6 +7,14 @@ add_hermes_tool(hermes-node
   hermes-node.cpp
   LINK_LIBS
     hermesNodeRuntime
+    # The read-only verbs are dispatched from main(), before any runtime
+    # exists, so the tools layer is linked here rather than reached through
+    # hermesNodeRuntime.
+    hermesNodeBundleTools
+    # --dump-bytecode, the one verb that needs the Hermes disassembler. Its
+    # own target so that hermesNodeBundleTools stays VM-free; see
+    # lib/bytecode-dump/CMakeLists.txt.
+    hermesNodeBytecodeDump
 )
 
 target_include_directories(hermes-node PRIVATE

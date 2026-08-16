@@ -89,6 +89,20 @@ struct CompileCacheEntry {
 /// plus this offset satisfies Hermes's BYTECODE_ALIGNMENT (4).
 inline constexpr size_t kCompileCacheHeaderSize = 24;
 
+/// First field of the entry header. Written as a little-endian uint32, so
+/// an entry begins with the bytes 4e 48 43 43 -- "NHCC" in a hex dump, for
+/// Node Hermes Compile Cache.
+///
+/// Here rather than private to compile_cache.cpp because --dump-bytecode
+/// (lib/bytecode-dump) recognizes an entry by it, so that pointing the
+/// disassembler at a cache file disassembles it instead of reporting the
+/// header as a bad bytecode magic. That is a read of the format, not a use
+/// of the cache: it costs no link dependency either way.
+inline constexpr uint32_t kCompileCacheMagic = 0x4343484e;
+
+/// Second field of the entry header. Bumped when the header layout changes.
+inline constexpr uint32_t kCompileCacheHeaderVersion = 1;
+
 /// Write \p bytecode to \p path with a header describing \p entry. Writes a
 /// temp file and renames it, so a concurrent reader never sees a partial
 /// entry. Returns false on any failure; failure is not an error, the caller

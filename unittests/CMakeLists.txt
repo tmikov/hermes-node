@@ -53,6 +53,11 @@ target_link_libraries(CompileCacheRunTest
 add_node_compat_unittest(BundleFormatTest BundleFormatTest.cpp)
 target_link_libraries(BundleFormatTest hermesNodeBundle)
 
+# No VM, exactly like BundleFormatTest: the tools layer reads a container's
+# tables and copies bytes, so its whole surface is testable with no runtime.
+add_node_compat_unittest(BundleToolsTest BundleToolsTest.cpp)
+target_link_libraries(BundleToolsTest hermesNodeBundleTools)
+
 add_node_compat_unittest(RequireScannerTest RequireScannerTest.cpp)
 target_link_libraries(RequireScannerTest hermesNodeBundleBuild)
 

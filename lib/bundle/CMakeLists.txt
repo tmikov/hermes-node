@@ -82,6 +82,23 @@ target_link_libraries(hermesNodeBundleBuild
     hermesvm_a
 )
 
+# Tools layer: reads a container and reports on it. Links the format layer
+# and nothing else -- dumping and extracting need no VM, so keeping this
+# target VM-free is what lets BundleToolsTest run with no runtime, the same
+# property BundleFormatTest relies on.
+add_hermes_library(hermesNodeBundleTools STATIC
+  bundle_tools.cpp
+)
+
+target_include_directories(hermesNodeBundleTools
+  PUBLIC
+    ${PROJECT_SOURCE_DIR}/include
+)
+
+target_link_libraries(hermesNodeBundleTools PUBLIC
+  hermesNodeBundle
+)
+
 # Run layer: maps a container and executes bytecode straight out of it. Kept
 # separate from hermesNodeBundleBuild for the same reason that one is kept
 # separate from hermesNodeBundle: running a bundle needs neither the parser

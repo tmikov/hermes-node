@@ -72,12 +72,10 @@ std::string compileCacheGenerationName(
 
 namespace {
 
-/// 'HNCC' -- Hermes Node Compile Cache.
-constexpr uint32_t kMagic = 0x4343484e;
-/// Bumped when the header layout below changes.
-constexpr uint32_t kHeaderVersion = 1;
-
-/// Entry header, 24 bytes. Field order matches the design document.
+/// Entry header, 24 bytes. Field order matches the design document. The
+/// magic and header version live in the public header (compile_cache.h),
+/// next to the header size, because --dump-bytecode recognizes an entry by
+/// them too.
 struct EntryHeader {
   uint32_t magic;
   uint32_t headerVersion;
@@ -166,8 +164,8 @@ bool compileCacheWriteEntry(
     return false;
 
   EntryHeader header{};
-  header.magic = kMagic;
-  header.headerVersion = kHeaderVersion;
+  header.magic = kCompileCacheMagic;
+  header.headerVersion = kCompileCacheHeaderVersion;
   header.sourceCrc = entry.sourceCrc;
   header.sourceSize = entry.sourceSize;
   header.bytecodeSize = static_cast<uint32_t>(bytecodeSize);
@@ -197,7 +195,8 @@ bool compileCacheReadEntry(CompileCacheEntry &entry) {
 
   // Cheapest checks first: a changed file usually changes length, so the
   // size check rejects most edits before the CRC matters.
-  if (header.magic != kMagic || header.headerVersion != kHeaderVersion ||
+  if (header.magic != kCompileCacheMagic ||
+      header.headerVersion != kCompileCacheHeaderVersion ||
       header.sourceSize != entry.sourceSize ||
       header.sourceCrc != entry.sourceCrc || header.bytecodeSize == 0) {
     ::close(fd);
