@@ -266,6 +266,120 @@ A stale entry can't produce wrong results. Each one stores the length and
 checksum of the source it came from, and a mismatch counts as a miss.
 Deleting the cache directory is always safe.
 
+## AOT bundles
+
+A step beyond the compile cache. `--build-bundle` walks the `require()`
+graph of a script, compiles every JavaScript file it finds to bytecode, and
+writes the lot into one file. `--bundle` runs that file. Nothing is compiled
+at startup, and the source tree the bundle was built from does not have to
+be there any more.
+
+```sh
+$ hermes-node --build-bundle=app.bundle ./greet.js
+bundle root: /home/me/greet
+
+$ hermes-node --bundle=/home/me/greet/app.bundle -- hello --name World
+Hello, World.
+```
+
+The build prints a **bundle root**: the deepest directory that contains
+every file it packaged. Paths inside the bundle are recorded relative to it,
+and at run time the root is taken to be the directory the bundle file itself
+sits in, so put the bundle there. Arguments for the bundled program go after
+`--`, the same as for a script.
+
+This is verified end to end on `examples/yargs-cli`, a CLI built on yargs
+with 16 packages underneath it: `test/bundle-yargs.js` bundles it, deletes
+both `node_modules` and the entry script, and checks that `--help` and the
+subcommands still produce the same output.
+
+What stays outside the bundle, and is read from disk under the bundle root
+as usual:
+
+- `.node` native addons, and any other file that is not JavaScript or JSON.
+  The build prints `warning: skipping ...` for each one.
+- Anything only a computed `require()` can reach. The build finds
+  `require()` calls whose argument is a string literal; `require(name)` is
+  invisible to it. Set `HERMES_NODE_DEBUG_NATIVE=BUNDLE` to log every
+  specifier that falls back this way.
+
+A bundled module gets the same `require` a module compiled from disk gets:
+`require.cache`, `require.extensions`, `require.resolve.paths`,
+`module.require` and `require.main` are Node's own. `require.resolve` is the
+one thing that answers differently -- it consults the bundle first, so it
+returns a module's real path even when the tree is gone, and falls back to
+the filesystem resolver otherwise. Bundled modules are registered in
+`require.cache` under their filenames, so a module reached both from the
+container and through the disk fallback is instantiated once.
+
+`.mjs` files are skipped too, but they are not in that list, because nothing
+loads them either way: `require()` of an ESM file throws here, bundle or no
+bundle. The build leaves them out so that one unloadable module fails at the
+`require`, the way it already does, instead of failing the whole build with
+a syntax error.
+
+Two more limits worth knowing. Bundling resolves a package through its
+`package.json` `main` field, then `index.js`/`index.ts`/`index.json`;
+`exports` is not consulted, so a package that describes itself only that way
+may resolve differently than it does under Node. And `--bundle` is rejected
+together with `--inspect` or `--inspect-brk`: bundled bytecode is compiled
+without the debug info the debugger needs to set breakpoints, and there is no
+source left to recompile from.
+
+Built-in modules always win. A bundled module named `fs` cannot shadow the
+real one.
+
+Vendored packages -- `ws` is the only one today -- sit between the two
+cases. If the program has its own copy under `node_modules`, that copy is
+packaged like any other dependency and is what the bundle runs. If it does
+not, the build prints `warning: not packaging 'ws' ...` and the embedded
+copy serves the `require()` at run time, so the program still works with
+the tree deleted.
+
+### Looking inside a bundle
+
+Four diagnostic flags, none of them on the run path. Three describe a file
+-- a container, or a file of bytecode -- and the fourth narrates a build:
+
+```sh
+# Narrate the build: each module as it is discovered, the specifier that
+# pulled it in, what it compiled to, and the totals. Goes to stderr.
+$ hermes-node --build-bundle=app.bundle --verbose ./greet.js
+
+# Print the container's tables: header, modules, edges, section sizes.
+$ hermes-node --bundle=app.bundle --dump
+
+# Write one module's payload to a file, verbatim.
+$ hermes-node --bundle=app.bundle --extract-module=lib/util.js --out=util.hbc
+
+# Disassemble a bytecode file, or a compile cache entry.
+$ hermes-node --dump-bytecode=util.hbc
+```
+
+`--dump` and `--extract-module` read a container this binary would refuse to
+execute. A bundle built by a different hermes-node carries a different
+generation tag and `--bundle` rejects it, but the dump prints that tag with
+a `MISMATCH` note beside the one this binary requires and keeps going, and
+extraction gets the bytecode out. Structural damage is still fatal to both:
+bad magic, an unknown format version, or a table that does not fit inside
+the file.
+
+The identity `--extract-module` takes is the one `--dump` prints, matched
+exactly; an unknown one is an error that lists the closest few. A JavaScript
+module's payload is the compiled bytecode, so the extracted file is what
+`--dump-bytecode` reads; a JSON module's payload is the source file's own
+bytes. `--out` naming the container itself is refused rather than obeyed:
+the write is a rename, so it would replace the bundle with one module's
+payload. A symlink or a second hard link to the container counts as the
+container.
+
+`--verbose` also works with `--dump`, where it adds each module's incoming
+and outgoing edge counts, and with `--dump-bytecode`, where it annotates
+each instruction with a `; file:line:column` comment. The source text
+itself is never printed: a bytecode file does not carry it. `--verbose` is
+an error anywhere else, as is any combination of two of the verbs, and so
+is `--out` without `--extract-module`.
+
 ## Command-line options
 
 ```
@@ -277,6 +391,17 @@ Options:
   --inspect-brk[=[host:]port]    Enable inspector, break before user code
   --compile-cache=<dir>          Bytecode cache directory
   --no-compile-cache             Disable the bytecode cache
+  --build-bundle=<file>          Compile the script and its requires into <file>
+  --verbose                      With --build-bundle, narrate the walk to stderr;
+                                 with --dump, add per-module edge counts;
+                                 with --dump-bytecode, add source locations
+  --bundle=<file>                Run an application from a bundle file
+  --dump                         With --bundle, print the container's tables
+  --extract-module=<identity>    With --bundle and --out, write one module's
+                                 payload to <file>
+  --out=<file>                   Destination for --extract-module
+  --dump-bytecode=<file>         Disassemble a Hermes bytecode file or a
+                                 compile cache entry
   --optimize=<default|on|off>    Optimize compiled code. default is on
                                  with the cache, off without it
   --inspect-open                 Open the DevTools URL in the system browser

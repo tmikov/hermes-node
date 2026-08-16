@@ -99,6 +99,135 @@ on by default. Built-in JS is unaffected (already embedded as bytecode).
   landing at ~16 MB / ~1506 entries. See
   `history/plans/progress-compile-cache.md` for the full numbers.
 
+## AOT Bundles
+
+`--build-bundle=<file>` walks a script's `require()` graph, compiles every
+JavaScript file to bytecode, and writes one container. `--bundle=<file>`
+runs it, with no compilation and no source tree needed at run time.
+
+- Design `history/plans/2026-08-15-aot-bundle-design.md`, plan
+  `history/plans/2026-08-15-aot-bundle-plan.md`, progress
+  `history/plans/progress-aot-bundle.md`.
+- Implementation: `lib/bundle/` (format, writer, reader, generation tag,
+  `require()` scanner, resolver, producer, run layer) plus
+  `libjs/bundle-loader.js`, which wraps `Module._load`. `hermesNodeBundleRun`
+  is deliberately free of the parser and compiler; only the producer links
+  them.
+- The producer prints `bundle root: <dir>`, the deepest common directory of
+  every packaged file. Identities are relative to it and the consumer takes
+  the root from the bundle file's own directory, so **the bundle must sit at
+  the printed root**.
+- Packaged as JavaScript: `.js`, `.cjs`, `.ts`, and extensionless files (a
+  bare `node_modules/<pkg>/<name>` entry point is real; yargs ships one).
+  `.json` is packaged as raw text. Everything else warns and is skipped:
+  `.node` addons, assets, and `.mjs` (ESM, which the CJS loader cannot run).
+  Module kind is stored in the container record and is never re-derived from
+  the identity's extension.
+- Skipped files, and specifiers only a computed `require()` can reach, fall
+  back to disk through the original `Module._load`. Log the fallbacks with
+  `HERMES_NODE_DEBUG_NATIVE=BUNDLE`.
+- A bundled module's `require` comes from Node's `makeRequireFunction`; only
+  `require.resolve` is overridden (edge table first, then
+  `Module._resolveFilename`), and it skips the edge table when the caller
+  passes `options.paths`.
+- `Module._cache`, keyed by filename, is the loader's **only** cache: bundled
+  records are published there before their body runs and read back from
+  there. So a module reached both from the container and through the disk
+  fallback is instantiated once, and
+  `delete require.cache[require.resolve(x)]` really does force a reload. Do
+  not reintroduce a private identity-keyed cache; the program cannot
+  invalidate one.
+- Builtins are resolved before the edge table, via
+  `BuiltinModule.normalizeRequirableId` (NOT `Module.isBuiltin`, which also
+  answers for vendored packages such as `ws`), so a bundle can never shadow
+  an embedded builtin. The producer's `isBuiltinSpecifier`
+  (`lib/bundle/bundle_resolve.cpp`) mirrors the same 43-name list.
+- Vendored packages (`ws`) are not builtins: an installed `node_modules` copy
+  is packaged and wins, and when there is none the producer warns
+  (`warning: not packaging '<id>' ...` via `isVendoredSpecifier`) and the
+  embedded copy serves the `require()` at run time.
+- `package.json` `exports` is not consulted in v1; only `main`, then
+  `index.*`. This is the most likely source of a resolution mismatch with
+  Node.
+- `--bundle` is rejected with `--inspect`/`--inspect-brk` (bundled bytecode
+  lacks the debug info the debugger needs), and with `--build-bundle` or
+  `-e`/`--eval`. A positional argument in bundle mode belongs to the bundled
+  program, not to hermes-node.
+- Tests: `test/bundle-{build,run,require,errors,fallback,yargs}.js` plus
+  `BundleFormatTest`, `BundleResolveTest`, `RequireScannerTest`.
+  `bundle-yargs.js` is gated on the `examples-installed` lit feature
+  (`test/lit.cfg`), set when `examples/yargs-cli/node_modules` exists, so the
+  offline default suite reports it UNSUPPORTED rather than failing.
+
+### Bundle tooling
+
+Four diagnostic flags, none of them on the run path. Design
+`history/plans/2026-08-15-bundle-tooling-design.md`, plan
+`history/plans/2026-08-15-bundle-tooling-plan.md`, progress
+`history/plans/progress-bundle-tooling.md`.
+
+- `--build-bundle=<f> --verbose` narrates configuration (entry, absolute
+  output path, generation tag with the version/arch/bytecode-version/
+  optimization it folds), discovery (with the specifier that pulled each
+  module in), compilation (source/bytecode bytes, ratio, timing) and a
+  summary of the finished container (modules by kind, edges and distinct
+  specifiers, string/payload/bytecode bytes, the largest module, total file
+  size, total compile time) **to stderr**. The container is byte-for-byte
+  the same with or without it. The summary runs after
+  `BundleWriter::serialize()` and reads its section sizes back out of the
+  serialized bytes, so it and a later `--dump` cannot disagree.
+- `--bundle=<f> --dump` prints the header, module table, edge table and
+  section sizes to stdout. `--verbose` adds per-module in/out edge counts.
+- `--bundle=<f> --extract-module=<identity> --out=<file>` writes one
+  module's payload verbatim (bytecode for a JS module, the original bytes
+  for a JSON one). Unknown identities are an error listing the nearest few
+  by edit distance. `--out` naming the same file as `--bundle` (compared by
+  `st_dev`/`st_ino`, so `./app.hbb`, a symlink and a hard link all count) is
+  refused: the write is a rename, so it would replace the container with one
+  module's payload and nothing downstream would notice.
+- `--dump-bytecode=<f>` disassembles a raw bytecode file or a compile cache
+  entry (detected by the cache header's magic and skipped past).
+  `--verbose` adds a `; file:line:column` comment per instruction, not the
+  source text (a bytecode file does not carry it).
+- The three read-only verbs are dispatched by `runToolVerb()` in
+  `tools/hermes-node/hermes-node.cpp` **before `runHermesNode`**, so no
+  runtime, event loop or `napi_env` exists while they run: a tool that
+  describes a file must not fail for reasons belonging to a runtime it never
+  needed.
+- `checkToolOptions()` in the same file holds the whole flag-conflict
+  matrix, all of it after the parse loop so that flag order never matters.
+  The rows are the table under "Flag surface" in the design doc: two verbs
+  at once, a container verb with no `--bundle`, `--extract-module` without
+  `--out` (and `--out` without it), `--verbose` with none of its three
+  consumers, `--dump-bytecode` with `--bundle`/`--build-bundle`, and any
+  verb with `--inspect`/`--inspect-brk`. Each message names both flags. Two
+  checks beyond the table live there too: `--dump-bytecode=` and `--out=`
+  with an empty value, which name the flag instead of reporting a missing
+  file with no filename in it. An empty `--extract-module=` is deliberately
+  not among them -- that flag takes a lookup key, where empty is a lookup
+  that legitimately misses, and the miss is reported by the lookup code.
+- `--dump` and `--extract-module` open through
+  `BundleReader::openForInspection`, which reports the generation tag
+  instead of enforcing it (`MISMATCH` line in the dump); structural
+  validation is unchanged and a format-version mismatch stays fatal.
+  `open()` keeps its hard error, so nothing on the run path can reach a
+  mismatched container.
+- Two new libraries, split by dependency: `hermesNodeBundleTools`
+  (`lib/bundle/bundle_tools.cpp`, dump and extract) links only
+  `hermesNodeBundle` and stays free of the Hermes VM, which is what lets
+  `BundleToolsTest` run with no runtime; `hermesNodeBytecodeDump`
+  (`lib/bytecode-dump/`) links `hermesvm_a` because Hermes's disassembler
+  lives there; it includes `bundle_format.h` for `kBundleMagic` alone (so a
+  container pointed at it is named), which is a header of constants and
+  costs no link dependency. Folding them together would give dump and
+  extract a VM dependency neither needs.
+- Tests:
+  `test/bundle-{verbose,dump,extract,dump-bytecode,tool-errors,tool-no-runtime}.js`
+  plus `BundleToolsTest` and the inspection-mode cases in
+  `BundleFormatTest`. `bundle-tool-no-runtime.js` pins the pre-runtime
+  dispatch: a verb given `--compile-cache=<dir>` never creates the
+  directory, while running the same container does.
+
 ## Test Infrastructure
 
 JS tests use LLVM Lit (`test/lit.cfg`), run in parallel via `check-hermes-node-js` target.
