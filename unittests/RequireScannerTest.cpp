@@ -55,46 +55,96 @@ TEST(RequireScannerTest, IgnoresRequireWithNoArguments) {
   EXPECT_EQ(scan("require(); require('a');"), (std::vector<std::string>{"a"}));
 }
 
-// The positions of the require() calls the scan had to give up on. Every
-// one of them is a module missing from the container, so the producer
-// reports them; see lib/bundle/bundle_build.cpp.
-std::vector<ComputedRequire> scanComputed(const char *src) {
+// A module body is a function body, so constructs legal only inside a
+// function are legal here. Scanning the source as a Program -- which is
+// what this did before the scan wrapped it -- rejects this outright, and
+// the module runs perfectly from disk.
+TEST(RequireScannerTest, AcceptsTopLevelReturn) {
+  EXPECT_EQ(
+      scan("if (x) { return; }\nrequire('a');"),
+      (std::vector<std::string>{"a"}));
+}
+
+// A module that declares its own `require` is not talking about the
+// module's require, and its specifiers were only ever meaningful inside
+// whatever bundle produced it. This is the shape browserify and older
+// webpack output ship, and matching on the name alone would send the
+// producer looking for these on disk.
+TEST(RequireScannerTest, IgnoresShadowedRequire) {
+  EXPECT_TRUE(scan("(function (require) { require('inner'); })(f);").empty());
+  EXPECT_TRUE(scan("function f(require) { require('inner'); }").empty());
+  EXPECT_TRUE(scan("{ let require = f; require('inner'); }").empty());
+  // ... while the real one, in the same file, still counts.
+  EXPECT_EQ(
+      scan("function f(require) { require('inner'); }\nrequire('real');"),
+      (std::vector<std::string>{"real"}));
+}
+
+// The uses of the module's require the scan cannot follow. Each is a module
+// missing from the container, so the producer reports them; see
+// lib/bundle/bundle_build.cpp.
+std::vector<RequireGap> scanGaps(const char *src) {
   std::vector<std::string> out;
-  std::vector<ComputedRequire> computed;
+  std::vector<RequireGap> gaps;
   std::string error;
-  EXPECT_TRUE(scanRequires(src, false, &out, &error, &computed)) << error;
-  return computed;
+  EXPECT_TRUE(scanRequires(src, false, &out, &error, &gaps)) << error;
+  return gaps;
 }
 
 TEST(RequireScannerTest, RecordsComputedRequirePositions) {
   // Both shapes the scan gives up on: an argument that is not a literal at
-  // all, and a template literal with a substitution in it. The second one
-  // is on its own line and indented, so a position taken from the wrong
-  // node (the argument, say, rather than the call) does not match.
-  auto sites = scanComputed("require(name);\n  require(`t${x}`);");
-  ASSERT_EQ(sites.size(), 2u);
-  EXPECT_EQ(sites[0].line, 1u);
-  EXPECT_EQ(sites[0].column, 1u);
-  EXPECT_EQ(sites[1].line, 2u);
-  EXPECT_EQ(sites[1].column, 3u);
+  // all, and a template literal with a substitution in it. The second is on
+  // its own line and indented, so a position taken from the wrong node (the
+  // argument, say, rather than the call) does not match. Line 1 also pins
+  // that the wrapper's columns are converted back: the raw position there
+  // is offset by the wrapper prefix.
+  auto gaps = scanGaps("require(name);\n  require(`t${x}`);");
+  ASSERT_EQ(gaps.size(), 2u);
+  EXPECT_EQ(gaps[0].kind, RequireGapKind::kComputedArgument);
+  EXPECT_EQ(gaps[0].line, 1u);
+  EXPECT_EQ(gaps[0].column, 1u);
+  EXPECT_EQ(gaps[1].kind, RequireGapKind::kComputedArgument);
+  EXPECT_EQ(gaps[1].line, 2u);
+  EXPECT_EQ(gaps[1].column, 3u);
 }
 
-TEST(RequireScannerTest, DoesNotRecordLiteralOrNonRequireCalls) {
-  // A literal require() is followed, so it is not a gap. Neither is
-  // require.resolve(), obj.require(), or a require() naming nothing at all
-  // -- the last of these computes no specifier to miss.
-  EXPECT_TRUE(scanComputed("require('a'); require(`b`);").empty());
+TEST(RequireScannerTest, RecordsRequireUsedAsAValue) {
+  // What @babel/core does -- endHiddenCallStack(require)(filepath) -- which
+  // no amount of looking at call sites can find, because there is no
+  // require() call in the source at all.
+  auto gaps = scanGaps("var x = 1;\nwrap(require)(p);");
+  ASSERT_EQ(gaps.size(), 1u);
+  EXPECT_EQ(gaps[0].kind, RequireGapKind::kEscapedValue);
+  EXPECT_EQ(gaps[0].line, 2u);
+  EXPECT_EQ(gaps[0].column, 6u);
+}
+
+TEST(RequireScannerTest, DoesNotRecordAccountedForUses) {
+  // A literal require() is followed, so it is not a gap. Reading a property
+  // of require loads nothing, so neither is that -- and the wrapper's own
+  // `require` parameter is a declaration, not a use, which if reported
+  // would fire in every module ever scanned.
+  EXPECT_TRUE(scanGaps("require('a'); require(`b`);").empty());
   EXPECT_TRUE(
-      scanComputed("require.resolve(x); obj.require(y); require();").empty());
+      scanGaps("require.resolve('x'); require.cache; require.main;").empty());
+  EXPECT_TRUE(scanGaps("obj.require(y); require();").empty());
+  EXPECT_TRUE(scanGaps("var x = 1;").empty());
 }
 
-TEST(RequireScannerTest, DoesNotDeduplicateComputedRequires) {
+TEST(RequireScannerTest, DoesNotRecordGapsForAShadowedRequire) {
+  // Not our require, so neither its computed calls nor its escapes are
+  // holes in our container.
+  EXPECT_TRUE(
+      scanGaps("function f(require) { require(x); g(require); }").empty());
+}
+
+TEST(RequireScannerTest, DoesNotDeduplicateGaps) {
   // Two computed calls are two modules missing from the container even when
   // they compute the same string, and the position is what identifies each.
-  EXPECT_EQ(scanComputed("require(x);\nrequire(x);").size(), 2u);
+  EXPECT_EQ(scanGaps("require(x);\nrequire(x);").size(), 2u);
 }
 
-TEST(RequireScannerTest, ComputedRequiresAreOptional) {
+TEST(RequireScannerTest, GapsAreOptional) {
   // The out-parameter defaults to null, and the specifier scan is unchanged
   // when a caller does not ask for the positions.
   EXPECT_EQ(
@@ -157,9 +207,14 @@ TEST(RequireScannerTest, ReportsErrorOnExcessiveNesting) {
   // deep as the chain is long. That is exactly the shape the visitor's
   // stack-overflow guard exists for: walking it with an unguarded
   // recursive visitor would itself overflow the C++ stack.
+  //
+  // The operand is an identifier, not a literal. Semantic resolution --
+  // which the scan now runs before this visitor, to bind `require` --
+  // constant-folds `0+1+1+...` down to a single NumericLiteral, so a chain
+  // of literals reaches the visitor already flat and tests nothing.
   std::string src = "require('a');\nvar x = 0";
   for (int i = 0; i < 3000; ++i)
-    src += "+1";
+    src += "+y";
   src += ";";
 
   std::vector<std::string> out;

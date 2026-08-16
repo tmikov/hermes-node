@@ -68,6 +68,22 @@
 // RUN: %hermes-node --bundle=%t.quiet/app.hbb | %FileCheck --check-prefix=QUIETEXEC %s
 // QUIETEXEC: QUIET OK
 
+// A top-level `return` is an ordinary CommonJS early-exit idiom, legal
+// because a module body is a function body. The scan wraps the source in
+// the module wrapper before parsing it for exactly this reason; reading it
+// as a Program rejects it, which used to fail the build outright and then,
+// once failures became stubs, silently turned a working module into one
+// that throws. Neither is acceptable for a file that runs from disk.
+// RUN: rm -rf %t.ret && mkdir -p %t.ret
+// RUN: echo "if (globalThis.never) { module.exports = { v: 1 }; return; }" > %t.ret/dep.js
+// RUN: echo "module.exports = { v: 2 };" >> %t.ret/dep.js
+// RUN: echo "console.log('RETURN', require('./dep').v);" > %t.ret/cli.js
+// RUN: %hermes-node --build-bundle=%t.ret/app.hbb %t.ret/cli.js 2>&1 | %FileCheck --check-prefix=RETWARN --implicit-check-not="cannot parse" %s
+// RETWARN: bundle root:
+// RUN: rm -f %t.ret/cli.js %t.ret/dep.js
+// RUN: %hermes-node --bundle=%t.ret/app.hbb | %FileCheck --check-prefix=RETEXEC %s
+// RETEXEC: RETURN 2
+
 // A file the *parser* rejects takes the same path as one the compiler
 // rejects, and is reported against the parser. The two failures are found
 // in different phases (the scan that collects require() calls, and the

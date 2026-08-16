@@ -41,12 +41,50 @@
 // DYNWARN: warning: 1 computed require() call in 1 file: not packaged, resolved from disk at run time
 
 // A literal require() is followed, so it must never be counted as one: a
-// warning that fires for every module would say nothing.
+// warning that fires for every module would say nothing. The same run also
+// pins that the module wrapper's own `require` parameter is not reported as
+// a use of require -- it is a declaration, and reporting it would fire in
+// every module ever built.
 // RUN: rm -rf %t.static && mkdir -p %t.static
 // RUN: echo "module.exports = { v: 1 };" > %t.static/dep.js
 // RUN: echo "console.log('STATIC', require('./dep').v);" > %t.static/cli.js
-// RUN: %hermes-node --build-bundle=%t.static/app.bundle %t.static/cli.js 2>&1 | %FileCheck --check-prefix=NODYN --implicit-check-not="computed require" %s
+// RUN: %hermes-node --build-bundle=%t.static/app.bundle %t.static/cli.js 2>&1 | %FileCheck --check-prefix=NODYN --implicit-check-not="computed require" --implicit-check-not="require used as a value" %s
 // NODYN: bundle root:
+
+// `require` passed somewhere instead of called. Nothing it goes on to load
+// can be discovered -- there is no require() call in the source at all --
+// so the count is all the build can offer. @babel/core does exactly this,
+// which is what makes a bundle of it quietly need node_modules on disk.
+// RUN: rm -rf %t.escape && mkdir -p %t.escape
+// RUN: echo "module.exports = { v: 4 };" > %t.escape/dep.js
+// RUN: echo "const load = (function (r) { return r; })(require); console.log('ESCAPE', load('./dep').v);" > %t.escape/cli.js
+// RUN: %hermes-node --build-bundle=%t.escape/app.bundle %t.escape/cli.js 2>&1 | %FileCheck --check-prefix=ESCWARN %s
+// ESCWARN: warning: require used as a value in 1 place in 1 file: whatever it goes on to load is not packaged
+// RUN: %hermes-node --bundle=%t.escape/app.bundle | %FileCheck --check-prefix=ESCEXEC %s
+// ESCEXEC: ESCAPE 4
+
+// Reading a property of require loads nothing, so it is not a use the
+// build has to warn about. Without this, require.resolve() and
+// require.cache -- both ordinary -- would produce a warning each.
+// RUN: rm -rf %t.prop && mkdir -p %t.prop
+// RUN: echo "module.exports = { v: 6 };" > %t.prop/dep.js
+// RUN: echo "require.resolve('./dep'); void require.cache; console.log('PROP', require('./dep').v);" > %t.prop/cli.js
+// RUN: %hermes-node --build-bundle=%t.prop/app.bundle %t.prop/cli.js 2>&1 | %FileCheck --check-prefix=PROP --implicit-check-not="require used as a value" %s
+// PROP: bundle root:
+
+// A module that declares its own `require` is not talking about the
+// module's require: its specifiers were only ever meaningful inside
+// whatever bundle produced it, and looking for them on disk is how a
+// pre-bundled dist/ file used to fail the build. Matching the binding
+// rather than the name is what tells the two apart.
+// RUN: rm -rf %t.shadow && mkdir -p %t.shadow
+// RUN: echo "(function (require) { require('./only-inside-that-bundle'); })(function () {});" > %t.shadow/dep.js
+// RUN: echo "module.exports = { v: 8 };" >> %t.shadow/dep.js
+// RUN: echo "console.log('SHADOW', require('./dep').v);" > %t.shadow/cli.js
+// RUN: %hermes-node --build-bundle=%t.shadow/app.bundle %t.shadow/cli.js 2>&1 | %FileCheck --check-prefix=SHADOW --implicit-check-not="cannot be resolved" --implicit-check-not="require used as a value" %s
+// SHADOW: bundle root:
+// RUN: %hermes-node --bundle=%t.shadow/app.bundle | %FileCheck --check-prefix=SHADOWEXEC %s
+// SHADOWEXEC: SHADOW 8
 
 // A module must not exist twice, once from the container and once from disk.
 // The fallback resolves through Node's loader, which checks Module._cache, so

@@ -125,13 +125,24 @@ runs it, with no compilation and no source tree needed at run time.
   the identity's extension.
 - Skipped files, and specifiers only a computed `require()` can reach, fall
   back to disk through the original `Module._load`. Log the fallbacks with
-  `HERMES_NODE_DEBUG_NATIVE=BUNDLE`. The producer warns at build time too:
-  the scanner records the position of every `require()` whose argument is
-  not a literal, and the build prints how many there were and in how many
-  files. `--verbose` lists each position (`dynamic <file>:<line>:<col>`).
-  This does not catch `require` passed around as a value -- `@babel/core`
-  does exactly that, which is why the Babel example warns about none of the
-  four presets it loads.
+  `HERMES_NODE_DEBUG_NATIVE=BUNDLE`. The producer warns at build time too,
+  in two counted lines: `require()` calls whose argument is not a literal,
+  and places where `require` is used as a value rather than called (what
+  `@babel/core` does, and why a bundle of it needs `node_modules` on disk).
+  `--verbose` lists each position -- `dynamic <file>:<line>:<col>` and
+  `escape <file>:<line>:<col>`.
+- The scanner (`lib/bundle/require_scanner.cpp`) wraps each source in the
+  CommonJS module wrapper before parsing, then runs `sema::resolveAST` and
+  identifies `require` **by binding**, not by name: the wrapper's `require`
+  parameter. Both halves matter. A module body is a function body, so a
+  top-level `return` -- an ordinary CommonJS idiom -- is only legal wrapped.
+  And a module that declares its own `require` (pre-bundled browserify or
+  webpack output) must not contribute specifiers that were only ever
+  meaningful inside that bundle. `kCJSWrapperPrefix` is single-sourced in
+  `include/hermes/node-compat/bundle/cjs_wrapper.h`, shared with the
+  compile step so the scan sees exactly the text that gets compiled.
+  Positions are converted back out of the wrapper; compiler diagnostics are
+  not, and their column on line 1 is offset by the prefix, as it always was.
 - The static walk reaches code the run never does, so two things it finds
   there warn instead of failing the build. A specifier that resolves to
   nothing (an optional-dependency probe) is left out of the edge table and

@@ -7,25 +7,35 @@
 
 #include <hermes/node-compat/bundle/require_scanner.h>
 
+#include <hermes/node-compat/bundle/cjs_wrapper.h>
+
 #include "hermes/AST/Context.h"
 #include "hermes/AST/ESTree.h"
 #include "hermes/AST/RecursiveVisitor.h"
 #include "hermes/Parser/JSParser.h"
+#include "hermes/Sema/SemContext.h"
+#include "hermes/Sema/SemResolve.h"
 #include "hermes/Support/SourceErrorManager.h"
 
 #include "llvh/Support/Casting.h"
 #include "llvh/Support/SourceMgr.h"
 
 #include <algorithm>
+#include <unordered_set>
 
 namespace hermes {
 namespace node_compat {
 
 namespace {
 
-/// Walks the whole AST looking for calls of the shape `require(<literal>)`,
-/// collecting the literal into `*out_` (deduplicated, first-seen order), and
-/// the position of every other `require()` call into `*computed_`.
+/// Walks the whole AST looking for uses of \p requireDecl -- the CommonJS
+/// wrapper's `require` parameter, and so the module's real require.
+///
+/// A call of it with a literal argument contributes the literal to `*out_`
+/// (deduplicated, first-seen order). Every other use is a gap recorded in
+/// `*gaps_`: a call with a computed argument, or the identifier appearing
+/// anywhere it is not being called and not being read through (`require.foo`
+/// is not a gap -- `require.cache` and `require.resolve` load nothing).
 ///
 /// Inherits hermes::ESTree::RecursionDepthTracker rather than the brief's
 /// trivial always-true stub: RecursiveVisitor.h documents
@@ -38,9 +48,17 @@ class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
  public:
   RequireVisitor(
       std::vector<std::string> *out,
-      std::vector<ComputedRequire> *computed,
-      SourceErrorManager *sm)
-      : out_(out), computed_(computed), sm_(sm) {}
+      std::vector<RequireGap> *gaps,
+      SourceErrorManager *sm,
+      sema::SemContext *semCtx,
+      sema::Decl *requireDecl,
+      ESTree::IdentifierNode *requireParam)
+      : out_(out),
+        gaps_(gaps),
+        sm_(sm),
+        semCtx_(semCtx),
+        requireDecl_(requireDecl),
+        accounted_{requireParam} {}
 
   /// Called by RecursionDepthTracker once the nesting limit is hit. Once
   /// this fires, RecursionDepthTracker::incRecursionDepth() keeps returning
@@ -74,7 +92,49 @@ class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
     ESTree::visitESTreeChildren(*this, node);
   }
 
+  // `require.resolve`, `require.cache`, `require.main`: reading a property
+  // of require loads nothing, so the identifier is accounted for and is not
+  // an escape. Both member-expression kinds, for the same reason both call
+  // kinds are handled: `require?.resolve` is a distinct ESTree node.
+  void visit(ESTree::MemberExpressionNode *node) {
+    accountFor(node->_object);
+    ESTree::visitESTreeChildren(*this, node);
+  }
+
+  void visit(ESTree::OptionalMemberExpressionNode *node) {
+    accountFor(node->_object);
+    ESTree::visitESTreeChildren(*this, node);
+  }
+
+  // Every remaining appearance of the identifier. Reached after the visits
+  // above have run on the enclosing node -- RecursiveVisitor descends into
+  // children only once the parent's overload has, so an identifier that is
+  // a callee or a member object has already been accounted for by the time
+  // this sees it.
+  void visit(ESTree::IdentifierNode *node) {
+    if (isRequire(node) && accounted_.count(node) == 0)
+      record(RequireGapKind::kEscapedValue, node);
+    ESTree::visitESTreeChildren(*this, node);
+  }
+
  private:
+  /// \return true if \p node is an identifier bound to the module's
+  /// `require` parameter.
+  bool isRequire(ESTree::Node *node) const {
+    auto *ident = llvh::dyn_cast<ESTree::IdentifierNode>(node);
+    // An identifier the resolver gave up on carries no decl to compare, and
+    // getExpressionDecl() asserts rather than tolerating one.
+    if (ident == nullptr || ident->isUnresolvable())
+      return false;
+    return semCtx_->getExpressionDecl(ident) == requireDecl_;
+  }
+
+  /// Marks \p node as a use of `require` that is not an escape, so the
+  /// IdentifierNode overload does not report it when the walk reaches it.
+  void accountFor(ESTree::Node *node) {
+    if (isRequire(node))
+      accounted_.insert(node);
+  }
   /// Appends the require() argument of \p node to `*out_` if \p node is a
   /// call to a bare `require` identifier with a literal first argument that
   /// has not already been collected. See require_scanner.h for the exact
@@ -86,9 +146,11 @@ class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
   /// callee/argument checks per kind.
   template <typename CallNodeT>
   void collect(CallNodeT *node) {
-    auto *callee = llvh::dyn_cast<ESTree::IdentifierNode>(node->_callee);
-    if (callee == nullptr || callee->_name->str() != "require")
+    if (!isRequire(node->_callee))
       return;
+    // Being called is what a require is for: whatever the argument turns
+    // out to be, this use is not an escape.
+    accounted_.insert(node->_callee);
 
     if (node->_arguments.empty())
       return;
@@ -103,7 +165,7 @@ class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
       // The grammar guarantees quasis.size() == expressions.size() + 1, so
       // "no substitutions" is exactly "exactly one quasi".
       if (!tmpl->_expressions.empty() || tmpl->_quasis.empty()) {
-        recordComputed(node);
+        record(RequireGapKind::kComputedArgument, node);
         return;
       }
       auto *elem =
@@ -116,7 +178,7 @@ class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
           elem->_cooked != nullptr ? elem->_cooked : elem->_raw;
       value = text->str().str();
     } else {
-      recordComputed(node);
+      record(RequireGapKind::kComputedArgument, node);
       return;
     }
 
@@ -124,25 +186,36 @@ class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
       out_->push_back(std::move(value));
   }
 
-  /// Records the position of \p node as a require() this scan could not
-  /// follow. Not deduplicated: two computed require() calls are two holes in
-  /// the container even when they compute the same string, and the position
-  /// is the whole value of the record.
-  template <typename CallNodeT>
-  void recordComputed(CallNodeT *node) {
-    if (computed_ == nullptr)
+  /// Records \p node's position as a use of require this scan could not
+  /// follow. Not deduplicated: two such uses are two holes in the container
+  /// even when they would compute the same string, and the position is the
+  /// whole value of the record.
+  ///
+  /// The coordinates are converted back out of the CommonJS wrapper, so a
+  /// caller never has to know the scan added one.
+  void record(RequireGapKind kind, ESTree::Node *node) {
+    if (gaps_ == nullptr)
       return;
     SourceErrorManager::SourceCoords coords;
     if (!sm_->findBufferLineAndLoc(node->getStartLoc(), coords))
       return;
-    computed_->push_back(
-        {static_cast<uint32_t>(coords.line),
-         static_cast<uint32_t>(coords.col)});
+    RequireGap gap;
+    gap.kind = kind;
+    gap.line = static_cast<uint32_t>(coords.line);
+    gap.column = static_cast<uint32_t>(coords.col);
+    unwrapCoords(gap.line, &gap.column);
+    gaps_->push_back(gap);
   }
 
   std::vector<std::string> *out_;
-  std::vector<ComputedRequire> *computed_;
+  std::vector<RequireGap> *gaps_;
   SourceErrorManager *sm_;
+  sema::SemContext *semCtx_;
+  sema::Decl *requireDecl_;
+  /// Uses of `require` that are already explained -- a callee, or the object
+  /// of a member expression -- so the IdentifierNode overload can report
+  /// everything else without needing a parent pointer.
+  std::unordered_set<ESTree::Node *> accounted_;
   bool overflowed_ = false;
 };
 
@@ -175,6 +248,35 @@ void diagHandler(const llvh::SMDiagnostic &diag, void *ctx) {
   *error += diag.getMessage().str();
 }
 
+/// \return the FunctionExpressionNode of the CommonJS wrapper wrapCJS() put
+/// around the source, or null if \p program is not that shape.
+///
+/// The wrapper is `(function(...) { ... })` -- a Program whose single
+/// statement is an expression statement holding a parenthesized function
+/// expression. Nothing about the module's own text can change that, since
+/// the module's text is entirely inside the function body.
+ESTree::FunctionExpressionNode *findWrapper(ESTree::ProgramNode *program) {
+  if (program->_body.size() != 1)
+    return nullptr;
+  auto *stmt =
+      llvh::dyn_cast<ESTree::ExpressionStatementNode>(&program->_body.front());
+  if (stmt == nullptr)
+    return nullptr;
+  return llvh::dyn_cast<ESTree::FunctionExpressionNode>(stmt->_expression);
+}
+
+/// \return \p wrapper's parameter named \p name, or null.
+ESTree::IdentifierNode *findParam(
+    ESTree::FunctionExpressionNode *wrapper,
+    llvh::StringRef name) {
+  for (ESTree::Node &param : wrapper->_params) {
+    auto *ident = llvh::dyn_cast<ESTree::IdentifierNode>(&param);
+    if (ident != nullptr && ident->_name->str() == name)
+      return ident;
+  }
+  return nullptr;
+}
+
 } // namespace
 
 bool scanRequires(
@@ -182,19 +284,24 @@ bool scanRequires(
     bool enableTS,
     std::vector<std::string> *out,
     std::string *error,
-    std::vector<ComputedRequire> *computed) {
+    std::vector<RequireGap> *gaps) {
   error->clear();
 
-  // JSParser's StringRef constructor hands the bytes to
-  // llvh::MemoryBuffer::getMemBuffer() with RequiresNullTerminator = true:
-  // the lexer reads one byte past the logical end of the buffer as an EOF
-  // sentinel, and MemoryBuffer only asserts (rather than checks) that it is
-  // '\0'. std::string_view carries no such guarantee -- a caller could pass
-  // a view into the middle of a larger buffer -- so the source is copied
-  // into an owned std::string, whose data() is always nul-terminated, and
-  // that owned copy (not the caller's view) backs the parser for the rest
-  // of this function.
-  std::string ownedSource(source);
+  // Wrapped, so this scan parses and resolves exactly the text the compiler
+  // will compile: a module body is a function body, and reading it as a
+  // Program rejects a top-level `return` that runs perfectly well from
+  // disk. It is also what gives `require` a binding to resolve against.
+  // See cjs_wrapper.h.
+  //
+  // wrapCJS() also settles the nul-termination question JSParser's StringRef
+  // constructor raises: it hands the bytes to
+  // llvh::MemoryBuffer::getMemBuffer() with RequiresNullTerminator = true --
+  // the lexer reads one byte past the logical end as an EOF sentinel, and
+  // MemoryBuffer only asserts (rather than checks) that it is '\0'.
+  // std::string_view carries no such guarantee, since a caller could pass a
+  // view into the middle of a larger buffer, but the owned std::string built
+  // here does.
+  std::string ownedSource = wrapCJS(source);
 
   auto context = std::make_shared<Context>();
   if (enableTS)
@@ -210,7 +317,44 @@ bool scanRequires(
     return false;
   }
 
-  RequireVisitor visitor(out, computed, &context->getSourceErrorManager());
+  // Resolution is what turns "an identifier spelled require" into "the
+  // module's require". It reports through the same diag handler, so a
+  // failure lands in *error like a parse error does -- and a failure here
+  // means the compiler will reject the same wrapped text for the same
+  // reason, so treating it as a scan failure is not a new restriction.
+  sema::SemContext semCtx(*context);
+  if (!sema::resolveAST(*context, semCtx, *program)) {
+    if (error->empty())
+      *error = "hermes-node bundle: semantic resolution error";
+    return false;
+  }
+
+  ESTree::FunctionExpressionNode *wrapper = findWrapper(*program);
+  ESTree::IdentifierNode *requireParam =
+      wrapper != nullptr ? findParam(wrapper, "require") : nullptr;
+  sema::Decl *requireDecl = requireParam != nullptr
+      ? semCtx.getDeclarationDecl(requireParam)
+      : nullptr;
+  if (requireDecl == nullptr) {
+    // Unreachable barring a bug in wrapCJS() or in this file's idea of the
+    // wrapper's shape. Reported rather than asserted because silently
+    // scanning nothing would look exactly like a module with no
+    // dependencies, and the bundle would be quietly wrong.
+    *error = "hermes-node bundle: internal: no require binding in the wrapper";
+    return false;
+  }
+
+  // The parameter that declares `require` is a declaration, not a use of
+  // it, and Hermes records an expression decl on it like any other
+  // identifier -- so without this the wrapper's own parameter is reported
+  // as an escape in every single module.
+  RequireVisitor visitor(
+      out,
+      gaps,
+      &context->getSourceErrorManager(),
+      &semCtx,
+      requireDecl,
+      requireParam);
   ESTree::visitESTreeNodeNoReplace(visitor, *program);
   if (visitor.overflowed()) {
     *error = "hermes-node bundle: source is too deeply nested to scan";

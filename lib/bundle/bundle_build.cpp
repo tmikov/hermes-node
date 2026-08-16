@@ -12,6 +12,7 @@
 #include <hermes/node-compat/bundle/bundle_reader.h>
 #include <hermes/node-compat/bundle/bundle_resolve.h>
 #include <hermes/node-compat/bundle/bundle_writer.h>
+#include <hermes/node-compat/bundle/cjs_wrapper.h>
 #include <hermes/node-compat/bundle/require_scanner.h>
 
 #include <napi/hermes_napi_compile.h>
@@ -37,15 +38,6 @@ namespace node_compat {
 namespace {
 
 namespace fs = std::filesystem;
-
-/// The module wrapper libjs/loader.js applies to a user file read from disk
-/// (see loadModule() there). Every JavaScript module compiled into the
-/// bundle is wrapped identically, so a compiled function value invoked as
-/// (exports, require, module, __filename, __dirname) behaves the same way
-/// whether the loader got it from the bundle or from a fresh disk compile.
-constexpr std::string_view kWrapperPrefix =
-    "(function(exports, require, module, __filename, __dirname) {";
-constexpr std::string_view kWrapperSuffix = "\n})";
 
 bool isRegularFile(const std::string &path) {
   std::error_code ec;
@@ -368,14 +360,21 @@ class BuildReporter {
     std::fprintf(stderr, "stub    %s (%s)\n", path.c_str(), reason.c_str());
   }
 
-  /// One require() the scanner could not follow, at its source position.
-  /// The default build reports only how many there were, because a large
-  /// tree has many and drowning the actionable warnings in them would cost
-  /// more than the positions are worth; this is where the positions live.
-  void computedRequire(const std::string &path, uint32_t line, uint32_t col) {
+  /// One use of require the scanner could not follow, at its source
+  /// position. The default build reports only how many there were, because
+  /// a large tree has many and drowning the actionable warnings in them
+  /// would cost more than the positions are worth; this is where the
+  /// positions live.
+  void requireGap(const RequireGap &gap, const std::string &path) {
     if (!enabled_)
       return;
-    std::fprintf(stderr, "dynamic %s:%u:%u\n", path.c_str(), line, col);
+    std::fprintf(
+        stderr,
+        "%s %s:%u:%u\n",
+        gap.kind == RequireGapKind::kComputedArgument ? "dynamic" : "escape ",
+        path.c_str(),
+        gap.line,
+        gap.column);
   }
 
   void compiled(
@@ -531,6 +530,8 @@ int buildBundle(
   std::unordered_map<std::string, FileInfo> files;
   size_t computedRequires = 0;
   size_t filesWithComputedRequires = 0;
+  size_t escapedRequires = 0;
+  size_t filesWithEscapedRequires = 0;
   reporter.discovered(0, absEntry);
 
   for (size_t i = 0; i < paths.size(); ++i) {
@@ -563,9 +564,9 @@ int buildBundle(
     bool isTS = hasExtension(path, ".ts");
 
     std::vector<std::string> specifiers;
-    std::vector<ComputedRequire> computed;
+    std::vector<RequireGap> gaps;
     std::string parseError;
-    if (!scanRequires(source, isTS, &specifiers, &parseError, &computed)) {
+    if (!scanRequires(source, isTS, &specifiers, &parseError, &gaps)) {
       // The entry is the one file the program is certain to load, so a
       // build that cannot read it has produced nothing runnable and fails.
       // Every other file may never be reached at run time, and packaging it
@@ -592,18 +593,28 @@ int buildBundle(
       continue;
     }
 
-    // A require() whose argument the program computes names nothing this
-    // build can follow, so its target is absent from the container and
-    // answered by the run-time fallback -- correct wherever the source tree
-    // is still there, and a hole in the bundle the moment it is not. The
-    // walk cannot close it; what it can do is stop being silent about it.
-    // Counted here and reported once at the end: a large tree has many, and
-    // a line each would bury the warnings a user can act on.
-    if (!computed.empty()) {
-      computedRequires += computed.size();
-      ++filesWithComputedRequires;
-      for (const ComputedRequire &site : computed)
-        reporter.computedRequire(path, site.line, site.column);
+    // A use of require this scan could not follow names something absent
+    // from the container and answered by the run-time fallback -- correct
+    // wherever the source tree is still there, and a hole in the bundle the
+    // moment it is not. The walk cannot close it; what it can do is stop
+    // being silent about it. Counted here and reported once at the end: a
+    // large tree has many, and a line each would bury the warnings a user
+    // can act on.
+    if (!gaps.empty()) {
+      bool computedHere = false;
+      bool escapedHere = false;
+      for (const RequireGap &gap : gaps) {
+        reporter.requireGap(gap, path);
+        if (gap.kind == RequireGapKind::kComputedArgument) {
+          ++computedRequires;
+          computedHere = true;
+        } else {
+          ++escapedRequires;
+          escapedHere = true;
+        }
+      }
+      filesWithComputedRequires += computedHere;
+      filesWithEscapedRequires += escapedHere;
     }
 
     // Pass A: resolve and classify every specifier, reporting (and, for a
@@ -705,7 +716,10 @@ int buildBundle(
   // this to know which directory a disk-fallback path (e.g. for a skipped
   // native addon) is relative to.
   // Once, after the walk, rather than per site during it -- and naming
-  // --verbose, because that is where the positions are.
+  // --verbose, because that is where the positions are. Two lines rather
+  // than a combined one: a computed argument leaves a call site the reader
+  // can go and look at, while an escaped require leaves only the point
+  // where it stopped being traceable, and the second is the worse news.
   if (computedRequires != 0) {
     std::fprintf(
         stderr,
@@ -715,6 +729,16 @@ int buildBundle(
         computedRequires == 1 ? "call" : "calls",
         filesWithComputedRequires,
         filesWithComputedRequires == 1 ? "file" : "files");
+  }
+  if (escapedRequires != 0) {
+    std::fprintf(
+        stderr,
+        "warning: require used as a value in %zu %s in %zu %s: whatever it "
+        "goes on to load is not packaged (--verbose lists them)\n",
+        escapedRequires,
+        escapedRequires == 1 ? "place" : "places",
+        filesWithEscapedRequires,
+        filesWithEscapedRequires == 1 ? "file" : "files");
   }
 
   std::string root = commonAncestor(paths);
@@ -731,12 +755,7 @@ int buildBundle(
     if (info.kind != ModuleKind::kJavaScript)
       continue;
 
-    std::string wrapped;
-    wrapped.reserve(
-        kWrapperPrefix.size() + info.payload.size() + kWrapperSuffix.size());
-    wrapped.append(kWrapperPrefix);
-    wrapped.append(info.payload);
-    wrapped.append(kWrapperSuffix);
+    std::string wrapped = wrapCJS(info.payload);
 
     hermes_compile_flags cflags{};
     cflags.struct_size = sizeof(cflags);
@@ -779,9 +798,7 @@ int buildBundle(
           error.c_str());
       reporter.stubbed(path, "does not compile");
 
-      wrapped.assign(kWrapperPrefix);
-      wrapped.append(makeThrowingStub(path, error));
-      wrapped.append(kWrapperSuffix);
+      wrapped = wrapCJS(makeThrowingStub(path, error));
       // The stub is plain JavaScript whatever the file's extension was.
       cflags.enable_ts = false;
       status = hermes_compile_to_bytecode(

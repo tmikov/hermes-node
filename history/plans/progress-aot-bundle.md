@@ -487,3 +487,45 @@ in the source to warn about. Catching that means warning when the identifier
 a member expression, which covers `require.resolve` and `require.cache`).
 Webpack warns about this shape too, separately. Not implemented; it is the
 next increment and it is what would have flagged the Babel case.
+
+### 2026-08-16, second increment: require is identified by binding
+
+The scanner now wraps each source in the CommonJS module wrapper before
+parsing, runs `sema::resolveAST`, and treats an identifier as `require`
+only when it resolves to the wrapper's `require` parameter. Three things
+follow, two of them fixes rather than features.
+
+**A top-level `return` no longer breaks the build.** A module body is a
+function body, and `return` is an ordinary CommonJS early-exit idiom.
+Scanning the source as a Program rejected it. Before the tolerant-build
+change that was a hard error; after it, it was worse -- a module that runs
+correctly from disk was silently packaged as one that throws. Wrapping is
+what the compile step always did; now the scan does it too, from the same
+`kCJSWrapperPrefix` in `include/hermes/node-compat/bundle/cjs_wrapper.h`.
+
+**A shadowed `require` is no longer followed.** `(function (require) {
+require('./x'); })` is what browserify and older webpack output ship
+inside a package's `dist/`. Those specifiers were only ever meaningful
+inside that bundle's own module map, and the producer used to look for
+them on disk -- a hard error before, a wrong "cannot be resolved" warning
+after. Now they are not edges at all.
+
+**`require` used as a value is reported.** A second warning line, counted
+like the computed-argument one and listed by `--verbose` as `escape`. This
+is the shape that hides Babel's preset loads:
+`endHiddenCallStack(require)(filepath)` at `module-types.js:57:57` is now
+named. It reports the hole without naming what is in it -- there is no
+specifier to recover -- but issue 3 above is no longer silent for this
+case.
+
+Two things learned in the process, both recorded in the tests:
+
+- Hermes records an expression decl on the wrapper's `require` **parameter**
+  as well, so without excluding that one node every module reports an
+  escape at its own line 1.
+- `sema::resolveAST` constant-folds, so `0+1+1+...` reaches the visitor as
+  a single literal. `RequireScannerTest.ReportsErrorOnExcessiveNesting`
+  now uses a non-foldable chain; with the old fixture it silently stopped
+  testing the recursion guard.
+
+Build time over the ~1500-file Babel example is unchanged at ~1.1 s.
