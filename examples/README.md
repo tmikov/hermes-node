@@ -32,3 +32,12 @@ Runs the Hermes benchmark suite's Flow bundler end to end under
 hermes-node, parsing with the vendored native `hermes-parser` addon, and
 checks its output against committed expected bundles. Requires `npm
 install` in the directory first; see `flow-bundler/README.md`.
+
+## babel-parser/
+
+Parses and transforms JavaScript with Babel. Also the worked example of
+what a static bundler can and cannot discover: `transform.js` names its
+preset by string, which nothing can follow, and `transform-static.js`
+requires it instead, which makes the AOT bundle self-contained. Optionally
+bundles with rollup as well. Requires `npm install` in the directory
+first; see `babel-parser/README.md`.
