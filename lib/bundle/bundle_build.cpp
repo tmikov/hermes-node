@@ -423,11 +423,26 @@ class BuildReporter {
     std::fprintf(stderr, "known   '%s' -> [%u]\n", specifier.c_str(), index);
   }
 
-  void skipped(const std::string &specifier, const std::string &reason) {
+  /// \p path, \p line, \p column locate the require() that named \p
+  /// specifier -- the same position the build-time warning for the same
+  /// skip already prints (see bundle_build.cpp's pass A loop), carried here
+  /// too so --verbose does not lose what the default output already says.
+  void skipped(
+      const std::string &specifier,
+      const std::string &path,
+      uint32_t line,
+      uint32_t column,
+      const std::string &reason) {
     if (!enabled_)
       return;
     std::fprintf(
-        stderr, "skip    '%s' (%s)\n", specifier.c_str(), reason.c_str());
+        stderr,
+        "skip    '%s' from %s:%u:%u (%s)\n",
+        specifier.c_str(),
+        path.c_str(),
+        line,
+        column,
+        reason.c_str());
   }
 
   /// A file packaged as a module that throws when required, because this
@@ -789,7 +804,7 @@ int buildBundle(
     stripShebang(&source);
     bool isTS = hasExtension(path, ".ts");
 
-    std::vector<std::string> specifiers;
+    std::vector<RequireSpecifier> specifiers;
     std::vector<RequireGap> gaps;
     std::string parseError;
     if (!scanRequires(source, isTS, &specifiers, &parseError, &gaps)) {
@@ -858,7 +873,8 @@ int buildBundle(
     // `keep` collects only the ones that survive -- resolved to a
     // packageable file -- in source order, for pass B below.
     std::vector<std::pair<std::string, std::string>> keep;
-    for (const std::string &specifier : specifiers) {
+    for (const RequireSpecifier &spec : specifiers) {
+      const std::string &specifier = spec.text;
       if (isBuiltinSpecifier(specifier))
         continue;
 
@@ -879,11 +895,13 @@ int buildBundle(
           std::string reason(kVendoredSkipReason);
           std::fprintf(
               stderr,
-              "warning: not packaging '%s' from %s (%s)\n",
+              "warning: not packaging '%s' from %s:%u:%u (%s)\n",
               specifier.c_str(),
               path.c_str(),
+              spec.line,
+              spec.column,
               reason.c_str());
-          reporter.skipped(specifier, reason);
+          reporter.skipped(specifier, path, spec.line, spec.column, reason);
           continue;
         }
         // Nothing on disk to package, and nothing this build can say about
@@ -899,21 +917,26 @@ int buildBundle(
         std::string reason("cannot be resolved, left to the run-time loader");
         std::fprintf(
             stderr,
-            "warning: not packaging '%s' from %s (%s)\n",
+            "warning: not packaging '%s' from %s:%u:%u (%s)\n",
             specifier.c_str(),
             path.c_str(),
+            spec.line,
+            spec.column,
             reason.c_str());
-        reporter.skipped(specifier, reason);
+        reporter.skipped(specifier, path, spec.line, spec.column, reason);
         continue;
       }
       if (classifyFile(*resolved) == Packageability::kSkip) {
         std::string reason = formatSkipReason(*resolved);
         std::fprintf(
             stderr,
-            "warning: skipping %s (%s)\n",
+            "warning: skipping %s from %s:%u:%u (%s)\n",
             resolved->c_str(),
+            path.c_str(),
+            spec.line,
+            spec.column,
             reason.c_str());
-        reporter.skipped(specifier, reason);
+        reporter.skipped(specifier, path, spec.line, spec.column, reason);
         continue;
       }
 

@@ -22,7 +22,7 @@
 // RUN: rm -rf %t.miss && mkdir -p %t.miss
 // RUN: echo "try { require('nope-not-here'); } catch (e) { console.log('MISSING', e.code); } console.log('MISS DONE');" > %t.miss/cli.js
 // RUN: %hermes-node --build-bundle=%t.miss/app.hbb %t.miss/cli.js 2>&1 | %FileCheck --check-prefix=MISSWARN %s
-// MISSWARN: warning: not packaging 'nope-not-here' from {{.*}}cli.js (cannot be resolved, left to the run-time loader)
+// MISSWARN: warning: not packaging 'nope-not-here' from {{.*}}cli.js:{{[0-9]+}}:{{[0-9]+}} (cannot be resolved, left to the run-time loader)
 
 // The require() throws the same catchable MODULE_NOT_FOUND it throws from
 // disk -- pinning e.code, not merely that something was thrown, because a

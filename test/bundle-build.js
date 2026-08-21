@@ -57,7 +57,7 @@
 // RUN: echo '{ "main": "bare" }' > %t.kinds/node_modules/bare/package.json
 // RUN: echo "module.exports = { v: 5 };" > %t.kinds/node_modules/bare/bare
 // RUN: %hermes-node --build-bundle=%t.kinds/app.bundle %t.kinds/cli.js 2>&1 | %FileCheck --check-prefix=KINDS %s
-// KINDS: warning: skipping {{.*}}esm.mjs (.mjs is ESM, not packageable)
+// KINDS: warning: skipping {{.*}}esm.mjs from {{.*}}cli.js:{{[0-9]+}}:{{[0-9]+}} (.mjs is ESM, not packageable)
 // KINDS: bundle root: {{.*}}.kinds
 
 // Delete every source file, leaving only the bundle: the .cjs and the
@@ -133,8 +133,8 @@
 // RUN: rm -rf %t.vendored && mkdir -p %t.vendored
 // RUN: echo "const a = require('ws'); const b = require('node:ws'); console.log('VENDORED', typeof a.WebSocketServer, a === b);" > %t.vendored/cli.js
 // RUN: %hermes-node --build-bundle=%t.vendored/app.bundle %t.vendored/cli.js 2>&1 | %FileCheck --check-prefix=VENDORED %s
-// VENDORED-DAG: warning: not packaging 'ws' from {{.*}}cli.js (vendored package, served by the runtime)
-// VENDORED-DAG: warning: not packaging 'node:ws' from {{.*}}cli.js (vendored package, served by the runtime)
+// VENDORED-DAG: warning: not packaging 'ws' from {{.*}}cli.js:{{[0-9]+}}:{{[0-9]+}} (vendored package, served by the runtime)
+// VENDORED-DAG: warning: not packaging 'node:ws' from {{.*}}cli.js:{{[0-9]+}}:{{[0-9]+}} (vendored package, served by the runtime)
 // RUN: rm %t.vendored/cli.js
 // RUN: %hermes-node --bundle=%t.vendored/app.bundle | %FileCheck --check-prefix=VENDOREDOUT %s
 // VENDOREDOUT: VENDORED function true
@@ -158,7 +158,7 @@
 // RUN: rm -rf %t.wsdecoy && mkdir -p %t.wsdecoy
 // RUN: echo "const w = require('ws'); console.log('WSDECOY', w.mark, typeof w.WebSocketServer, require.resolve('ws'));" > %t.wsdecoy/cli.js
 // RUN: %hermes-node --build-bundle=%t.wsdecoy/app.bundle %t.wsdecoy/cli.js 2>&1 | %FileCheck --check-prefix=WSDECOYWARN %s
-// WSDECOYWARN: warning: not packaging 'ws' from {{.*}}cli.js (vendored package, served by the runtime)
+// WSDECOYWARN: warning: not packaging 'ws' from {{.*}}cli.js:{{[0-9]+}}:{{[0-9]+}} (vendored package, served by the runtime)
 // RUN: rm %t.wsdecoy/cli.js && mkdir -p %t.wsdecoy/node_modules/ws
 // RUN: echo '{ "main": "index.js" }' > %t.wsdecoy/node_modules/ws/package.json
 // RUN: echo "module.exports = { mark: 'DECOY' };" > %t.wsdecoy/node_modules/ws/index.js

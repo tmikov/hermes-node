@@ -14,9 +14,21 @@ using namespace hermes::node_compat;
 namespace {
 
 std::vector<std::string> scan(const char *src, bool ts = false) {
-  std::vector<std::string> out;
+  std::vector<RequireSpecifier> out;
   std::string error;
   EXPECT_TRUE(scanRequires(src, ts, &out, &error)) << error;
+  std::vector<std::string> texts;
+  for (const RequireSpecifier &spec : out)
+    texts.push_back(spec.text);
+  return texts;
+}
+
+/// Like scan(), but keeps the positions -- for the tests below that assert
+/// on them rather than just on the text.
+std::vector<RequireSpecifier> scanWithPositions(const char *src) {
+  std::vector<RequireSpecifier> out;
+  std::string error;
+  EXPECT_TRUE(scanRequires(src, false, &out, &error)) << error;
   return out;
 }
 
@@ -36,6 +48,40 @@ TEST(RequireScannerTest, DeduplicatesPreservingOrder) {
   EXPECT_EQ(
       scan("require('b'); require('a'); require('b');"),
       (std::vector<std::string>{"b", "a"}));
+}
+
+TEST(RequireScannerTest, RecordsSpecifierPositions) {
+  // Line 1 specifically, because that is where the CommonJS wrapper's
+  // column offset would show up if unwrapCoords() were not applied to
+  // specifiers the same way it is applied to gaps (see
+  // RecordsComputedRequirePositions for the same concern on the gap side).
+  // "require('b'); require('a'); require('b');" -- the third call repeats
+  // the first specifier, so this also pins first-occurrence-wins: the
+  // recorded position for "b" is column 1 (its first call), not column 29
+  // (its second).
+  auto specs = scanWithPositions("require('b'); require('a'); require('b');");
+  ASSERT_EQ(specs.size(), 2u);
+  EXPECT_EQ(specs[0].text, "b");
+  EXPECT_EQ(specs[0].line, 1u);
+  EXPECT_EQ(specs[0].column, 1u);
+  EXPECT_EQ(specs[1].text, "a");
+  EXPECT_EQ(specs[1].line, 1u);
+  EXPECT_EQ(specs[1].column, 15u);
+
+  // A specifier on a later, indented line, to check the line/column pair
+  // together rather than only ever exercising column 1.
+  auto onSecondLine = scanWithPositions("var x = 1;\n  require('dep');");
+  ASSERT_EQ(onSecondLine.size(), 1u);
+  EXPECT_EQ(onSecondLine[0].text, "dep");
+  EXPECT_EQ(onSecondLine[0].line, 2u);
+  EXPECT_EQ(onSecondLine[0].column, 3u);
+
+  // require.resolve() gets a position the same way a bare require() does.
+  auto viaResolve = scanWithPositions("require.resolve('res');");
+  ASSERT_EQ(viaResolve.size(), 1u);
+  EXPECT_EQ(viaResolve[0].text, "res");
+  EXPECT_EQ(viaResolve[0].line, 1u);
+  EXPECT_EQ(viaResolve[0].column, 1u);
 }
 
 TEST(RequireScannerTest, IgnoresNonLiteralArguments) {
@@ -104,7 +150,7 @@ TEST(RequireScannerTest, IgnoresShadowedRequire) {
 // missing from the container, so the producer reports them; see
 // lib/bundle/bundle_build.cpp.
 std::vector<RequireGap> scanGaps(const char *src) {
-  std::vector<std::string> out;
+  std::vector<RequireSpecifier> out;
   std::vector<RequireGap> gaps;
   std::string error;
   EXPECT_TRUE(scanRequires(src, false, &out, &error, &gaps)) << error;
@@ -233,7 +279,7 @@ TEST(RequireScannerTest, ParsesTypeScriptWhenEnabled) {
 }
 
 TEST(RequireScannerTest, ReportsParseError) {
-  std::vector<std::string> out;
+  std::vector<RequireSpecifier> out;
   std::string error;
   EXPECT_FALSE(scanRequires("function (", false, &out, &error));
   EXPECT_FALSE(error.empty());
@@ -245,11 +291,12 @@ TEST(RequireScannerTest, WarningsDoNotLeakIntoErrorOnSuccess) {
   // succeed, find the require(), and leave `error` empty -- a warning is
   // not a parse error, and a caller checking "error.empty() == success"
   // must not be misled.
-  std::vector<std::string> out;
+  std::vector<RequireSpecifier> out;
   std::string error;
   EXPECT_TRUE(scanRequires("require('a'); var x = 019;", false, &out, &error));
   EXPECT_TRUE(error.empty()) << error;
-  EXPECT_EQ(out, (std::vector<std::string>{"a"}));
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].text, "a");
 }
 
 TEST(RequireScannerTest, FindsOptionalCallRequire) {
@@ -309,7 +356,7 @@ TEST(RequireScannerTest, ReportsErrorOnExcessiveNesting) {
     src += "+y";
   src += ";";
 
-  std::vector<std::string> out;
+  std::vector<RequireSpecifier> out;
   std::string error;
   EXPECT_FALSE(scanRequires(src, false, &out, &error));
   EXPECT_FALSE(error.empty());

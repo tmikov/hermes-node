@@ -52,7 +52,7 @@ namespace {
 class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
  public:
   RequireVisitor(
-      std::vector<std::string> *out,
+      std::vector<RequireSpecifier> *out,
       std::vector<RequireGap> *gaps,
       SourceErrorManager *sm,
       sema::SemContext *semCtx,
@@ -262,8 +262,50 @@ class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
       return;
     }
 
-    if (std::find(out_->begin(), out_->end(), value) == out_->end())
-      out_->push_back(std::move(value));
+    // First occurrence wins: a specifier written more than once keeps the
+    // position of the first, matching the header's documented dedup rule.
+    // Comparing .text (not the whole struct) is what makes a later
+    // occurrence of an already-seen specifier a no-op rather than a second
+    // entry with a different position.
+    auto it = std::find_if(
+        out_->begin(), out_->end(), [&value](const RequireSpecifier &spec) {
+          return spec.text == value;
+        });
+    if (it != out_->end())
+      return;
+    RequireSpecifier spec;
+    spec.text = std::move(value);
+    // Unlike record() below, a specifier is never dropped when its position
+    // cannot be resolved: dropping it would silently remove a real edge
+    // from the module graph, while a zero position only degrades a
+    // diagnostic. record() can afford to drop a gap because a gap is
+    // nothing but a diagnostic -- there is no edge riding along with it.
+    if (!sourceCoords(node, &spec.line, &spec.column)) {
+      spec.line = 0;
+      spec.column = 0;
+    }
+    out_->push_back(std::move(spec));
+  }
+
+  /// Converts \p node's start position into 1-based line/column relative to
+  /// the original source, undoing the CommonJS wrapper the scan puts around
+  /// it -- the one conversion both a gap and a specifier need, so neither
+  /// copy can drift from the other. \return false (leaving *line/*column
+  /// untouched) if the position manager cannot find the location, which is
+  /// not expected to happen for a node this visitor produced but is checked
+  /// rather than asserted, the same caution findBufferLineAndLoc's own
+  /// caller in record() used before this was factored out. Not expected to
+  /// happen means exactly that: neither caller's failure branch has a
+  /// regression test, record()'s never did either, and this is that
+  /// property stated rather than left for a reader to notice on their own.
+  bool sourceCoords(ESTree::Node *node, uint32_t *line, uint32_t *column) {
+    SourceErrorManager::SourceCoords coords;
+    if (!sm_->findBufferLineAndLoc(node->getStartLoc(), coords))
+      return false;
+    *line = static_cast<uint32_t>(coords.line);
+    *column = static_cast<uint32_t>(coords.col);
+    unwrapCoords(*line, column);
+    return true;
   }
 
   /// Records \p node's position as a use of require this scan could not
@@ -276,18 +318,14 @@ class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
   void record(RequireGapKind kind, ESTree::Node *node) {
     if (gaps_ == nullptr)
       return;
-    SourceErrorManager::SourceCoords coords;
-    if (!sm_->findBufferLineAndLoc(node->getStartLoc(), coords))
-      return;
     RequireGap gap;
     gap.kind = kind;
-    gap.line = static_cast<uint32_t>(coords.line);
-    gap.column = static_cast<uint32_t>(coords.col);
-    unwrapCoords(gap.line, &gap.column);
+    if (!sourceCoords(node, &gap.line, &gap.column))
+      return;
     gaps_->push_back(gap);
   }
 
-  std::vector<std::string> *out_;
+  std::vector<RequireSpecifier> *out_;
   std::vector<RequireGap> *gaps_;
   SourceErrorManager *sm_;
   sema::SemContext *semCtx_;
@@ -362,7 +400,7 @@ ESTree::IdentifierNode *findParam(
 bool scanRequires(
     std::string_view source,
     bool enableTS,
-    std::vector<std::string> *out,
+    std::vector<RequireSpecifier> *out,
     std::string *error,
     std::vector<RequireGap> *gaps) {
   error->clear();

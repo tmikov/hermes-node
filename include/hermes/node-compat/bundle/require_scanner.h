@@ -42,11 +42,26 @@ struct RequireGap {
   uint32_t column = 0;
 };
 
+/// One literal `require()`/`require.resolve()` specifier, with where it was
+/// written. A gap gets a position because the position is the only thing
+/// that can point at it (see RequireGap); a specifier that turns out not to
+/// resolve at build time needs the same pointer, for the same reason, so it
+/// carries one too.
+struct RequireSpecifier {
+  std::string text;
+  /// 1-based, and relative to the original source rather than to the
+  /// CommonJS wrapper the scan puts around it -- the same convention
+  /// RequireGap uses.
+  uint32_t line = 0;
+  uint32_t column = 0;
+};
+
 /// Wraps \p source in the CommonJS module wrapper (see cjs_wrapper.h),
 /// parses and semantically resolves it with the Hermes front end, and
 /// appends every literal `require()` and `require.resolve()` argument to
-/// \p out, in source order, with duplicates removed (first occurrence
-/// wins).
+/// \p out, in source order, with duplicates removed (first occurrence wins:
+/// a specifier written more than once is appended once, carrying the
+/// position of its first occurrence).
 ///
 /// A call counts when its callee is an identifier **bound to the wrapper's
 /// `require` parameter** -- that is, to the real module require -- or is
@@ -84,7 +99,7 @@ struct RequireGap {
 bool scanRequires(
     std::string_view source,
     bool enableTS,
-    std::vector<std::string> *out,
+    std::vector<RequireSpecifier> *out,
     std::string *error,
     std::vector<RequireGap> *gaps = nullptr);
 
