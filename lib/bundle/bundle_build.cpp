@@ -13,9 +13,12 @@
 #include <hermes/node-compat/bundle/bundle_resolve.h>
 #include <hermes/node-compat/bundle/bundle_writer.h>
 #include <hermes/node-compat/bundle/cjs_wrapper.h>
+#include <hermes/node-compat/bundle/native_digest.h>
 #include <hermes/node-compat/bundle/require_scanner.h>
 
 #include <napi/hermes_napi_compile.h>
+
+#include <zlib.h>
 
 #include <algorithm>
 #include <cassert>
@@ -177,6 +180,9 @@ enum class Packageability {
   kJavaScript,
   /// Store the raw text as a kJSON module.
   kJSON,
+  /// Record as a kNative module -- an addon whose bytes are not in the
+  /// container at all, but are copied to a flat sidecar file beside it.
+  kNative,
   /// Leave out of the container with a warning; the runtime reads it from
   /// disk instead.
   kSkip,
@@ -212,15 +218,24 @@ enum class Packageability {
 /// or not a bundle is involved -- so the reason to skip it is simpler than
 /// that: its `import`/`export` syntax is a syntax error inside the CommonJS
 /// wrapper below, so packaging one would fail the whole build over a module
-/// that could never have run. Every other extension (`.node` addons, assets,
-/// config formats a loader hook might understand) is skipped for the reason
-/// the spec gives: it is not JavaScript or JSON.
+/// that could never have run.
+///
+/// `.node` is packaged, but not the way the other two are: its bytes stay
+/// out of the container and are copied to a flat sidecar file beside it,
+/// because dlopen() takes a path and there is no portable way to load a
+/// shared object from memory. What the container records is the identity,
+/// the sidecar's name, and a digest -- see the native table in
+/// bundle_format.h. Every other extension (assets, config formats a loader
+/// hook might understand) is skipped for the reason the spec gives: it is
+/// not JavaScript or JSON.
 Packageability classifyFile(const std::string &path) {
   std::string ext = fs::path(path).extension().string();
   if (ext.empty() || ext == ".js" || ext == ".cjs" || ext == ".ts")
     return Packageability::kJavaScript;
   if (ext == ".json")
     return Packageability::kJSON;
+  if (ext == ".node")
+    return Packageability::kNative;
   return Packageability::kSkip;
 }
 
@@ -251,6 +266,15 @@ struct BuildSummary {
   uint32_t modules = 0;
   uint32_t jsModules = 0;
   uint32_t jsonModules = 0;
+  /// Native addons: modules of the container whose bytes are not in it.
+  /// Counted in `modules` like any other, so the three kinds still sum to
+  /// the total, but reported on a line of their own as well (see
+  /// nativeBytes).
+  uint32_t nativeModules = 0;
+  /// The addons' total size, summed from the digests. Deliberately kept
+  /// out of every other byte figure here: those describe the container,
+  /// and these bytes are not in it -- they sit beside it as sidecar files.
+  uint64_t nativeBytes = 0;
   uint32_t edges = 0;
   /// Distinct specifier strings across every edge. Lower than `edges`
   /// exactly when two files require the same thing by the same name, which
@@ -277,6 +301,47 @@ struct BuildSummary {
   size_t largestBytes = 0;
   /// The whole file, which exceeds the sections above by the header.
   size_t totalBytes = 0;
+};
+
+/// Data collected for one visited file during the graph walk (pass 1),
+/// before module indices exist.
+struct FileInfo {
+  ModuleKind kind;
+  /// For kJSON, the raw file text -- also the final payload. For
+  /// kJavaScript, the raw (unwrapped) source text until the compile step
+  /// (buildBundle's step 4) overwrites it with serialized bytecode. Always
+  /// empty for kNative: an addon's bytes never enter the container, and
+  /// reading a shared object that can be tens of megabytes into memory to
+  /// then not use it would be the one cost this design exists to avoid.
+  std::string payload;
+  /// (specifier as written, resolved absolute target path) for every
+  /// literal require() this file contains that resolved to a packageable
+  /// file (see classifyFile). Builtins and skipped-with-a-warning
+  /// specifiers are not recorded here.
+  std::vector<std::pair<std::string, std::string>> edges;
+  /// Passed straight to BundleWriter::addModule(). Defaults to
+  /// requirable -- every module discovered by the walk below is something
+  /// require() can load. The one exception is a package.json packaged
+  /// afterward purely for the resolver (see the loop after the walk in
+  /// buildBundle), which sets this to 0 so require() cannot see it even
+  /// though its bytes are in the container.
+  uint32_t flags = kRequirable;
+
+  /// kNative only: the flat file name this addon is copied to, beside the
+  /// bundle, and what the container records for it. Assigned by
+  /// buildBundle's step 3b, which needs the root the identity is relative
+  /// to and so cannot run during the walk.
+  std::string sidecarName;
+  /// kNative only: the identity that already owned `sidecarName`'s plain
+  /// basename, when this addon had to take a disambiguated one. Empty
+  /// otherwise -- and empty for every other kind. Kept so --verbose can
+  /// say why a hash appeared in a file name instead of leaving it to be
+  /// noticed.
+  std::string sidecarCollidedWith;
+  /// kNative only: length and SHA-256 of the addon as it was at build
+  /// time, recorded in the container's native table for --dump and
+  /// --verify-natives. Nothing on the run path reads them.
+  NativeDigest digest;
 };
 
 /// Verbose build reporting. Every method is a no-op when disabled, so call
@@ -420,15 +485,62 @@ class BuildReporter {
         milliseconds);
   }
 
-  void summary(const BuildSummary &s) {
+  /// One native addon placed beside the container. \p info is the walk's
+  /// record for it, carrying the sidecar name and the digest; \p src and
+  /// \p dst are absolute. \p inPlace says the two name the same file --
+  /// the addon already sits at the bundle root under the name it would be
+  /// copied to -- so nothing was written.
+  void nativeCopied(
+      const std::string &identity,
+      const FileInfo &info,
+      const std::string &src,
+      const std::string &dst,
+      bool inPlace) {
     if (!enabled_)
       return;
     std::fprintf(
         stderr,
-        "modules:    %u  (%u js, %u json)\n",
+        "native  %s -> %s%s\n",
+        identity.c_str(),
+        info.sidecarName.c_str(),
+        inPlace ? " (already in place)" : "");
+    // Said outright rather than left as a hash in a file name for someone
+    // to notice and wonder about.
+    if (!info.sidecarCollidedWith.empty()) {
+      std::fprintf(
+          stderr,
+          "  name collides with %s from %s; using %s\n",
+          fs::path(src).filename().string().c_str(),
+          info.sidecarCollidedWith.c_str(),
+          info.sidecarName.c_str());
+    }
+    if (inPlace) {
+      std::fprintf(stderr, "  at   %s\n", src.c_str());
+    } else {
+      std::fprintf(stderr, "  from %s\n", src.c_str());
+      std::fprintf(stderr, "  to   %s\n", dst.c_str());
+    }
+    // The whole hash, not a prefix: --verbose is where a number is printed
+    // to be compared against another one, and half of a hash cannot be.
+    std::fprintf(
+        stderr,
+        "  %u bytes sha256:%s\n",
+        info.digest.byteLength,
+        nativeDigestToHex(info.digest.raw).c_str());
+  }
+
+  void summary(const BuildSummary &s) {
+    if (!enabled_)
+      return;
+    // The native count is on this line even though its bytes are not: the
+    // three kinds have to sum to the total, or the breakdown is a puzzle.
+    std::fprintf(
+        stderr,
+        "modules:    %u  (%u js, %u json, %u native)\n",
         s.modules,
         s.jsModules,
-        s.jsonModules);
+        s.jsonModules,
+        s.nativeModules);
     std::fprintf(
         stderr,
         "edges:      %u  (%u distinct specifiers)\n",
@@ -436,6 +548,18 @@ class BuildReporter {
         s.distinctSpecifiers);
     if (s.preloads != 0)
       std::fprintf(stderr, "preloads:   %u\n", s.preloads);
+    // Separate from every other byte figure below, and labelled with where
+    // those bytes actually are: a reader who added this into `total:` would
+    // be describing a file that does not exist. Only when there are any, in
+    // the register `preloads:` above already uses.
+    if (s.nativeModules != 0) {
+      std::fprintf(
+          stderr,
+          "natives:    %u %s, %llu bytes alongside (not in the container)\n",
+          s.nativeModules,
+          s.nativeModules == 1 ? "file" : "files",
+          static_cast<unsigned long long>(s.nativeBytes));
+    }
     std::fprintf(
         stderr,
         "strings:    %zu %s, %zu bytes\n",
@@ -456,28 +580,6 @@ class BuildReporter {
  private:
   bool enabled_;
   double totalCompileMs_ = 0;
-};
-
-/// Data collected for one visited file during the graph walk (pass 1),
-/// before module indices exist.
-struct FileInfo {
-  ModuleKind kind;
-  /// For kJSON, the raw file text -- also the final payload. For
-  /// kJavaScript, the raw (unwrapped) source text until the compile step
-  /// (buildBundle's step 4) overwrites it with serialized bytecode.
-  std::string payload;
-  /// (specifier as written, resolved absolute target path) for every
-  /// literal require() this file contains that resolved to a packageable
-  /// file (see classifyFile). Builtins and skipped-with-a-warning
-  /// specifiers are not recorded here.
-  std::vector<std::pair<std::string, std::string>> edges;
-  /// Passed straight to BundleWriter::addModule(). Defaults to
-  /// requirable -- every module discovered by the walk below is something
-  /// require() can load. The one exception is a package.json packaged
-  /// afterward purely for the resolver (see the loop after the walk in
-  /// buildBundle), which sets this to 0 so require() cannot see it even
-  /// though its bytes are in the container.
-  uint32_t flags = kRequirable;
 };
 
 } // namespace
@@ -578,6 +680,9 @@ int buildBundle(
           stderr, "error: --include=%s cannot be resolved\n", spec.c_str());
       return 1;
     }
+    // A .node is Packageability::kNative, not kSkip, so it passes here:
+    // --include=<addon>.node is exactly how an addon reached by a computed
+    // path (bindings, node-gyp-build) gets into the container.
     if (classifyFile(*resolved) == Packageability::kSkip) {
       std::fprintf(
           stderr,
@@ -639,6 +744,27 @@ int buildBundle(
     // to `paths` itself (below), and a reallocation would invalidate a
     // reference into it out from under this iteration.
     std::string path = paths[i];
+
+    // A native addon is a leaf of the graph: nothing scans it, nothing
+    // compiles it, and it contributes no edges. It is also the one visited
+    // file that is never read into memory here -- a shared object can be
+    // tens of megabytes and none of those bytes belong in the container.
+    // The digest is streamed instead, which is both the record the native
+    // table wants and the read that proves the file is there and readable,
+    // at the point in the build where saying so is still cheap.
+    if (classifyFile(path) == Packageability::kNative) {
+      FileInfo info;
+      info.kind = ModuleKind::kNative;
+      std::string digestError;
+      std::optional<NativeDigest> digest = nativeFileDigest(path, &digestError);
+      if (!digest) {
+        std::fprintf(stderr, "error: %s\n", digestError.c_str());
+        return 1;
+      }
+      info.digest = std::move(*digest);
+      files.emplace(path, std::move(info));
+      continue;
+    }
 
     std::string source;
     if (!readFile(path, &source)) {
@@ -745,8 +871,8 @@ int buildBundle(
         // tree being deleted, like a builtin. Only an *installed* copy is
         // bundleable, which is why this is not in the skip set the builtin
         // check above uses: when one is installed it is resolved and
-        // packaged like any other dependency, and the bundle's version wins,
-        // which is the Task 6 anti-shadowing decision. This branch is the
+        // packaged like any other dependency, and the bundle's version
+        // wins, which is the anti-shadowing rule. This branch is the
         // other direction -- nothing on disk to package -- where failing the
         // build would refuse to bundle a program that runs fine.
         if (isVendoredSpecifier(specifier)) {
@@ -935,6 +1061,179 @@ int buildBundle(
   std::printf("bundle root: %s\n", root.c_str());
   fs::path rootPath(root);
 
+  // Step 3b: give every native addon a flat sidecar name and work out where
+  // its copy goes. Flat, rather than mirroring the identity's own subtree:
+  // the whole point of shipping a bundle is a small countable set of files,
+  // and "bundle plus tree" is not a better distribution unit than a tree
+  // (see history/plans/2026-08-21-bundle-natives-design.md). One
+  // consequence worth knowing: every native lands in one directory, so an
+  // addon whose RPATH is $ORIGIN-relative finds a sibling .so the user
+  // drops beside the bundle.
+  //
+  // Naming happens here, next to the root it needs; the copying happens at
+  // step 5b, once everything that can fail the build has run. Nothing in
+  // this block writes a file.
+  fs::path sidecarDir = fs::path(outPath).parent_path();
+  std::unordered_map<std::string, std::string> sidecarOwner; // name -> id
+  auto identityOf = [&rootPath](const std::string &path) {
+    return fs::path(path).lexically_relative(rootPath).generic_string();
+  };
+
+  // Pass 1: an addon that ALREADY is the file it would be copied to gets
+  // first claim on its plain basename. Discovery order must not decide
+  // this. Consider a project with proj/binding.node beside its entry and
+  // node_modules/foo/build/Release/binding.node underneath -- the most
+  // ordinary pair of addon paths there is. If foo's copy is discovered
+  // first and takes the plain name, its destination IS the other addon's
+  // source file, and the copy overwrites a file in the user's source tree
+  // with the wrong shared object. Giving the in-place candidate the name
+  // makes that pair cost zero writes instead of one destructive one.
+  for (const std::string &path : paths) {
+    FileInfo &info = files.at(path);
+    if (info.kind != ModuleKind::kNative)
+      continue;
+    std::string base = fs::path(path).filename().string();
+    // Guarded against a name already claimed because two identities can be
+    // the same file (a hard link, or a symlink into the tree): the second
+    // one falls through to pass 2 and takes a hashed name of its own.
+    if (sidecarOwner.count(base) == 0 &&
+        isSameFile(path, (sidecarDir / base).string())) {
+      info.sidecarName = base;
+      sidecarOwner.emplace(base, identityOf(path));
+    }
+  }
+
+  // Pass 2: everyone else, in discovery order.
+  for (const std::string &path : paths) {
+    FileInfo &info = files.at(path);
+    if (info.kind != ModuleKind::kNative || !info.sidecarName.empty())
+      continue;
+    std::string identity = identityOf(path);
+    std::string base = fs::path(path).filename().string();
+    std::string name = base;
+    auto owner = sidecarOwner.find(name);
+    if (owner != sidecarOwner.end()) {
+      // Two identities with the same basename -- two packages each shipping
+      // their own build/Release/binding.node is the ordinary shape of this.
+      // Disambiguate with a short hash of the identity, which is stable
+      // across builds. The map from identity to sidecar name is recorded in
+      // the container, so this rule can change later without invalidating a
+      // bundle that already exists.
+      info.sidecarCollidedWith = owner->second;
+      char suffix[16];
+      std::snprintf(
+          suffix,
+          sizeof(suffix),
+          "-%08x",
+          static_cast<unsigned>(crc32(
+              0L,
+              reinterpret_cast<const Bytef *>(identity.data()),
+              static_cast<uInt>(identity.size()))));
+      fs::path p(base);
+      name = p.stem().string() + suffix + p.extension().string();
+      // Two identities whose hashes collide, or an addon literally named
+      // like a disambiguated one. Both are absurd and neither is
+      // impossible, and the alternative to failing is writing one addon's
+      // bytes over another's and shipping the wrong file -- which nothing
+      // downstream would catch, since the container names only the sidecar.
+      auto second = sidecarOwner.find(name);
+      if (second != sidecarOwner.end()) {
+        std::fprintf(
+            stderr,
+            "error: native addons %s and %s both want the sidecar file %s\n",
+            second->second.c_str(),
+            identity.c_str(),
+            name.c_str());
+        return 1;
+      }
+    }
+    sidecarOwner.emplace(name, identity);
+    info.sidecarName = name;
+  }
+
+  // Pass 3: destinations, in discovery order (which is the order the
+  // `native:` lines and the native table come out in).
+  struct NativePlacement {
+    /// Index into `paths`, so the addon's source path, FileInfo and module
+    /// index are all one lookup away.
+    size_t index;
+    /// Absolute or as-given, matching outPath's own spelling.
+    std::string dst;
+    /// The addon already IS `dst`: nothing to copy. A flat project whose
+    /// entry and addon sit in one directory, built into that directory, is
+    /// the common case and not a mistake. Copying would rewrite one of the
+    /// build's own inputs with a fresh inode, mtime and possibly different
+    /// permission bits, for no gain.
+    bool inPlace;
+  };
+  std::vector<NativePlacement> nativeCopies;
+  for (size_t i = 0; i < paths.size(); ++i) {
+    const FileInfo &info = files.at(paths[i]);
+    if (info.kind != ModuleKind::kNative)
+      continue;
+    std::string dst = (sidecarDir / info.sidecarName).string();
+
+    // Refuse to write over the container itself: an addon whose sidecar
+    // name collides with the bundle's own would otherwise have the build
+    // destroy its own output. Two tests because neither alone is enough --
+    // the (st_dev, st_ino) one --extract-module --out uses catches a
+    // rebuild, where the container from last time is still there, and the
+    // spelling comparison catches the first build, where neither file
+    // exists yet and stat() has nothing to say. dst is always
+    // sidecarDir / name, so the two spellings are equal exactly when the
+    // sidecar name is the bundle's own basename.
+    if (isSameFile(dst, outPath) ||
+        fs::path(dst).lexically_normal() ==
+            fs::path(outPath).lexically_normal()) {
+      std::fprintf(
+          stderr,
+          "error: native addon %s would be written over the bundle %s\n",
+          paths[i].c_str(),
+          outPath.c_str());
+      return 1;
+    }
+    // isSameFile() stat()s, so it follows symlinks -- correct for the
+    // name-claim and overwrite checks above, which ask "would this write
+    // land somewhere it must not?", and wrong here, where the question is
+    // "is there nothing to do?". A symlink at the sidecar path pointing at
+    // the addon's source answers same-file, the copy is skipped, and the
+    // "sidecar" stays a link into the source tree: shipping the output
+    // directory alone then gives a bundle that throws, and --verify-natives
+    // (which reads through the link) calls it OK. So a symlink is never in
+    // place; it gets overwritten by a real copy.
+    std::error_code linkEc;
+    const bool dstIsSymlink =
+        fs::is_symlink(fs::symlink_status(fs::path(dst), linkEc));
+    const bool inPlace = !dstIsSymlink && isSameFile(paths[i], dst);
+    nativeCopies.push_back({i, dst, inPlace});
+  }
+
+  // A structural check behind pass 1's policy: no addon's destination may
+  // be another addon's source. Pass 1 is what makes this hold, and if it is
+  // ever weakened -- or defeated by a shape nobody thought of -- the
+  // failure is silent and destructive: an input file overwritten, and a
+  // container whose native table describes bytes that are no longer in the
+  // sidecar (the digest was taken during the walk, and nothing on the run
+  // path reads it). Quadratic in the number of natives, which is one or
+  // two.
+  for (const NativePlacement &copy : nativeCopies) {
+    if (copy.inPlace)
+      continue;
+    for (const NativePlacement &other : nativeCopies) {
+      if (other.index == copy.index ||
+          !isSameFile(copy.dst, paths[other.index]))
+        continue;
+      std::fprintf(
+          stderr,
+          "error: the sidecar for native addon %s (%s) is the source file of "
+          "native addon %s\n",
+          identityOf(paths[copy.index]).c_str(),
+          copy.dst.c_str(),
+          identityOf(paths[other.index]).c_str());
+      return 1;
+    }
+  }
+
   // Step 4: compile every JavaScript file to bytecode, replacing its raw
   // source payload in place. optimize is unconditionally true: this is an
   // ahead-of-time artifact with no interactive fast path to protect.
@@ -1047,6 +1346,8 @@ int buildBundle(
         fs::path(path).lexically_relative(rootPath).generic_string();
     if (info.kind == ModuleKind::kJSON)
       ++summary.jsonModules;
+    else if (info.kind == ModuleKind::kNative)
+      ++summary.nativeModules;
     else
       ++summary.jsModules;
     if (info.payload.size() > summary.largestBytes) {
@@ -1066,6 +1367,21 @@ int buildBundle(
     reporter.preloaded(idx, p);
   }
   summary.preloads = static_cast<uint32_t>(preloadPaths.size());
+  // The native table, keyed by the same discovery-order module indices the
+  // preload table above uses -- which is why it is filled in here, once
+  // every module has one. A kNative module without a row is a container the
+  // reader refuses to open (see BundleReader::open), so this loop and the
+  // module loop above must walk the same set.
+  for (const NativePlacement &copy : nativeCopies) {
+    const std::string &path = paths[copy.index];
+    const FileInfo &info = files.at(path);
+    writer.addNative(
+        moduleIndex.at(path),
+        info.sidecarName,
+        info.digest.byteLength,
+        info.digest.raw);
+    summary.nativeBytes += info.digest.byteLength;
+  }
   uint32_t edgeCount = 0;
   for (const std::string &path : paths) {
     const FileInfo &info = files.at(path);
@@ -1083,6 +1399,69 @@ int buildBundle(
   summary.edges = edgeCount;
   summary.distinctSpecifiers = static_cast<uint32_t>(distinctSpecifiers.size());
   summary.bytecodeBytes = totalBytecodeBytes;
+
+  // Step 5b: copy every native addon next to the bundle. Last, deliberately:
+  // the container is written temp-then-rename so that a failed build cannot
+  // damage a good artifact, and a sidecar is half of that same artifact.
+  // Copying eagerly -- before the compile, which is the step most likely to
+  // fail -- means a failed rebuild in a deployment directory leaves the
+  // PREVIOUS build's container beside THIS build's sidecars, a mismatch
+  // nothing on the run path detects (the digests are --verify-natives only).
+  // The cost is compile time spent on a build that then fails to place its
+  // sidecars; the alternative cost is mutating a directory the user may
+  // still be running from. Everything above this point that can fail has
+  // already run -- serialize() cannot fail (see the assert below) -- so the
+  // two writes are effectively adjacent.
+  for (const NativePlacement &copy : nativeCopies) {
+    const std::string &src = paths[copy.index];
+    const FileInfo &info = files.at(src);
+    std::string identity = identityOf(src);
+
+    if (!copy.inPlace) {
+      std::string contents;
+      if (!readFile(src, &contents)) {
+        std::fprintf(stderr, "error: cannot read %s\n", src.c_str());
+        return 1;
+      }
+      // Temp file then rename, like the container's own write, so a failure
+      // never leaves a half-written shared object beside a good bundle --
+      // which dlopen() would reject with an error about the addon rather
+      // than about the build that truncated it.
+      if (!writeFileAtomically(
+              copy.dst, contents.data(), contents.size(), std::cerr))
+        return 1;
+      // Preserve the source's mode bits so a 0644 copy of a 0755 addon does
+      // not surprise anyone reading `ls -l`. dlopen() itself needs only
+      // read permission, so a failure on either call is not worth failing
+      // the build over -- but the stat has to be checked before its result
+      // is used, because perms::unknown handed to permissions() means 0777
+      // rather than "leave it alone".
+      std::error_code statEc;
+      fs::file_status srcStatus = fs::status(src, statEc);
+      if (!statEc) {
+        std::error_code modeEc;
+        fs::permissions(copy.dst, srcStatus.permissions(), modeEc);
+      }
+    }
+
+    // Stdout, under `bundle root:`: this is part of the artifact's
+    // description, not a diagnostic. Printed after the copy, so the line
+    // means the file is there.
+    std::printf(
+        "native: %s (from %s)\n", info.sidecarName.c_str(), identity.c_str());
+    reporter.nativeCopied(identity, info, src, copy.dst, copy.inPlace);
+  }
+  if (!nativeCopies.empty()) {
+    // Packaging a native changes the distribution contract from "one file"
+    // to "one file plus these", and a build that changed it silently would
+    // be the same class of failure this subsystem exists to remove -- found
+    // on the deployment machine instead of at build time.
+    std::printf(
+        "note: this bundle requires %zu native addon%s alongside it; ship "
+        "them together.\n",
+        nativeCopies.size(),
+        nativeCopies.size() == 1 ? "" : "s");
+  }
 
   // Step 6: serialize and write via a temp file + rename, so a build that
   // fails partway through never leaves a partial bundle at outPath.

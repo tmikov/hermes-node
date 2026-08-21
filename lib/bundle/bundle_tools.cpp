@@ -9,11 +9,11 @@
 
 #include <hermes/node-compat/bundle/atomic_write.h>
 #include <hermes/node-compat/bundle/bundle_reader.h>
-
-#include <sys/stat.h>
+#include <hermes/node-compat/bundle/native_digest.h>
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -23,6 +23,8 @@
 
 namespace hermes {
 namespace node_compat {
+
+namespace fs = std::filesystem;
 
 namespace {
 
@@ -35,8 +37,8 @@ std::string hex32(uint32_t value) {
 }
 
 /// The reader validated every module's kind field at open time, so no
-/// third value can reach here today. It still prints the number rather
-/// than falling back to one of the two names: a tool whose whole job is
+/// fourth value can reach here today. It still prints the number rather
+/// than falling back to one of the three names: a tool whose whole job is
 /// telling the truth about a file must not report a kind it does not
 /// recognize as JavaScript.
 std::string kindName(ModuleKind kind) {
@@ -45,6 +47,8 @@ std::string kindName(ModuleKind kind) {
       return "js";
     case ModuleKind::kJSON:
       return "json";
+    case ModuleKind::kNative:
+      return "native";
   }
   return "?" + std::to_string(static_cast<uint32_t>(kind));
 }
@@ -140,24 +144,46 @@ void reportContainerError(
   err << "error: " << path << ": " << reason << "\n";
 }
 
-/// True if \p a and \p b both exist and name the same file -- same device,
-/// same inode.
+/// The mapping plus the validated reader over it, held together because
+/// every tool verb that reads a container needs both for as long as it
+/// runs: dumpBundle() reads file->size() for its own total, and
+/// extractModule() and verifyNatives() read only through \c reader, but all
+/// three need the mapping to outlive it.
+struct OpenedBundle {
+  MappedFile file;
+  BundleReader reader;
+};
+
+/// Maps \p bundlePath and validates it through
+/// BundleReader::openForInspection -- not open(): a container this binary
+/// would refuse to run is still one worth describing, extracting from, or
+/// checking the sidecars of. One copy of the open/map/validate sequence for
+/// dumpBundle(), extractModule() and verifyNatives(), all three of which
+/// used to paste it (the first two did; this factors it out before a third
+/// copy could exist).
 ///
-/// Compares identity rather than spelling because the spellings that reach
-/// the same file are unbounded: "app.hbb" and "./app.hbb", a relative and an
-/// absolute path, a path through a symlinked directory, a symlink to the
-/// container, and a second hard link to it. stat() follows symlinks, so all
-/// of those collapse to one comparison here.
-///
-/// A path that cannot be stat()'d (most often because it does not exist,
-/// which is the normal case for an output file) is not the same file as
-/// anything, so the answer is false and the caller carries on.
-bool isSameFile(const std::string &a, const std::string &b) {
-  struct stat sa {};
-  struct stat sb {};
-  if (::stat(a.c_str(), &sa) != 0 || ::stat(b.c_str(), &sb) != 0)
-    return false;
-  return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+/// Reports the reason on \p err, in reportContainerError()'s shape, and
+/// returns std::nullopt on any failure. Deliberately not release()'d: none
+/// of the three callers' mappings outlive the call that opened them, unlike
+/// the run path's, which stays mapped for the life of the process.
+std::optional<OpenedBundle> openBundleForTool(
+    const std::string &bundlePath,
+    std::ostream &err) {
+  std::string error;
+  std::optional<MappedFile> file = MappedFile::open(bundlePath, &error);
+  if (!file) {
+    err << "error: " << error << "\n";
+    return std::nullopt;
+  }
+
+  std::optional<BundleReader> reader =
+      BundleReader::openForInspection(file->data(), file->size(), &error);
+  if (!reader) {
+    reportContainerError(err, bundlePath, error);
+    return std::nullopt;
+  }
+
+  return OpenedBundle{std::move(*file), std::move(*reader)};
 }
 
 } // namespace
@@ -168,21 +194,13 @@ int dumpBundle(
     bool verbose,
     std::ostream &out,
     std::ostream &err) {
-  std::string error;
-  std::optional<MappedFile> file = MappedFile::open(bundlePath, &error);
-  if (!file) {
-    err << "error: " << error << "\n";
-    return 1;
-  }
-
   // Inspection mode: structural validation is unchanged, but the generation
   // tag is reported below rather than enforced.
-  std::optional<BundleReader> reader =
-      BundleReader::openForInspection(file->data(), file->size(), &error);
-  if (!reader) {
-    reportContainerError(err, bundlePath, error);
+  std::optional<OpenedBundle> opened = openBundleForTool(bundlePath, err);
+  if (!opened)
     return 1;
-  }
+  MappedFile *file = &opened->file;
+  BundleReader *reader = &opened->reader;
 
   const uint32_t moduleCount = reader->moduleCount();
   const uint32_t edgeCount = reader->edgeCount();
@@ -290,20 +308,46 @@ int dumpBundle(
     }
   }
 
+  // Same rule as PRELOADS above, for the same reason: no natives is still
+  // the overwhelming majority of containers, and their dump must stay
+  // exactly what it was before this table existed.
+  const uint32_t nativeCount = reader->nativeCount();
+  if (nativeCount > 0) {
+    out << "\nNATIVES (" << nativeCount << ")\n";
+    for (uint32_t i = 0; i < nativeCount; ++i) {
+      BundleReader::NativeView native = reader->native(i);
+      // Full 64 hex characters under --verbose; otherwise the first 16 (8
+      // bytes), enough to tell two builds of the same addon apart at a
+      // glance without the row wrapping. verifyNatives() prints the full
+      // digest unconditionally instead -- there each row already stands
+      // alone as a verdict (OK/MISSING/MISMATCH) rather than one line in an
+      // inventory, so the extra width does not compete with anything.
+      std::string digestHex = nativeDigestToHex(native.digest);
+      if (!verbose)
+        digestHex.resize(16);
+      out << "  [" << native.moduleIndex << "] "
+          << reader->identity(native.moduleIndex) << "\n";
+      out << "      sidecar " << native.sidecar << "  " << native.byteLength
+          << " bytes  sha256:" << digestHex << "\n";
+    }
+  }
+
   const uint32_t strings = reader->stringsSize();
   const uint32_t modules = reader->moduleTableSize();
   const uint32_t edges = reader->edgeTableSize();
+  const uint32_t natives = reader->nativeTableSize();
   const uint32_t payload = reader->payloadSize();
   size_t sectionWidth = std::max(
       std::max(widthOf(strings), widthOf(modules)),
-      std::max(widthOf(edges), widthOf(payload)));
+      std::max(widthOf(edges), std::max(widthOf(natives), widthOf(payload))));
 
   out << "\nSECTIONS\n";
   out << "  strings  " << std::right << std::setw(sectionWidth) << strings
       << " B    modules  " << std::setw(sectionWidth) << modules << " B\n";
   out << "  edges    " << std::setw(sectionWidth) << edges << " B    payload  "
       << std::setw(sectionWidth) << payload << " B\n";
-  // The size of the file, which is larger than the four sections add up to:
+  out << "  natives  " << std::setw(sectionWidth) << natives << " B\n";
+  // The size of the file, which is larger than the five sections add up to:
   // the header, and the padding that puts each payload on its alignment
   // boundary, belong to neither.
   out << "total " << file->size() << " bytes\n";
@@ -330,24 +374,13 @@ int extractModule(
     return 1;
   }
 
-  std::string error;
-  std::optional<MappedFile> file = MappedFile::open(bundlePath, &error);
-  if (!file) {
-    err << "error: " << error << "\n";
-    return 1;
-  }
-
   // Inspection mode, exactly like dumpBundle: getting bytecode out of a
   // container the current binary refuses to run is a reason to have this
-  // feature, not a reason to withhold it. Deliberately not release()'d:
-  // unlike the run path, nothing here outlives this call, so the mapping
-  // is fine to unmap on the way out.
-  std::optional<BundleReader> reader =
-      BundleReader::openForInspection(file->data(), file->size(), &error);
-  if (!reader) {
-    reportContainerError(err, bundlePath, error);
+  // feature, not a reason to withhold it.
+  std::optional<OpenedBundle> opened = openBundleForTool(bundlePath, err);
+  if (!opened)
     return 1;
-  }
+  BundleReader *reader = &opened->reader;
 
   std::optional<uint32_t> found;
   for (uint32_t i = 0, n = reader->moduleCount(); i < n; ++i) {
@@ -368,6 +401,23 @@ int extractModule(
     return 1;
   }
 
+  // A native's bytes are never in the container -- they ship as a flat
+  // sidecar file beside the bundle, because dlopen() takes a path and there
+  // is no portable way to load a shared object from memory (see
+  // openBundle() in bundle_run.cpp). Extracting one would write an empty
+  // file: a tool whose whole job is describing a container must not lie
+  // about a file it exists to describe by reporting success on nothing.
+  // Named by nativeFor() rather than by re-deriving it, and checked before
+  // any write, exactly like the same-file guard above.
+  if (reader->kind(*found) == ModuleKind::kNative) {
+    std::optional<BundleReader::NativeView> native = reader->nativeFor(*found);
+    err << "error: '" << identity
+        << "' is a native addon; its bytes are not in the container.\n"
+        << "It ships alongside the bundle as "
+        << (native ? native->sidecar : std::string_view("<unknown>")) << ".\n";
+    return 1;
+  }
+
   // Verbatim: no header, no transformation. That is what makes a
   // JavaScript extraction directly loadable and a JSON extraction
   // byte-identical to its source.
@@ -375,6 +425,113 @@ int extractModule(
   if (!writeFileAtomically(outPath, payload.data(), payload.size(), err))
     return 1;
 
+  return 0;
+}
+
+int verifyNatives(
+    const std::string &bundlePath,
+    bool verbose,
+    std::ostream &out,
+    std::ostream &err) {
+  // Inspection mode, exactly like dumpBundle and extractModule: a container
+  // this binary refuses to run is still one whose sidecars are worth
+  // checking.
+  std::optional<OpenedBundle> opened = openBundleForTool(bundlePath, err);
+  if (!opened)
+    return 1;
+  BundleReader *reader = &opened->reader;
+
+  // The same rule the run-time loader uses to turn a recorded sidecar name
+  // into a path it dlopen()s (openBundle() in bundle_run.cpp): sidecars
+  // live flat, beside the container, in its own directory. realpath'd
+  // first, exactly as openBundle() does, so a bundle reached through a
+  // symlinked directory is checked in the same place the run would look --
+  // otherwise this verb could report OK (or MISSING) about a directory the
+  // run never consults, which is a worse failure than not having the verb
+  // at all. If this ever drifts from openBundle()'s sequence, the two
+  // stop agreeing on where a sidecar lives.
+  std::error_code canonicalEc;
+  fs::path canonicalBundle = fs::canonical(fs::path(bundlePath), canonicalEc);
+  const fs::path sidecarDir = canonicalEc
+      ? fs::absolute(fs::path(bundlePath)).parent_path()
+      : canonicalBundle.parent_path();
+
+  const uint32_t nativeCount = reader->nativeCount();
+  if (nativeCount == 0) {
+    // Said out loud rather than exiting 0 in silence: in a CI log, no output
+    // at all is indistinguishable from the verb never having run.
+    out << "no native addons recorded\n";
+    return 0;
+  }
+  uint32_t failed = 0;
+  for (uint32_t i = 0; i < nativeCount; ++i) {
+    BundleReader::NativeView native = reader->native(i);
+    const std::string sidecar(native.sidecar);
+    const std::string identity(reader->identity(native.moduleIndex));
+    const std::string sidecarPath = (sidecarDir / sidecar).string();
+
+    // Streamed, not read whole: an addon can be tens of megabytes and
+    // nothing here needs the bytes themselves, only their hash.
+    std::string digestError;
+    std::optional<NativeDigest> digest =
+        nativeFileDigest(sidecarPath, &digestError);
+
+    // nativeFileDigest() has three failure modes, not one: the file is not
+    // there, the file is there but unreadable (a directory at the path, a
+    // permission bit, an I/O error), and the file is absurdly large. Only
+    // the first is MISSING. The other two get ERROR and carry the reason on
+    // the row itself, because the operator reading a CI log greps the status
+    // word first and cannot re-run the build to get --verbose after the
+    // fact. exists() rather than parsing errno out of the message: it is one
+    // extra stat on a verb that already reads the whole file, and a race
+    // between the two is not a distinction an audit needs to make.
+    const char *status;
+    std::string rowSuffix;
+    if (!digest) {
+      std::error_code existsEc;
+      const bool present = fs::exists(fs::path(sidecarPath), existsEc);
+      status = present ? "ERROR" : "MISSING";
+      if (present)
+        rowSuffix = ": " + digestError;
+      ++failed;
+    } else if (
+        digest->byteLength != native.byteLength ||
+        digest->raw != native.digest) {
+      status = "MISMATCH";
+      ++failed;
+    } else {
+      status = "OK";
+    }
+
+    // Column format fixed at these widths (not sized to the widest value
+    // present, unlike dumpBundle's tables): a sidecar name is a flat
+    // basename by construction, so there is no deep node_modules path here
+    // to force a wider column, and a fixed layout is what makes the output
+    // diffable across runs against different bundles.
+    out << std::left << std::setw(8) << status << ' ' << std::left
+        << std::setw(24) << sidecar << " (" << identity << ")" << rowSuffix
+        << "\n";
+
+    // Under --verbose, every entry gets its expected and actual length and
+    // hash -- including OK ones: a verification whose passing case shows
+    // nothing is hard to trust.
+    if (verbose) {
+      out << "    expected " << native.byteLength
+          << " bytes sha256:" << nativeDigestToHex(native.digest) << "\n";
+      if (digest) {
+        out << "    actual   " << digest->byteLength
+            << " bytes sha256:" << nativeDigestToHex(digest->raw) << "\n";
+      } else {
+        out << "    actual   (" << digestError << ")\n";
+      }
+    }
+  }
+
+  if (failed > 0) {
+    err << "error: " << failed << " of " << nativeCount << " native addon"
+        << (nativeCount == 1 ? "" : "s") << " failed verification\n";
+    return 1;
+  }
   return 0;
 }
 

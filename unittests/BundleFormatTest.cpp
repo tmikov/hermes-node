@@ -8,6 +8,9 @@
 #include <hermes/node-compat/bundle/bundle_generation.h>
 #include <hermes/node-compat/bundle/bundle_reader.h>
 #include <hermes/node-compat/bundle/bundle_writer.h>
+#include <hermes/node-compat/bundle/native_digest.h>
+
+#include "TempTree.h"
 
 #include <gtest/gtest.h>
 
@@ -15,6 +18,7 @@
 #include <cstring>
 
 using namespace hermes::node_compat;
+using hermes::node_compat::test::TempTree;
 
 namespace {
 
@@ -54,7 +58,7 @@ TEST(BundleFormatTest, RoundTripsModuleFlags) {
   ASSERT_TRUE(r.has_value()) << error;
   EXPECT_TRUE(r->isRequirable(a));
   EXPECT_FALSE(r->isRequirable(b));
-  EXPECT_EQ(r->formatVersion(), 3u);
+  EXPECT_EQ(r->formatVersion(), 4u);
 }
 
 TEST(BundleFormatTest, EdgeLookupHitAndMiss) {
@@ -515,7 +519,7 @@ TEST(BundleFormatTest, RoundTripsPreloads) {
   auto r = BundleReader::open(
       bytes.data(), bytes.size(), bundleGenerationTag(), &error);
   ASSERT_TRUE(r.has_value()) << error;
-  EXPECT_EQ(r->formatVersion(), 3u);
+  EXPECT_EQ(r->formatVersion(), 4u);
   ASSERT_EQ(r->preloadCount(), 1u);
   EXPECT_EQ(r->preload(0), setup);
 }
@@ -569,6 +573,105 @@ TEST(BundleFormatTest, RejectsNonRequirablePreload) {
   EXPECT_NE(error.find("non-requirable"), std::string::npos) << error;
 }
 
+TEST(BundleFormatTest, NativeRecordRoundTrips) {
+  BundleWriter writer;
+  uint32_t entry = writer.addModule(
+      "cli.js", ModuleKind::kJavaScript, kRequirable, "bytecode");
+  uint32_t addon = writer.addModule(
+      "node_modules/a/build/Release/a.node",
+      ModuleKind::kNative,
+      kRequirable,
+      "");
+  writer.setEntry(entry);
+  // A 32-byte digest with a NUL and a high byte, so the string table is
+  // proven to carry raw bytes rather than a C string.
+  std::string digest(32, '\x00');
+  digest[0] = '\xff';
+  digest[31] = '\x7f';
+  writer.addNative(addon, "a.node", 4096, digest);
+
+  std::vector<uint8_t> bytes = writer.serialize(/*generationTag=*/7);
+  ASSERT_FALSE(bytes.empty());
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 7, &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+  EXPECT_EQ(reader->formatVersion(), 4u);
+  EXPECT_EQ(reader->kind(addon), ModuleKind::kNative);
+  EXPECT_EQ(reader->payload(addon).size(), 0u);
+
+  ASSERT_EQ(reader->nativeCount(), 1u);
+  BundleReader::NativeView view = reader->native(0);
+  EXPECT_EQ(view.moduleIndex, addon);
+  EXPECT_EQ(view.sidecar, "a.node");
+  EXPECT_EQ(view.byteLength, 4096u);
+  EXPECT_EQ(view.digest, digest);
+
+  auto found = reader->nativeFor(addon);
+  ASSERT_TRUE(found.has_value());
+  EXPECT_EQ(found->sidecar, "a.node");
+  EXPECT_FALSE(reader->nativeFor(entry).has_value());
+}
+
+TEST(BundleFormatTest, NativeTableIsSortedByModuleIndex) {
+  BundleWriter writer;
+  uint32_t entry = writer.addModule(
+      "cli.js", ModuleKind::kJavaScript, kRequirable, "bytecode");
+  uint32_t b = writer.addModule("b.node", ModuleKind::kNative, kRequirable, "");
+  uint32_t a = writer.addModule("a.node", ModuleKind::kNative, kRequirable, "");
+  writer.setEntry(entry);
+  // Added out of module-index order on purpose.
+  writer.addNative(b, "b.node", 1, std::string(32, 'b'));
+  writer.addNative(a, "a.node", 2, std::string(32, 'a'));
+
+  std::vector<uint8_t> bytes = writer.serialize(7);
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 7, &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+  ASSERT_EQ(reader->nativeCount(), 2u);
+  EXPECT_LT(reader->native(0).moduleIndex, reader->native(1).moduleIndex);
+  EXPECT_EQ(reader->nativeFor(a)->sidecar, "a.node");
+  EXPECT_EQ(reader->nativeFor(b)->sidecar, "b.node");
+}
+
+TEST(BundleFormatTest, NativeTableOutOfRangeModuleIndexIsRejected) {
+  BundleWriter writer;
+  uint32_t entry = writer.addModule(
+      "cli.js", ModuleKind::kJavaScript, kRequirable, "bytecode");
+  // A real kNative module, so the container is valid until it is corrupted
+  // below. Pointing the native record at `entry` instead would be rejected
+  // by the "names a module that is not native" check, and this test would
+  // pass without ever exercising the range check it is named for.
+  uint32_t addon =
+      writer.addModule("a.node", ModuleKind::kNative, kRequirable, "");
+  writer.setEntry(entry);
+  writer.addNative(addon, "a.node", 1, std::string(32, 'a'));
+  std::vector<uint8_t> bytes = writer.serialize(7);
+
+  // Corrupt the native record's moduleIndex to one past the last module.
+  auto *header = reinterpret_cast<BundleHeader *>(bytes.data());
+  auto *record = reinterpret_cast<BundleNativeRecord *>(
+      bytes.data() + header->nativeTableOffset);
+  record->moduleIndex = header->moduleCount;
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 7, &error);
+  EXPECT_FALSE(reader.has_value());
+  EXPECT_NE(error.find("native"), std::string::npos) << error;
+}
+
+TEST(BundleFormatTest, NoNativesCostsNothing) {
+  BundleWriter writer;
+  uint32_t entry = writer.addModule(
+      "cli.js", ModuleKind::kJavaScript, kRequirable, "bytecode");
+  writer.setEntry(entry);
+  std::vector<uint8_t> bytes = writer.serialize(7);
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 7, &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+  EXPECT_EQ(reader->nativeCount(), 0u);
+}
+
 TEST(BundleGenerationTest, IsStableWithinOneBuild) {
   EXPECT_EQ(bundleGenerationTag(), bundleGenerationTag());
 }
@@ -598,6 +701,40 @@ TEST(BundleGenerationTest, EachInputChangesTheTag) {
       << "bytecode version does not affect the tag";
   EXPECT_NE(base, bundleGenerationTagFor("1.2.3", "x86_64", 99, 'o'))
       << "optimize byte does not affect the tag";
+}
+
+TEST(BundleFormatTest, NativeFileDigestMatchesKnownVector) {
+  // SHA-256("abc"), the standard test vector.
+  const char kAbcHex[] =
+      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+  TempTree tree;
+  std::string path = tree.write("blob.bin", "abc");
+
+  std::string error;
+  auto digest = nativeFileDigest(path, &error);
+  ASSERT_TRUE(digest.has_value()) << error;
+  EXPECT_EQ(digest->byteLength, 3u);
+  EXPECT_EQ(digest->raw.size(), 32u);
+  EXPECT_EQ(nativeDigestToHex(digest->raw), kAbcHex);
+}
+
+TEST(BundleFormatTest, NativeFileDigestOfEmptyFile) {
+  const char kEmptyHex[] =
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  TempTree tree;
+  std::string path = tree.write("empty.bin", "");
+  std::string error;
+  auto digest = nativeFileDigest(path, &error);
+  ASSERT_TRUE(digest.has_value()) << error;
+  EXPECT_EQ(digest->byteLength, 0u);
+  EXPECT_EQ(nativeDigestToHex(digest->raw), kEmptyHex);
+}
+
+TEST(BundleFormatTest, NativeFileDigestReportsAMissingFile) {
+  std::string error;
+  auto digest = nativeFileDigest("/nonexistent/nope.node", &error);
+  EXPECT_FALSE(digest.has_value());
+  EXPECT_FALSE(error.empty());
 }
 
 } // namespace

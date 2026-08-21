@@ -41,6 +41,34 @@ bool writeFileAtomically(
     size_t size,
     std::ostream &err);
 
+/// True if \p a and \p b both exist and name the same file -- same device,
+/// same inode.
+///
+/// Compares identity rather than spelling because the spellings that reach
+/// the same file are unbounded: "app.hbb" and "./app.hbb", a relative and an
+/// absolute path, a path through a symlinked directory, a symlink to the
+/// container, and a second hard link to it. stat() follows symlinks, so all
+/// of those collapse to one comparison here.
+///
+/// A path that cannot be stat()'d (most often because it does not exist,
+/// which is the normal case for an output file) is not the same file as
+/// anything, so the answer is false and the caller carries on.
+///
+/// Lives beside writeFileAtomically because both of its callers are about
+/// to write a file and are asking whether the write would land somewhere it
+/// must not: the extractor refusing to write a module's payload over its
+/// own container (bundle_tools.cpp), and the producer refusing to copy a
+/// native addon over the bundle (bundle_build.cpp). Two copies of a
+/// refusal rule is how the two come to disagree.
+///
+/// A caller asking the opposite question -- "is there nothing to do?", as
+/// the producer does when an addon already IS its own sidecar -- needs a
+/// symlink check of its own before trusting a true answer here. A symlink
+/// at the destination pointing at the source is the same file by this
+/// predicate, but skipping the write there leaves a link into the source
+/// tree where a real file was meant to be.
+bool isSameFile(const std::string &a, const std::string &b);
+
 } // namespace node_compat
 } // namespace hermes
 

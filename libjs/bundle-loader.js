@@ -75,9 +75,23 @@
   var makeRequireFunction =
     globalThis.require('internal/modules/helpers').makeRequireFunction;
 
-  return function installBundleLoader(Module, bundle, path) {
+  return function installBundleLoader(Module, bundle, path, fs) {
     var root = bundle.root();
     var entryIdentity = bundle.entry();
+
+    // identity -> sidecar filename, for the container's native addons.
+    // Built once, here, rather than asked per require(): a native call on
+    // the hot path of every require would cost every module in the bundle
+    // to describe the one or two that are addons -- the same reasoning
+    // that took the HERMES_NODE_DEBUG_NATIVE read off that path.
+    //
+    // A null-prototype object so a module named 'constructor.node' (or
+    // anything else that collides with Object.prototype) cannot be
+    // mistaken for a native.
+    var nativeSidecars = Object.create(null);
+    var natives = bundle.natives();
+    for (var ni = 0; ni < natives.length; ni++)
+      nativeSidecars[natives[ni].identity] = natives[ni].sidecar;
 
     // Shut libjs/loader.js's disk fallback before anything from the
     // container runs. That loader is globalThis.require, which a bundled
@@ -118,15 +132,6 @@
     // record under the bare name.
     function embeddedRequest(request) {
       return request.slice(0, 5) === 'node:' ? request : 'node:' + request;
-    }
-
-    // A specifier that names a native addon. The producer skips .node files
-    // deliberately -- they are not JavaScript and there is nothing to
-    // compile -- so "add it with --include" would be advice that cannot
-    // work, and the message says so instead. See notInBundle().
-    function isAddonRequest(request) {
-      return request.length > 5 &&
-        request.slice(request.length - 5) === '.node';
     }
 
     // The --include value that would have packaged this request, ready to
@@ -182,39 +187,55 @@
     }
 
     // The error a closed world reports where the old loader read the disk.
+    // A native addon takes this same path as any other missing specifier:
+    // the producer packages a literal require() of a .node file, so a
+    // miss here means only that nothing packaged it, and
+    // --include is exactly as actionable an answer for it as it is for a
+    // missing .js -- see includeSuggestion() below. (An addon the container
+    // DOES record but whose sidecar file is absent at run time is a
+    // different situation, handled by missingSidecar(), not here.)
     //
-    // `code` is MODULE_NOT_FOUND in every case, including the addon one:
-    // programs branch on it -- an optional-dependency probe is a require()
-    // in a try/catch that tests e.code -- and in a closed world the probe's
-    // answer is legitimately "no". Only the human-readable text differs, and
-    // it names the importer, because a bundled module's stack trace points
-    // at bytecode with no source on disk behind it.
+    // `code` is MODULE_NOT_FOUND in every case: programs branch on it -- an
+    // optional-dependency probe is a require() in a try/catch that tests
+    // e.code -- and in a closed world the probe's answer is legitimately
+    // "no". Only the human-readable text differs, and it names the
+    // importer, because a bundled module's stack trace points at bytecode
+    // with no source on disk behind it.
     function notInBundle(request, importer, importerIsIdentity) {
-      var err;
-      if (isAddonRequest(request)) {
-        err = new Error(
-          "Cannot find module '" + request + "'\n" +
-          "  required by " + importer + "\n" +
-          "  Native addons are not supported in a bundle yet.");
-      } else {
-        var suggestion =
-          includeSuggestion(request, importer, importerIsIdentity);
-        // A bare specifier's suggestion is not guaranteed to work (see
-        // isBareSpecifier() above), so the message adds where --include
-        // resolves from rather than implying the printed value always does.
-        var caveat =
-          suggestion !== undefined && isBareSpecifier(request)
-            ? "\n  (--include resolves from the entry's directory.)"
-            : '';
-        err = new Error(
-          "Cannot find module '" + request + "'\n" +
-          "  required by " + importer + "\n" +
-          (suggestion !== undefined
-            ? "  Not in the bundle. Add it with:\n" +
-              "    --include=" + suggestion + caveat
-            : "  Not in the bundle. Add it with --include, whose value is\n" +
-              "  resolved from the entry's directory."));
-      }
+      var suggestion =
+        includeSuggestion(request, importer, importerIsIdentity);
+      // A bare specifier's suggestion is not guaranteed to work (see
+      // isBareSpecifier() above), so the message adds where --include
+      // resolves from rather than implying the printed value always does.
+      var caveat =
+        suggestion !== undefined && isBareSpecifier(request)
+          ? "\n  (--include resolves from the entry's directory.)"
+          : '';
+      var err = new Error(
+        "Cannot find module '" + request + "'\n" +
+        "  required by " + importer + "\n" +
+        (suggestion !== undefined
+          ? "  Not in the bundle. Add it with:\n" +
+            "    --include=" + suggestion + caveat
+          : "  Not in the bundle. Add it with --include, whose value is\n" +
+            "  resolved from the entry's directory."));
+      err.code = 'MODULE_NOT_FOUND';
+      return err;
+    }
+
+    // The addon is recorded in the container but its file is not beside
+    // the bundle. MODULE_NOT_FOUND rather than ERR_DLOPEN_FAILED: the
+    // practical meaning is "this addon is unavailable", and the code that
+    // exists in the world to handle that -- an optional-dependency probe,
+    // a napi-rs try/catch chain -- branches on MODULE_NOT_FOUND. Precision
+    // that breaks a fallback is worth less than the fallback.
+    function missingSidecar(identity, sidecar) {
+      var err = new Error(
+        "Cannot find module '" + identity + "'\n" +
+        '  This bundle records a native addon, but its file is not beside ' +
+        'the bundle.\n' +
+        '  Expected: ' + path.join(root, sidecar) + '\n' +
+        '  Native addons ship alongside the container; copy it there.');
       err.code = 'MODULE_NOT_FOUND';
       return err;
     }
@@ -539,12 +560,36 @@
       // handling the early publish above exists for.
       var threw = true;
       try {
-        var payload = bundle.load(target);
-        if (typeof payload === 'string') {
-          mod.exports = JSON.parse(payload);
+        // The native branch must run before any call to bundle.load(): that
+        // call throws for a kNative record (its bytes are not in the
+        // container -- see __bundleLoad's refusal), so a native has to be
+        // recognized and dispatched here, ahead of the two-way JS/JSON
+        // dispatch below rather than as a fallback from it.
+        var sidecar = nativeSidecars[target];
+        if (sidecar !== undefined) {
+          // The addon's bytes are not in the container -- dlopen takes a
+          // path, and there is no portable way to load a shared object from
+          // memory -- so they ship as a flat file beside the bundle.
+          // mod.filename stays the identity path, like every other bundled
+          // module (whose file is not on disk either); the real path is
+          // what dlopen is given and what its errors name.
+          var addonPath = path.join(root, sidecar);
+          if (!fs.existsSync(addonPath)) throw missingSidecar(target, sidecar);
+          // Its own outcome name, so HERMES_NODE_DEBUG_NATIVE=BUNDLE
+          // distinguishes "resolved to an addon and dlopen'd it" from an
+          // ordinary container hit. This is a LOAD, where the other
+          // logOutcome calls are resolutions, which is exactly why it is
+          // worth telling apart.
+          logOutcome('native', sidecar, target, target);
+          process.dlopen(mod, addonPath);
         } else {
-          payload(mod.exports, makeRequire(mod, target), mod, filename,
-            dirname);
+          var payload = bundle.load(target);
+          if (typeof payload === 'string') {
+            mod.exports = JSON.parse(payload);
+          } else {
+            payload(mod.exports, makeRequire(mod, target), mod, filename,
+              dirname);
+          }
         }
         threw = false;
       } finally {

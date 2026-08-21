@@ -43,6 +43,16 @@ class BundleWriter {
   /// bundle_format.h.
   void addPreload(uint32_t moduleIndex);
 
+  /// Records the sidecar file that carries module \p moduleIndex's bytes.
+  /// \p rawDigest is the raw SHA-256 (32 bytes), not hex. Call order does
+  /// not matter: serialize() sorts the table by module index, which is what
+  /// BundleReader::nativeFor() binary-searches.
+  void addNative(
+      uint32_t moduleIndex,
+      std::string_view sidecar,
+      uint32_t byteLength,
+      std::string_view rawDigest);
+
   void setEntry(uint32_t moduleIndex);
 
   /// Returns the serialized container. Sorts the edge table by
@@ -80,10 +90,17 @@ class BundleWriter {
     std::string specifier;
     uint32_t target;
   };
+  struct PendingNative {
+    uint32_t moduleIndex;
+    std::string sidecar;
+    uint32_t byteLength;
+    std::string digest;
+  };
 
   std::vector<PendingModule> modules_;
   std::vector<PendingEdge> edges_;
   std::vector<uint32_t> preloads_;
+  std::vector<PendingNative> natives_;
   std::map<std::string, uint32_t, std::less<>> internTable_;
   std::string stringBytes_;
   uint32_t entry_ = 0;

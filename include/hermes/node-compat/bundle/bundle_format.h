@@ -19,7 +19,7 @@ constexpr char kBundleMagic[8] = {'H', 'N', 'B', 'U', 'N', 'D', 'L', 'E'};
 
 /// Bumped whenever the layout below changes in a way older readers cannot
 /// interpret. A mismatch is a hard error; there is no forward compatibility.
-constexpr uint32_t kBundleFormatVersion = 3;
+constexpr uint32_t kBundleFormatVersion = 4;
 
 /// Every payload entry starts at a multiple of this. Hermes bytecode is
 /// executed in place from the mapping and requires alignment.
@@ -28,6 +28,12 @@ constexpr size_t kBundlePayloadAlign = 8;
 enum class ModuleKind : uint32_t {
   kJavaScript = 0,
   kJSON = 1,
+  /// A native addon. Its bytes are NOT in the container: they ship as a
+  /// flat sidecar file next to the bundle, because dlopen() takes a path
+  /// and there is no portable way to load a shared object from memory.
+  /// payloadOffset and payloadSize are zero; everything else about the
+  /// addon lives in the native table (BundleNativeRecord below).
+  kNative = 2,
 };
 
 /// Set on a `BundleModuleRecord` whose module `require()` may load. Clear
@@ -60,6 +66,14 @@ struct BundleHeader {
   // which could say "this module preloads" but not "before that one".
   uint32_t preloadTableOffset;
   uint32_t preloadCount;
+  // The native table: an array of BundleNativeRecord, sorted by
+  // moduleIndex, one per kNative module. A section of its own rather than
+  // three more fields on every module record: a real bundle has ~1500
+  // modules and one or two natives, so the record would carry twelve bytes
+  // of zeros per module to describe the exception. This mirrors the
+  // preload table's reasoning above.
+  uint32_t nativeTableOffset;
+  uint32_t nativeCount;
   uint32_t payloadOffset;
   uint32_t payloadSize;
 };
@@ -79,6 +93,22 @@ struct BundleEdgeRecord {
   uint32_t importer;
   uint32_t specifierString;
   uint32_t target;
+};
+
+/// One per kNative module. `sidecarString` and `hashString` index the
+/// string table; the hash entry holds the raw 32-byte SHA-256, not hex, so
+/// it may contain NUL bytes -- which the string table's explicit length
+/// prefix already allows.
+///
+/// `byteLength` and the digest are recorded at build time and read by
+/// nothing on the run path: hashing at load would mean reading the whole
+/// addon on every launch, in an artifact whose reason for existing is
+/// startup cost. They exist for --dump and --verify-natives.
+struct BundleNativeRecord {
+  uint32_t moduleIndex;
+  uint32_t sidecarString;
+  uint32_t byteLength;
+  uint32_t hashString;
 };
 
 /// Entries in the string table are stored as uint32 length followed by that

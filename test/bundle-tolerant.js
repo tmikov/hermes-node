@@ -133,18 +133,3 @@
 // RUN: %hermes-node --build-bundle=%t.closed/app.hbb %t.closed/cli.js
 // RUN: %hermes-node --bundle=%t.closed/app.hbb | %FileCheck --check-prefix=CLOSED %s
 // CLOSED: CLOSED MODULE_NOT_FOUND
-
-// A .node native addon is the one specifier whose message is not "--include
-// it": the producer skips .node files because they are not JavaScript and
-// there is nothing to compile, so naming the flag would be advice that
-// cannot work. The code stays MODULE_NOT_FOUND -- a probing caller branches
-// on that and must still see the "no" it expects -- and only the text
-// differs. Addons work unbundled (examples/bufferutil-addon); in a bundle
-// they wait for a mechanism of their own.
-// RUN: rm -rf %t.addon && mkdir -p %t.addon/native
-// RUN: touch %t.addon/native/thing.node
-// RUN: echo "try { require('./native/thing.node'); } catch (e) { console.log('ADDON', e.code, e.message.split('\\n').pop().trim()); }" > %t.addon/cli.js
-// RUN: %hermes-node --build-bundle=%t.addon/app.hbb %t.addon/cli.js 2>&1 | %FileCheck --check-prefix=ADDONWARN %s
-// ADDONWARN: warning: skipping {{.*}}thing.node (.node is not packageable)
-// RUN: %hermes-node --bundle=%t.addon/app.hbb | %FileCheck --check-prefix=ADDON %s
-// ADDON: ADDON MODULE_NOT_FOUND Native addons are not supported in a bundle yet.

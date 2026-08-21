@@ -51,6 +51,10 @@ struct ToolOptions {
   /// "--out=" with an empty path, and one of those questions cannot be
   /// answered by a plain string that is empty either way.
   std::optional<std::string> out;
+  /// --verify-natives: check the sidecar files of the container named by
+  /// --bundle against the lengths and hashes it recorded at build time. A
+  /// bool, not an optional<string>, because it takes no value.
+  bool verifyNatives = false;
 };
 
 /// Runs whichever read-only verb the arguments asked for. Returns false if
@@ -93,6 +97,11 @@ static bool runToolVerb(
         *tools.dumpBytecode, config.verbose, std::cout, std::cerr);
     return true;
   }
+  if (tools.verifyNatives) {
+    exitCode = hermes::node_compat::verifyNatives(
+        config.bundlePath, config.verbose, std::cout, std::cerr);
+    return true;
+  }
   return false;
 }
 
@@ -131,6 +140,23 @@ static bool checkToolOptions(
         "Error: --dump-bytecode cannot be combined with --extract-module.\n");
     return false;
   }
+  if (tools.verifyNatives && tools.dump) {
+    std::fprintf(
+        stderr, "Error: --verify-natives cannot be combined with --dump.\n");
+    return false;
+  }
+  if (tools.verifyNatives && tools.extractModule.has_value()) {
+    std::fprintf(
+        stderr,
+        "Error: --verify-natives cannot be combined with --extract-module.\n");
+    return false;
+  }
+  if (tools.verifyNatives && tools.dumpBytecode.has_value()) {
+    std::fprintf(
+        stderr,
+        "Error: --verify-natives cannot be combined with --dump-bytecode.\n");
+    return false;
+  }
 
   // At most one verb survives the checks above, so the name of the verb in
   // play is well defined from here on.
@@ -141,6 +167,8 @@ static bool checkToolOptions(
     verb = "--extract-module";
   else if (tools.dumpBytecode.has_value())
     verb = "--dump-bytecode";
+  else if (tools.verifyNatives)
+    verb = "--verify-natives";
 
   // --dump-bytecode names its own file. A container is neither an input nor
   // an output of it, so naming one alongside describes two jobs.
@@ -168,6 +196,10 @@ static bool checkToolOptions(
     std::fprintf(stderr, "Error: --extract-module requires --bundle=<file>.\n");
     return false;
   }
+  if (tools.verifyNatives && config.bundlePath.empty()) {
+    std::fprintf(stderr, "Error: --verify-natives requires --bundle=<file>.\n");
+    return false;
+  }
 
   // --out is never inferred from the identity and never serves anything
   // else: writing a file the user did not name is how a tool overwrites
@@ -185,14 +217,14 @@ static bool checkToolOptions(
     return false;
   }
 
-  // --verbose has exactly three consumers. Anywhere else it promises output
+  // --verbose has exactly four consumers. Anywhere else it promises output
   // that will never appear, which is worse than a refusal.
   if (config.verbose && config.buildBundlePath.empty() && !tools.dump &&
-      !tools.dumpBytecode.has_value()) {
+      !tools.verifyNatives && !tools.dumpBytecode.has_value()) {
     std::fprintf(
         stderr,
-        "Error: --verbose requires --build-bundle, --dump or "
-        "--dump-bytecode.\n");
+        "Error: --verbose requires --build-bundle, --dump, --verify-natives "
+        "or --dump-bytecode.\n");
     return false;
   }
 
@@ -280,8 +312,10 @@ static void printUsage(const char *argv0) {
       "walk to stderr;\n"
       "                                 with --dump, add per-module edge "
       "counts;\n"
-      "                                 with --dump-bytecode, add source "
-      "locations\n"
+      "                                 with --verify-natives, add expected "
+      "and actual\n"
+      "                                 hashes; with --dump-bytecode, add "
+      "source locations\n"
       "  --bundle=<file>                Run an application from a bundle file\n"
       "  --dump                         With --bundle, print the container's "
       "tables\n"
@@ -289,6 +323,10 @@ static void printUsage(const char *argv0) {
       "module's\n"
       "                                 payload to <file>\n"
       "  --out=<file>                   Destination for --extract-module\n"
+      "  --verify-natives               With --bundle, check the native "
+      "addons\n"
+      "                                 shipped beside it (audit, not "
+      "enforcement)\n"
       "  --dump-bytecode=<file>         Disassemble a Hermes bytecode file "
       "or a\n"
       "                                 compile cache entry\n"
@@ -421,6 +459,8 @@ int main(int argc, char **argv) {
       tools.dumpBytecode = argv[i] + 16;
     } else if (std::strncmp(argv[i], "--out=", 6) == 0) {
       tools.out = argv[i] + 6;
+    } else if (std::strcmp(argv[i], "--verify-natives") == 0) {
+      tools.verifyNatives = true;
     } else if (std::strncmp(argv[i], "--optimize=", 11) == 0) {
       const char *value = argv[i] + 11;
       if (std::strcmp(value, "default") == 0) {

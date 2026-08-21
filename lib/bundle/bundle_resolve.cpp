@@ -349,6 +349,27 @@ std::optional<std::string> resolveSpecifier(
     return resolveBase(src, base, 0);
   }
 
+  // An absolute specifier names its target outright, the way Node does it:
+  // Module._findPath overrides the lookup paths to [''] for an absolute
+  // request (`const absoluteRequest = path.isAbsolute(request); if
+  // (absoluteRequest) { paths = ['']; }`, loader.js:699-701) and probes the
+  // path itself. Module._resolveLookupPaths has no absolute case at all --
+  // it hands back the ordinary node_modules list, which _findPath then
+  // throws away. That is the same shape as the accident described below.
+  // This is reached constantly in a bundle --
+  // require(path.join(__dirname, 'build', 'Release', 'x.node')) is how
+  // bindings, node-gyp-build and hermes-parser's own addon loader all ask --
+  // so it must not be incidental.
+  //
+  // Before this branch existed the bare walk below produced the same
+  // answer, but only because joinNormalized() ends in fs::path::operator/,
+  // which DISCARDS its left operand when the right one is absolute. That
+  // is correct behaviour resting on a detail of a helper that has nothing
+  // to do with resolution; stating it here is what keeps it true.
+  if (!specifier.empty() && specifier[0] == '/') {
+    return resolveBase(src, joinNormalized(fs::path("/"), specifier), 0);
+  }
+
   // Bare specifier: walk node_modules from fromDir up to the filesystem
   // root, exactly as Node's NODE_MODULES_PATHS does -- including its skip of
   // any directory that is itself named "node_modules", which would otherwise

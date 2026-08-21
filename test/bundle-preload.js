@@ -35,9 +35,14 @@
 // A --preload naming something unpackageable is a build error too, and says
 // which reason: the user named this file explicitly, so skipping it with a
 // warning the way the walk does would leave a container that cannot run.
-// RUN: printf 'not really an addon\n' > %t.tree/native.node
-// RUN: %not %hermes-node --build-bundle=%t.tree/bad2.hbb --preload=./native.node %t.tree/cli.js 2>&1 | %FileCheck --check-prefix=BADKIND %s
-// BADKIND: error: --preload=./native.node resolves to {{.*}}native.node, which is not packageable
+// (An .mjs, not a .node: a .node addon IS packageable now -- as a kNative
+// module whose bytes ship beside the bundle -- and preloading one is
+// meaningful, since running a preload means requiring it, which for a
+// native means dlopen. An .mjs is the extension this loader still cannot
+// execute at all.)
+// RUN: printf 'export const v = 1;\n' > %t.tree/native.mjs
+// RUN: %not %hermes-node --build-bundle=%t.tree/bad2.hbb --preload=./native.mjs %t.tree/cli.js 2>&1 | %FileCheck --check-prefix=BADKIND %s
+// BADKIND: error: --preload=./native.mjs resolves to {{.*}}native.mjs, which is not packageable
 
 // A --preload that resolves but does not parse or compile is a hard build
 // error too, not the tolerant "package as a throwing stub" fallback

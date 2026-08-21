@@ -276,6 +276,19 @@ napi_value bundleLoadCallback(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
+  // A native addon's bytes are not in the container -- they ship as a
+  // sidecar file and are loaded by dlopen, never by this loader. Refusing
+  // here is the same guard the isRequirable check above is: two load paths
+  // that must not be able to blunder into each other.
+  if (state.reader->kind(*index) == ModuleKind::kNative) {
+    napi_throw_error(
+        env,
+        nullptr,
+        "__bundleLoad: that module is a native addon; it is loaded with "
+        "process.dlopen from its sidecar file");
+    return nullptr;
+  }
+
   std::string_view payload = state.reader->payload(*index);
 
   if (state.reader->kind(*index) == ModuleKind::kJSON) {
@@ -358,6 +371,45 @@ napi_value bundlePreloadsCallback(napi_env env, napi_callback_info /*info*/) {
     if (napi_create_string_utf8(env, id.data(), id.size(), &item) != napi_ok)
       return nullptr;
     napi_set_element(env, result, i, item);
+  }
+  return result;
+}
+
+/// __bundleNatives() -> array of {identity, sidecar}, in module order.
+///
+/// Returned as one array rather than answered per module because the
+/// loader builds an identity-to-sidecar map from it once, at install time.
+/// A per-require native lookup would sit on the hot path of every module
+/// load in an artifact whose entire reason for existing is startup cost --
+/// the same reasoning that moved the HERMES_NODE_DEBUG_NATIVE gate off that
+/// path (see the bundle module doc comment in CLAUDE.md).
+napi_value bundleNativesCallback(napi_env env, napi_callback_info /*info*/) {
+  const OpenBundle &state = openBundleState();
+  uint32_t n = state.reader->nativeCount();
+  napi_value result;
+  if (napi_create_array_with_length(env, n, &result) != napi_ok)
+    return nullptr;
+  for (uint32_t i = 0; i < n; ++i) {
+    BundleReader::NativeView view = state.reader->native(i);
+    std::string_view identity = state.reader->identity(view.moduleIndex);
+
+    napi_value entry;
+    if (napi_create_object(env, &entry) != napi_ok)
+      return nullptr;
+    napi_value identityVal;
+    if (napi_create_string_utf8(
+            env, identity.data(), identity.size(), &identityVal) != napi_ok)
+      return nullptr;
+    napi_value sidecarVal;
+    if (napi_create_string_utf8(
+            env, view.sidecar.data(), view.sidecar.size(), &sidecarVal) !=
+        napi_ok)
+      return nullptr;
+    if (napi_set_named_property(env, entry, "identity", identityVal) !=
+            napi_ok ||
+        napi_set_named_property(env, entry, "sidecar", sidecarVal) != napi_ok ||
+        napi_set_element(env, result, i, entry) != napi_ok)
+      return nullptr;
   }
   return result;
 }
@@ -477,6 +529,10 @@ napi_status installBundleGlobals(napi_env env, napi_value *bundleObject) {
     return status;
   status = defineNative(
       env, global, bundle, "__bundleRoot", "root", bundleRootCallback);
+  if (status != napi_ok)
+    return status;
+  status = defineNative(
+      env, global, bundle, "__bundleNatives", "natives", bundleNativesCallback);
   if (status != napi_ok)
     return status;
 

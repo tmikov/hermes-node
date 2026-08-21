@@ -17,19 +17,23 @@
 // RUN: head -c 8 %t.bundle | %FileCheck --check-prefix=MAGIC %s
 // MAGIC: HNBUNDLE
 
-// A require() that resolves to a non-packageable extension (e.g. a native
-// addon) must not fail the build: it is a warning, the module is left out
-// of the container, and the runtime's on-disk fallback handles it at load
-// time. Assert both that the warning is printed AND that the build still
-// succeeds and still writes a real bundle -- the failure mode this guards
-// against is treating a skip as an error.
+// A require() that resolves to a native addon does not put bytes in the
+// container: a .node is recorded as a kNative module and its file is copied
+// to a flat sidecar beside the bundle, because dlopen() takes a path. The
+// build says so on stdout, next to the root line, since a bundle that needs
+// files beside it has a different distribution contract and a build that
+// changed that silently would be the failure this subsystem exists to
+// remove. test/bundle-natives.js is where the whole mechanism is pinned;
+// what matters here is that an ordinary build containing one still succeeds
+// and still writes a real container.
 // RUN: rm -rf %t.warn && mkdir -p %t.warn
 // RUN: touch %t.warn/native.node
 // RUN: echo "require('./native.node'); console.log('ok');" > %t.warn/entry.js
-// RUN: %hermes-node --build-bundle=%t.warn.bundle %t.warn/entry.js 2>&1 | %FileCheck --check-prefix=WARN %s
-// WARN: warning: skipping {{.*}}native.node (.node is not packageable)
+// RUN: %hermes-node --build-bundle=%t.warn/app.bundle %t.warn/entry.js 2>&1 | %FileCheck --check-prefix=WARN %s
 // WARN: bundle root: {{.*}}.warn
-// RUN: head -c 8 %t.warn.bundle | %FileCheck --check-prefix=WARNMAGIC %s
+// WARN: native: native.node (from native.node)
+// WARN: note: this bundle requires 1 native addon alongside it; ship them together.
+// RUN: head -c 8 %t.warn/app.bundle | %FileCheck --check-prefix=WARNMAGIC %s
 // WARNMAGIC: HNBUNDLE
 
 // "JavaScript" is not the same set as "*.js". A package with
@@ -120,8 +124,8 @@
 
 // A vendored package ('ws') is embedded in the binary and served by the
 // runtime when no node_modules copy exists -- test/test-vendored-ws.js pins
-// that. It is not in the producer's builtin skip set (see the Task 6
-// anti-shadowing decision: an installed copy must be packaged and must win),
+// that. It is not in the producer's builtin skip set (the anti-shadowing
+// rule: an installed copy must be packaged and must win),
 // so with nothing on disk to resolve, the specifier used to fail the build
 // outright and no program using ws could be bundled at all. It has to warn
 // and skip instead: the runtime serves the embedded copy, which survives the

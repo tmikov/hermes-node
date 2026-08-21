@@ -161,17 +161,25 @@ std::optional<BundleReader> BundleReader::openImpl(
           header->preloadCount,
           sizeof(uint32_t)))
     return fail("hermes-node bundle: preload table out of range");
+  // The native table sits between the preload table and the payload.
+  if (!tableInRange(
+          size,
+          header->nativeTableOffset,
+          header->nativeCount,
+          sizeof(BundleNativeRecord)))
+    return fail("hermes-node bundle: native table out of range");
   if (!inRange(size, header->payloadOffset, header->payloadSize))
     return fail("hermes-node bundle: payload out of range");
 
-  // The module and edge tables are read through pointer casts straight
-  // onto the buffer (records are all-uint32_t), which is undefined
+  // The module, edge and native tables are read through pointer casts
+  // straight onto the buffer (records are all-uint32_t), which is undefined
   // behavior at a misaligned address even where the target CPU tolerates
-  // it. The writer always emits both tables 4-byte aligned; a corrupt or
+  // it. The writer always emits every table 4-byte aligned; a corrupt or
   // adversarial file might not.
   if (header->moduleTableOffset % alignof(BundleModuleRecord) != 0 ||
       header->edgeTableOffset % alignof(BundleEdgeRecord) != 0 ||
-      header->preloadTableOffset % alignof(uint32_t) != 0)
+      header->preloadTableOffset % alignof(uint32_t) != 0 ||
+      header->nativeTableOffset % alignof(BundleNativeRecord) != 0)
     return fail("hermes-node bundle: table offset is misaligned");
 
   if (header->moduleCount == 0)
@@ -206,7 +214,8 @@ std::optional<BundleReader> BundleReader::openImpl(
     if (!seenIdentities.insert(identity).second)
       return fail("hermes-node bundle: duplicate module identity");
     if (m.kind != static_cast<uint32_t>(ModuleKind::kJavaScript) &&
-        m.kind != static_cast<uint32_t>(ModuleKind::kJSON))
+        m.kind != static_cast<uint32_t>(ModuleKind::kJSON) &&
+        m.kind != static_cast<uint32_t>(ModuleKind::kNative))
       return fail("hermes-node bundle: module has an unknown kind");
     if ((m.flags & ~kRequirable) != 0)
       return fail("hermes-node bundle: module has unknown flags");
@@ -235,12 +244,54 @@ std::optional<BundleReader> BundleReader::openImpl(
       return fail("hermes-node bundle: preload names a non-requirable module");
   }
 
+  const auto *natives = reinterpret_cast<const BundleNativeRecord *>(
+      data + header->nativeTableOffset);
+  for (uint32_t i = 0; i < header->nativeCount; ++i) {
+    if (natives[i].moduleIndex >= header->moduleCount)
+      return fail("hermes-node bundle: native table names an unknown module");
+    // Sorted and strictly increasing: nativeFor() binary-searches it, and
+    // two rows for one module would make "the" sidecar ambiguous.
+    if (i != 0 && natives[i].moduleIndex <= natives[i - 1].moduleIndex)
+      return fail(
+          "hermes-node bundle: native table is not sorted by module index");
+    // Every kNative module must have a row, and only a kNative module may.
+    // Without this a container could name a JavaScript module as native
+    // (loading its bytecode through dlopen) or leave a kNative with no
+    // sidecar (a require() that cannot report what file is missing).
+    if (modules[natives[i].moduleIndex].kind !=
+        static_cast<uint32_t>(ModuleKind::kNative))
+      return fail(
+          "hermes-node bundle: native table names a module that is not "
+          "native");
+    if (!validateStringIndex(
+            stringsBase, header->stringsSize, natives[i].sidecarString))
+      return fail("hermes-node bundle: native sidecar string out of range");
+    if (!validateStringIndex(
+            stringsBase, header->stringsSize, natives[i].hashString))
+      return fail("hermes-node bundle: native hash string out of range");
+  }
+  for (uint32_t i = 0; i < header->moduleCount; ++i) {
+    if (modules[i].kind != static_cast<uint32_t>(ModuleKind::kNative))
+      continue;
+    bool found = false;
+    for (uint32_t j = 0; j < header->nativeCount; ++j) {
+      if (natives[j].moduleIndex == i) {
+        found = true;
+        break;
+      }
+    }
+    if (!found)
+      return fail(
+          "hermes-node bundle: native module has no native table entry");
+  }
+
   BundleReader reader;
   reader.data_ = data;
   reader.header_ = header;
   reader.modules_ = modules;
   reader.edges_ = edges;
   reader.preloads_ = preloads;
+  reader.natives_ = natives;
   return reader;
 }
 
@@ -354,6 +405,34 @@ uint32_t BundleReader::preload(uint32_t i) const {
   return preloads_[i];
 }
 
+uint32_t BundleReader::nativeCount() const {
+  return header_->nativeCount;
+}
+
+BundleReader::NativeView BundleReader::native(uint32_t i) const {
+  const BundleNativeRecord &record = natives_[i];
+  return NativeView{
+      record.moduleIndex,
+      stringAt(record.sidecarString),
+      record.byteLength,
+      stringAt(record.hashString)};
+}
+
+std::optional<BundleReader::NativeView> BundleReader::nativeFor(
+    uint32_t moduleIndex) const {
+  uint32_t lo = 0, hi = header_->nativeCount;
+  while (lo < hi) {
+    uint32_t mid = lo + (hi - lo) / 2;
+    if (natives_[mid].moduleIndex < moduleIndex)
+      lo = mid + 1;
+    else
+      hi = mid;
+  }
+  if (lo < header_->nativeCount && natives_[lo].moduleIndex == moduleIndex)
+    return native(lo);
+  return std::nullopt;
+}
+
 uint32_t BundleReader::stringsSize() const {
   return header_->stringsSize;
 }
@@ -369,6 +448,11 @@ uint32_t BundleReader::moduleTableSize() const {
 uint32_t BundleReader::edgeTableSize() const {
   return static_cast<uint32_t>(
       static_cast<uint64_t>(header_->edgeCount) * sizeof(BundleEdgeRecord));
+}
+
+uint32_t BundleReader::nativeTableSize() const {
+  return static_cast<uint32_t>(
+      static_cast<uint64_t>(header_->nativeCount) * sizeof(BundleNativeRecord));
 }
 
 uint32_t BundleReader::payloadSize() const {

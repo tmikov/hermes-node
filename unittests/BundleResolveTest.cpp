@@ -5,7 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <hermes/node-compat/bundle/bundle_generation.h>
+#include <hermes/node-compat/bundle/bundle_reader.h>
 #include <hermes/node-compat/bundle/bundle_resolve.h>
+#include <hermes/node-compat/bundle/bundle_writer.h>
 #include <hermes/node-compat/bundle/file_source.h>
 
 #include "TempTree.h"
@@ -15,6 +18,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 using namespace hermes::node_compat;
 using hermes::node_compat::test::TempTree;
@@ -239,6 +243,56 @@ TEST_F(BundleResolveTest, DotDotSpecifierResolvesToTheParentDirectory) {
   auto result = resolveSpecifier(appDir_ + "/lib/util.js", "..");
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(appDir_ + "/index.js", *result);
+}
+
+TEST_F(BundleResolveTest, AbsoluteSpecifierResolvesDirectly) {
+  // An absolute request names its target outright -- see the comment on the
+  // new branch in resolveSpecifier() for why this must be explicit rather
+  // than an accident of the bare-specifier node_modules walk.
+  writeFile(appDir_ + "/deep/thing.js", "module.exports = 0;\n");
+  std::string target = appDir_ + "/deep/thing.js";
+  auto result = resolveSpecifier(cliJs(), target);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(target, *result);
+}
+
+TEST_F(BundleResolveTest, AbsoluteSpecifierDoesNotWalkNodeModules) {
+  // A file that exists ONLY under node_modules must not be found by an
+  // absolute request naming a path where it does not exist. The bare walk
+  // below would have produced <dir>/node_modules + this absolute path,
+  // which fs::path::operator/ collapses to the absolute path itself -- the
+  // right answer by accident. Pin the intent directly, so a future
+  // joinNormalized() cannot silently change it.
+  writeFile(appDir_ + "/node_modules/ghost/index.js", "module.exports = 0;\n");
+  auto result = resolveSpecifier(cliJs(), appDir_ + "/ghost");
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(BundleResolveTest, AbsoluteSpecifierAgreesAcrossBackends) {
+  writeFile(appDir_ + "/deep/thing.js", "module.exports = 0;\n");
+  std::string target = appDir_ + "/deep/thing.js";
+  DiskFileSource disk;
+  auto onDisk = resolveSpecifier(disk, cliJs(), target);
+  ASSERT_TRUE(onDisk.has_value());
+
+  // Same question against a container holding the same two identities,
+  // rooted at the same directory. Built the way the other agreement cases
+  // in BundleFileSourceTest.cpp do.
+  BundleWriter writer;
+  uint32_t entry =
+      writer.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.addModule("deep/thing.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(entry);
+  std::vector<uint8_t> bytes = writer.serialize(bundleGenerationTag());
+  std::string error;
+  auto reader = BundleReader::open(
+      bytes.data(), bytes.size(), bundleGenerationTag(), &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+  BundleFileSource container(*reader, appDir_);
+
+  auto inBundle = resolveSpecifier(container, cliJs(), target);
+  ASSERT_TRUE(inBundle.has_value());
+  EXPECT_EQ(*inBundle, *onDisk);
 }
 
 TEST_F(BundleResolveTest, WalkNeverProbesNodeModulesInsideNodeModules) {

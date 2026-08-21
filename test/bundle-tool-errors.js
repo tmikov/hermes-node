@@ -27,6 +27,9 @@
 // RUN: %not %hermes-node --extract-module=util.js --out=%t.x 2>&1 | %FileCheck --check-prefix=EXTNOBUNDLE %s
 // EXTNOBUNDLE: Error: --extract-module requires --bundle
 
+// RUN: %not %hermes-node --verify-natives 2>&1 | %FileCheck --check-prefix=VERIFYNOBUNDLE %s
+// VERIFYNOBUNDLE: Error: --verify-natives requires --bundle
+
 // Two verbs in one invocation is a mistake, not a precedence question, and
 // the answer must not depend on which was typed first.
 // RUN: %not %hermes-node --bundle=%t.tree/app.hbb --dump --extract-module=util.js --out=%t.x 2>&1 | %FileCheck --check-prefix=TWOVERBS %s
@@ -39,6 +42,16 @@
 // RUN: %not %hermes-node --extract-module=util.js --out=%t.x --dump-bytecode=%t.util.hbc 2>&1 | %FileCheck --check-prefix=BCEXT %s
 // BCEXT: Error: --dump-bytecode cannot be combined with --extract-module
 
+// RUN: %not %hermes-node --bundle=%t.tree/app.hbb --verify-natives --dump 2>&1 | %FileCheck --check-prefix=VERIFYDUMP %s
+// VERIFYDUMP: Error: --verify-natives cannot be combined with --dump
+// RUN: %not %hermes-node --bundle=%t.tree/app.hbb --dump --verify-natives 2>&1 | %FileCheck --check-prefix=VERIFYDUMP %s
+
+// RUN: %not %hermes-node --bundle=%t.tree/app.hbb --verify-natives --extract-module=util.js --out=%t.x 2>&1 | %FileCheck --check-prefix=VERIFYEXT %s
+// VERIFYEXT: Error: --verify-natives cannot be combined with --extract-module
+
+// RUN: %not %hermes-node --bundle=%t.tree/app.hbb --verify-natives --dump-bytecode=%t.util.hbc 2>&1 | %FileCheck --check-prefix=VERIFYBC %s
+// VERIFYBC: Error: --verify-natives cannot be combined with --dump-bytecode
+
 // Extraction writes a file, and the file it writes is always one the user
 // named.
 // RUN: %not %hermes-node --bundle=%t.tree/app.hbb --extract-module=util.js 2>&1 | %FileCheck --check-prefix=NOOUT %s
@@ -47,10 +60,10 @@
 // RUN: %not %hermes-node --bundle=%t.tree/app.hbb --out=%t.x 2>&1 | %FileCheck --check-prefix=OUTALONE %s
 // OUTALONE: Error: --out requires --extract-module
 
-// --verbose has exactly three consumers. Naming it anywhere else asks for
+// --verbose has exactly four consumers. Naming it anywhere else asks for
 // output that will never come, so it is refused rather than ignored.
 // RUN: %not %hermes-node --verbose %t.tree/cli.js 2>&1 | %FileCheck --check-prefix=VERBALONE %s
-// VERBALONE: Error: --verbose requires --build-bundle, --dump or --dump-bytecode
+// VERBALONE: Error: --verbose requires --build-bundle, --dump, --verify-natives or --dump-bytecode
 
 // RUN: %not %hermes-node --verbose --bundle=%t.tree/app.hbb 2>&1 | %FileCheck --check-prefix=VERBALONE %s
 

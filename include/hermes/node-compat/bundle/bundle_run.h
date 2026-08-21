@@ -29,12 +29,14 @@ namespace node_compat {
 /// open at a time; a second call fails.
 bool openBundle(const std::string &path, std::string *error);
 
-/// Defines the five bundle natives on globalThis --
-/// `__bundleLookup(importerIdentity, specifier)`,
+/// Defines six functions on globalThis -- called "bundle natives" here in
+/// the Node-API sense (native code exposed to JavaScript), not to be
+/// confused with the native *addons* (.node files) this module also
+/// supports: `__bundleLookup(importerIdentity, specifier)`,
 /// `__bundleResolve(fromIdentity, request, paths?)`, `__bundleLoad(identity)`,
-/// `__bundleEntry()`, `__bundleRoot()` -- and returns, through
-/// \p bundleObject, a plain `{lookup, resolve, load, entry, root}` object
-/// bound to the same five functions. That object is what
+/// `__bundleEntry()`, `__bundleRoot()`, `__bundleNatives()` -- and returns,
+/// through \p bundleObject, a plain `{lookup, resolve, load, entry, root,
+/// natives}` object bound to the same six functions. That object is what
 /// libjs/bundle-loader.js takes as its `bundle` parameter.
 ///
 /// openBundle() must have succeeded first.

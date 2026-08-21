@@ -108,14 +108,35 @@ class BundleReader {
   /// preloadCount(), exactly like edge() above.
   uint32_t preload(uint32_t i) const;
 
+  /// One entry of the native table -- see bundle_format.h. `sidecar` and
+  /// `digest` are views into the mapped string table; `digest` is the raw
+  /// 32-byte SHA-256 and may contain NUL bytes.
+  struct NativeView {
+    uint32_t moduleIndex;
+    std::string_view sidecar;
+    uint32_t byteLength;
+    std::string_view digest;
+  };
+
+  uint32_t nativeCount() const;
+
+  /// Only valid for \p i below nativeCount(), exactly like edge() above.
+  NativeView native(uint32_t i) const;
+
+  /// The native table entry for \p moduleIndex, or nullopt when that module
+  /// is not a kNative. Binary search: the table is sorted by module index.
+  std::optional<NativeView> nativeFor(uint32_t moduleIndex) const;
+
   /// Section sizes, straight from the header, for a dump that reports them.
   /// stringsSize() and payloadSize() are byte counts, same as the header
-  /// fields they return. moduleTableSize() and edgeTableSize() are also
-  /// byte counts -- record count times record size -- NOT element counts;
-  /// use moduleCount()/edgeCount() for the latter.
+  /// fields they return. moduleTableSize(), edgeTableSize() and
+  /// nativeTableSize() are also byte counts -- record count times record
+  /// size -- NOT element counts; use moduleCount()/edgeCount()/
+  /// nativeCount() for the latter.
   uint32_t stringsSize() const;
   uint32_t moduleTableSize() const;
   uint32_t edgeTableSize() const;
+  uint32_t nativeTableSize() const;
   uint32_t payloadSize() const;
 
  private:
@@ -139,6 +160,7 @@ class BundleReader {
   const BundleModuleRecord *modules_ = nullptr;
   const BundleEdgeRecord *edges_ = nullptr;
   const uint32_t *preloads_ = nullptr;
+  const BundleNativeRecord *natives_ = nullptr;
 };
 
 } // namespace node_compat

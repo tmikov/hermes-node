@@ -84,6 +84,29 @@ int extractModule(
     const std::string &outPath,
     std::ostream &err);
 
+/// Checks each native addon the container at \p bundlePath records against
+/// the file of that name in the container's own directory, printing one
+/// line per addon to \p out and a summary to \p err.
+///
+/// Opened in inspection mode, like dumpBundle(): a container this binary
+/// would refuse to run is still one whose sidecars are worth checking.
+///
+/// This is an AUDIT, NOT AN ENFORCEMENT. It reports what the files are at
+/// the moment it runs; the program dlopens them later, and nothing here
+/// closes the gap between the two. A cryptographic hash is used anyway --
+/// SHA-256, not the CRC32 the generation tag uses -- because a CRC can be
+/// forged to any value, and a check offered as a security step should not
+/// have that as its weakest part.
+///
+/// Returns 0 when every recorded native is present and matches, and 1
+/// otherwise -- so it can gate a deployment -- or when the container itself
+/// cannot be read.
+int verifyNatives(
+    const std::string &bundlePath,
+    bool verbose,
+    std::ostream &out,
+    std::ostream &err);
+
 } // namespace node_compat
 } // namespace hermes
 

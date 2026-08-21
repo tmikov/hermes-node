@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the root directory of this source tree.
 //
-// The three read-only verbs answer before any runtime exists. runToolVerb()
+// The four read-only verbs answer before any runtime exists. runToolVerb()
 // in tools/hermes-node/hermes-node.cpp dispatches them from main() ahead of
 // runHermesNode(), which is what keeps a diagnostic tool from failing for
 // reasons that have nothing to do with the file being diagnosed.
@@ -26,7 +26,7 @@
 
 // The positive control, first, and on the same file the verbs below are
 // pointed at: running that container boots a runtime, and the runtime
-// creates the directory it was pointed at. This is what makes the three
+// creates the directory it was pointed at. This is what makes the four
 // assertions below mean "the runtime never started" rather than "bundle
 // mode does not use the cache" or "the cache is off".
 // RUN: rm -rf %t.cc-control
@@ -45,5 +45,9 @@
 // RUN: rm -rf %t.cc-disasm
 // RUN: %hermes-node-cc --compile-cache=%t.cc-disasm --dump-bytecode=%t.cli.hbc > /dev/null
 // RUN: test ! -e %t.cc-disasm
+
+// RUN: rm -rf %t.cc-verify
+// RUN: %hermes-node-cc --compile-cache=%t.cc-verify --bundle=%t.tree/app.hbb --verify-natives > /dev/null
+// RUN: test ! -e %t.cc-verify
 
 // This file is a lit driver only; the RUN lines above are the test.

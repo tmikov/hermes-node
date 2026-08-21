@@ -9,8 +9,13 @@
 // RUN: echo "const d = require('./lib/dep'); const u = require('./lib/util'); console.log('V', d.v + u.v);" > %t.tree/cli.js
 // RUN: echo "const u = require('./util'); module.exports = { v: u.v + 1 };" > %t.tree/lib/dep.js
 // RUN: echo "module.exports = { v: 1 };" > %t.tree/lib/util.js
-// RUN: printf 'not really an addon\n' > %t.tree/lib/native.node
-// RUN: echo "require('./native.node'); module.exports = {};" >> %t.tree/lib/dep.js
+// The .mjs is here for the `skip` verb and the default build's warning: it
+// is JavaScript this CommonJS loader cannot execute, so it is the shape
+// that is still left out of a container (a .node addon is not -- it is
+// packaged as a kNative module, see test/bundle-natives.js). The require
+// sits in a function nobody calls, so only the scanner ever sees it.
+// RUN: printf 'export const v = 1;\n' > %t.tree/lib/esm.mjs
+// RUN: echo "function unused() { require('./esm.mjs'); } module.exports = {};" >> %t.tree/lib/dep.js
 
 // Verbose output goes to stderr and names discovery, provenance and totals.
 // The configuration block names the output path absolutely (the working
@@ -25,7 +30,7 @@
 // VERB: discover {{.*}}cli.js
 // VERB: require './lib/dep'
 // VERB: discover {{.*}}lib/dep.js
-// VERB: skip {{.*}}native.node
+// VERB: skip {{.*}}esm.mjs
 // VERB: known './util'
 // VERB: compile {{.*}}src -> {{[0-9]+}} bc ({{[0-9]+\.[0-9]}}x) {{[0-9]+\.[0-9]+}} ms
 //
@@ -33,7 +38,7 @@
 // number that answers a question the module table alone does not: how the
 // modules split by kind, how many of the edges name the same specifier,
 // what the string table costs, and which single module is the big one.
-// VERB: modules: 3 (3 js, 0 json)
+// VERB: modules: 3 (3 js, 0 json, 0 native)
 // VERB: edges: 3 (3 distinct specifiers)
 // VERB: strings: {{[0-9]+}} entries, {{[0-9]+}} bytes
 // VERB: payload: {{[0-9]+}} bytes
@@ -64,7 +69,7 @@
 // RUN: head -c 4000 /dev/zero | tr '\\0' 'x' >> %t.two/big.json
 // RUN: printf '" }' >> %t.two/big.json
 // RUN: %hermes-node --build-bundle=%t.two/app.hbb --verbose %t.two/cli.js 2>&1 | %FileCheck --check-prefix=TWO %s
-// TWO: modules: 5 (4 js, 1 json)
+// TWO: modules: 5 (4 js, 1 json, 0 native)
 // TWO: edges: 5 (4 distinct specifiers)
 // TWO: largest: big.json 4021 bytes
 
@@ -73,7 +78,7 @@
 // RUN: rm -rf %t.one && mkdir -p %t.one
 // RUN: echo "console.log('V', 1);" > %t.one/cli.js
 // RUN: %hermes-node --build-bundle=%t.one/app.hbb --verbose %t.one/cli.js 2>&1 | %FileCheck --check-prefix=ONE %s
-// ONE: modules: 1 (1 js, 0 json)
+// ONE: modules: 1 (1 js, 0 json, 0 native)
 // ONE: edges: 0 (0 distinct specifiers)
 // ONE: strings: 1 entry, {{[0-9]+}} bytes
 

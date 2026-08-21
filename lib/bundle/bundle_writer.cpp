@@ -70,6 +70,15 @@ void BundleWriter::addPreload(uint32_t moduleIndex) {
   preloads_.push_back(moduleIndex);
 }
 
+void BundleWriter::addNative(
+    uint32_t moduleIndex,
+    std::string_view sidecar,
+    uint32_t byteLength,
+    std::string_view rawDigest) {
+  natives_.push_back(PendingNative{
+      moduleIndex, std::string(sidecar), byteLength, std::string(rawDigest)});
+}
+
 size_t BundleWriter::stringCount() const {
   return internTable_.size();
 }
@@ -106,9 +115,25 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
   for (size_t i = 0; i < edges_.size(); ++i)
     edgeSpecifierStrings[i] = internString(edges_[i].specifier);
 
+  // Sort by module index: that is the order BundleReader::nativeFor()
+  // binary-searches. The producer adds natives in discovery order, which
+  // is not module-index order once an --include seeds one late.
+  std::sort(
+      natives_.begin(),
+      natives_.end(),
+      [](const PendingNative &a, const PendingNative &b) {
+        return a.moduleIndex < b.moduleIndex;
+      });
+  std::vector<uint32_t> nativeSidecarStrings(natives_.size());
+  std::vector<uint32_t> nativeDigestStrings(natives_.size());
+  for (size_t i = 0; i < natives_.size(); ++i) {
+    nativeSidecarStrings[i] = internString(natives_[i].sidecar);
+    nativeDigestStrings[i] = internString(natives_[i].digest);
+  }
+
   // Layout: header, strings, module table, edge table, preload table,
-  // payload. Each section is computed before any bytes are emitted so
-  // offsets in the header are known up front.
+  // native table, payload. Each section is computed before any bytes are
+  // emitted so offsets in the header are known up front.
   //
   // String entries are packed with no padding (length header immediately
   // followed by bytes, back to back), so the string table's raw size is
@@ -127,8 +152,10 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
   size_t edgeTableSize = edges_.size() * sizeof(BundleEdgeRecord);
   size_t preloadTableOffset = edgeTableOffset + edgeTableSize;
   size_t preloadTableSize = preloads_.size() * sizeof(uint32_t);
+  size_t nativeTableOffset = preloadTableOffset + preloadTableSize;
+  size_t nativeTableSize = natives_.size() * sizeof(BundleNativeRecord);
   size_t payloadOffset =
-      alignUp(preloadTableOffset + preloadTableSize, kBundlePayloadAlign);
+      alignUp(nativeTableOffset + nativeTableSize, kBundlePayloadAlign);
 
   // Each payload's offset (relative to payloadOffset) and the total,
   // aligned payload size.
@@ -157,6 +184,8 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
   header.edgeCount = static_cast<uint32_t>(edges_.size());
   header.preloadTableOffset = static_cast<uint32_t>(preloadTableOffset);
   header.preloadCount = static_cast<uint32_t>(preloads_.size());
+  header.nativeTableOffset = static_cast<uint32_t>(nativeTableOffset);
+  header.nativeCount = static_cast<uint32_t>(natives_.size());
   header.payloadOffset = static_cast<uint32_t>(payloadOffset);
   header.payloadSize = static_cast<uint32_t>(payloadSize);
   appendPod(out, header);
@@ -186,6 +215,15 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
 
   for (uint32_t moduleIndex : preloads_)
     appendPod(out, moduleIndex);
+
+  for (size_t i = 0; i < natives_.size(); ++i) {
+    BundleNativeRecord record{};
+    record.moduleIndex = natives_[i].moduleIndex;
+    record.sidecarString = nativeSidecarStrings[i];
+    record.byteLength = natives_[i].byteLength;
+    record.hashString = nativeDigestStrings[i];
+    appendPod(out, record);
+  }
 
   appendPadding(out, payloadOffset - out.size());
 

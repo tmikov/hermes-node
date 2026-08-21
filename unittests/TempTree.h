@@ -90,6 +90,37 @@ class TempTree {
     return path_;
   }
 
+  /// The absolute path \p name would have directly inside this tree, with
+  /// no file created -- for a caller that wants the path a later step
+  /// (BundleWriter::serialize(), for instance) will write to, rather than
+  /// content this class writes itself.
+  std::string path(const std::string &name) const {
+    return path_ + "/" + name;
+  }
+
+  /// Writes \p content to a new file named \p name directly inside this
+  /// tree and returns its absolute path. A convenience wrapper around the
+  /// free writeFile() above, for the common case of one file with no
+  /// subdirectory nesting.
+  std::string write(const std::string &name, const std::string &content) const {
+    std::string full = path_ + "/" + name;
+    writeFile(full, content);
+    return full;
+  }
+
+  /// Writes \p bytes to a new file named \p name directly inside this tree
+  /// and returns its absolute path. The std::vector<uint8_t> counterpart to
+  /// write() above, for binary content -- a serialized container, in
+  /// particular -- that would otherwise need copying into a std::string
+  /// just to call it.
+  std::string writeBytes(
+      const std::string &name,
+      const std::vector<uint8_t> &bytes) const {
+    std::string full = path_ + "/" + name;
+    writeFile(full, bytes);
+    return full;
+  }
+
  private:
   std::string path_;
 };

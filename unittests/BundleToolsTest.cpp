@@ -8,7 +8,9 @@
 #include <hermes/node-compat/bundle/bundle_tools.h>
 
 #include <hermes/node-compat/bundle/bundle_format.h>
+#include <hermes/node-compat/bundle/bundle_generation.h>
 #include <hermes/node-compat/bundle/bundle_writer.h>
+#include <hermes/node-compat/bundle/native_digest.h>
 
 #include "TempTree.h"
 
@@ -20,6 +22,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <sstream>
@@ -103,7 +106,7 @@ TEST(BundleToolsTest, DumpPrintsHeaderTablesAndTotals) {
   const std::string text = out.str();
 
   EXPECT_TRUE(
-      contains(text, "bundle: " + path + "   format v3  generation 0xabcd1234"))
+      contains(text, "bundle: " + path + "   format v4  generation 0xabcd1234"))
       << text;
   EXPECT_TRUE(contains(text, "\nentry:  [0] cli.js\n")) << text;
 
@@ -331,7 +334,9 @@ TEST(BundleToolsTest, DumpFailsOnAMissingFile) {
 TEST(BundleToolsTest, DumpFailsOnAFileThatIsNotAContainer) {
   TempTree dir;
   std::string path = dir.path() + "/notabundle";
-  writeFile(path, std::vector<uint8_t>(64, 'x'));
+  // Bigger than sizeof(BundleHeader), so the reader reaches the magic check
+  // rather than reporting truncation first.
+  writeFile(path, std::vector<uint8_t>(256, 'x'));
 
   std::ostringstream out;
   std::ostringstream err;
@@ -352,7 +357,9 @@ TEST(BundleToolsTest, DumpFailsOnAFileThatIsNotAContainer) {
 TEST(BundleToolsTest, ExtractNamesTheFileWhenTheContainerIsMalformed) {
   TempTree dir;
   std::string path = dir.path() + "/notabundle";
-  writeFile(path, std::vector<uint8_t>(64, 'x'));
+  // Bigger than sizeof(BundleHeader), so the reader reaches the magic check
+  // rather than reporting truncation first.
+  writeFile(path, std::vector<uint8_t>(256, 'x'));
 
   std::ostringstream err;
   EXPECT_NE(extractModule(path, "cli.js", dir.path() + "/out", err), 0);
@@ -602,6 +609,118 @@ TEST(BundleToolsTest, ExtractLeavesNothingWhenTheFinalRenameFails) {
   // Exactly app.hbb and the still-empty out/ directory: no ".<pid>.<n>.tmp"
   // sibling of outPath was left behind.
   EXPECT_EQ(listDir(dir.path()).size(), 2u);
+}
+
+// The three outcomes verifyNatives() reports, in one container: a sidecar
+// present and matching, one deleted after the build, and one present but
+// with different bytes at the same recorded length. bundleGenerationTag()
+// rather than the fixed kGen constant the dump tests use, because
+// verifyNatives() opens through openForInspection() exactly like dumpBundle
+// and extractModule do -- it does not care what tag the container carries,
+// so nothing here should suggest that it does.
+TEST(BundleToolsTest, VerifyNativesReportsOkMissingAndMismatch) {
+  TempTree tree;
+  std::string addon = tree.write("ok.node", "addon-bytes");
+  std::string error;
+  auto digest = nativeFileDigest(addon, &error);
+  ASSERT_TRUE(digest.has_value()) << error;
+
+  BundleWriter writer;
+  uint32_t entry =
+      writer.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "x");
+  uint32_t okIdx =
+      writer.addModule("ok.node", ModuleKind::kNative, kRequirable, "");
+  uint32_t goneIdx =
+      writer.addModule("gone.node", ModuleKind::kNative, kRequirable, "");
+  uint32_t badIdx =
+      writer.addModule("bad.node", ModuleKind::kNative, kRequirable, "");
+  writer.setEntry(entry);
+  writer.addNative(okIdx, "ok.node", digest->byteLength, digest->raw);
+  writer.addNative(goneIdx, "gone.node", 7, std::string(32, '\x01'));
+  writer.addNative(badIdx, "bad.node", 11, std::string(32, '\x02'));
+  std::vector<uint8_t> bytes = writer.serialize(bundleGenerationTag());
+
+  std::string bundlePath = tree.path("app.hbb");
+  tree.writeBytes("app.hbb", bytes);
+  tree.write("bad.node", "different!!"); // same length, different bytes
+
+  std::ostringstream out, err;
+  int rc = verifyNatives(bundlePath, /*verbose=*/false, out, err);
+  EXPECT_EQ(rc, 1);
+  std::string text = out.str();
+  EXPECT_NE(text.find("OK       ok.node"), std::string::npos) << text;
+  EXPECT_NE(text.find("MISSING  gone.node"), std::string::npos) << text;
+  EXPECT_NE(text.find("MISMATCH bad.node"), std::string::npos) << text;
+  EXPECT_NE(err.str().find("2 of 3"), std::string::npos) << err.str();
+}
+
+TEST(BundleToolsTest, VerifyNativesSucceedsWithNoNatives) {
+  TempTree tree;
+  BundleWriter writer;
+  uint32_t entry =
+      writer.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(entry);
+  tree.writeBytes("app.hbb", writer.serialize(bundleGenerationTag()));
+
+  std::ostringstream out, err;
+  EXPECT_EQ(verifyNatives(tree.path("app.hbb"), false, out, err), 0);
+}
+
+// The NATIVES section is dumpBundle()'s inventory of what verifyNatives()
+// later checks against disk: the module it belongs to, the sidecar it
+// expects, and enough of the recorded digest to eyeball. bundleGenerationTag
+// rather than kGen, matching the natives fixtures above -- dumpBundle() opens
+// through openForInspection() regardless of which tag the container carries,
+// so nothing here should suggest that it matters.
+TEST(BundleToolsTest, DumpPrintsNativesSection) {
+  TempTree tree;
+  BundleWriter writer;
+  uint32_t entry =
+      writer.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "x");
+  uint32_t addon = writer.addModule(
+      "node_modules/a/build/Release/a.node",
+      ModuleKind::kNative,
+      kRequirable,
+      "");
+  writer.setEntry(entry);
+  writer.addNative(addon, "a.node", 4096, std::string(32, '\xab'));
+  tree.writeBytes("app.hbb", writer.serialize(bundleGenerationTag()));
+
+  std::ostringstream out, err;
+  ASSERT_EQ(
+      dumpBundle(tree.path("app.hbb"), bundleGenerationTag(), false, out, err),
+      0)
+      << err.str();
+  std::string text = out.str();
+  EXPECT_NE(text.find("NATIVES"), std::string::npos) << text;
+  EXPECT_NE(text.find("a.node"), std::string::npos) << text;
+  EXPECT_NE(text.find("4096"), std::string::npos) << text;
+  EXPECT_NE(text.find("abababab"), std::string::npos) << text;
+}
+
+// extractModule() has nothing to write for a native: its bytes never
+// entered the container in the first place (see the sidecar design note
+// above extractModule() in bundle_tools.cpp). The error names both the
+// module and the sidecar it actually ships as, so the caller knows where to
+// look instead of finding a zero-byte file and no explanation.
+TEST(BundleToolsTest, ExtractModuleRefusesANative) {
+  TempTree tree;
+  BundleWriter writer;
+  uint32_t entry =
+      writer.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "x");
+  uint32_t addon =
+      writer.addModule("a.node", ModuleKind::kNative, kRequirable, "");
+  writer.setEntry(entry);
+  writer.addNative(addon, "a.node", 4096, std::string(32, '\xab'));
+  tree.writeBytes("app.hbb", writer.serialize(bundleGenerationTag()));
+
+  std::ostringstream err;
+  EXPECT_EQ(
+      extractModule(tree.path("app.hbb"), "a.node", tree.path("out.bin"), err),
+      1);
+  EXPECT_NE(err.str().find("native addon"), std::string::npos) << err.str();
+  EXPECT_NE(err.str().find("alongside"), std::string::npos) << err.str();
+  EXPECT_FALSE(std::filesystem::exists(tree.path("out.bin")));
 }
 
 } // namespace

@@ -30,6 +30,10 @@
 # layer (BundleFileSource, for a require() the edge table has no row for)
 # call it. Putting it in the VM-free base library is what lets both link it
 # without either one pulling in the parser/compiler it doesn't need.
+# native_digest.cpp is picohash and stdio, and nothing more, so it does not
+# cost this target its VM-free property. It lives here rather than in the
+# build or tools layer because both need it: the producer records a digest
+# and --verify-natives checks one, and the two must compute it identically.
 add_hermes_library(hermesNodeBundle STATIC
   bundle_writer.cpp
   bundle_reader.cpp
@@ -39,6 +43,7 @@ add_hermes_library(hermesNodeBundle STATIC
   disk_file_source.cpp
   bundle_file_source.cpp
   bundle_resolve.cpp
+  native_digest.cpp
 )
 
 target_include_directories(hermesNodeBundle
@@ -59,6 +64,10 @@ target_link_libraries(hermesNodeBundle PRIVATE
   # this and the compile cache's generation name (lib/runtime) can never
   # disagree on what "architecture" means.
   hermesNodeCacheArch
+  # SHA-256 for native_digest.cpp. Already vendored and VM-free (a plain C
+  # library), and already linked by lib/bindings for crypto -- this is the
+  # same dependency, not a new one.
+  picohash
 )
 
 # Build layer: static discovery of require() calls, using the Hermes parser.
@@ -98,6 +107,12 @@ target_link_libraries(hermesNodeBundleBuild
     hermesNapiCompile
   PRIVATE
     hermesvm_a
+    # crc32(), for the short identity hash that disambiguates two native
+    # addons sharing a basename. The same zlib hermesNodeBundle links for
+    # the generation tag; a static library's PRIVATE dependency is not
+    # transitive for include paths, so it is named again here rather than
+    # inherited.
+    zlib_a
 )
 
 # Tools layer: reads a container and reports on it. Links the format layer

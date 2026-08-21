@@ -490,3 +490,30 @@ TEST(BundleFileSourceTest, SubsetContainerMissesSkippedFilesCleanly) {
         << "require " << spec;
   }
 }
+
+// BundleFileSource::index() builds its entry list from every module index,
+// filtering on neither kind nor kRequirable, so a kNative is already
+// indexed and require.resolve() of one is already answered -- this holds
+// by omission today, and this test pins it so it stays true on purpose.
+TEST(BundleFileSourceTest, ANativeIsAnOrdinaryIdentity) {
+  BundleWriter writer;
+  uint32_t entry =
+      writer.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "x");
+  uint32_t addon =
+      writer.addModule("build/a.node", ModuleKind::kNative, kRequirable, "");
+  writer.setEntry(entry);
+  writer.addNative(addon, "a.node", 8, std::string(32, 'z'));
+  std::vector<uint8_t> bytes = writer.serialize(7);
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 7, &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+
+  BundleFileSource src(*reader, "/app");
+  // An empty payload must not make it invisible: require.resolve() has to
+  // answer the same way require() will.
+  EXPECT_TRUE(src.isRegularFile("/app/build/a.node"));
+  EXPECT_TRUE(src.isDirectory("/app/build"));
+  auto resolved = resolveSpecifier(src, "/app/cli.js", "./build/a.node");
+  ASSERT_TRUE(resolved.has_value());
+  EXPECT_EQ(*resolved, "/app/build/a.node");
+}

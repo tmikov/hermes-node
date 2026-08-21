@@ -10,7 +10,7 @@
 // RUN: %hermes-node --build-bundle=%t.tree/app.hbb %t.tree/cli.js
 
 // RUN: %hermes-node --bundle=%t.tree/app.hbb --dump | %FileCheck %s
-// CHECK: bundle: {{.*}}app.hbb   format v3  generation 0x{{[0-9a-f]+}}
+// CHECK: bundle: {{.*}}app.hbb   format v4  generation 0x{{[0-9a-f]+}}
 // CHECK: entry:  [0] cli.js
 // CHECK: MODULES (3)
 // CHECK-DAG: js {{.*}} cli.js
@@ -43,3 +43,24 @@
 // But it still refuses to execute it.
 // RUN: %not %hermes-node --bundle=%t.tree/old.hbb 2>&1 | %FileCheck --check-prefix=OLDGEN %s
 // OLDGEN: generation mismatch
+
+// A container with a native addon gets a NATIVES section: the module it
+// belongs to, the sidecar file it ships as, and its expected size and
+// digest -- the inventory verifyNatives() later checks against disk.
+// RUN: rm -rf %t.native && mkdir -p %t.native
+// RUN: cp %hello_addon %t.native/hello_addon.node
+// RUN: cp %source_dir/test/fixtures/bundle-natives/main.js %t.native/main.js
+// RUN: %hermes-node --build-bundle=%t.native/app.hbb %t.native/main.js > /dev/null
+// RUN: %hermes-node --bundle=%t.native/app.hbb --dump | %FileCheck --check-prefix=NATIVES %s
+// NATIVES: NATIVES (1)
+// NATIVES: hello_addon.node
+// The digest is truncated to 16 hex characters here; the {{$}} anchor is
+// what makes that a real assertion, since an unanchored 16 would also match
+// the leading half of a full 64-character one.
+// NATIVES: sidecar hello_addon.node{{.*}}bytes{{.*}}sha256:{{[0-9a-f]{16}$}}
+// NATIVES: natives{{ *}}{{[0-9]+}} B
+
+// --verbose prints the full 64-character digest instead of the short
+// prefix.
+// RUN: %hermes-node --bundle=%t.native/app.hbb --dump --verbose | %FileCheck --check-prefix=NATIVESVERBOSE %s
+// NATIVESVERBOSE: sha256:{{([0-9a-f]{64})}}

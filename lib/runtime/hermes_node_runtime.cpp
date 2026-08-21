@@ -576,12 +576,17 @@ int runBundle(
   // Node's CJS loader is what the wrapper hooks -- user code and everything
   // under node_modules goes through it, so hooking it covers resolution and
   // file reading at once. `path` turns the bundle root and a module identity
-  // into the __filename / __dirname a bundled module sees.
+  // into the __filename / __dirname a bundled module sees. `fs` is for
+  // exactly one question -- whether a native addon's sidecar file exists --
+  // so a missing one is reported as our own MODULE_NOT_FOUND rather than as
+  // an ERR_DLOPEN_FAILED that misdescribes the problem.
   napi_value cjsLoader;
   napi_value pathModule;
+  napi_value fsModule;
   if (loader.require(env, "internal/modules/cjs/loader", &cjsLoader) !=
           napi_ok ||
-      loader.require(env, "path", &pathModule) != napi_ok) {
+      loader.require(env, "path", &pathModule) != napi_ok ||
+      loader.require(env, "fs", &fsModule) != napi_ok) {
     std::fprintf(stderr, "Error: failed to load the CommonJS loader\n");
     printAndClearException(env);
     return 1;
@@ -599,10 +604,10 @@ int runBundle(
   napi_value global;
   napi_get_global(env, &global);
 
-  // installBundleLoader(Module, bundle, path) -> run()
-  napi_value installArgs[3] = {moduleCtor, bundleObject, pathModule};
+  // installBundleLoader(Module, bundle, path, fs) -> run()
+  napi_value installArgs[4] = {moduleCtor, bundleObject, pathModule, fsModule};
   napi_value runFn;
-  if (napi_call_function(env, global, installFn, 3, installArgs, &runFn) !=
+  if (napi_call_function(env, global, installFn, 4, installArgs, &runFn) !=
       napi_ok) {
     printAndClearException(env);
     return 1;

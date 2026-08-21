@@ -8,6 +8,7 @@
 #include <hermes/node-compat/bundle/atomic_write.h>
 
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -95,6 +96,14 @@ bool writeFileAtomically(
     return false;
   }
   return true;
+}
+
+bool isSameFile(const std::string &a, const std::string &b) {
+  struct stat sa {};
+  struct stat sb {};
+  if (::stat(a.c_str(), &sa) != 0 || ::stat(b.c_str(), &sb) != 0)
+    return false;
+  return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
 }
 
 } // namespace node_compat
