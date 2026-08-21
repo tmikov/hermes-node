@@ -418,10 +418,29 @@ idiom (`require('pkg')` alongside `require.resolve('pkg')`, which is what
 `examples/bufferutil-addon/mask.js` does) is fully covered. Recording
 `require.resolve` specifiers as edges would close it and is additive.
 
-## Open: a bundle is not self-contained when specifiers are computed
+## 2026-08-16: a bundle is not self-contained when specifiers are computed
 
-Recorded 2026-08-16, from bundling `examples/babel-parser/transform.js`.
-**Not fixed -- to be discussed.**
+Recorded from bundling `examples/babel-parser/transform.js`.
+
+**Read this with the entries below it.** What follows describes the system
+as it was on 2026-08-16, and the shape of the problem is still right, but
+the specifics are not: the disk fallback it keeps referring to was removed
+on 2026-08-19, and three of the four directions it lists as unchosen were
+subsequently taken -- `--include`, the build-time warning, and recording a
+literal `require.resolve` as an edge. Where it says the gap is "passed over
+in silence", the build now prints a count and `--verbose` the positions,
+and the run fails with an error naming `--include` rather than quietly
+reading the disk.
+
+What remains open is the part no static analysis can close: a specifier the
+program computes names nothing the walk can follow, so if nothing else
+pulled the target in, the container does not hold it and the program fails
+when that code path runs. The remedy is to declare it (`--include`), which
+works -- `examples/babel-parser` bundles the unmodified `transform.js` that
+way. The unimplemented direction is the first one listed below: a
+`--verify` pass that runs the entry from the container with the tree hidden
+and reports every miss, which is the only answer that finds these without
+being told where to look.
 
 The static walk is an under-approximation of what the program loads. Every
 specifier that only a computed `require()` can reach is missing from the
@@ -543,3 +562,346 @@ The scan now accounts for `require` as the operand of `typeof`, `!` or
 `f(require)`, `var r = require` and `'' + require` still count, because
 each of those can hand the value on. Both examples now report exactly one
 escape, and each is genuine.
+
+### 2026-08-19: the world is closed
+
+The run-time disk fallback is gone. Design
+`2026-08-19-closed-world-bundle-design.md`, plan
+`2026-08-19-closed-world-bundle-plan.md`, seven tasks; this is the outcome
+of the last one, which is the only breaking one.
+
+A bundle now answers every `require()` from the container -- edge table
+first, then the container's own resolver, running the producer's
+`resolveSpecifier` against `BundleFileSource` -- and throws when neither
+can. The error names the importer's identity and the remedy
+(`--include=<specifier>`), and keeps `code = 'MODULE_NOT_FOUND'` so an
+optional-dependency probe still sees the answer it branches on. A `.node`
+specifier gets its own text instead, since `--include` cannot help it.
+
+Two things are still served from outside the container, and neither is a
+filesystem read: builtins, and a vendored package (`ws`) with no packaged
+copy. Both come out of the binary. The precedence is unchanged --
+`normalizeRequirableId` decides builtins before the container is consulted,
+`Module.isBuiltin` (which also answers for `ws`) is consulted only after
+both container lookups have missed, so an installed `node_modules/ws` that
+was packaged still wins.
+
+`require.resolve` was closed the same way, and this went beyond the letter
+of the task: it used to fall through to `Module._resolveFilename` on a
+miss. A `resolve()` that answers where the `require()` after it throws is
+worse than either, and with no filesystem behind it deferring means failing
+anyway. Only a builtin, a vendored name, and a malformed `options.paths`
+(whose `ERR_INVALID_ARG_VALUE` is Node's own error to construct) still
+reach `baseResolve`.
+
+**`probeForContainer` is gone.** Task 5 bounded the `options.paths` branch
+of the container resolve to each entry's nearest `node_modules`, because a
+climb past an ancestor that was merely unpackaged could land on a
+different, real package of the same name while the disk fallback behind it
+knew better. With no fallback there is no "merely unpackaged": a level with
+no records is a level with nothing there, and the walk answers exactly what
+the producer's own walk answered. One algorithm, one set of inputs, both
+sides -- which is the point of the whole design.
+`test/bundle-require.js`'s OPTPATHS case now asserts that (the container's
+NEAR, not the disk's FAR), plus a `paths` miss throwing rather than going
+looking.
+
+**`test/bundle-yargs.js` needed no `--include`.** The design flagged it as
+the case at genuine risk -- a real 16-package tree with two computed
+requires and one escape reported at build time. None of the three is on the
+live path, and the container's resolver answers what is. That was the main
+open question of the round and it came out clean.
+
+**The Babel example now proves the feature.** `examples/babel-parser`
+bundles the *unmodified* `transform.js` -- the idiomatic one, which names
+`@babel/preset-env` in a string that no static bundler can follow -- with
+`--include=@babel/preset-env`, and `run.sh` runs it with `node_modules`
+moved aside. `transform-static.js` reaches the same place by requiring the
+preset instead. Two routes, one of which does not touch the source, which
+is the usual situation for a dependency several packages down.
+
+**Tests.** `test/bundle-fallback.js` became `test/bundle-scanner.js`: the
+brief said to delete it, but only three of its cases rested on the fallback
+(the computed-require run, the escaped-require run, and the two
+shared-`Module._cache` cases). The rest are assertions about what the
+*scanner* reports -- that a literal require is not counted as computed,
+that the wrapper's own `require` parameter is not an escape, that
+`typeof require` is not, that a shadowed `require` contributes no edges --
+which are properties of the scan and not of the loader, and are not
+duplicated anywhere else. Deleting the file would have dropped them. The
+two `Module._cache` cases moved into `test/bundle-run.js` as the brief
+asked; the other two were rewritten around `--include`.
+
+Also: the producer's computed-require warning no longer says "resolved from
+disk at run time", because that is not what happens any more.
+
+**Known limitation, unchanged in shape but sharper in consequence.** A
+native addon cannot be loaded from a bundle at all. It could not be
+packaged before either, but the fallback loaded it off disk;
+`examples/bufferutil-addon` therefore runs unbundled only. Addons need
+their own mechanism, deliberately deferred.
+
+### 2026-08-20: bundle preloads (format v3), and the `-r` injection point closed
+
+Design `2026-08-20-bundle-preload-design.md`, plan
+`2026-08-20-bundle-preload-plan.md`, four tasks. `--build-bundle
+--preload=<specifier>` (repeatable) resolves from the entry's directory
+exactly as `--include` does, packages the module, and additionally records
+its index in a new preload table -- format v3 -- in flag order (duplicates
+collapse to one entry, same as `--include`). `--bundle` runs the table
+through `loadIdentity` before the entry, in order; a preload observes
+`require.main === undefined`, the same thing Node's `-r` observes, and a
+throwing preload stops the run before the entry executes. `--dump` prints
+a `PRELOADS` section.
+
+This closes the loop `dedb781` left open. That commit hardened
+`__closeDiskModuleLoading` against a preload reassigning it, but its own
+message said plainly: "`-r` is still not rejected with `--bundle`; that
+combination is unchanged by design, only the property's mutability is
+hardened." The design doc traced the sharper problem underneath: preloads
+ran at step 12c of `runHermesNode`, before the bundle loader was installed
+at step 13, resolved from the real filesystem -- so `--bundle app.hbb` and
+`--bundle app.hbb -r x.js` were different worlds, and a preload could reach
+into the run that followed it (demonstrated against `dedb781`: a preload
+planting `Module._cache[<root>/<identity>]` replaced a bundled module's
+exports before the program ever saw the container's copy). This round's
+last task makes `checkToolOptions()` refuse `--bundle` combined with
+`-r`/`--require` outright, which removes the phase a preload could occupy
+by construction rather than by further hardening a property on it.
+`-r` with `--build-bundle` is untouched -- a build runs in the disk world.
+`test/bundle-errors.js` NORFLAG is the regression test, asserting both the
+refusal and (`--implicit-check-not`) that the preload's own output never
+appears.
+
+Two risks carried over from the design doc, neither addressed this round:
+
+- **A container can now run code before its entry, and only `--dump` says
+  so.** That is the point of the feature, but a bundle is no longer simply
+  "run the entry" -- auditing one means reading the preload table, which is
+  why `--dump` prints it rather than leaving it inspectable only through
+  the format.
+- **`examples/flow-bundler` is still not bundled.** It is the natural
+  end-to-end case for this feature (it already uses `-r` to install
+  `@babel/register` ahead of its own entry point), but bundling it means
+  solving the computed-require problem in its strongest form -- the
+  bundler loads Flow sources through `@babel/register` at run time -- which
+  is a larger piece of work than this design. Tested with synthetic
+  fixtures instead; confirmed this round that `run.sh`, which uses `-r`
+  with no `--bundle`, is unaffected by the new refusal.
+
+`dedb781`'s non-writable `__closeDiskModuleLoading` is now unreachable for
+the attack it was written for: `installBundleLoader()` calls the closer as
+its first statement, before `run()` executes any bundle-carried preload, so
+a preload never occupies the window that hardening defended (a
+`-r`/`--require` preload, the only thing that used to run earlier, is
+refused outright by this round's flag check). It stays in place as defence
+in depth rather than being reverted, but no test now exercises its
+mutability -- the only test that reached it, `test/bundle-escapes.js` case
+3, was rewritten to pin the refusal instead (a `-r` invocation that used to
+reopen the escape now never starts the bundle at all).
+
+### 2026-08-21: bundle residuals cleared
+
+Six tasks closing the fourteen findings from a full-subsystem walkthrough
+recorded at `.superpowers/sdd/2026-08-19-closed-world-bundle-plan/progress.md`
+(plan `history/plans/2026-08-21-bundle-residuals-plan.md`, per-task ledger
+`.superpowers/sdd/2026-08-21-bundle-residuals-plan/progress.md`). None of it
+is new capability; all of it is the closed-world design's own guarantees
+made to hold in cases the shipping round did not exercise.
+
+**What the scanner and producer see.** A literal `require.resolve(spec)` is
+now a discovery edge, exactly like `require(spec)` -- it used to be
+invisible to the walk (only `require(...)` calls were followed), so a
+target reached solely through `require.resolve` could be missing from the
+container with no build-time signal at all, only a run-time
+`MODULE_NOT_FOUND`. This changes what gets packaged, so both example
+bundles were rebuilt to check for drift: container size on `babel-parser`
+and on `yargs-cli` came out byte-for-byte identical before and after,
+meaning every project in the offline test corpus already reached its
+`require.resolve` targets through an ordinary `require()` as well, and no
+fixture's expected file count needed updating.
+
+That measurement says the size risk is *unexercised by this corpus*, not
+that it is absent. The shape that triggers it is the pure feature probe --
+`try { require.resolve('typescript'); hasTS = true; } catch (e) {}` -- a
+widespread idiom whose whole point is that the package is never loaded.
+A bundle built from a program containing one now packages that package
+and its entire transitive graph, for a `require.resolve` whose only use
+is to answer a boolean. Nothing in `examples/` does this, so nothing here
+measured it; a real project that does will see the container grow, and
+the answer for it (should one be needed) is a way to say "resolve, but do
+not package", which does not exist today. A non-literal
+`require.resolve(x)` now also counts toward the "computed require() call"
+warning, by the same reasoning that already applied to `require(x)`: both
+reach the run-time loader through the identical path (edge table, then
+`bundle.resolve`, then throw), so both deserve the identical build-time
+warning. Separately, the bundle root computation had a bug where a
+`package.json` belonging to a *failed* resolution probe (a bare specifier
+that does not resolve, e.g. an optional dependency one directory shallower
+than every module the walk actually packaged) could widen the root outward
+from what the packaged modules alone would justify -- `BundleFileSource`
+can never serve anything outside the root it was given, so that widening
+bought nothing and only made the root wider than it needed to be.
+
+The shipped rule: a recorded `package.json` is kept when its directory is
+an ancestor of (or equal to) some packaged module's directory, and dropped
+otherwise -- and the common ancestor is computed AFTER that filter runs,
+from the modules plus the kept `package.json` files, so a kept file can
+still widen the root. Both halves matter, and the obvious simpler rule
+does not work: computing the root from the walked modules first and then
+keeping only the resolution inputs already under it was tried (58a8529)
+and reverted (a0b88b0), because it drops a `package.json` a dynamic
+resolution genuinely needs. A package whose whole reachable module graph
+lives under its own `lib/` has its `package.json` one level ABOVE every
+packaged module, so a modules-only root excludes it -- and without it the
+container cannot answer a run-time `require.resolve('foo', {paths})`,
+which does not go through the edge table and needs foo's `"main"` to find
+the package by name. Being an ancestor of a packaged module is exactly the
+test that separates that file from the failed probe's, and letting the
+kept file widen the root afterwards is what puts it inside the container's
+reach. `test/bundle-resolution-inputs.js` pins both halves: its `%t.wide`
+case (prefix `WIDE`) pins the drop, its `%t.deep` case (prefix
+`DEEPROOT`) pins the keep, and changing either half breaks one of them.
+A `package.json` kept for resolution only is flagged `kResolveOnly` (a
+named zero, not a bare `0`) rather than `kRequirable`; one the program
+also require()s keeps `kRequirable`.
+
+One residual, known and deliberately left: reachability for a resolution
+INPUT is not the same as reachability for a module, so a package whose
+`"main"` escapes its own directory (`"main": "../../../outside/real.js"`)
+has its `package.json` dropped, and a computed require of that package by
+name throws `MODULE_NOT_FOUND` at run time. The shape is pathological and
+the alternative is the bug this filter fixed.
+
+**What the debug log says.** `HERMES_NODE_DEBUG_NATIVE=BUNDLE` used to log
+only a miss. It now traces all three outcomes a bundled `require()` can
+have -- an edge-table hit, a resolve-time hit through `bundle.resolve`, and
+a miss -- because a resolve hit today is one dependency change away from
+becoming a miss tomorrow, and there was no way to tell that apart from an
+edge-table hit without logging both. This is the log an `--include` set
+gets built from, so the three outcomes being distinguishable is the point.
+The `resolve:`, `edge:` and `miss:` lines are now all anchored with
+`{{$}}` in the tests that pin them, closing a substring-match gap the
+`resolve:` line's tightened wording opened (`... -> extra.js` unanchored
+would also match `... -> extra.json`).
+
+**What got de-duplicated.** `bundle_run.cpp` used to carry its own
+hand-copy of `BundleFileSource`'s root-stripping rule
+(`identityUnderRoot()`, including the root == "/" special case); one
+implementation of that rule now lives in a public
+`BundleFileSource::identityFor()`, and the C++ resolve callback calls it
+directly. Three performance items landed alongside it: `DiskFileSource`
+dedupes its read-path list through a set instead of a linear scan,
+`BundleFileSource`'s sorted identity index is now built lazily on first
+query instead of eagerly in the constructor, and the root-prefix string
+used by every `identityFor()` call is precomputed once rather than
+rebuilt per call.
+
+**What the format now rejects.** `BundleReader::open()` (and
+`openForInspection()`) validate two more identity invariants: an empty
+path segment (`"a/"`, `"a//b"`) is rejected the same way a `"."` segment
+already was, and a container carrying the same identity twice is rejected
+outright. The duplicate check matters concretely, not just in principle --
+it was reachable in practice through a trailing-slash bug, fixed in the
+closed-world round that preceded this one, before that fix made it merely
+defensive. A duplicate identity would let the run-time identity index
+(which keeps the first record) and `BundleFileSource` (which sorts and
+binary-searches every record, with no defined tie-break of its own) each
+answer for a different record, with nothing outside able to tell which one
+answered. The
+`--include` dedup tests (one record for a repeated identical `--include`,
+and for an `--include` the entry graph already reaches on its own) landed
+in the same round, specifically so a dedup regression would surface as a
+failing test rather than as an unopenable bundle once the reader started
+enforcing uniqueness.
+
+**What the tests cover now that they used to assert past.** The
+disk-vs-container agreement test (`BundleFileSourceTest.
+AgreesWithTheDiskBackend`) gained fixture shapes that used to have no
+discriminating power at all -- a file beside a same-named directory, a
+trailing-slash directory specifier, `.ts`/`.json` extension probes, a
+nested `node_modules`, an absolute specifier both inside and outside the
+root -- plus a companion test that builds a container which is a strict
+*subset* of its tree (skipping `.node`/`.mjs`/unrecognized extensions the
+way the real producer does) and checks that a skipped file misses cleanly
+rather than being picked up by a same-stem packaged neighbour. The
+agreement test also gained two hardening passes: a positive check that
+every specifier meant to resolve actually resolves from at least one
+fixture directory (agreement alone was satisfied just as well by two
+`nullopt`s as by two real hits, so a fixture edit that silently broke a
+specifier would have gone unnoticed), and an explicit miss assertion for
+`"missing"` and for an absolute specifier outside the root, rather than
+leaving both to the same agreement check that a vacuous pass could satisfy.
+The five hand-copies of the `mkdtemp`-plus-cleanup test fixture (two of
+them in the unrelated compile-cache tests) are now one `unittests/
+TempTree.h`.
+
+**Two items looked at and deliberately left.** `libjs/loader.js`'s
+`probeFile()` has a guard (`if (diskLoadingClosed) return false;`) that
+stops it from touching the filesystem once a bundle has closed disk
+loading. No test exercises the true branch of that guard, because nothing
+reaches `probeFile()` at all while a bundle is running: bundled modules
+resolve through the C++ `bundle.resolve()` path, never through this
+loader's `resolveRelative()`. The guard is defense in depth for a path
+that is unreachable today, so it stays unpinned rather than pinning
+something a test cannot actually exercise. Separately, an earlier round's
+`COLLIDE` test pinned `mod.path` against a `relativeResolveCache`
+collision; that collision is now out of reach, because
+`relativeResolveCache` is only ever written on the embedded-vendored (`ws`)
+path, not on the general resolution path the old test exercised. The
+rewritten test asserts the same property a different way -- keying on
+`(importer, request)` instead -- and the `mod.path` assertion specifically
+was not restored, since there is no longer a code path that would let it
+fail.
+
+**The debug gate stopped re-reading `process.env` per require.** The
+`debugBundle` flag in `libjs/bundle-loader.js` used to be recomputed from
+`process.env.HERMES_NODE_DEBUG_NATIVE` inside `logOutcome()`, called on
+every `require()` and `require.resolve()`,
+hit or miss, ahead of the `Module._cache` check. `process.env` is a Proxy
+whose get trap is a native callback around `getenv()`
+(`lib/process/node_process.cpp`), so that was a proxy trap plus a native
+call plus a `getenv()` on the hottest path of an artifact whose whole
+reason for existing is startup cost -- paid twice per check, since `&&`
+reads the property again. `installBundleLoader()` now reads the variable
+once, at install time, and caches the result. The deliberate consequence:
+assigning `process.env.HERMES_NODE_DEBUG_NATIVE` from inside a running
+bundled program no longer turns the log on or off. This matches the native
+side, which also takes the variable from `getenv()` once, at startup
+(`lib/runtime/hermes_node_runtime.cpp`), and never rereads it.
+
+
+## 2026-08-21: the --include hint is unfollowable for one specifier shape
+
+Not fixed. Recorded here because it lived only in a code comment
+(`includeSuggestion()` in `libjs/bundle-loader.js`), which is not where
+someone hitting it will look.
+
+When a bundled module requires a bare specifier the container cannot
+answer, the error suggests the specifier verbatim:
+
+```
+Error: Cannot find module 'baz'
+  required by node_modules/foo/index.js
+  Not in the bundle. Add it with:
+    --include=baz
+  (--include resolves from the entry's directory.)
+```
+
+`--include=baz` then fails with `error: --include=baz cannot be resolved`
+whenever the target sits under a nested `node_modules` -- here it is at
+`node_modules/foo/node_modules/baz`, and the value that works is
+`--include=./node_modules/foo/node_modules/baz`.
+
+The suggestion is not computable. The module did not resolve, so the
+loader does not know which of Node's candidate directories would have held
+it; only the program's own tree does. The options were to print every
+candidate the walk would have tried, which is several lines of mostly
+wrong paths, or to state the rule, which is the parenthetical above. The
+message is therefore honest but unhelpful in this shape: it tells you
+where `--include` resolves from and leaves you to derive the path.
+
+A relative specifier does not have this problem -- `includeSuggestion()`
+computes the exact value from the importer's identity, and
+`test/bundle-include.js` runs the suggested command to prove it resolves.
+The bare case is the one with no correct answer to print.

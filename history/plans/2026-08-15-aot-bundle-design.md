@@ -2,6 +2,14 @@
 
 **Status:** Design approved 2026-08-15. Implementation plan to follow.
 
+**Superseded in part 2026-08-19** by
+`2026-08-19-closed-world-bundle-design.md`, which removes the run-time disk
+fallback: a bundle is now a closed world, every module and every resolution
+comes from the container, and a `require()` it cannot answer is an error
+naming `--include` instead of a disk read. Every row and paragraph below
+that rests on the fallback is marked, and the container format went to v2 in
+the process. The rest of this document stands.
+
 ## Goal
 
 Package an application's compiled JavaScript into one distributable file, so
@@ -209,10 +217,10 @@ after code depends on it.
 | Situation | Behavior |
 | --- | --- |
 | Literal specifier will not resolve (build) | Warn naming importer and specifier, leave out of the edge table, hand to the run-time loader -- except a vendored package name (`ws`), which warns with its own reason and is left to the copy embedded in the binary |
-| Resolves to `.node` or other non-JS/JSON (build) | Warn, skip, leave to runtime fallback |
+| Resolves to `.node` or other non-JS/JSON (build) | Warn, skip -- **superseded 2026-08-19**: nothing catches it at run time any more; a `.node` specifier gets its own "native addons are not supported in a bundle yet" error |
 | Required file the parser or compiler rejects (build) | Warn, package a module that throws the same `SyntaxError` when required |
 | Entry point does not parse or compile (build) | Hard error |
-| `require` misses the edge table (runtime) | Fall back to disk resolution and compilation; log under `HERMES_NODE_DEBUG_NATIVE=BUNDLE` |
+| `require` misses the edge table (runtime) | **Superseded 2026-08-19**: the container's own resolver is asked next, and a miss there throws `MODULE_NOT_FOUND` naming the importer and `--include`. Nothing is read from disk. The `HERMES_NODE_DEBUG_NATIVE=BUNDLE` log remains, now as the trace of what failed |
 | Generation or format version mismatch | Hard error, no fallback |
 | Truncated or corrupt container | Hard error, from the structural checks |
 
@@ -251,6 +259,14 @@ crash into a visible performance regression. Its log is, in effect, a
 hand-rolled trace naming exactly the modules a future trace producer would need
 to capture.
 
+**Superseded 2026-08-19.** That trade was the wrong one: it made
+"self-contained" unverifiable, since a container with a hole in it behaves
+exactly like a complete one until the tree is gone, and it left the
+artifact's boundary meaningless, since a computed specifier could name any
+file on the machine. "Static analysis missed something" is a build-time
+warning and a run-time error naming `--include` now. The log survives and is
+still the hand-rolled trace described here.
+
 ## Interactions with existing features
 
 **`--inspect` / `--inspect-brk` are rejected with `--bundle`**, matching the
@@ -259,11 +275,13 @@ compiled at `DebugInfoSetting::THROWING` and the debugger requires `ALL`. The
 error message directs the user to run from source.
 
 **`--optimize` does not apply to the producer**, which always optimizes -- that
-is what AOT means here. On the consumer side the flag affects only fallback
-compiles.
+is what AOT means here. On the consumer side the flag affects nothing, since
+nothing is compiled at run time (superseded 2026-08-19: it used to affect
+fallback compiles).
 
 **The compile cache is not consulted for bundle hits** and not written for
-them; there is nothing to compile. Fallback compiles use it normally.
+them; there is nothing to compile. (Superseded 2026-08-19: there are no
+fallback compiles left for it to serve.)
 
 ## Testing
 
@@ -278,7 +296,10 @@ Lit tests (`test/`) for behavior:
   test that actually demonstrates the feature.
 - Corrupt the container and check for a clean error rather than a crash.
 - Force a fallback (a module reached only by dynamic `require`) and check that
-  it runs and that the debug log names it.
+  it runs and that the debug log names it. **Superseded 2026-08-19**: such a
+  module is answered by the container when something else packaged it or an
+  `--include` named it, and is an error otherwise. The debug log still names
+  it either way.
 - A JSON `require` round trip.
 
 End to end, `examples/yargs-cli` (50 files) builds and runs as a bundle
@@ -296,14 +317,20 @@ reached. The fallback path is covered by synthetic fixtures instead --
 `test/bundle-fallback.js` (computed `require`, debug log, and the shared
 `Module._cache`) and the COLLIDE / BARE / THROW cases in
 `test/bundle-run.js` -- which pin the same behaviors with no `npm install`
-and no native addon.
+and no native addon. **Superseded 2026-08-19**: `test/bundle-fallback.js` is
+now `test/bundle-scanner.js`, keeping the scanner cases (which are about the
+scan, not the loader) and asserting the closed world where it used to assert
+the fallback; the `bundle-run.js` cases were rewritten the same way.
 
 ## Risks
 
 **Static discovery is incomplete by construction.** Any `require()` whose
 argument is not a literal is invisible to it. Mitigated by the runtime
 fallback, not solved by it; solving it needs the trace producer, which is out
-of scope for v1.
+of scope for v1. **Superseded 2026-08-19**: mitigated by the container's own
+resolver (which answers a computed specifier whenever the target was packaged
+for any reason) and by `--include` for the rest. A trace producer is still
+the thing that would remove the annotation.
 
 **The common-ancestor root can be surprising** for a tree whose entry sits deep
 inside it, since the bundle must then be placed at that ancestor to rehydrate

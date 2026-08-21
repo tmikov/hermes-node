@@ -5,9 +5,11 @@
 ## The property
 
 A bundle is a closed world. Every module the program loads comes from the
-container, and the loader never touches the filesystem to resolve or read
-code. A `require()` the container cannot answer is an error, not a disk
-read.
+container, and `require()`/`require.resolve()` never touch the filesystem
+to resolve or read code (code that deliberately drops to
+`Module.prototype.load`, `require.extensions`, or reads and evals a file
+itself sits outside that boundary, same as it would unbundled). A
+`require()` the container cannot answer is an error, not a disk read.
 
 Today it is the opposite: a miss falls through to Node's real loader,
 which resolves and compiles from disk. That fallback was scaffolding for
@@ -313,6 +315,35 @@ trailing slash `lexically_normal()` leaves behind when a `..` cancels a
 segment, so `require('..')` recorded `<dir>//package.json` and packaged the
 same file twice under one identity. Both backends now share
 `trimOneTrailingSlash()` from `file_source.h`.
+
+## Closed in review, 2026-08-20
+
+Two residuals from the same final review, left open at the time and closed
+the next day:
+
+- **The `--include` suggestion for a bare specifier.** The prior round's
+  fix computed the suggestion for a relative request but still echoed a
+  bare one back verbatim, on the claim that a bare specifier "resolves the
+  same way from any directory" -- false for one required from a nested
+  `node_modules`: `--include=baz` from `node_modules/foo/index.js` fails
+  where `--include=./node_modules/foo/node_modules/baz` is what actually
+  works, and the loader cannot compute that value (the request never
+  resolved, so there is no candidate directory to build it from). The
+  message now keeps printing the bare value -- correct in the common case,
+  including the design's own `--include=@babel/preset-env` example -- and
+  adds one line stating that `--include` resolves from the entry's
+  directory, so the advice is never false even where it is not automatic.
+- **"Nothing is loaded from the filesystem" overclaimed.** `require()` and
+  `require.resolve()` are closed, but `Module.prototype.load` and
+  `require.extensions` (`Module._extensions`) reach Node's own vendored
+  `.js`/`.json`/`.node` handlers directly, bypassing both loader wrappers,
+  and read the disk exactly as they would unbundled. Not reachable from a
+  computed specifier -- it takes code that deliberately calls the
+  lower-level module machinery, the same way `eval(fs.readFileSync(x))`
+  does -- so the fix is wording, not gating: every categorical "never
+  touches the filesystem" claim (this doc, CLAUDE.md, `libjs/loader.js`'s
+  error text, `libjs/bundle-loader.js`'s header) is now scoped to
+  `require()`/`require.resolve()`.
 
 ## Risks
 
