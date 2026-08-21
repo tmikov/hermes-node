@@ -41,3 +41,13 @@ preset by string, which nothing can follow, and `transform-static.js`
 requires it instead, which makes the AOT bundle self-contained. Optionally
 bundles with rollup as well. Requires `npm install` in the directory
 first; see `babel-parser/README.md`.
+
+## hermes-parser-ast/
+
+Parses a file with the native Hermes parser addon and prints its ESTree
+AST, from disk and then from an AOT bundle -- the native-addon sibling of
+`babel-parser/ast.js`. `hermes-parser`'s own loader reaches its `.node`
+through three computed `require()` calls, which the scanner cannot follow,
+so the addon is named with `--include`; the resulting bundle is a file
+plus a sidecar shared object rather than one file. Requires `npm install`
+in the directory first; see `hermes-parser-ast/README.md`.
