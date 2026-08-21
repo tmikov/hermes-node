@@ -4,15 +4,21 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 #
-# Runs the Babel examples under hermes-node: the two scripts from disk, then
+# Runs the Babel examples under hermes-node: the scripts from disk, then
 # their AOT bundles, checked with the source tree hidden. A bundle is a
-# closed world -- it never reads a module off the disk -- so hiding the tree
-# is what tells a self-contained container from one that is not.
+# closed world for modules -- it never reads a module off the disk -- so
+# hiding the tree is what tells a self-contained container from one that is
+# not.
 #
 # transform.js names its preset in a string, which no static bundler can
 # follow, and is bundled with --include=@babel/preset-env. transform-static.js
 # requires the preset instead and needs nothing. Both end up self-contained,
 # by the two different routes, and that pair is the point of this example.
+#
+# ast.js takes a file to parse as an argument. It shows the other half of
+# "closed world": the bundle still won't read a *module* off disk, but the
+# program's own input keeps coming from wherever its argument points, tree
+# hidden or not.
 #
 # The rollup section is optional. It runs only when rollup and node are both
 # present, and reports SKIP otherwise, so `npm install --omit=dev` leaves a
@@ -72,6 +78,26 @@ expect_pass() {
   fi
 }
 
+# Sibling to expect_pass, for ast.js: it has no PASS line, since its whole
+# output is an AST. This checks that the output really is one -- the File
+# node, plus two node types known to appear in the input -- rather than any
+# old JSON. Every call below points ast.js at parse.js, so those two types
+# are fixed.
+expect_ast() {
+  local label="$1"
+  shift
+  local out
+  out="$("$@")" || { echo "FAIL: $label" 1>&2; exit 1; }
+  if echo "$out" | grep -q '"type": "File"' \
+      && echo "$out" | grep -q '"VariableDeclaration"' \
+      && echo "$out" | grep -q '"ExpressionStatement"'; then
+    echo "  ok: $label"
+  else
+    echo "FAIL: $label" 1>&2
+    exit 1
+  fi
+}
+
 # Hides node_modules for the duration of one command. A bundle that is
 # genuinely self-contained does not notice; one with a hole in it fails with
 # "Cannot find module ... Not in the bundle", which is the only way to tell
@@ -88,6 +114,7 @@ echo "from disk:"
 expect_pass "parse.js" "$HERMES_NODE" parse.js
 expect_pass "transform.js" "$HERMES_NODE" transform.js
 expect_pass "transform-static.js" "$HERMES_NODE" transform-static.js
+expect_ast "ast.js parse.js" "$HERMES_NODE" ast.js parse.js
 
 echo "hermes-node --build-bundle:"
 "$HERMES_NODE" --build-bundle=parse.hbb parse.js >/dev/null 2>&1
@@ -97,12 +124,31 @@ echo "hermes-node --build-bundle:"
 # world exists for: the idiomatic source, no edit, self-contained.
 "$HERMES_NODE" --build-bundle=transform.hbb --include=@babel/preset-env \
   transform.js >/dev/null 2>&1
+# @babel/parser is a static require, so ast.js needs no --include.
+"$HERMES_NODE" --build-bundle=ast.hbb ast.js >/dev/null 2>&1
 expect_pass "parse.hbb, no source tree" \
   without_node_modules "$HERMES_NODE" --bundle=parse.hbb
 expect_pass "transform-static.hbb, no source tree" \
   without_node_modules "$HERMES_NODE" --bundle=transform-static.hbb
 expect_pass "transform.hbb (--include), no source tree" \
   without_node_modules "$HERMES_NODE" --bundle=transform.hbb
+# The point of this one: modules come from the container (node_modules is
+# hidden), and the input file -- parse.js, an ordinary argument -- still
+# comes from the disk.
+expect_ast "ast.hbb, no source tree, parse.js from disk" \
+  without_node_modules "$HERMES_NODE" --bundle=ast.hbb parse.js
+
+# ast.js with no argument is a usage error, not silence dressed as success.
+if err="$("$HERMES_NODE" ast.js 2>&1 1>/dev/null)"; then
+  echo "FAIL: ast.js with no argument should not exit 0" 1>&2
+  exit 1
+fi
+if echo "$err" | grep -qi usage; then
+  echo "  ok: ast.js with no argument fails with a usage message"
+else
+  echo "FAIL: ast.js with no argument printed no usage message" 1>&2
+  exit 1
+fi
 
 # Optional: rollup is a devDependency, and running it needs node itself.
 if [ ! -d "$HERE/node_modules/rollup" ]; then
@@ -115,7 +161,7 @@ else
   expect_pass "rollup-out.cjs, no source tree" \
     without_node_modules "$HERMES_NODE" rollup-out.cjs
   # Rollup collapses the graph into one module; the container then holds one
-  # bytecode blob instead of 270, which is both smaller and faster to load.
+  # bytecode blob instead of 574, which is both smaller and faster to load.
   "$HERMES_NODE" --build-bundle=rollup-out.hbb rollup-out.cjs >/dev/null 2>&1
   expect_pass "rollup-out.hbb, no source tree" \
     without_node_modules "$HERMES_NODE" --bundle=rollup-out.hbb
