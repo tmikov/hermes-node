@@ -256,6 +256,25 @@ TEST_F(BundleResolveTest, AbsoluteSpecifierResolvesDirectly) {
   EXPECT_EQ(target, *result);
 }
 
+TEST_F(BundleResolveTest, AbsoluteSpecifierResolvesThroughPackageMain) {
+  // The absolute branch hands off to the same resolveBase() the relative
+  // and bare-specifier branches use, so a directory target should fall
+  // through to its package.json "main" exactly like
+  // ResolvesBareSpecifierViaPackageMain does. Argued equivalent by reading
+  // during review; this is that argument, run.
+  auto result = resolveSpecifier(cliJs(), appDir_ + "/node_modules/dep");
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(appDir_ + "/node_modules/dep/main.js", *result);
+}
+
+TEST_F(BundleResolveTest, AbsoluteSpecifierResolvesThroughIndexFallback) {
+  // Same as above for the other resolveBase() directory branch: no "main",
+  // fall through to index.js.
+  auto result = resolveSpecifier(cliJs(), appDir_ + "/node_modules/noMain");
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(appDir_ + "/node_modules/noMain/index.js", *result);
+}
+
 TEST_F(BundleResolveTest, AbsoluteSpecifierDoesNotWalkNodeModules) {
   // A file that exists ONLY under node_modules must not be found by an
   // absolute request naming a path where it does not exist. The bare walk

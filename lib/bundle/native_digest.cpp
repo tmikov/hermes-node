@@ -7,6 +7,8 @@
 
 #include <hermes/node-compat/bundle/native_digest.h>
 
+#include <hermes/node-compat/bundle/bundle_format.h>
+
 #include <picohash_wrapper.h>
 
 #include <cerrno>
@@ -57,7 +59,16 @@ std::optional<NativeDigest> nativeFileDigest(
   }
 
   result.byteLength = static_cast<uint32_t>(total);
-  result.raw.resize(PICOHASH_SHA256_DIGEST_LENGTH);
+  // kNativeDigestBytes, not picohash's own PICOHASH_SHA256_DIGEST_LENGTH:
+  // the format declares the field width the reader enforces, and producing
+  // the digest against that same constant is what keeps the two from ever
+  // disagreeing about it. (They are both 32, and always will be for SHA-256;
+  // the point is which name this file takes its instruction from.)
+  static_assert(
+      PICOHASH_SHA256_DIGEST_LENGTH == kNativeDigestBytes,
+      "picohash's SHA-256 output size no longer matches the bundle "
+      "format's declared digest width");
+  result.raw.resize(kNativeDigestBytes);
   ph_final(&ctx, result.raw.data());
   return result;
 }

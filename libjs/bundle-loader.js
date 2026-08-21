@@ -580,6 +580,10 @@
           // ordinary container hit. This is a LOAD, where the other
           // logOutcome calls are resolutions, which is exactly why it is
           // worth telling apart.
+          // `target` fills both the importer and identity slots: a load has
+          // no importer to report (the resolution that produced `target`
+          // already logged its own outcome above), and the module being
+          // loaded IS the identity, so there is nothing else to put there.
           logOutcome('native', sidecar, target, target);
           process.dlopen(mod, addonPath);
         } else {

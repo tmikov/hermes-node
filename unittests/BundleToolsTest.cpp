@@ -144,8 +144,10 @@ TEST(BundleToolsTest, DumpPrintsHeaderTablesAndTotals) {
   EXPECT_TRUE(contains(text, "\nSECTIONS\n")) << text;
   EXPECT_TRUE(contains(text, "\n  strings  65 B    modules  60 B\n")) << text;
   EXPECT_TRUE(contains(text, "\n  edges    24 B    payload  40 B\n")) << text;
-  // The total is the size of the file, which exceeds the sum of the four
-  // sections by the header and the payload alignment padding.
+  // The total is the size of the file, which exceeds the sum of the six
+  // sections (this fixture's natives and preloads are both empty, but the
+  // rows are unconditional) by the header and the payload alignment
+  // padding.
   EXPECT_TRUE(
       contains(text, "\ntotal " + std::to_string(bytes.size()) + " bytes\n"))
       << text;
@@ -696,6 +698,42 @@ TEST(BundleToolsTest, DumpPrintsNativesSection) {
   EXPECT_NE(text.find("a.node"), std::string::npos) << text;
   EXPECT_NE(text.find("4096"), std::string::npos) << text;
   EXPECT_NE(text.find("abababab"), std::string::npos) << text;
+}
+
+// The preload table has real bytes in the file even though it has no row of
+// its own in MODULES or EDGES -- SECTIONS is the only place a dump ever
+// says so. A container with at least one preload is what makes preloads
+// nonzero and worth pinning; DumpPrintsHeaderTablesAndTotals above already
+// covers the all-zero case implicitly (its fixture has none).
+TEST(BundleToolsTest, DumpPrintsPreloadsInSections) {
+  TempTree tree;
+  BundleWriter writer;
+  uint32_t entry =
+      writer.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "x");
+  uint32_t setup =
+      writer.addModule("setup.js", ModuleKind::kJavaScript, kRequirable, "y");
+  writer.setEntry(entry);
+  writer.addPreload(setup);
+  tree.writeBytes("app.hbb", writer.serialize(bundleGenerationTag()));
+
+  std::ostringstream out, err;
+  ASSERT_EQ(
+      dumpBundle(tree.path("app.hbb"), bundleGenerationTag(), false, out, err),
+      0)
+      << err.str();
+  std::string text = out.str();
+  // Found by locating the "natives" row and slicing out its own line,
+  // rather than matching a literal string with the section-width padding
+  // baked in: that padding depends on the widest value in the whole
+  // SECTIONS block, which is incidental to what this test is pinning.
+  size_t nativesLine = text.find("\n  natives");
+  ASSERT_NE(nativesLine, std::string::npos) << text;
+  size_t lineEnd = text.find('\n', nativesLine + 1);
+  std::string line = text.substr(nativesLine, lineEnd - nativesLine);
+  EXPECT_NE(line.find("preloads"), std::string::npos) << line;
+  // sizeof(uint32_t) == 4: one preload index, and nothing else in the
+  // table.
+  EXPECT_NE(line.find("4 B"), std::string::npos) << line;
 }
 
 // extractModule() has nothing to write for a native: its bytes never

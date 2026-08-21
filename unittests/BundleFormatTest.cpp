@@ -660,6 +660,82 @@ TEST(BundleFormatTest, NativeTableOutOfRangeModuleIndexIsRejected) {
   EXPECT_NE(error.find("native"), std::string::npos) << error;
 }
 
+TEST(BundleFormatTest, NativeTableNonNativeModuleIsRejected) {
+  BundleWriter writer;
+  uint32_t entry = writer.addModule(
+      "cli.js", ModuleKind::kJavaScript, kRequirable, "bytecode");
+  writer.setEntry(entry);
+  // The native table's own moduleIndex range/sort checks accept this
+  // trivially (one row, in range, nothing to sort against); only the kind
+  // check below can catch a native record pointed at a JavaScript module.
+  writer.addNative(entry, "a.node", 1, std::string(32, 'a'));
+  std::vector<uint8_t> bytes = writer.serialize(7);
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 7, &error);
+  EXPECT_FALSE(reader.has_value());
+  EXPECT_NE(error.find("not native"), std::string::npos) << error;
+}
+
+TEST(BundleFormatTest, NativeModuleWithNoNativeTableEntryIsRejected) {
+  BundleWriter writer;
+  uint32_t entry = writer.addModule(
+      "cli.js", ModuleKind::kJavaScript, kRequirable, "bytecode");
+  // A real kNative module, deliberately never handed to addNative(): the
+  // container claims a module can be dlopen'd but says nothing about where
+  // its sidecar is.
+  writer.addModule("a.node", ModuleKind::kNative, kRequirable, "");
+  writer.setEntry(entry);
+  std::vector<uint8_t> bytes = writer.serialize(7);
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 7, &error);
+  EXPECT_FALSE(reader.has_value());
+  EXPECT_NE(error.find("no native table entry"), std::string::npos) << error;
+}
+
+TEST(BundleFormatTest, NativeModuleWithNonEmptyPayloadIsRejected) {
+  BundleWriter writer;
+  uint32_t entry = writer.addModule(
+      "cli.js", ModuleKind::kJavaScript, kRequirable, "bytecode");
+  // addModule's payload parameter is generic -- nothing stops a kNative
+  // module from being built with one, which is exactly the malformed
+  // container this check exists to reject. A real producer never does
+  // this: bundle_build.cpp never calls addModule with a non-empty payload
+  // for a native.
+  uint32_t addon = writer.addModule(
+      "a.node", ModuleKind::kNative, kRequirable, "should not be here");
+  writer.setEntry(entry);
+  writer.addNative(addon, "a.node", 1, std::string(32, 'a'));
+  std::vector<uint8_t> bytes = writer.serialize(7);
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 7, &error);
+  EXPECT_FALSE(reader.has_value());
+  EXPECT_NE(error.find("non-empty payload"), std::string::npos) << error;
+}
+
+TEST(BundleFormatTest, NativeDigestWrongLengthIsRejected) {
+  BundleWriter writer;
+  uint32_t entry = writer.addModule(
+      "cli.js", ModuleKind::kJavaScript, kRequirable, "bytecode");
+  uint32_t addon =
+      writer.addModule("a.node", ModuleKind::kNative, kRequirable, "");
+  writer.setEntry(entry);
+  // 4 bytes, not kNativeDigestBytes (32): a "digest" this short cannot be a
+  // SHA-256, and letting it round-trip is what used to leave
+  // --dump's digestHex.resize(16) truncation depending on this check for
+  // its own correctness (resize() pads a too-short string instead of
+  // shrinking it).
+  writer.addNative(addon, "a.node", 1, std::string(4, 'a'));
+  std::vector<uint8_t> bytes = writer.serialize(7);
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 7, &error);
+  EXPECT_FALSE(reader.has_value());
+  EXPECT_NE(error.find("32 bytes"), std::string::npos) << error;
+}
+
 TEST(BundleFormatTest, NoNativesCostsNothing) {
   BundleWriter writer;
   uint32_t entry = writer.addModule(

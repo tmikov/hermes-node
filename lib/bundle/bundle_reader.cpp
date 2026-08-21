@@ -221,6 +221,16 @@ std::optional<BundleReader> BundleReader::openImpl(
       return fail("hermes-node bundle: module has unknown flags");
     if (!inRange(header->payloadSize, m.payloadOffset, m.payloadSize))
       return fail("hermes-node bundle: module payload out of range");
+    // A native's bytes ship as a sidecar file, never in the container (see
+    // ModuleKind::kNative in bundle_format.h) -- so a non-zero payload size
+    // here is not "extra data to ignore", it is a container claiming a
+    // dlopen() target lives somewhere this reader would never look for it.
+    // payloadOffset is not part of this check: it carries no meaning for a
+    // zero-size entry, and the writer does not special-case it (see the
+    // comment on kNative).
+    if (m.kind == static_cast<uint32_t>(ModuleKind::kNative) &&
+        m.payloadSize != 0)
+      return fail("hermes-node bundle: native module has a non-empty payload");
   }
 
   for (uint32_t i = 0; i < header->edgeCount; ++i) {
@@ -269,6 +279,22 @@ std::optional<BundleReader> BundleReader::openImpl(
     if (!validateStringIndex(
             stringsBase, header->stringsSize, natives[i].hashString))
       return fail("hermes-node bundle: native hash string out of range");
+    // A well-formed string-table entry of the wrong length is still
+    // well-formed as a string; only the digest's own declared width (see
+    // kNativeDigestBytes in bundle_format.h) says whether it is really a
+    // SHA-256. --verify-natives compares this field byte-for-byte against a
+    // freshly computed 32-byte digest, so a short or long one could never
+    // match and --dump's truncation to a hex prefix would otherwise pad a
+    // too-short digest with NULs instead of shrinking it.
+    if (stringViewAt(stringsBase, natives[i].hashString).size() !=
+        kNativeDigestBytes) {
+      // Built from the constant rather than a literal "32" in the message,
+      // so a future change to kNativeDigestBytes cannot leave the message
+      // stating a number the check no longer enforces.
+      std::string message = "hermes-node bundle: native digest is not " +
+          std::to_string(kNativeDigestBytes) + " bytes";
+      return fail(message.c_str());
+    }
   }
   for (uint32_t i = 0; i < header->moduleCount; ++i) {
     if (modules[i].kind != static_cast<uint32_t>(ModuleKind::kNative))
@@ -448,6 +474,11 @@ uint32_t BundleReader::moduleTableSize() const {
 uint32_t BundleReader::edgeTableSize() const {
   return static_cast<uint32_t>(
       static_cast<uint64_t>(header_->edgeCount) * sizeof(BundleEdgeRecord));
+}
+
+uint32_t BundleReader::preloadTableSize() const {
+  return static_cast<uint32_t>(
+      static_cast<uint64_t>(header_->preloadCount) * sizeof(uint32_t));
 }
 
 uint32_t BundleReader::nativeTableSize() const {

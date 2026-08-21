@@ -31,8 +31,11 @@ enum class ModuleKind : uint32_t {
   /// A native addon. Its bytes are NOT in the container: they ship as a
   /// flat sidecar file next to the bundle, because dlopen() takes a path
   /// and there is no portable way to load a shared object from memory.
-  /// payloadOffset and payloadSize are zero; everything else about the
-  /// addon lives in the native table (BundleNativeRecord below).
+  /// payloadSize is zero (the reader rejects anything else); payloadOffset
+  /// carries no meaning for a zero-size entry and is whatever position the
+  /// writer's payload cursor happened to be at when it reached this module,
+  /// same as any other zero-byte module would get. Everything else about
+  /// the addon lives in the native table (BundleNativeRecord below).
   kNative = 2,
 };
 
@@ -95,10 +98,24 @@ struct BundleEdgeRecord {
   uint32_t target;
 };
 
+/// Length in bytes of a native record's digest, as stored in the string
+/// table entry `hashString` points at. Raw SHA-256 output, not hex text: 32
+/// bytes either way, but the format declares its own field width rather
+/// than importing picohash's PICOHASH_SHA256_DIGEST_LENGTH into this header
+/// -- this header itself stays free of that compile-time coupling, so the
+/// reader's check and the producer's output agree on a number this file
+/// states, not on a constant reached through picohash. (hermesNodeBundle,
+/// the library both live in, does link picohash already, for
+/// native_digest.cpp's own use; this constant is about not reaching for
+/// picohash's header a second time, not about the link graph.) See the
+/// static_assert next to native_digest.cpp's use of this constant, which is
+/// what keeps the two declarations of "32" from silently drifting apart.
+constexpr size_t kNativeDigestBytes = 32;
+
 /// One per kNative module. `sidecarString` and `hashString` index the
-/// string table; the hash entry holds the raw 32-byte SHA-256, not hex, so
-/// it may contain NUL bytes -- which the string table's explicit length
-/// prefix already allows.
+/// string table; the hash entry holds the raw kNativeDigestBytes-byte
+/// SHA-256, not hex, so it may contain NUL bytes -- which the string
+/// table's explicit length prefix already allows.
 ///
 /// `byteLength` and the digest are recorded at build time and read by
 /// nothing on the run path: hashing at load would mean reading the whole

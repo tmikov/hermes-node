@@ -16,6 +16,10 @@
 // DUMP: setup.js
 // DUMP: PRELOADS (1)
 // DUMP: setup.js
+// The preload table is a section with real bytes, not a free extra folded
+// into "header and padding" -- SECTIONS says so instead of only PRELOADS
+// counting the module.
+// DUMP: preloads {{[1-9][0-9]*}} B
 
 // Without the flag it is not in the container at all.
 // RUN: %hermes-node --build-bundle=%t.tree/plain.hbb %t.tree/cli.js

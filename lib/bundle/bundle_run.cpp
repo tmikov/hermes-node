@@ -476,6 +476,12 @@ bool openBundle(const std::string &path, std::string *error) {
 
   // realpath, so that a bundle reached through a symlinked directory
   // resolves identities against the directory the file really lives in.
+  // This is also where a native addon's sidecar is found -- root plus its
+  // recorded sidecar name, see the dispatch in libjs/bundle-loader.js --
+  // and verifyNatives() in bundle_tools.cpp recomputes this exact sequence
+  // independently, so it can check a container this binary refuses to run.
+  // If the two ever drift apart, they stop agreeing on where a sidecar
+  // lives.
   std::error_code ec;
   fs::path canonical = fs::canonical(fs::path(path), ec);
   fs::path rootPath =

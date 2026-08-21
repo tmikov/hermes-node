@@ -129,13 +129,14 @@ class BundleReader {
 
   /// Section sizes, straight from the header, for a dump that reports them.
   /// stringsSize() and payloadSize() are byte counts, same as the header
-  /// fields they return. moduleTableSize(), edgeTableSize() and
-  /// nativeTableSize() are also byte counts -- record count times record
-  /// size -- NOT element counts; use moduleCount()/edgeCount()/
-  /// nativeCount() for the latter.
+  /// fields they return. moduleTableSize(), edgeTableSize(),
+  /// preloadTableSize() and nativeTableSize() are also byte counts --
+  /// record count times record size -- NOT element counts; use
+  /// moduleCount()/edgeCount()/preloadCount()/nativeCount() for the latter.
   uint32_t stringsSize() const;
   uint32_t moduleTableSize() const;
   uint32_t edgeTableSize() const;
+  uint32_t preloadTableSize() const;
   uint32_t nativeTableSize() const;
   uint32_t payloadSize() const;
 

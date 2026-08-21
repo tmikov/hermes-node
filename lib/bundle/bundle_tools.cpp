@@ -323,6 +323,10 @@ int dumpBundle(
       // alone as a verdict (OK/MISSING/MISMATCH) rather than one line in an
       // inventory, so the extra width does not compete with anything.
       std::string digestHex = nativeDigestToHex(native.digest);
+      // resize() shrinks here and never pads: BundleReader::openImpl()
+      // rejects a native digest that is not exactly kNativeDigestBytes
+      // (bundle_format.h) before this code ever runs, so digestHex is
+      // always the full 64 hex characters at this point.
       if (!verbose)
         digestHex.resize(16);
       out << "  [" << native.moduleIndex << "] "
@@ -335,21 +339,33 @@ int dumpBundle(
   const uint32_t strings = reader->stringsSize();
   const uint32_t modules = reader->moduleTableSize();
   const uint32_t edges = reader->edgeTableSize();
+  const uint32_t preloads = reader->preloadTableSize();
   const uint32_t natives = reader->nativeTableSize();
   const uint32_t payload = reader->payloadSize();
   size_t sectionWidth = std::max(
-      std::max(widthOf(strings), widthOf(modules)),
-      std::max(widthOf(edges), std::max(widthOf(natives), widthOf(payload))));
+      {widthOf(strings),
+       widthOf(modules),
+       widthOf(edges),
+       widthOf(preloads),
+       widthOf(natives),
+       widthOf(payload)});
 
   out << "\nSECTIONS\n";
   out << "  strings  " << std::right << std::setw(sectionWidth) << strings
       << " B    modules  " << std::setw(sectionWidth) << modules << " B\n";
   out << "  edges    " << std::setw(sectionWidth) << edges << " B    payload  "
       << std::setw(sectionWidth) << payload << " B\n";
-  out << "  natives  " << std::setw(sectionWidth) << natives << " B\n";
-  // The size of the file, which is larger than the five sections add up to:
+  out << "  natives  " << std::setw(sectionWidth) << natives
+      << " B    preloads " << std::setw(sectionWidth) << preloads << " B\n";
+  // The size of the file, which is larger than the six sections add up to:
   // the header, and the padding that puts each payload on its alignment
-  // boundary, belong to neither.
+  // boundary, belong to neither. Unconditional, like the natives row above
+  // it: a preload table is just as real a section as a native table even
+  // when its count is zero, which is the whole reason this row exists --
+  // the old comment claimed the total exceeded the sections by header and
+  // padding alone, which was already false for any container with
+  // preloads, since their table's bytes were counted in the total but
+  // named in no row.
   out << "total " << file->size() << " bytes\n";
 
   return 0;
