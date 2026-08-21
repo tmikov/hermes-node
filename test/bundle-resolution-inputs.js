@@ -51,3 +51,46 @@
 // RUN: rm -rf %t.dot/node_modules %t.dot/cli.js
 // RUN: %hermes-node --bundle=%t.dot/app.hbb | %FileCheck --check-prefix=DOTEXEC %s
 // DOTEXEC: DOT 3
+
+// A package.json read while probing a specifier that never resolved is not
+// a reason to move the bundle root. Here `foo` resolves to nothing (its
+// package.json main points at a file that does not exist), and it sits
+// OUTSIDE the directory every packaged module shares -- so before this it
+// pulled the root up a level and changed every identity in the container.
+// RUN: rm -rf %t.wide && mkdir -p %t.wide/app %t.wide/node_modules/foo
+// RUN: echo '{ "main": "nope.js" }' > %t.wide/node_modules/foo/package.json
+// RUN: echo "module.exports = { v: 1 };" > %t.wide/app/dep.js
+// RUN: echo "try { require('foo'); } catch (e) {} console.log('W', require('./dep').v);" > %t.wide/app/cli.js
+// RUN: %hermes-node --build-bundle=%t.wide/app/app.hbb %t.wide/app/cli.js 2>&1 | %FileCheck --check-prefix=WIDE %s
+// WIDE: bundle root: {{.*}}/app
+//
+// And the identities stay relative to that root. Anchored to the start of
+// the identity column -- the byte count and the padding before it -- since
+// a bare `cli.js` is a substring of the `app/cli.js` this case exists to
+// rule out, and so would pass whether the bug was fixed or not.
+// RUN: %hermes-node --bundle=%t.wide/app/app.hbb --dump | %FileCheck --check-prefix=WIDEDUMP %s
+// WIDEDUMP: {{[0-9]+ +cli\.js$}}
+
+// The flip side: a package.json outside the modules-only common ancestor
+// is not always safe to drop. Here every packaged module lives under
+// node_modules/foo/lib/, so node_modules/foo/package.json sits one level
+// ABOVE all of them -- an ancestor of every packaged module's directory,
+// not of none -- and dropping it unconditionally (the first cut of this
+// fix) would leave the container unable to answer a dynamic
+// require.resolve('foo', {paths}) lookup, which does not go through the
+// edge table and needs foo's package.json "main" to find it by name.
+// Widening the root to node_modules/foo/ is exactly what makes that
+// lookup work; a plain require('./helper') needs none of this, since a
+// static edge answers it without consulting any package.json again.
+// RUN: rm -rf %t.deep && mkdir -p %t.deep/node_modules/foo/lib
+// RUN: echo '{ "main": "lib/index.js" }' > %t.deep/node_modules/foo/package.json
+// RUN: echo "module.exports = { v: 7 };" > %t.deep/node_modules/foo/lib/helper.js
+// RUN: echo "var path = require('path'); var dir = path.join(__dirname, '..', '..', '..'); var resolved = require.resolve('foo', { paths: [dir] }); console.log('DEEP', resolved === __filename, require('./helper').v);" > %t.deep/node_modules/foo/lib/index.js
+// RUN: %hermes-node --build-bundle=%t.deep/node_modules/foo/app.hbb %t.deep/node_modules/foo/lib/index.js 2>&1 | %FileCheck --check-prefix=DEEPROOT %s
+// DEEPROOT: bundle root: {{.*}}/foo{{$}}
+//
+// The source tree is gone; only the container can answer the dynamic,
+// paths-qualified lookup of `foo` by name.
+// RUN: rm -rf %t.deep/node_modules/foo/lib %t.deep/node_modules/foo/package.json
+// RUN: %hermes-node --bundle=%t.deep/node_modules/foo/app.hbb | %FileCheck --check-prefix=DEEPEXEC %s
+// DEEPEXEC: DEEP true 7

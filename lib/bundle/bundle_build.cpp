@@ -826,18 +826,72 @@ int buildBundle(
   // "main" field. Nothing require()s these -- a bundle's closed-world
   // property otherwise depends on a source tree that stays on disk after
   // the build, since a future run-time resolver needs the same "main"
-  // answers the producer got. Added here, after the walk but before the
-  // root is computed just below, so these files count toward it like any
-  // other packaged file.
+  // answers the producer got.
+  //
+  // Not every one of these is kept, though. `moduleDirs` below is built
+  // from the entries `paths` held from the require() walk alone, before
+  // this loop starts appending to it -- that is the set this loop tests
+  // ancestry against, so a package.json kept by one iteration cannot make
+  // a later iteration keep another that would otherwise be dropped. A
+  // candidate is kept only when its directory is an ancestor of (or equal
+  // to) some packaged module's directory; otherwise it is dropped. This is
+  // not "kept iff already under the root", because the root has not been
+  // computed yet -- it is computed below, from `paths` after this loop, so
+  // a kept package.json outside a shallower module's directory can still
+  // widen the root to cover it (e.g. a package whose entire reachable
+  // module graph lives under its own `lib/` subdirectory: the package.json
+  // sits one level higher than every module, so it is an ancestor of all
+  // of them, is kept, and pulls the root up to the package directory,
+  // which is exactly where the consumer needs it for a dynamic resolution
+  // of that package by name). A candidate that is an ancestor of nothing
+  // packaged -- the original bug this loop's filter exists for, e.g. a
+  // failed require() probe into an unrelated node_modules/foo that never
+  // got packaged -- is dropped.
+  //
+  // What dropping guarantees, exactly: no packaged module sits under that
+  // directory, so no *module* the consumer serves is made unreachable. It
+  // does not guarantee that no resolution can want the file, because a
+  // package.json is reached as a resolution INPUT rather than as a module,
+  // and the two reachabilities are not the same. A package whose "main"
+  // escapes its own directory ("main": "../../../outside/real.js") has its
+  // module packaged elsewhere and its own directory an ancestor of nothing
+  // packaged, so its package.json is dropped and a run-time computed
+  // require of that package BY NAME then throws MODULE_NOT_FOUND. That is
+  // the known residual case, left as is deliberately: the shape is
+  // pathological, and the alternative -- keeping every package.json any
+  // probe ever read -- is the bug this filter was added to fix, where an
+  // unrelated failed probe widened the root and renamed every identity in
+  // the container.
+  size_t moduleCount = paths.size();
+  // The module directories, computed once. The filter below is
+  // O(candidates x modules), and rebuilding fs::path(paths[i])
+  // .parent_path() inside the inner loop parsed and allocated a path per
+  // pair; a literal require.resolve() being a discovery edge only grows
+  // the module count, which is the multiplicand.
+  std::vector<fs::path> moduleDirs;
+  moduleDirs.reserve(moduleCount);
+  for (size_t i = 0; i < moduleCount; ++i)
+    moduleDirs.push_back(fs::path(paths[i]).parent_path());
   for (const std::string &pkgPath : disk.readPackageJsonPaths()) {
     if (pathIndex.count(pkgPath) != 0)
       continue; // the program requires it too; it is already kRequirable.
+    fs::path pkgDir = fs::path(pkgPath).parent_path();
+    bool isAncestorOfSomeModule = false;
+    for (const fs::path &moduleDir : moduleDirs) {
+      fs::path relative = moduleDir.lexically_relative(pkgDir);
+      if (!relative.empty() && relative.begin()->string() != "..") {
+        isAncestorOfSomeModule = true;
+        break;
+      }
+    }
+    if (!isAncestorOfSomeModule)
+      continue; // an ancestor of nothing packaged; see comment above.
     std::string text;
     if (!readFile(pkgPath, &text))
       continue; // read once already; a disappearance now is not fatal.
     FileInfo info;
     info.kind = ModuleKind::kJSON;
-    info.flags = 0; // resolve-only: require() must not see it.
+    info.flags = kResolveOnly; // require() must not see it.
     info.payload = std::move(text);
     pathIndex.emplace(pkgPath, static_cast<uint32_t>(paths.size()));
     paths.push_back(pkgPath);
@@ -845,18 +899,20 @@ int buildBundle(
   }
 
   // Step 3: compute and announce the build root -- the longest path prefix
-  // shared by every visited file's directory. Module identities are
-  // relative to it, and the consumer recovers it from the bundle file's own
-  // directory, which is why the bundle has to sit at the printed root.
-  // Once, after the walk, rather than per site during it -- and naming
-  // --verbose, because that is where the positions are. Two lines rather
-  // than a combined one: a computed argument leaves a call site the reader
-  // can go and look at, while an escaped require leaves only the point
-  // where it stopped being traceable, and the second is the worse news.
+  // shared by every visited file's directory (modules and the package.json
+  // files kept just above). Module identities are relative to it, and the
+  // consumer recovers it from the bundle file's own directory, which is
+  // why the bundle has to sit at the printed root. Once, after the walk,
+  // rather than per site during it -- and naming --verbose, because that is
+  // where the positions are. Two lines rather than a combined one: a
+  // computed argument leaves a call site the reader can go and look at,
+  // while an escaped require leaves only the point where it stopped being
+  // traceable, and the second is the worse news.
   if (computedRequires != 0) {
     std::fprintf(
         stderr,
-        "warning: %zu computed require() %s in %zu %s: not packaged; "
+        "warning: %zu computed require()/require.resolve() %s in %zu %s: "
+        "not packaged; "
         "answered at run time only if the container already holds the "
         "target, else --include it (--verbose lists them)\n",
         computedRequires,

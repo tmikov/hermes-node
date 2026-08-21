@@ -18,21 +18,14 @@
 namespace hermes {
 namespace node_compat {
 
-/// Resolves \p specifier the same way as the two-argument overload below,
-/// but answering every filesystem question through \p src instead of the
-/// real filesystem. The two-argument overload constructs a DiskFileSource
-/// and forwards here; a caller with its own FileSource (e.g. a container's
-/// identity set) calls this overload directly.
-std::optional<std::string> resolveSpecifier(
-    FileSource &src,
-    std::string_view fromFile,
-    std::string_view specifier);
-
 /// Resolves \p specifier as written in a `require()` call inside \p
 /// fromFile to an absolute file on disk, approximating the subset of Node's
 /// CommonJS resolution algorithm (see
 /// libjs-node/internal/modules/cjs/loader.js) that the AOT bundle producer
-/// needs:
+/// needs, answering every filesystem question through \p src instead of
+/// going straight to the real filesystem -- so a caller with its own
+/// FileSource (e.g. a container's identity set) resolves exactly the way
+/// the producer did:
 ///
 ///   1. A relative specifier is joined against dirname(fromFile). "Relative"
 ///      is Node's own predicate from Module._resolveLookupPaths: starts with
@@ -54,6 +47,14 @@ std::optional<std::string> resolveSpecifier(
 ///
 /// \return the first probed path that exists as a regular file, made
 ///     absolute and lexically normalized; nullopt if none does.
+std::optional<std::string> resolveSpecifier(
+    FileSource &src,
+    std::string_view fromFile,
+    std::string_view specifier);
+
+/// Resolves \p specifier the same way as the three-argument overload above,
+/// against the real filesystem: constructs a DiskFileSource and forwards to
+/// it. See that overload for the algorithm.
 std::optional<std::string> resolveSpecifier(
     std::string_view fromFile,
     std::string_view specifier);

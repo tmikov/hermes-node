@@ -8,6 +8,7 @@
 #include <hermes/node-compat/bundle/bundle_reader.h>
 
 #include <cstring>
+#include <unordered_set>
 
 namespace hermes {
 namespace node_compat {
@@ -74,7 +75,10 @@ std::string_view stringViewAt(const uint8_t *tableBase, uint32_t offset) {
 
 /// True if \p identity is safe to use as a `root + "/" + identity` path
 /// (BundleFileSource's contract) and as a Module._cache key: non-empty, not
-/// absolute, no embedded NUL, and no "." or ".." path segment. Structure
+/// absolute, no embedded NUL, and no empty, "." or ".." path segment
+/// (an empty segment -- "a/", "a//b" -- would collapse under a real
+/// filesystem join the same way "." would, joining to a path the identity
+/// does not spell). Structure
 /// validation alone (the checks around this one) never looked at identity
 /// bytes -- identities happened to be safe because the producer only ever
 /// derives them via lexically_relative() against a common ancestor, which
@@ -93,7 +97,7 @@ bool isValidIdentity(std::string_view identity) {
     std::string_view segment = slash == std::string_view::npos
         ? identity.substr(start)
         : identity.substr(start, slash - start);
-    if (segment == "." || segment == "..")
+    if (segment.empty() || segment == "." || segment == "..")
       return false;
     if (slash == std::string_view::npos)
       return true;
@@ -181,13 +185,26 @@ std::optional<BundleReader> BundleReader::openImpl(
   const auto *edges = reinterpret_cast<const BundleEdgeRecord *>(
       data + header->edgeTableOffset);
 
+  // One record per identity is what lets the run-time identity index
+  // (bundle_run.cpp's OpenBundle::byIdentity, built with emplace() so the
+  // first record for a repeated identity wins) and BundleFileSource (which
+  // sorts every record and binary-searches the result, an unstable sort
+  // with no defined tie-break of its own) agree about what the container
+  // holds. A duplicate identity would let each pick a different record for
+  // it, with no way to tell from outside which one answered.
+  std::unordered_set<std::string_view> seenIdentities;
+  seenIdentities.reserve(header->moduleCount);
+
   for (uint32_t i = 0; i < header->moduleCount; ++i) {
     const BundleModuleRecord &m = modules[i];
     if (!validateStringIndex(
             stringsBase, header->stringsSize, m.identityString))
       return fail("hermes-node bundle: module identity string out of range");
-    if (!isValidIdentity(stringViewAt(stringsBase, m.identityString)))
+    std::string_view identity = stringViewAt(stringsBase, m.identityString);
+    if (!isValidIdentity(identity))
       return fail("hermes-node bundle: module has a malformed identity");
+    if (!seenIdentities.insert(identity).second)
+      return fail("hermes-node bundle: duplicate module identity");
     if (m.kind != static_cast<uint32_t>(ModuleKind::kJavaScript) &&
         m.kind != static_cast<uint32_t>(ModuleKind::kJSON))
       return fail("hermes-node bundle: module has an unknown kind");

@@ -18,8 +18,8 @@ namespace node_compat {
 
 /// Why a use of the module's `require` could not be followed statically.
 enum class RequireGapKind {
-  /// `require(expr)`: the specifier only exists once the program computes
-  /// it, so what it names is unknown here.
+  /// `require(expr)` or `require.resolve(expr)`: the specifier only exists
+  /// once the program computes it, so what it names is unknown here.
   kComputedArgument,
   /// `require` used as a value rather than called -- passed to a function,
   /// assigned, returned. Everything it goes on to load is unknown, and
@@ -44,20 +44,26 @@ struct RequireGap {
 
 /// Wraps \p source in the CommonJS module wrapper (see cjs_wrapper.h),
 /// parses and semantically resolves it with the Hermes front end, and
-/// appends every literal `require()` argument to \p out, in source order,
-/// with duplicates removed (first occurrence wins).
+/// appends every literal `require()` and `require.resolve()` argument to
+/// \p out, in source order, with duplicates removed (first occurrence
+/// wins).
 ///
-/// A call counts only when its callee is an identifier **bound to the
-/// wrapper's `require` parameter** -- that is, to the real module require --
-/// and its first argument is a string literal, or a template literal with
-/// exactly one quasi and no substitutions. Resolving the binding rather than
-/// matching the name is what keeps a module that declares its own inner
-/// `require` (the shape browserify and older webpack output ship) from
-/// contributing specifiers that were only ever meaningful inside that
-/// module's own bundle.
+/// A call counts when its callee is an identifier **bound to the wrapper's
+/// `require` parameter** -- that is, to the real module require -- or is
+/// `require.resolve`/`require?.resolve` (a non-computed property access on
+/// that same binding), and its first argument is a string literal, or a
+/// template literal with exactly one quasi and no substitutions. Resolving
+/// the binding rather than matching the name is what keeps a module that
+/// declares its own inner `require` (the shape browserify and older webpack
+/// output ship) from contributing specifiers that were only ever meaningful
+/// inside that module's own bundle. A resolve is as statically visible as a
+/// require, and its target has to be in the container or the call throws at
+/// run time with nothing said at build time.
 ///
-/// `require.resolve(...)` and `obj.require(...)` are not calls of `require`
-/// and are ignored, as they were before.
+/// `obj.require(...)` is not a call of `require` and is ignored, as before.
+/// Every other property access on `require` (`require.cache`,
+/// `require.main`, a computed `require['resolve']`) loads nothing and
+/// contributes nothing.
 ///
 /// Does not resolve specifiers or touch the filesystem; it only reports the
 /// raw strings written in the source.

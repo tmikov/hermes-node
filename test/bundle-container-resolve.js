@@ -69,3 +69,27 @@
 // RUN: rm -rf %t.pathhit/extra %t.pathhit/cli.js
 // RUN: %hermes-node --bundle=%t.pathhit/app.hbb | %FileCheck --check-prefix=PATHSHIT %s
 // PATHSHIT: PATHSHIT {{.*}}.pathhit/extra/node_modules/dep/entry.js
+
+// The same paths-qualified container resolve, reached through
+// Module._resolveFilename's own wrapper instead of makeRequire()'s
+// override above: a createRequire()'d require's resolve() is Node's own,
+// which calls Module._resolveFilename -- and that function is wrapped
+// globally by installBundleLoader() too (see libjs/bundle-loader.js), with
+// its own, separate `options.paths` handling. depX is packaged only under
+// extra/, reached by an explicit `paths` entry naming extra/ itself, same
+// shape as PATHSHIT above but exercised through createRequire() so the
+// wrapper's own paths branch -- not makeRequire()'s -- is what has to
+// answer. pull4.js's dead branch is what puts
+// extra/node_modules/depX in the container; the tree is deleted before the
+// run, so the resolved path can only have come from the container.
+// RUN: rm -rf %t.crpath && mkdir -p %t.crpath/extra/node_modules/depX
+// RUN: echo '{ "main": "entry.js" }' > %t.crpath/extra/node_modules/depX/package.json
+// RUN: echo "module.exports = { v: 22 };" > %t.crpath/extra/node_modules/depX/entry.js
+// RUN: echo "if (globalThis.never) { require('depX'); }" > %t.crpath/extra/pull4.js
+// RUN: echo "require('./extra/pull4');" > %t.crpath/cli.js
+// RUN: echo "var req = require('module').createRequire(__filename);" >> %t.crpath/cli.js
+// RUN: echo "console.log('CRPATH', req.resolve('depX', { paths: [__dirname + '/extra'] }));" >> %t.crpath/cli.js
+// RUN: %hermes-node --build-bundle=%t.crpath/app.hbb %t.crpath/cli.js
+// RUN: rm -rf %t.crpath/extra %t.crpath/cli.js
+// RUN: %hermes-node --bundle=%t.crpath/app.hbb | %FileCheck --check-prefix=CRPATH %s
+// CRPATH: CRPATH {{.*}}.crpath/extra/node_modules/depX/entry.js{{$}}

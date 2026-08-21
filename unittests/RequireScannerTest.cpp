@@ -44,11 +44,31 @@ TEST(RequireScannerTest, IgnoresNonLiteralArguments) {
       (std::vector<std::string>{"ok"}));
 }
 
-TEST(RequireScannerTest, IgnoresRequireResolveAndMemberCalls) {
-  // require.resolve() is not a module load; obj.require() is not our require.
+TEST(RequireScannerTest, RequireResolveContributesAnEdgeButNotMemberCalls) {
+  // require.resolve() names a real dependency, so it is now an edge like
+  // require() itself; obj.require() is still not our require.
   EXPECT_EQ(
       scan("require.resolve('x'); obj.require('y'); require('z');"),
-      (std::vector<std::string>{"z"}));
+      (std::vector<std::string>{"x", "z"}));
+}
+
+TEST(RequireScannerTest, RecordsLiteralRequireResolveTargets) {
+  // A resolve is as statically visible as a require, and its target has to
+  // be in the container or the call throws at run time with nothing said at
+  // build time.
+  EXPECT_EQ(
+      scan("require.resolve('./data.json');"),
+      (std::vector<std::string>{"./data.json"}));
+  // Deduplicated against a require() of the same specifier, like any other.
+  EXPECT_EQ(
+      scan("require('./a'); require.resolve('./a');"),
+      (std::vector<std::string>{"./a"}));
+  // A computed argument is still invisible, and still not an escape.
+  EXPECT_TRUE(scan("require.resolve(name);").empty());
+  // Not our require, so not our edge.
+  EXPECT_TRUE(scan("function f(require) { require.resolve('./x'); }").empty());
+  // Other properties of require load nothing and contribute nothing.
+  EXPECT_TRUE(scan("require.cache; require.main; require.extensions;").empty());
 }
 
 TEST(RequireScannerTest, IgnoresRequireWithNoArguments) {
@@ -106,6 +126,31 @@ TEST(RequireScannerTest, RecordsComputedRequirePositions) {
   EXPECT_EQ(gaps[1].kind, RequireGapKind::kComputedArgument);
   EXPECT_EQ(gaps[1].line, 2u);
   EXPECT_EQ(gaps[1].column, 3u);
+}
+
+TEST(RequireScannerTest, RecordsComputedRequireResolvePositions) {
+  // A computed require.resolve() is a gap for exactly the reason a computed
+  // require() is: the target is invisible to the walk, so it may not be in
+  // the container, and the call throws at run time with nothing said at
+  // build time. yargs's apply-extends.js does this, which is how the shape
+  // was found.
+  //
+  // This is the only assertion that fails if collect()'s record() is
+  // narrowed to direct calls, e.g. by gating it on isDirectCall. The
+  // specifier-side test (`scan("require.resolve(name);")` is empty) passes
+  // either way -- a computed argument contributes no specifier in both
+  // worlds -- and every lit test that pins the warning wording triggers it
+  // with require(expr).
+  auto gaps = scanGaps("var x = 1;\n  require.resolve(name);");
+  ASSERT_EQ(gaps.size(), 1u);
+  EXPECT_EQ(gaps[0].kind, RequireGapKind::kComputedArgument);
+  EXPECT_EQ(gaps[0].line, 2u);
+  EXPECT_EQ(gaps[0].column, 3u);
+
+  // The optional spelling is the same call shape and the same gap.
+  auto optional = scanGaps("require?.resolve(name);");
+  ASSERT_EQ(optional.size(), 1u);
+  EXPECT_EQ(optional[0].kind, RequireGapKind::kComputedArgument);
 }
 
 TEST(RequireScannerTest, RecordsRequireUsedAsAValue) {
@@ -211,6 +256,28 @@ TEST(RequireScannerTest, FindsOptionalCallRequire) {
   // require?.('x') parses as OptionalCallExpressionNode, a distinct ESTree
   // kind from a plain CallExpressionNode.
   EXPECT_EQ(scan("require?.('opt');"), (std::vector<std::string>{"opt"}));
+}
+
+TEST(RequireScannerTest, FindsOptionalChainRequireResolve) {
+  // require?.resolve('x') puts the '?.' between require and .resolve, so
+  // the callee is an OptionalMemberExpressionNode wrapped in an ordinary
+  // CallExpressionNode -- neither the shape FindsOptionalCallRequire pins
+  // (an OptionalCallExpressionNode whose callee is bare `require`) nor the
+  // one RecordsLiteralRequireResolveTargets pins (a non-optional
+  // MemberExpressionNode). isRequireResolveMember()'s
+  // OptionalMemberExpressionNode overload and isRequireResolveCallee()'s
+  // matching dispatch branch (require_scanner.cpp) exist for exactly this
+  // shape and had no test of their own.
+  EXPECT_EQ(
+      scan("require?.resolve('optres');"),
+      (std::vector<std::string>{"optres"}));
+  // The fully optional spelling -- both the member access and the call
+  // itself marked -- parses as an OptionalCallExpressionNode whose callee
+  // is the same OptionalMemberExpressionNode, exercising the two node
+  // kinds together.
+  EXPECT_EQ(
+      scan("require?.resolve?.('optres2');"),
+      (std::vector<std::string>{"optres2"}));
 }
 
 TEST(RequireScannerTest, FindsRequireNestedInsideTemplateSubstitution) {

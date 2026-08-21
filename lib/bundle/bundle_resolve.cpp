@@ -24,6 +24,13 @@ namespace fs = std::filesystem;
 /// symlink resolution) so the result stays byte-for-byte predictable even
 /// when the containing directory is itself reached through a symlink (e.g.
 /// macOS's /tmp -> /private/tmp).
+///
+/// lexically_normal() never emits more than one trailing '/': a ".."
+/// cancelling the segment before it adds at most one ("a/b/.." -> "a/"),
+/// and it does not otherwise introduce one. So every path this function
+/// hands to a FileSource carries at most one trailing slash -- see the
+/// comment on FileSource::isDirectory() in file_source.h for how the two
+/// backends each honour that.
 std::string joinNormalized(const fs::path &base, std::string_view rel) {
   return (base / fs::path(std::string(rel))).lexically_normal().string();
 }

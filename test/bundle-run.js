@@ -122,3 +122,24 @@
 // THROW: FIRST boom
 // THROW: SECOND boom
 // THROW: END
+
+// __bundleLoad refuses a module packaged only so the resolver could read
+// it (kRequirable clear -- here node_modules/dep/package.json, kept
+// because it is an ancestor of the packaged entry.js but never itself
+// require()d). bundle.lookup()'s edge-table hit and bundle.resolve()'s
+// container hit never hand such an identity to require() in the first
+// place -- the latter checks explicitly -- so this pins the guard at
+// __bundleLoad itself, the point the bytes are actually handed out,
+// reached directly rather than through either of its two normal callers.
+// pull.js's dead branch is what packages dep's package.json and entry.js
+// in the first place, the same trick test/bundle-container-resolve.js
+// uses for the same reason.
+// RUN: rm -rf %t.guard && mkdir -p %t.guard/node_modules/dep
+// RUN: echo '{ "main": "entry.js" }' > %t.guard/node_modules/dep/package.json
+// RUN: echo "module.exports = { v: 1 };" > %t.guard/node_modules/dep/entry.js
+// RUN: echo "if (globalThis.never) { require('dep'); }" > %t.guard/pull.js
+// RUN: echo "require('./pull'); try { globalThis.__bundleLoad('node_modules/dep/package.json'); console.log('NOTHROWN'); } catch (e) { console.log('GUARD', e.message); }" > %t.guard/cli.js
+// RUN: %hermes-node --build-bundle=%t.guard/app.bundle %t.guard/cli.js
+// RUN: rm -rf %t.guard/node_modules %t.guard/cli.js %t.guard/pull.js
+// RUN: %hermes-node --bundle=%t.guard/app.bundle | %FileCheck --check-prefix=GUARD %s
+// GUARD: GUARD {{.*}}node_modules/dep/package.json

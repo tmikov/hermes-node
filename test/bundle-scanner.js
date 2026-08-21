@@ -25,28 +25,48 @@
 // RUN: echo "module.exports = { v: 7 };" > %t.tree/dyn.js
 // RUN: echo "const n = 'dyn' + ''; try { console.log('GOT', require('./' + n).v); } catch (e) { console.log('CAUGHT', e.code); } require('path');" > %t.tree/cli.js
 // RUN: %hermes-node --build-bundle=%t.tree/app.bundle %t.tree/cli.js 2>&1 | %FileCheck --check-prefix=DYNWARN %s
-// DYNWARN: warning: 1 computed require() call in 1 file: not packaged; answered at run time only if the container already holds the target, else --include it
+// DYNWARN: warning: 1 computed require()/require.resolve() call in 1 file: not packaged; answered at run time only if the container already holds the target, else --include it
 
 // dyn.js is still sitting on the disk, right where the specifier names it,
 // and that must make no difference: nothing outside the container is a
-// source of module code. The miss is reported, and it names both the
+// source of module code. A miss is reported, and it names both the
 // specifier and the bundled importer that asked for it -- pinning the
 // importer is what would catch a regression to the "from null" bug
 // libjs/bundle-loader.js's `importer === undefined` guard exists to avoid.
 //
-// Builtins are routed to the original loader before the edge-table lookup
-// (see the same file), so the require('path') above must never produce a
-// miss line of its own: a log line for every non-bundled require would make
-// the log useless for spotting the real ones. The log is now the trace a
-// --include list is built from, so that matters more than it did.
+// The debug log traces all three outcomes a bundled require() can have,
+// not only a miss: an edge-table hit (dep.js, required literally by
+// cli.js), a container-resolve hit (extra.js, required literally only by
+// holder.js -- so it is packaged, but cli.js's own require of it has no
+// edge -- and reached by cli.js through a computed specifier instead), and
+// a miss (dyn.js, named only by a computed require and packaged nowhere).
+// All three matter for building an --include set: a resolve hit today is
+// one dependency change away from becoming a miss, and there is no way to
+// tell that apart from an edge-table hit without logging both.
+//
+// Builtins are routed to the original loader before either lookup runs
+// (see the same file), so the require('path') below must never produce a
+// line of its own under any of the three outcomes: a log line for every
+// non-bundled require would make the log useless for spotting the real
+// ones. The log is now the trace a --include list is built from, so that
+// matters more than it did.
 //
 // --implicit-check-not, not a trailing MISS-NOT: a trailing CHECK-NOT is
 // scanned only between the last positive match and EOF, so a regression
 // that logged the builtin would emit its line BEFORE the ./dyn one and
-// slip past, whatever order the two requires are written in. The implicit
+// slip past, whatever order the requires are written in. The implicit
 // form scans the whole output and does not depend on ordering at all.
-// RUN: env HERMES_NODE_DEBUG_NATIVE=BUNDLE %hermes-node --bundle=%t.tree/app.bundle 2>&1 | %FileCheck --check-prefix=MISS --implicit-check-not="miss: path" %s
-// MISS: [bundle] miss: ./dyn from cli.js
+// RUN: rm -rf %t.mixed && mkdir -p %t.mixed
+// RUN: echo "module.exports = { v: 1 };" > %t.mixed/dep.js
+// RUN: echo "module.exports = { v: 2 };" > %t.mixed/extra.js
+// RUN: echo "module.exports = require('./extra');" > %t.mixed/holder.js
+// RUN: echo "module.exports = { v: 7 };" > %t.mixed/dyn.js
+// RUN: echo "require('./holder'); console.log('DEP', require('./dep').v); console.log('EXTRA', require('./ex' + 'tra').v); try { console.log('GOT', require('./dy' + 'n').v); } catch (e) { console.log('CAUGHT', e.code); } require('path');" > %t.mixed/cli.js
+// RUN: %hermes-node --build-bundle=%t.mixed/app.bundle %t.mixed/cli.js
+// RUN: env HERMES_NODE_DEBUG_NATIVE=BUNDLE %hermes-node --bundle=%t.mixed/app.bundle 2>&1 | %FileCheck --check-prefix=MISS --implicit-check-not="miss: path" --implicit-check-not="edge: path" --implicit-check-not="resolve: path" %s
+// MISS: [bundle] edge: ./dep from cli.js -> dep.js{{$}}
+// MISS: [bundle] resolve: ./extra from cli.js -> extra.js{{$}}
+// MISS: [bundle] miss: ./dyn from cli.js{{$}}
 // MISS: CAUGHT MODULE_NOT_FOUND
 
 // The same specifier, with the remedy applied: --include puts the file in
@@ -75,7 +95,7 @@
 // RUN: echo "const n = 'gh' + 'ost'; module.exports = require('./' + n);" > %t.loud/lib/mod.js
 // RUN: echo "console.log('LOUD', require('./lib/mod').v);" > %t.loud/cli.js
 // RUN: %hermes-node --build-bundle=%t.loud/app.bundle %t.loud/cli.js 2>&1 | %FileCheck --check-prefix=LOUDWARN %s
-// LOUDWARN: warning: 1 computed require() call
+// LOUDWARN: warning: 1 computed require()/require.resolve() call
 // RUN: %not %hermes-node --bundle=%t.loud/app.bundle 2>&1 | %FileCheck --check-prefix=LOUD %s
 // LOUD: Cannot find module './ghost'
 // LOUD-NEXT: required by lib/mod.js
@@ -120,8 +140,12 @@
 // ESCEXEC: ESCAPE 4
 
 // Reading a property of require loads nothing, so it is not a use the
-// build has to warn about. Without this, require.resolve() and
-// require.cache -- both ordinary -- would produce a warning each.
+// build has to warn about. Without this, `require.cache` and any other
+// property read -- all ordinary -- would each be reported as require
+// escaping as a value. (`require.resolve('./dep')` is a recognized call
+// shape now and contributes a discovery edge, so it is doubly not an
+// escape; it stays in the case because the property read is what is
+// being tested and a literal resolve is the commonest one.)
 // RUN: rm -rf %t.prop && mkdir -p %t.prop
 // RUN: echo "module.exports = { v: 6 };" > %t.prop/dep.js
 // RUN: echo "require.resolve('./dep'); void require.cache; console.log('PROP', require('./dep').v);" > %t.prop/cli.js

@@ -136,5 +136,5 @@
 // DYN: dynamic {{.*}}cli.js:1:16
 // DYN: dynamic {{.*}}cli.js:1:35
 // RUN: %hermes-node --build-bundle=%t.dyn/plain.hbb %t.dyn/cli.js 2>&1 | %FileCheck --check-prefix=DYNQUIET --implicit-check-not=dynamic %s
-// DYNQUIET: warning: 2 computed require() calls in 1 file
+// DYNQUIET: warning: 2 computed require()/require.resolve() calls in 1 file
 // RUN: cmp %t.dyn/app.hbb %t.dyn/plain.hbb

@@ -31,11 +31,16 @@ namespace {
 /// Walks the whole AST looking for uses of \p requireDecl -- the CommonJS
 /// wrapper's `require` parameter, and so the module's real require.
 ///
-/// A call of it with a literal argument contributes the literal to `*out_`
-/// (deduplicated, first-seen order). Every other use is a gap recorded in
-/// `*gaps_`: a call with a computed argument, or the identifier appearing
-/// anywhere it is not being called and not being read through (`require.foo`
-/// is not a gap -- `require.cache` and `require.resolve` load nothing).
+/// Two call shapes are followed: `require(...)` and `require.resolve(...)`
+/// (either spelled optionally, `require?.(...)` / `require?.resolve(...)`).
+/// With a literal argument, each contributes the literal to `*out_`
+/// (deduplicated, first-seen order, shared between the two shapes) -- a
+/// resolve names a real dependency the container has to hold, or the call
+/// throws at run time. Every other use is a gap recorded in `*gaps_`:
+/// either call shape with a computed argument, or the identifier appearing
+/// anywhere it is not being called and not being read through. Reading a
+/// property is not itself a gap -- `require.cache`, and a `require.resolve`
+/// that is never called, load nothing.
 ///
 /// Inherits hermes::ESTree::RecursionDepthTracker rather than the brief's
 /// trivial always-true stub: RecursiveVisitor.h documents
@@ -160,39 +165,23 @@ class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
     if (isRequire(node))
       accounted_.insert(node);
   }
-  /// Appends the require() argument of \p node to `*out_` if \p node is a
-  /// call to a bare `require` identifier with a literal first argument that
-  /// has not already been collected. See require_scanner.h for the exact
-  /// acceptance rules.
-  ///
-  /// Templated so CallExpressionNode and OptionalCallExpressionNode -- two
-  /// distinct ESTree node kinds with identical `_callee`/`_arguments`
-  /// fields -- share this one implementation instead of duplicating the
-  /// callee/argument checks per kind.
-  template <typename CallNodeT>
-  void collect(CallNodeT *node) {
-    if (!isRequire(node->_callee))
-      return;
-    // Being called is what a require is for: whatever the argument turns
-    // out to be, this use is not an escape.
-    accounted_.insert(node->_callee);
-
-    if (node->_arguments.empty())
-      return;
-    ESTree::Node &firstArg = node->_arguments.front();
-
-    std::string value;
-    if (auto *str = llvh::dyn_cast<ESTree::StringLiteralNode>(&firstArg)) {
-      value = str->_value->str().str();
-    } else if (
-        auto *tmpl = llvh::dyn_cast<ESTree::TemplateLiteralNode>(&firstArg)) {
+  /// \return true and sets *value if \p node is a string literal, or a
+  /// template literal with exactly one quasi and no substitutions (using
+  /// _cooked when present, else _raw); false otherwise, leaving *value
+  /// untouched. Shared by both call shapes collect() recognizes -- a bare
+  /// `require(...)` and a `require.resolve(...)` -- so the two can never
+  /// disagree about what counts as a literal.
+  static bool extractLiteral(ESTree::Node *node, std::string *value) {
+    if (auto *str = llvh::dyn_cast<ESTree::StringLiteralNode>(node)) {
+      *value = str->_value->str().str();
+      return true;
+    }
+    if (auto *tmpl = llvh::dyn_cast<ESTree::TemplateLiteralNode>(node)) {
       // A template literal is a literal only when it has no substitutions.
       // The grammar guarantees quasis.size() == expressions.size() + 1, so
       // "no substitutions" is exactly "exactly one quasi".
-      if (!tmpl->_expressions.empty() || tmpl->_quasis.empty()) {
-        record(RequireGapKind::kComputedArgument, node);
-        return;
-      }
+      if (!tmpl->_expressions.empty() || tmpl->_quasis.empty())
+        return false;
       auto *elem =
           llvh::cast<ESTree::TemplateElementNode>(&tmpl->_quasis.front());
       // _cooked is null when the quasi has an invalid escape; _raw is
@@ -201,8 +190,74 @@ class RequireVisitor : public ESTree::RecursionDepthTracker<RequireVisitor> {
       // cooked is available.
       UniqueString *text =
           elem->_cooked != nullptr ? elem->_cooked : elem->_raw;
-      value = text->str().str();
-    } else {
+      *value = text->str().str();
+      return true;
+    }
+    return false;
+  }
+
+  /// \return true if \p member is `require.resolve` -- a MemberExpression
+  /// (either kind, hence the two overloads below rather than a template:
+  /// the two node kinds are matched by llvh::dyn_cast, not passed in
+  /// already resolved to a common shape) whose object is the module's
+  /// `require` and whose non-computed property is the identifier `resolve`.
+  /// `require['resolve']` is computed and deliberately not matched: it is
+  /// not the idiom this exists for, and treating a computed property as
+  /// literal-equivalent would blur the line collect() otherwise draws
+  /// cleanly for the call's own argument.
+  bool isRequireResolveMember(ESTree::MemberExpressionNode *member) const {
+    return !member->_computed && isRequireResolveProperty(member);
+  }
+  bool isRequireResolveMember(
+      ESTree::OptionalMemberExpressionNode *member) const {
+    return !member->_computed && isRequireResolveProperty(member);
+  }
+  template <typename MemberNodeT>
+  bool isRequireResolveProperty(MemberNodeT *member) const {
+    auto *prop = llvh::dyn_cast<ESTree::IdentifierNode>(member->_property);
+    return prop != nullptr && prop->_name->str() == "resolve" &&
+        isRequire(member->_object);
+  }
+
+  /// \return true if \p callee is `require.resolve` or `require?.resolve`.
+  bool isRequireResolveCallee(ESTree::Node *callee) const {
+    if (auto *member = llvh::dyn_cast<ESTree::MemberExpressionNode>(callee))
+      return isRequireResolveMember(member);
+    if (auto *member =
+            llvh::dyn_cast<ESTree::OptionalMemberExpressionNode>(callee))
+      return isRequireResolveMember(member);
+    return false;
+  }
+
+  /// Appends the literal argument of \p node to `*out_` if \p node is a call
+  /// to a bare `require` identifier, or to `require.resolve`/
+  /// `require?.resolve`, with a literal first argument that has not already
+  /// been collected -- a resolve is as statically visible as a require, and
+  /// its target has to be in the container or the call throws at run time
+  /// with nothing said at build time. See require_scanner.h for the exact
+  /// literal-acceptance rules.
+  ///
+  /// Templated so CallExpressionNode and OptionalCallExpressionNode -- two
+  /// distinct ESTree node kinds with identical `_callee`/`_arguments`
+  /// fields -- share this one implementation instead of duplicating the
+  /// callee/argument checks per kind.
+  template <typename CallNodeT>
+  void collect(CallNodeT *node) {
+    bool isDirectCall = isRequire(node->_callee);
+    if (isDirectCall) {
+      // Being called is what a require is for: whatever the argument turns
+      // out to be, this use is not an escape.
+      accounted_.insert(node->_callee);
+    } else if (!isRequireResolveCallee(node->_callee)) {
+      return;
+    }
+
+    if (node->_arguments.empty())
+      return;
+    ESTree::Node &firstArg = node->_arguments.front();
+
+    std::string value;
+    if (!extractLiteral(&firstArg, &value)) {
       record(RequireGapKind::kComputedArgument, node);
       return;
     }

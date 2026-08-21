@@ -48,11 +48,12 @@ struct OpenBundle {
   /// identities are relative to it, so it is what __filename is built from.
   std::string root;
   /// The FileSource bundleResolveCallback answers a require() the edge
-  /// table has no row for from. Built once here rather than per call: its
-  /// constructor builds a sorted identity vector over every module in the
-  /// container, and it holds only a reference to `reader` plus a copy of
-  /// `root`, both stable for the life of the process (see the comment on
-  /// this struct).
+  /// table has no row for from, and identityFor() converts a resolved path
+  /// back to an identity. Built once here rather than per call: it holds
+  /// only a reference to `reader` plus a copy of `root`, both stable for
+  /// the life of the process (see the comment on this struct). Its sorted
+  /// identity index is built lazily, by BundleFileSource itself, on first
+  /// query -- not here.
   std::optional<BundleFileSource> fileSource;
 };
 
@@ -84,9 +85,9 @@ napi_value undefinedValue(napi_env env) {
 
 /// Returns the module index for \p identity, or nullopt if the bundle has
 /// no such module.
-std::optional<uint32_t> indexOf(const std::string &identity) {
+std::optional<uint32_t> indexOf(std::string_view identity) {
   const OpenBundle &state = openBundleState();
-  auto it = state.byIdentity.find(std::string_view(identity));
+  auto it = state.byIdentity.find(identity);
   if (it == state.byIdentity.end())
     return std::nullopt;
   return it->second;
@@ -126,24 +127,6 @@ napi_value bundleLookupCallback(napi_env env, napi_callback_info info) {
       napi_ok)
     return nullptr;
   return result;
-}
-
-/// Strips \p root (a "root + '/' + rest" prefix) off \p absPath, returning
-/// the identity it names -- or nullopt when \p absPath is not lexically
-/// under \p root. Mirrors BundleFileSource::stripRoot()'s exact-prefix rule
-/// byte for byte, including its root == "/" special case (appending "/" to
-/// a root that already ends in one would turn the prefix into "//" and
-/// reject every real path) -- resolveSpecifier() can only ever have
-/// produced \p absPath by asking that same BundleFileSource whether paths
-/// under \p root exist, so the two must agree on what "under root" means.
-std::optional<std::string> identityUnderRoot(
-    const std::string &root,
-    const std::string &absPath) {
-  bool rootEndsInSlash = !root.empty() && root.back() == '/';
-  std::string prefix = rootEndsInSlash ? root : root + "/";
-  if (absPath.compare(0, prefix.size(), prefix) != 0)
-    return std::nullopt;
-  return absPath.substr(prefix.size());
 }
 
 /// __bundleResolve(fromIdentity, request[, paths]) -> identity | undefined.
@@ -226,8 +209,13 @@ napi_value bundleResolveCallback(napi_env env, napi_callback_info info) {
   if (!resolved)
     return undefinedValue(env);
 
-  std::optional<std::string> identity =
-      identityUnderRoot(state.root, *resolved);
+  // identityFor() strips state.root off *resolved the same way it does for
+  // every isRegularFile/isDirectory question resolveSpecifier() asked to
+  // produce it in the first place, so the two can only ever agree on what
+  // "under root" means -- one implementation, not two answering the same
+  // question.
+  std::optional<std::string_view> identity =
+      state.fileSource->identityFor(*resolved);
   std::optional<uint32_t> index = identity ? indexOf(*identity) : std::nullopt;
   if (!index || !state.reader->isRequirable(*index))
     return undefinedValue(env);
@@ -274,6 +262,20 @@ napi_value bundleLoadCallback(napi_env env, napi_callback_info info) {
   }
 
   const OpenBundle &state = openBundleState();
+
+  // bundle.lookup()'s edge-table hit and bundle.resolve()'s container hit
+  // (the latter checks explicitly, above) never hand JS an identity this
+  // flag is clear for: a package.json packaged only so the resolver could
+  // read "main", which must never be require()d even though its bytes sit
+  // in the container. That invariant currently holds only because both
+  // callers are careful; enforcing it here as well means the bytes cannot
+  // be handed out to a mistaken or future caller of __bundleLoad either.
+  if (!state.reader->isRequirable(*index)) {
+    std::string message = "module is resolve-only, not requirable: " + identity;
+    napi_throw_error(env, nullptr, message.c_str());
+    return nullptr;
+  }
+
   std::string_view payload = state.reader->payload(*index);
 
   if (state.reader->kind(*index) == ModuleKind::kJSON) {

@@ -9,7 +9,6 @@
 
 #include <sys/stat.h>
 
-#include <algorithm>
 #include <fstream>
 #include <sstream>
 
@@ -40,7 +39,10 @@ std::optional<std::string> DiskFileSource::readPackageJson(
     return std::nullopt;
   std::ostringstream ss;
   ss << f.rdbuf();
-  if (std::find(readPaths_.begin(), readPaths_.end(), path) == readPaths_.end())
+  // Dedup through the set (a hash lookup) rather than a linear scan of
+  // readPaths_, which a large tree (many packages sharing few common
+  // dependencies, each read repeatedly) can make expensive.
+  if (readPathsSet_.insert(path).second)
     readPaths_.push_back(std::move(path));
   return ss.str();
 }

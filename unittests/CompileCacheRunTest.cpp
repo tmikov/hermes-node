@@ -12,6 +12,8 @@
 #include "hermes/Public/RuntimeConfig.h"
 #include "hermes/hermes.h"
 
+#include "TempTree.h"
+
 #include <gtest/gtest.h>
 
 #include <dirent.h>
@@ -29,29 +31,10 @@
 #include <vector>
 
 using namespace hermes::node_compat;
+using hermes::node_compat::test::TempTree;
+using hermes::node_compat::test::writeFile;
 
 namespace {
-
-/// A temporary directory removed on destruction.
-class TempDir {
- public:
-  TempDir() {
-    char tmpl[] = "/tmp/hnccrun-test-XXXXXX";
-    const char *made = ::mkdtemp(tmpl);
-    EXPECT_NE(nullptr, made);
-    path_ = made ? made : "";
-  }
-  ~TempDir() {
-    if (!path_.empty())
-      ::system(("rm -rf " + path_).c_str());
-  }
-  const std::string &path() const {
-    return path_;
-  }
-
- private:
-  std::string path_;
-};
 
 /// The single entry file under a populated cache root, or "" if there is not
 /// exactly one.
@@ -78,11 +61,6 @@ std::string readFile(const std::string &path) {
   std::ifstream f(path, std::ios::binary);
   return std::string(
       std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
-}
-
-void writeFile(const std::string &path, const std::string &bytes) {
-  std::ofstream f(path, std::ios::binary | std::ios::trunc);
-  f.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 }
 
 } // namespace
@@ -160,7 +138,7 @@ class CompileCacheRunTest : public ::testing::Test {
 };
 
 TEST_F(CompileCacheRunTest, MissCompilesPersistsAndRuns) {
-  TempDir dir;
+  TempTree dir;
   CompileCache cache;
   ASSERT_TRUE(cache.enable(dir.path(), "gen"));
 
@@ -179,8 +157,8 @@ TEST_F(CompileCacheRunTest, HitRunsBytecodeFromTheEntry) {
   // overwrite its payload with the bytecode for "40 + 3" while leaving the
   // header -- which identifies the source as "40 + 2" -- intact. A lookup
   // for "40 + 2" then validates, maps the swapped payload, and yields 43.
-  TempDir dirA;
-  TempDir dirB;
+  TempTree dirA;
+  TempTree dirB;
   CompileCache cacheA;
   CompileCache cacheB;
   ASSERT_TRUE(cacheA.enable(dirA.path(), "gen"));
@@ -218,7 +196,7 @@ TEST_F(CompileCacheRunTest, HitRunsBytecodeFromTheEntry) {
 }
 
 TEST_F(CompileCacheRunTest, CorruptEntryRecompilesLeavingNoPendingException) {
-  TempDir dir;
+  TempTree dir;
   CompileCache cache;
   ASSERT_TRUE(cache.enable(dir.path(), "gen"));
 
@@ -249,7 +227,7 @@ TEST_F(CompileCacheRunTest, WrapperIsNotPartOfTheCacheKey) {
   // what lets the wrapper text live in the generation directory name rather
   // than being hashed per entry, so two calls differing only in wrapper must
   // reuse one entry rather than creating two.
-  TempDir dir;
+  TempTree dir;
   CompileCache cache;
   ASSERT_TRUE(cache.enable(dir.path(), "gen"));
 
@@ -287,7 +265,7 @@ TEST_F(CompileCacheRunTest, WrapperIsNotPartOfTheCacheKey) {
 }
 
 TEST_F(CompileCacheRunTest, RealSyntaxErrorPropagatesWithExceptionPending) {
-  TempDir dir;
+  TempTree dir;
   CompileCache cache;
   ASSERT_TRUE(cache.enable(dir.path(), "gen"));
 
@@ -315,7 +293,7 @@ TEST_F(CompileCacheRunTest, NullCacheCompilesAndRunsWithoutPersisting) {
   // compile and run normally, and must not touch the filesystem: only the
   // compile API can be told to optimize, so this is the route --optimize=on
   // takes when the cache is disabled.
-  TempDir dir;
+  TempTree dir;
 
   napi_value result = nullptr;
   ASSERT_EQ(
@@ -351,8 +329,8 @@ TEST_F(CompileCacheRunTest, OptimizedAndUnoptimizedEntriesDoNotCollide) {
   // the same key yields a usable entry either way. Keeping the two settings
   // in separate generations is the runtime's job -- createCompileCache folds
   // the resolved optimize bool into the generation name.
-  TempDir dirOpt;
-  TempDir dirPlain;
+  TempTree dirOpt;
+  TempTree dirPlain;
   CompileCache optCache;
   CompileCache plainCache;
   ASSERT_TRUE(optCache.enable(dirOpt.path(), "gen-O"));

@@ -8,67 +8,19 @@
 #include <hermes/node-compat/bundle/bundle_resolve.h>
 #include <hermes/node-compat/bundle/file_source.h>
 
+#include "TempTree.h"
+
 #include <gtest/gtest.h>
 
-#include <sys/stat.h>
-
-#include <fstream>
 #include <map>
 #include <set>
 #include <string>
 
 using namespace hermes::node_compat;
+using hermes::node_compat::test::TempTree;
+using hermes::node_compat::test::writeFile;
 
 namespace {
-
-/// A temporary directory removed (recursively) on destruction. Mirrors the
-/// TempDir helper in unittests/CompileCacheTest.cpp.
-class TempDir {
- public:
-  TempDir() {
-    char tmpl[] = "/tmp/hnbr-test-XXXXXX";
-    const char *made = ::mkdtemp(tmpl);
-    EXPECT_NE(nullptr, made);
-    path_ = made ? made : "";
-  }
-  ~TempDir() {
-    if (!path_.empty())
-      ::system(("rm -rf " + path_).c_str());
-  }
-  const std::string &path() const {
-    return path_;
-  }
-
- private:
-  std::string path_;
-};
-
-/// Creates directory \p path (POSIX mkdir, not the GNU `mkdir -p` shell
-/// command) along with any missing parents.
-void makeDirs(const std::string &path) {
-  std::string partial;
-  size_t start = 0;
-  while (start < path.size()) {
-    size_t slash = path.find('/', start + 1);
-    partial = slash == std::string::npos ? path : path.substr(0, slash);
-    if (!partial.empty())
-      ::mkdir(partial.c_str(), 0755); // ignored if it already exists
-    if (slash == std::string::npos)
-      break;
-    start = slash;
-  }
-}
-
-/// Writes \p content to a new file at \p path, creating parent directories
-/// first.
-void writeFile(const std::string &path, const std::string &content) {
-  size_t slash = path.find_last_of('/');
-  if (slash != std::string::npos)
-    makeDirs(path.substr(0, slash));
-  std::ofstream f(path, std::ios::binary | std::ios::trunc);
-  ASSERT_TRUE(f.is_open()) << path;
-  f << content;
-}
 
 /// Builds the fixture tree used by every resolution test in this file:
 ///
@@ -98,7 +50,7 @@ class BundleResolveTest : public ::testing::Test {
     return appDir_ + "/cli.js";
   }
 
-  TempDir dir_;
+  TempTree dir_;
   std::string appDir_;
 };
 

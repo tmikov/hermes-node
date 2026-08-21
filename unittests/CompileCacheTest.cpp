@@ -63,6 +63,8 @@ TEST(CompileCacheTest, GenerationNameVariesWithEachComponent) {
   EXPECT_NE(base, compileCacheGenerationName("0.3.0", "x86_64", 99, 2));
 }
 
+#include "TempTree.h"
+
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -71,28 +73,9 @@ TEST(CompileCacheTest, GenerationNameVariesWithEachComponent) {
 #include <fstream>
 #include <vector>
 
+using hermes::node_compat::test::TempTree;
+
 namespace {
-
-/// A temporary directory removed on destruction.
-class TempDir {
- public:
-  TempDir() {
-    char tmpl[] = "/tmp/hncc-test-XXXXXX";
-    const char *made = ::mkdtemp(tmpl);
-    EXPECT_NE(nullptr, made);
-    path_ = made ? made : "";
-  }
-  ~TempDir() {
-    if (!path_.empty())
-      ::system(("rm -rf " + path_).c_str());
-  }
-  const std::string &path() const {
-    return path_;
-  }
-
- private:
-  std::string path_;
-};
 
 /// A recognisable fake payload. The entry format does not interpret the
 /// payload, so real bytecode is not needed to test it.
@@ -118,7 +101,7 @@ CompileCacheEntry makeEntry(
 } // namespace
 
 TEST(CompileCacheTest, WriteThenReadRoundTrips) {
-  TempDir dir;
+  TempTree dir;
   std::string file = dir.path() + "/entry";
   std::string source = "module.exports = 1;";
   auto payload = fakePayload(1234, 7);
@@ -136,14 +119,14 @@ TEST(CompileCacheTest, WriteThenReadRoundTrips) {
 }
 
 TEST(CompileCacheTest, ReadMissesWhenFileAbsent) {
-  TempDir dir;
+  TempTree dir;
   CompileCacheEntry entry = makeEntry(dir.path() + "/nope", "x");
   EXPECT_FALSE(compileCacheReadEntry(entry));
   EXPECT_FALSE(entry.hit());
 }
 
 TEST(CompileCacheTest, ReadMissesWhenSourceChanged) {
-  TempDir dir;
+  TempTree dir;
   std::string file = dir.path() + "/entry";
   auto payload = fakePayload(64, 1);
   CompileCacheEntry written = makeEntry(file, "var a = 1;");
@@ -157,7 +140,7 @@ TEST(CompileCacheTest, ReadMissesWhenSourceChanged) {
 }
 
 TEST(CompileCacheTest, ReadMissesWhenSourceSizeChanged) {
-  TempDir dir;
+  TempTree dir;
   std::string file = dir.path() + "/entry";
   auto payload = fakePayload(64, 1);
   CompileCacheEntry written = makeEntry(file, "var a = 1;");
@@ -169,7 +152,7 @@ TEST(CompileCacheTest, ReadMissesWhenSourceSizeChanged) {
 }
 
 TEST(CompileCacheTest, ReadMissesOnBadMagic) {
-  TempDir dir;
+  TempTree dir;
   std::string file = dir.path() + "/entry";
   std::string source = "x";
   auto payload = fakePayload(64, 1);
@@ -187,7 +170,7 @@ TEST(CompileCacheTest, ReadMissesOnBadMagic) {
 }
 
 TEST(CompileCacheTest, ReadMissesOnTruncatedFile) {
-  TempDir dir;
+  TempTree dir;
   std::string file = dir.path() + "/entry";
   std::string source = "x";
   auto payload = fakePayload(4096, 3);
@@ -203,7 +186,7 @@ TEST(CompileCacheTest, ReadMissesOnTruncatedFile) {
 }
 
 TEST(CompileCacheTest, ReadMissesOnGarbageShorterThanHeader) {
-  TempDir dir;
+  TempTree dir;
   std::string file = dir.path() + "/entry";
   {
     std::ofstream f(file, std::ios::binary);
@@ -214,7 +197,7 @@ TEST(CompileCacheTest, ReadMissesOnGarbageShorterThanHeader) {
 }
 
 TEST(CompileCacheTest, WriteLeavesNoTempFileBehind) {
-  TempDir dir;
+  TempTree dir;
   std::string file = dir.path() + "/entry";
   auto payload = fakePayload(64, 1);
   CompileCacheEntry written = makeEntry(file, "x");
@@ -260,8 +243,8 @@ bool dirExists(const std::string &path) {
 /// changes the environment must put it back -- otherwise the next test
 /// reads the mutated value as if it were the original.
 ///
-/// Declare one before any TempDir it interacts with: destructors run in
-/// reverse order, so the TempDir is removed first and the variable is
+/// Declare one before any TempTree it interacts with: destructors run in
+/// reverse order, so the TempTree is removed first and the variable is
 /// restored afterwards.
 class EnvGuard {
  public:
@@ -308,14 +291,14 @@ void makeAgedDir(
 } // namespace
 
 TEST(CompileCacheTest, MakeDirsCreatesNestedPath) {
-  TempDir dir;
+  TempTree dir;
   std::string deep = dir.path() + "/a/b/c";
   ASSERT_TRUE(compileCacheMakeDirs(deep));
   EXPECT_TRUE(dirExists(deep));
 }
 
 TEST(CompileCacheTest, MakeDirsIsIdempotent) {
-  TempDir dir;
+  TempTree dir;
   std::string deep = dir.path() + "/a/b/c";
   ASSERT_TRUE(compileCacheMakeDirs(deep));
   EXPECT_TRUE(compileCacheMakeDirs(deep));
@@ -324,7 +307,7 @@ TEST(CompileCacheTest, MakeDirsIsIdempotent) {
 TEST(CompileCacheTest, DefaultRootHonoursXdgCacheHome) {
   EnvGuard xdgGuard("XDG_CACHE_HOME");
   EnvGuard homeGuard("HOME");
-  TempDir dir;
+  TempTree dir;
   ::setenv("XDG_CACHE_HOME", dir.path().c_str(), 1);
   EXPECT_EQ(
       dir.path() + "/hermes-node/compile-cache", compileCacheDefaultRoot());
@@ -333,7 +316,7 @@ TEST(CompileCacheTest, DefaultRootHonoursXdgCacheHome) {
 TEST(CompileCacheTest, DefaultRootFallsBackToHome) {
   EnvGuard xdgGuard("XDG_CACHE_HOME");
   EnvGuard homeGuard("HOME");
-  TempDir dir;
+  TempTree dir;
   ::unsetenv("XDG_CACHE_HOME");
   ::setenv("HOME", dir.path().c_str(), 1);
   EXPECT_EQ(
@@ -350,7 +333,7 @@ TEST(CompileCacheTest, DefaultRootIsEmptyWithoutHome) {
 }
 
 TEST(CompileCacheTest, PruneKeepsCurrentPlusThreeMostRecent) {
-  TempDir dir;
+  TempTree dir;
   makeAgedDir(dir.path(), "gen-current", 0);
   makeAgedDir(dir.path(), "gen-1s", 1);
   makeAgedDir(dir.path(), "gen-10s", 10);
@@ -372,7 +355,7 @@ TEST(CompileCacheTest, PruneKeepsCurrentPlusThreeMostRecent) {
 }
 
 TEST(CompileCacheTest, PruneDoesNothingWhenUnderLimit) {
-  TempDir dir;
+  TempTree dir;
   makeAgedDir(dir.path(), "gen-current", 0);
   makeAgedDir(dir.path(), "gen-old", 10);
 
@@ -382,7 +365,7 @@ TEST(CompileCacheTest, PruneDoesNothingWhenUnderLimit) {
 }
 
 TEST(CompileCacheTest, PruneRemovesGenerationContents) {
-  TempDir dir;
+  TempTree dir;
   makeAgedDir(dir.path(), "gen-current", 0);
   makeAgedDir(dir.path(), "gen-a", 10);
   makeAgedDir(dir.path(), "gen-b", 20);
@@ -407,7 +390,7 @@ TEST(CompileCacheTest, PruneRemovesGenerationContents) {
 }
 
 TEST(CompileCacheTest, PruneToleratesMissingRoot) {
-  TempDir dir;
+  TempTree dir;
   // Must not crash or create anything.
   compileCachePruneGenerations(dir.path() + "/absent", "gen-current", 3);
   EXPECT_FALSE(dirExists(dir.path() + "/absent"));
@@ -424,7 +407,7 @@ TEST(CompileCacheTest, DisabledUntilEnabled) {
 }
 
 TEST(CompileCacheTest, EnableCreatesVersionedGenerationDir) {
-  TempDir dir;
+  TempTree dir;
   CompileCache cache;
   ASSERT_TRUE(cache.enable(dir.path(), "0.3.0-x86_64-bc99-3f9c21ab"));
   EXPECT_TRUE(cache.enabled());
@@ -446,7 +429,7 @@ TEST(CompileCacheTest, EnableFailsOnEmptyRoot) {
 }
 
 TEST(CompileCacheTest, SaveThenLookupHits) {
-  TempDir dir;
+  TempTree dir;
   CompileCache cache;
   ASSERT_TRUE(cache.enable(dir.path(), "gen"));
 
@@ -468,7 +451,7 @@ TEST(CompileCacheTest, SaveThenLookupHits) {
 }
 
 TEST(CompileCacheTest, LookupMissesAfterSourceChanges) {
-  TempDir dir;
+  TempTree dir;
   CompileCache cache;
   ASSERT_TRUE(cache.enable(dir.path(), "gen"));
   auto payload = fakePayload(64, 1);
@@ -483,7 +466,7 @@ TEST(CompileCacheTest, LookupMissesAfterSourceChanges) {
 }
 
 TEST(CompileCacheTest, KindsDoNotShareEntries) {
-  TempDir dir;
+  TempTree dir;
   CompileCache cache;
   ASSERT_TRUE(cache.enable(dir.path(), "gen"));
   std::string source = "var a = 1;";
@@ -500,7 +483,7 @@ TEST(CompileCacheTest, KindsDoNotShareEntries) {
 }
 
 TEST(CompileCacheTest, EntriesGoInFanoutSubdirectories) {
-  TempDir dir;
+  TempTree dir;
   CompileCache cache;
   ASSERT_TRUE(cache.enable(dir.path(), "gen"));
   auto payload = fakePayload(64, 1);
@@ -517,7 +500,7 @@ TEST(CompileCacheTest, EntriesGoInFanoutSubdirectories) {
 }
 
 TEST(CompileCacheTest, InvalidateRemovesTheEntry) {
-  TempDir dir;
+  TempTree dir;
   CompileCache cache;
   ASSERT_TRUE(cache.enable(dir.path(), "gen"));
   auto payload = fakePayload(64, 1);
@@ -539,7 +522,7 @@ TEST(CompileCacheTest, InvalidateRemovesTheEntry) {
 }
 
 TEST(CompileCacheTest, EnablePrunesOldGenerations) {
-  TempDir dir;
+  TempTree dir;
   std::string versioned = dir.path() + "/v1";
   makeAgedDir(versioned, "gen-a", 10);
   makeAgedDir(versioned, "gen-b", 20);

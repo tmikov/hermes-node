@@ -252,6 +252,34 @@ TEST(BundleFormatTest, RejectsMalformedIdentities) {
   expectRejected("a/./b.js"); // "." segment, interior
 }
 
+// An empty path segment ("a/", "a//b") would collapse under a real
+// filesystem join the same way a "." segment would -- resolving to a path
+// the identity does not spell.
+TEST(BundleFormatTest, RejectsAnEmptyPathSegment) {
+  for (const char *identity : {"a/", "a//b", "/a"}) {
+    SCOPED_TRACE(identity);
+    BundleWriter w;
+    w.setEntry(
+        w.addModule(identity, ModuleKind::kJavaScript, kRequirable, "A"));
+    auto bytes = w.serialize(kGen);
+    std::string error;
+    EXPECT_FALSE(BundleReader::open(bytes.data(), bytes.size(), kGen, &error)
+                     .has_value());
+  }
+}
+
+TEST(BundleFormatTest, RejectsADuplicateIdentity) {
+  // One record per identity is what lets byIdentity and BundleFileSource
+  // agree about what a container holds.
+  BundleWriter w;
+  w.setEntry(w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "A"));
+  w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "B");
+  auto bytes = w.serialize(kGen);
+  std::string error;
+  EXPECT_FALSE(
+      BundleReader::open(bytes.data(), bytes.size(), kGen, &error).has_value());
+}
+
 // Truncation at every byte length must be rejected, never crash. This is the
 // test that catches missing bounds checks in the reader.
 TEST(BundleFormatTest, RejectsTruncationAtEveryLength) {

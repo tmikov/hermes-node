@@ -10,6 +10,8 @@
 #include <hermes/node-compat/bundle/bundle_format.h>
 #include <hermes/node-compat/bundle/bundle_writer.h>
 
+#include "TempTree.h"
+
 #include <gtest/gtest.h>
 
 #include <dirent.h>
@@ -25,6 +27,8 @@
 #include <vector>
 
 using namespace hermes::node_compat;
+using hermes::node_compat::test::TempTree;
+using hermes::node_compat::test::writeFile;
 
 namespace {
 
@@ -33,29 +37,6 @@ constexpr uint32_t kGen = 0xABCD1234;
 /// What a differently-built binary would require. Deliberately unequal to
 /// kGen, so the dump has a mismatch to report.
 constexpr uint32_t kOtherGen = 0x0BADF00D;
-
-/// A temporary directory removed on destruction. mkdtemp picks a name no
-/// other process or thread holds, which is what makes this safe under the
-/// parallel test runner -- CompileCacheRunTest uses the same recipe.
-class TempDir {
- public:
-  TempDir() {
-    char tmpl[] = "/tmp/hnbtools-test-XXXXXX";
-    const char *made = ::mkdtemp(tmpl);
-    EXPECT_NE(nullptr, made);
-    path_ = made ? made : "";
-  }
-  ~TempDir() {
-    if (!path_.empty())
-      ::system(("rm -rf " + path_).c_str());
-  }
-  const std::string &path() const {
-    return path_;
-  }
-
- private:
-  std::string path_;
-};
 
 /// An entry module requiring one JavaScript module and one JSON module.
 /// The edges are added in the reverse of the order the table stores them
@@ -73,13 +54,6 @@ std::vector<uint8_t> makeBundle() {
   writer.addEdge(cli, "./cfg.json", cfg);
   writer.setEntry(cli);
   return writer.serialize(kGen);
-}
-
-void writeFile(const std::string &path, const std::vector<uint8_t> &bytes) {
-  std::ofstream f(path, std::ios::binary);
-  f.write(reinterpret_cast<const char *>(bytes.data()), bytes.size());
-  f.close();
-  EXPECT_FALSE(f.fail());
 }
 
 std::string readFile(const std::string &path) {
@@ -117,7 +91,7 @@ bool contains(const std::string &text, const std::string &needle) {
 }
 
 TEST(BundleToolsTest, DumpPrintsHeaderTablesAndTotals) {
-  TempDir dir;
+  TempTree dir;
   std::vector<uint8_t> bytes = makeBundle();
   std::string path = dir.path() + "/app.hbb";
   writeFile(path, bytes);
@@ -204,7 +178,7 @@ TEST(BundleToolsTest, EdgesPrintInStoredOrder) {
   writer.addEdge(entry, "./a-lib", lib);
   writer.setEntry(entry);
 
-  TempDir dir;
+  TempTree dir;
   std::string path = dir.path() + "/order.hbb";
   writeFile(path, writer.serialize(kGen));
 
@@ -227,7 +201,7 @@ TEST(BundleToolsTest, EdgesPrintInStoredOrder) {
 }
 
 TEST(BundleToolsTest, DumpReportsGenerationMismatchAndStillSucceeds) {
-  TempDir dir;
+  TempTree dir;
   std::string path = dir.path() + "/app.hbb";
   writeFile(path, makeBundle());
 
@@ -249,7 +223,7 @@ TEST(BundleToolsTest, DumpReportsGenerationMismatchAndStillSucceeds) {
 }
 
 TEST(BundleToolsTest, VerboseAddsPerModuleEdgeCounts) {
-  TempDir dir;
+  TempTree dir;
   std::string path = dir.path() + "/app.hbb";
   writeFile(path, makeBundle());
 
@@ -288,7 +262,7 @@ TEST(BundleToolsTest, ColumnsWidenToTheWidestValuePresent) {
   writer.addEdge(cli, "@scope/a-package-with-a-long-name", big);
   writer.setEntry(cli);
 
-  TempDir dir;
+  TempTree dir;
   std::string path = dir.path() + "/wide.hbb";
   writeFile(path, writer.serialize(kGen));
 
@@ -324,7 +298,7 @@ TEST(BundleToolsTest, DumpMarksResolveOnlyModules) {
       "{}");
   writer.setEntry(cli);
 
-  TempDir dir;
+  TempTree dir;
   std::string path = dir.path() + "/resolve-only.hbb";
   writeFile(path, writer.serialize(kGen));
 
@@ -346,7 +320,7 @@ TEST(BundleToolsTest, DumpMarksResolveOnlyModules) {
 }
 
 TEST(BundleToolsTest, DumpFailsOnAMissingFile) {
-  TempDir dir;
+  TempTree dir;
   std::ostringstream out;
   std::ostringstream err;
   EXPECT_NE(dumpBundle(dir.path() + "/nope.hbb", kGen, false, out, err), 0);
@@ -355,7 +329,7 @@ TEST(BundleToolsTest, DumpFailsOnAMissingFile) {
 }
 
 TEST(BundleToolsTest, DumpFailsOnAFileThatIsNotAContainer) {
-  TempDir dir;
+  TempTree dir;
   std::string path = dir.path() + "/notabundle";
   writeFile(path, std::vector<uint8_t>(64, 'x'));
 
@@ -376,7 +350,7 @@ TEST(BundleToolsTest, DumpFailsOnAFileThatIsNotAContainer) {
 // container must not name the file or not depending on which verb was
 // asked for.
 TEST(BundleToolsTest, ExtractNamesTheFileWhenTheContainerIsMalformed) {
-  TempDir dir;
+  TempTree dir;
   std::string path = dir.path() + "/notabundle";
   writeFile(path, std::vector<uint8_t>(64, 'x'));
 
@@ -390,7 +364,7 @@ TEST(BundleToolsTest, ExtractNamesTheFileWhenTheContainerIsMalformed) {
 // for it. It must still reach the reader and be diagnosed as the truncated
 // container it is, rather than as an I/O failure.
 TEST(BundleToolsTest, DumpFailsOnAnEmptyFile) {
-  TempDir dir;
+  TempTree dir;
   std::string path = dir.path() + "/empty.hbb";
   writeFile(path, std::vector<uint8_t>());
 
@@ -402,7 +376,7 @@ TEST(BundleToolsTest, DumpFailsOnAnEmptyFile) {
 }
 
 TEST(BundleToolsTest, MappedFileExposesTheWholeFile) {
-  TempDir dir;
+  TempTree dir;
   std::string path = dir.path() + "/app.hbb";
   std::vector<uint8_t> bytes = makeBundle();
   writeFile(path, bytes);
@@ -418,7 +392,7 @@ TEST(BundleToolsTest, MappedFileExposesTheWholeFile) {
 // Payload bytes go out verbatim, so extracting a JavaScript module's
 // bytecode payload is a byte-for-byte round trip through the container.
 TEST(BundleToolsTest, ExtractRoundTripsJavaScriptPayloadBytes) {
-  TempDir dir;
+  TempTree dir;
   std::string bundlePath = dir.path() + "/app.hbb";
   writeFile(bundlePath, makeBundle());
   std::string outPath = dir.path() + "/util.hbc";
@@ -433,7 +407,7 @@ TEST(BundleToolsTest, ExtractRoundTripsJavaScriptPayloadBytes) {
 // text, so this is what makes an extracted JSON file byte-identical to the
 // tree it was built from.
 TEST(BundleToolsTest, ExtractRoundTripsJsonPayloadBytes) {
-  TempDir dir;
+  TempTree dir;
   std::string bundlePath = dir.path() + "/app.hbb";
   writeFile(bundlePath, makeBundle());
   std::string outPath = dir.path() + "/cfg.json";
@@ -445,7 +419,7 @@ TEST(BundleToolsTest, ExtractRoundTripsJsonPayloadBytes) {
 }
 
 TEST(BundleToolsTest, ExtractFailsOnUnknownIdentityAndWritesNothing) {
-  TempDir dir;
+  TempTree dir;
   std::string bundlePath = dir.path() + "/app.hbb";
   writeFile(bundlePath, makeBundle());
   std::string outPath = dir.path() + "/x";
@@ -459,7 +433,7 @@ TEST(BundleToolsTest, ExtractFailsOnUnknownIdentityAndWritesNothing) {
 // A close typo is offered a suggestion, drawn from the container's own
 // identities rather than some second vocabulary invented here.
 TEST(BundleToolsTest, ExtractSuggestsCloseIdentitiesForATypo) {
-  TempDir dir;
+  TempTree dir;
   std::string bundlePath = dir.path() + "/app.hbb";
   writeFile(bundlePath, makeBundle());
   std::string outPath = dir.path() + "/x";
@@ -476,7 +450,7 @@ TEST(BundleToolsTest, ExtractSuggestsCloseIdentitiesForATypo) {
 // candidate here, so padding the list with three irrelevant identities
 // would be worse than saying nothing.
 TEST(BundleToolsTest, ExtractSuggestsNothingForAWildTypo) {
-  TempDir dir;
+  TempTree dir;
   std::string bundlePath = dir.path() + "/app.hbb";
   writeFile(bundlePath, makeBundle());
   std::string outPath = dir.path() + "/x";
@@ -504,7 +478,7 @@ TEST(BundleToolsTest, ExtractSuggestsAtMostThreeClosestIdentities) {
   writer.addModule("mod5.js", ModuleKind::kJavaScript, kRequirable, "BC-5");
   writer.setEntry(entry);
 
-  TempDir dir;
+  TempTree dir;
   std::string bundlePath = dir.path() + "/five.hbb";
   writeFile(bundlePath, writer.serialize(kGen));
   std::string outPath = dir.path() + "/x";
@@ -526,7 +500,7 @@ TEST(BundleToolsTest, ExtractSuggestsAtMostThreeClosestIdentities) {
 // container has to come out of this byte-for-byte unchanged, which is the
 // assertion an exit code alone cannot make.
 TEST(BundleToolsTest, ExtractRefusesToWriteOntoTheContainer) {
-  TempDir dir;
+  TempTree dir;
   std::string bundlePath = dir.path() + "/app.hbb";
   std::vector<uint8_t> bytes = makeBundle();
   writeFile(bundlePath, bytes);
@@ -548,7 +522,7 @@ TEST(BundleToolsTest, ExtractRefusesToWriteOntoTheContainer) {
 // shape a user actually meets -- `app.hbb` in a build tree pointing at the
 // real artifact -- and a string comparison would let it straight through.
 TEST(BundleToolsTest, ExtractRefusesASecondNameForTheContainer) {
-  TempDir dir;
+  TempTree dir;
   std::string bundlePath = dir.path() + "/app.hbb";
   std::vector<uint8_t> bytes = makeBundle();
   writeFile(bundlePath, bytes);
@@ -581,7 +555,7 @@ TEST(BundleToolsTest, ExtractRefusesASecondNameForTheContainer) {
 // refusal to write into the container's directory and every test above would
 // still pass.
 TEST(BundleToolsTest, ExtractWritesBesideTheContainer) {
-  TempDir dir;
+  TempTree dir;
   std::string bundlePath = dir.path() + "/app.hbb";
   writeFile(bundlePath, makeBundle());
   std::string outPath = dir.path() + "/app.hbb.util";
@@ -601,7 +575,7 @@ TEST(BundleToolsTest, ExtractWritesBesideTheContainer) {
 // happen before the failure. outPath (the directory) and its parent must
 // come out exactly as they went in.
 TEST(BundleToolsTest, ExtractLeavesNothingWhenTheFinalRenameFails) {
-  TempDir dir;
+  TempTree dir;
   std::string bundlePath = dir.path() + "/app.hbb";
   writeFile(bundlePath, makeBundle());
 

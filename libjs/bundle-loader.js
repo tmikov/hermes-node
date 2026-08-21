@@ -8,7 +8,10 @@
 // row in the edge table -- a computed require(), typically -- gets a second
 // chance from the container's resolver.
 //
-// A bundle is a closed world: those two are the ONLY sources of module code.
+// A bundle is a closed world for require()/require.resolve(): those two are
+// the ONLY sources of module code reached through them (code that
+// deliberately drops to Module.prototype.load, require.extensions, or reads
+// and evals a file itself is outside that boundary, same as unbundled).
 // What neither can place is an error naming the importer and the remedy
 // (--include), not a filesystem lookup. That is the point of shipping a
 // bundle -- "self-contained" is unverifiable while a container that quietly
@@ -142,9 +145,22 @@
     // Both identities are relative to the bundle root, so the value is
     // path arithmetic and nothing else: join the request onto the
     // importer's directory, then express the result relative to the
-    // entry's directory. A bare specifier ('@babel/preset-env') and an
-    // absolute path resolve the same way from any directory, so they are
-    // suggested as written.
+    // entry's directory. An absolute path resolves the same way from any
+    // directory, so it is suggested as written.
+    //
+    // A bare specifier ('@babel/preset-env') is suggested as written too,
+    // but NOT because it resolves the same way from anywhere -- it doesn't.
+    // Node's node_modules walk starts at the importer and climbs, so one
+    // required from inside a nested node_modules can need a deeper value:
+    // 'baz' required by node_modules/foo/index.js can need
+    // --include=./node_modules/foo/node_modules/baz, where plain
+    // --include=baz only works if baz sits at the root node_modules (the
+    // common case, and the one the design's own --include=@babel/preset-env
+    // example is). There is no way to compute the correct value here -- the
+    // request never resolved, so there is no candidate directory to build
+    // it from -- so the bare value is printed and notInBundle() appends a
+    // line saying where --include resolves from, so the message stays
+    // truthful even where it isn't automatic.
     function includeSuggestion(request, importer, importerIsIdentity) {
       if (request.charAt(0) !== '.') return request;
       // A request relative to an importer this loader cannot place in the
@@ -155,6 +171,14 @@
       var value = path.relative(path.dirname(entryIdentity), target);
       if (value === '') return undefined;
       return value.charAt(0) === '.' ? value : './' + value;
+    }
+
+    // True for a specifier whose --include suggestion is not guaranteed to
+    // work -- a bare specifier, per the comment on includeSuggestion()
+    // above. A relative request's suggestion is computed and always
+    // correct; an absolute path resolves the same from anywhere.
+    function isBareSpecifier(request) {
+      return request.charAt(0) !== '.' && !path.isAbsolute(request);
     }
 
     // The error a closed world reports where the old loader read the disk.
@@ -175,12 +199,19 @@
       } else {
         var suggestion =
           includeSuggestion(request, importer, importerIsIdentity);
+        // A bare specifier's suggestion is not guaranteed to work (see
+        // isBareSpecifier() above), so the message adds where --include
+        // resolves from rather than implying the printed value always does.
+        var caveat =
+          suggestion !== undefined && isBareSpecifier(request)
+            ? "\n  (--include resolves from the entry's directory.)"
+            : '';
         err = new Error(
           "Cannot find module '" + request + "'\n" +
           "  required by " + importer + "\n" +
           (suggestion !== undefined
             ? "  Not in the bundle. Add it with:\n" +
-              "    --include=" + suggestion
+              "    --include=" + suggestion + caveat
             : "  Not in the bundle. Add it with --include, whose value is\n" +
               "  resolved from the entry's directory."));
       }
@@ -188,14 +219,55 @@
       return err;
     }
 
-    // The trace of what a failing bundle asked for. It used to mark the
-    // handful of requires that took the disk fallback; now that a miss is
-    // fatal it is the record of everything the container was asked for and
-    // could not place, which is what a --include list is built from.
-    function logMiss(request, importer) {
-      if (process.env.HERMES_NODE_DEBUG_NATIVE &&
-          process.env.HERMES_NODE_DEBUG_NATIVE.indexOf('BUNDLE') >= 0) {
-        console.error('[bundle] miss: ' + request + ' from ' + importer);
+    // The trace of how the container answered every require() it saw. It
+    // used to log only a miss -- the handful of requires that took the disk
+    // fallback -- but a miss is fatal now, and knowing what a bundle asked
+    // for is only half of what a --include list is built from: the other
+    // half is knowing why the requires that DID succeed did, since a hit
+    // from the container's resolver (a computed specifier that happens to
+    // already be packaged) is one more --include away from a miss the
+    // moment the file it depends on is not, and there is no way to tell
+    // that apart from an edge-table hit without logging both.
+    //
+    // `outcome` is 'edge' (found by the row the producer recorded at build
+    // time), 'resolve' (found by asking the container's resolver at run
+    // time -- the same algorithm the producer used, against the same
+    // identity set) or 'miss' (found by neither). `identity` is the
+    // container identity a hit resolved to; omitted for a miss, which has
+    // none -- that keeps the miss line's wording exactly what it was before
+    // this outcome existed, so an existing reader's expectations still
+    // hold.
+    //
+    // Builtins and the vendored packages the runtime serves out of the
+    // binary never reach here: isEmbedded()'s callers forward those before
+    // either lookup runs, so they have no outcome to report, and a line for
+    // every require('path') would drown the log in the entries that are
+    // never interesting (test/bundle-scanner.js's MISS case pins this with
+    // --implicit-check-not).
+    //
+    // The gate is read ONCE, here, and not inside logOutcome(). Every
+    // require() and every require.resolve() calls logOutcome, hit or miss,
+    // and the wrapper runs before the Module._cache check, so a repeated
+    // require('./dep') pays for the gate on every call rather than only on
+    // the first. process.env is a Proxy whose get trap is a native callback
+    // around getenv() (lib/process/node_process.cpp), so the obvious
+    // in-function test costs a proxy trap plus a native call plus a getenv
+    // on the hottest path of an artifact whose entire reason for existing
+    // is startup cost -- twice over, since `&&` reads the property again.
+    // Reading it at install time also matches the native side, which takes
+    // the same variable from getenv() once during startup
+    // (lib/runtime/hermes_node_runtime.cpp); a program that assigns to
+    // process.env.HERMES_NODE_DEBUG_NATIVE mid-run does not turn native
+    // tracing on either.
+    var debugBundle = false;
+    var debugSetting = process.env.HERMES_NODE_DEBUG_NATIVE;
+    if (typeof debugSetting === 'string')
+      debugBundle = debugSetting.indexOf('BUNDLE') >= 0;
+
+    function logOutcome(outcome, request, importer, identity) {
+      if (debugBundle) {
+        console.error('[bundle] ' + outcome + ': ' + request + ' from ' +
+          importer + (identity !== undefined ? ' -> ' + identity : ''));
       }
     }
 
@@ -297,14 +369,20 @@
         }
         if (!hasPaths) {
           var target = bundle.lookup(identity, request);
-          if (target !== undefined) return path.join(root, target);
+          if (target !== undefined) {
+            logOutcome('edge', request, identity, target);
+            return path.join(root, target);
+          }
         }
         var viaContainer = bundle.resolve(identity, request,
           hasPaths ? options.paths : undefined);
-        if (viaContainer !== undefined) return path.join(root, viaContainer);
+        if (viaContainer !== undefined) {
+          logOutcome('resolve', request, identity, viaContainer);
+          return path.join(root, viaContainer);
+        }
         if (isEmbedded(request))
           return baseResolve(embeddedRequest(request), options);
-        logMiss(request, identity);
+        logOutcome('miss', request, identity);
         throw notInBundle(request, identity, true);
       }
       resolve.paths = baseResolve.paths;
@@ -511,12 +589,15 @@
         if (isEmbedded(request))
           return originalLoad.call(
             this, embeddedRequest(request), parent, isMain);
-        logMiss(request, '<no bundled importer>');
+        logOutcome('miss', request, '<no bundled importer>');
         throw notInBundle(request, '<no bundled importer>', false);
       }
 
       var target = bundle.lookup(importer, request);
-      if (target !== undefined) return loadIdentity(target, parent, false);
+      if (target !== undefined) {
+        logOutcome('edge', request, importer, target);
+        return loadIdentity(target, parent, false);
+      }
 
       // A miss in the edge table is not necessarily a miss in the
       // container: a computed require() is invisible to the static scanner
@@ -527,7 +608,10 @@
       // producer would have -- same algorithm, same identity set -- is what
       // makes a computed specifier work after the source tree is gone.
       var resolved = bundle.resolve(importer, request);
-      if (resolved !== undefined) return loadIdentity(resolved, parent, false);
+      if (resolved !== undefined) {
+        logOutcome('resolve', request, importer, resolved);
+        return loadIdentity(resolved, parent, false);
+      }
 
       // A vendored package with no packaged copy is served by the runtime
       // out of the binary, and asking for it by its 'node:' name is what
@@ -542,7 +626,7 @@
       // Nothing can answer. In a closed world that is the end of it: the
       // disk is not a source of module code, so this is an error naming
       // the importer and the remedy rather than a filesystem lookup.
-      logMiss(request, importer);
+      logOutcome('miss', request, importer);
       throw notInBundle(request, importer, true);
     };
 
@@ -578,17 +662,21 @@
       }
 
       var importer = identityOf(parent);
+      var named = importer === undefined ? '<no bundled importer>' : importer;
       if (!hasPaths) {
         if (importer === undefined) {
           if (isEmbedded(request)) {
             return originalResolveFilename.call(
               this, embeddedRequest(request), parent, isMain, options);
           }
-          logMiss(request, '<no bundled importer>');
-          throw notInBundle(request, '<no bundled importer>', false);
+          logOutcome('miss', request, named);
+          throw notInBundle(request, named, false);
         }
         var target = bundle.lookup(importer, request);
-        if (target !== undefined) return path.join(root, target);
+        if (target !== undefined) {
+          logOutcome('edge', request, importer, target);
+          return path.join(root, target);
+        }
       }
 
       // With an explicit paths, the importer is not what resolution starts
@@ -599,14 +687,16 @@
         importer === undefined ? '' : importer,
         request,
         hasPaths ? options.paths : undefined);
-      if (resolved !== undefined) return path.join(root, resolved);
+      if (resolved !== undefined) {
+        logOutcome('resolve', request, named, resolved);
+        return path.join(root, resolved);
+      }
 
       if (isEmbedded(request)) {
         return originalResolveFilename.call(
           this, embeddedRequest(request), parent, isMain, options);
       }
-      var named = importer === undefined ? '<no bundled importer>' : importer;
-      logMiss(request, named);
+      logOutcome('miss', request, named);
       throw notInBundle(request, named, importer !== undefined);
     };
 

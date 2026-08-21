@@ -72,7 +72,7 @@
             "Cannot find module '" + id + "'\n" +
             '  A bundle is running, so the container is the only source of' +
             ' module code.\n' +
-            '  Nothing is loaded from the filesystem.');
+            '  This fallback does not read the filesystem.');
           closed.code = 'MODULE_NOT_FOUND';
           throw closed;
         }

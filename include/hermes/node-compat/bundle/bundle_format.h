@@ -37,6 +37,10 @@ enum class ModuleKind : uint32_t {
 /// bytes are in the container.
 constexpr uint32_t kRequirable = 1u << 0;
 
+/// The absence of `kRequirable`. Named so a resolution-input record's
+/// `flags` reads as a deliberate choice, not a leftover zero.
+constexpr uint32_t kResolveOnly = 0;
+
 /// Fixed-width. Offsets are byte offsets from the start of the file.
 struct BundleHeader {
   char magic[8];
