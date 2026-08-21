@@ -113,37 +113,52 @@ runs it, with no compilation and no source tree needed at run time.
   `history/plans/2026-08-19-closed-world-bundle-plan.md`. The preload round
   (2026-08-20, format v3) adds `--preload`: design
   `history/plans/2026-08-20-bundle-preload-design.md`, plan
-  `history/plans/2026-08-20-bundle-preload-plan.md`.
+  `history/plans/2026-08-20-bundle-preload-plan.md`. The native-addon round
+  (2026-08-21, format v4) makes a `.node` addon packageable: design
+  `history/plans/2026-08-21-bundle-natives-design.md`, plan
+  `history/plans/2026-08-21-bundle-natives-plan.md`.
 - Implementation: `lib/bundle/` (format, writer, reader, generation tag,
   `require()` scanner, resolver, producer, run layer) plus
   `libjs/bundle-loader.js`, which wraps `Module._load`. `hermesNodeBundleRun`
   is deliberately free of the parser and compiler; only the producer links
   them.
 - The producer prints `bundle root: <dir>`, the deepest common directory of
-  every packaged file. Identities are relative to it and the consumer takes
-  the root from the bundle file's own directory, so **the bundle must sit at
-  the printed root**.
+  every packaged file; identities are relative to it. The consumer does not
+  read that path out of the container -- it re-roots every identity at the
+  bundle file's own directory -- so a container is internally consistent
+  wherever it is placed, and a bundle built into a directory of its own
+  runs fine. What placing it at the printed root buys is that a bundled
+  module's `__dirname`/`__filename` name the files they named at build
+  time. That matters in exactly two places: reading a data file that was
+  never packaged, and the stat-before-require escape hatch below. Nothing
+  else depends on the two roots coinciding.
 - Packaged as JavaScript: `.js`, `.cjs`, `.ts`, and extensionless files (a
   bare `node_modules/<pkg>/<name>` entry point is real; yargs ships one).
-  `.json` is packaged as raw text. Everything else warns and is skipped:
-  `.node` addons, assets, and `.mjs` (ESM, which the CJS loader cannot run).
+  `.json` is packaged as raw text. A `.node` addon is packaged as a
+  `kNative` record with an empty payload and its bytes copied beside the
+  container -- see the natives bullet below. Everything else warns and is
+  skipped: assets, and `.mjs` (ESM, which the CJS loader cannot run).
   Module kind is stored in the container record and is never re-derived from
   the identity's extension.
 - **A bundle is a closed world.** Every module comes from the container;
   `require()`/`require.resolve()` never read or resolve code from the
   filesystem (code that deliberately drops to `Module.prototype.load`,
-  `require.extensions`, or reads and evals a file itself sits outside that
-  boundary, same as it would unbundled). A `require()` neither the edge
+  `require.extensions`, `process.dlopen` of a path it names itself, or
+  reads and evals a file itself sits outside that boundary, same as it
+  would unbundled). A `require()` neither the edge
   table nor the container's resolver can place throws
   `Cannot find module '<x>' / required by <identity> / Not in the bundle.
   Add it with: --include=<x>`, with `code = 'MODULE_NOT_FOUND'` so an
-  optional-dependency probe still sees what it expects. A `.node` addon
-  gets its own text ("Native addons are not supported in a bundle yet") and
-  the same code. This is the point of shipping a bundle -- otherwise
-  "self-contained" is unverifiable -- and a containment property: a
-  computed specifier cannot make a bundled program load arbitrary code off
-  disk. `HERMES_NODE_DEBUG_NATIVE=BUNDLE` logs the outcome of every bundled
-  require -- an edge-table hit, a container-resolve hit, or a miss -- not
+  optional-dependency probe still sees what it expects. A `.node` addon the
+  container does not record takes that same path, with that same text and
+  the same `--include` suggestion: the producer packages addons now, so a
+  miss means only that nothing packaged this one. (An addon the container
+  *does* record whose sidecar file is absent is a different situation --
+  `missingSidecar()`, see the natives bullet.) This is the point of shipping
+  a bundle -- otherwise "self-contained" is unverifiable -- and a
+  containment property: a computed specifier cannot make a bundled program
+  load arbitrary code off disk. `HERMES_NODE_DEBUG_NATIVE=BUNDLE` logs the
+  outcome of every bundled require -- an edge-table hit, a container-resolve hit, or a miss -- not
   only the misses; the misses are the list an `--include` set is built
   from. The gate is read once, when `installBundleLoader()` runs, because
   it sits on the hot path of every `require()`; assigning
@@ -206,6 +221,74 @@ runs it, with no compilation and no source tree needed at run time.
   `--build-bundle`, since a build runs in the disk world. **Format v3** adds
   the preload table (a list of module indices); `--dump` prints it as a
   `PRELOADS` section so a container that runs code before its entry says so.
+- **A native addon ships beside the bundle, not inside it.** `dlopen(3)`
+  takes a path and there is no portable way to load a shared object out of
+  memory, so a `.node` file's bytes cannot come from the container. It is
+  packaged as a `kNative` module record with an **empty payload**, and its
+  bytes are copied to a flat **sidecar** file in the bundle's own directory
+  -- flat, not a mirrored identity tree, because "bundle plus tree" is not
+  a better distribution unit than a tree. The sidecar is named by the
+  addon's basename, with a `-<crc32 of the identity>` suffix when two
+  addons want the same one; an addon that already *is* the file it would be
+  copied to claims its plain basename first, so the ordinary
+  `proj/binding.node` plus `node_modules/foo/build/Release/binding.node`
+  pair costs zero writes instead of one that overwrites a build input. Two
+  addons that still collide is a hard build error, as is a sidecar that
+  would land on the container itself or on another addon's source file. The
+  copies run **after** compilation, so the window in which a failed build
+  can leave this run's sidecars beside the last run's container is narrowed
+  to the container write itself. The producer prints
+  `native: <sidecar> (from <identity>)` per addon and one `note:` line
+  saying the artifact is now more than one file. At run time the loader
+  `dlopen`s `<bundle dir>/<sidecar>`; `module.filename` stays the identity
+  path, like every other bundled module, and the real path is what
+  `dlopen` errors name. A recorded addon whose sidecar is missing throws
+  `MODULE_NOT_FOUND` naming the file to ship -- not `ERR_DLOPEN_FAILED`,
+  because what exists in the world to handle an unavailable addon (an
+  optional-dependency probe, a napi-rs try/catch chain) branches on
+  `MODULE_NOT_FOUND`. **Format v4** adds the native table: one
+  `BundleNativeRecord {moduleIndex, sidecarString, byteLength, hashString}`
+  per `kNative` module, in a section of its own
+  (`nativeTableOffset`/`nativeCount`), reached from JS as
+  `bundle.natives()` (`__bundleNatives` in `lib/bundle/bundle_run.cpp`) and
+  built into an identity-to-sidecar map once, at install time.
+  `__bundleLoad` refuses a native outright, since its bytes are not there
+  to return. Discovery uses the two routes that already exist: the scanner
+  follows a literal `require('./x.node')` (the design doc argues this
+  covers napi-rs, whose generated platform switch is literal in every
+  branch), and everything computed -- `bindings()`,
+  `node-gyp-build(__dirname)`, `node-pre-gyp` -- needs `--include`. An
+  absolute specifier is resolved by an explicit branch in
+  `resolveSpecifier()` (`lib/bundle/bundle_resolve.cpp`), because
+  `require(path.join(__dirname, ...))` is how a computed loader asks; the
+  bare walk below it happened to give the same answer, but only through
+  `fs::path::operator/` discarding its left operand.
+  `examples/hermes-parser-ast` is the worked end-to-end case: the native
+  Hermes parser addon, reached only through computed requires, named with
+  one `--include`, producing a 240,560-byte container plus a
+  2,521,344-byte sidecar whose AST output is byte-identical to the
+  unbundled run.
+- **A loader that stats before it requires does not find a flat sidecar.**
+  `node-gyp-build` and `node-pre-gyp` `readdirSync`/`existsSync` a
+  candidate directory and only then require the winner, so a probe for the
+  addon's original path finds nothing at the flat sidecar. Measured, not
+  predicted, on `examples/bufferutil-addon` (whose `bufferutil/index.js` is
+  `try { require('node-gyp-build')(__dirname) } catch { require('./fallback') }`,
+  and whose addon nothing names literally, so nothing packages it without
+  `--include`): the bundled program **runs and silently uses the pure
+  JavaScript fallback**. Which half fails depends on whether the source
+  tree is still on disk beside the bundle. With it gone, `readdirSync`
+  finds nothing and node-gyp-build throws its own "No native build was
+  found". With it present, the stat succeeds against the real tree,
+  node-gyp-build returns a real absolute path, and the *following*
+  `require()` of it is what the closed world refuses -- so
+  `require.resolve`-shaped self-checks can report a native addon that was
+  never loaded. Either way the same catch fires and the same fallback
+  loads. The escape hatch costs no code: additionally place the real file
+  beside the bundle, at `<bundle dir>/<identity>`, and the stat succeeds.
+  Teaching `fs` to answer for recorded native identities was considered and
+  deliberately deferred -- `existsSync` would say yes where `readFileSync`
+  on the same path says no.
 - **One resolver, two backends.** `resolveSpecifier`
   (`lib/bundle/bundle_resolve.cpp`) runs against a `FileSource`:
   `DiskFileSource` for the producer, `BundleFileSource` (a sorted index of
@@ -308,7 +391,7 @@ runs it, with no compilation and no source tree needed at run time.
   A positional argument in bundle mode belongs to the bundled program, not
   to hermes-node.
 - Tests:
-  `test/bundle-{build,run,require,errors,scanner,tolerant,include,preload,container-resolve,resolution-inputs,escapes,yargs}.js`
+  `test/bundle-{build,run,require,errors,scanner,tolerant,include,preload,container-resolve,resolution-inputs,escapes,natives,natives-errors,yargs}.js`
   plus `BundleFormatTest`, `BundleResolveTest`, `BundleFileSourceTest`,
   `RequireScannerTest`. (`bundle-scanner.js` was `bundle-fallback.js` before
   the fallback was removed; it keeps the scanner cases, which are about the
@@ -319,7 +402,7 @@ runs it, with no compilation and no source tree needed at run time.
 
 ### Bundle tooling
 
-Four diagnostic flags, none of them on the run path. Design
+Five diagnostic flags, none of them on the run path. Design
 `history/plans/2026-08-15-bundle-tooling-design.md`, plan
 `history/plans/2026-08-15-bundle-tooling-plan.md`, progress
 `history/plans/progress-bundle-tooling.md`.
@@ -334,20 +417,42 @@ Four diagnostic flags, none of them on the run path. Design
   the same with or without it. The summary runs after
   `BundleWriter::serialize()` and reads its section sizes back out of the
   serialized bytes, so it and a later `--dump` cannot disagree.
-- `--bundle=<f> --dump` prints the header, module table, edge table and
-  section sizes to stdout. `--verbose` adds per-module in/out edge counts.
+- `--bundle=<f> --dump` prints the header, module table, edge table,
+  `NATIVES` section (identity, sidecar name, byte length, truncated
+  SHA-256, printed only when the container records one) and section sizes
+  (including a `natives` row) to stdout. `--verbose` adds per-module in/out
+  edge counts.
 - `--bundle=<f> --extract-module=<identity> --out=<file>` writes one
   module's payload verbatim (bytecode for a JS module, the original bytes
-  for a JSON one). Unknown identities are an error listing the nearest few
-  by edit distance. `--out` naming the same file as `--bundle` (compared by
-  `st_dev`/`st_ino`, so `./app.hbb`, a symlink and a hard link all count) is
+  for a JSON one). A native is refused, naming its sidecar: its bytes are
+  not in the container, so an "extraction" would write the empty payload
+  and call it the addon. Unknown identities are an error listing the
+  nearest few by edit distance. `--out` naming the same file as `--bundle`
+  (compared by `st_dev`/`st_ino`, so `./app.hbb`, a symlink and a hard link all count) is
   refused: the write is a rename, so it would replace the container with one
   module's payload and nothing downstream would notice.
+- `--bundle=<f> --verify-natives` checks every recorded addon against the
+  file of that name in the container's own directory (realpath'd first,
+  exactly as the run path does, so a bundle reached through a symlinked
+  directory is checked where the run would look), printing `OK` /
+  `MISSING` / `MISMATCH` per addon and exiting 1 if any failed, so it can
+  gate a deployment. `--verbose` prints expected and actual length and
+  digest for **every** entry, passing ones included: a verification whose
+  passing case shows nothing is hard to trust. This is an **audit, not an
+  enforcement** -- it reports what the files are when it runs, and the
+  program `dlopen`s them later; nothing closes that gap, and nothing on the
+  run path hashes an addon (that would read the whole thing on every
+  launch). SHA-256, not the CRC32 the generation tag uses, because a CRC
+  can be forged to any value and a check offered as a security step should
+  not have that as its weakest part. The digest is computed by
+  `nativeFileDigest()` (`lib/bundle/native_digest.cpp`, picohash, streamed
+  rather than read whole), the single copy the producer and this verb
+  share.
 - `--dump-bytecode=<f>` disassembles a raw bytecode file or a compile cache
   entry (detected by the cache header's magic and skipped past).
   `--verbose` adds a `; file:line:column` comment per instruction, not the
   source text (a bytecode file does not carry it).
-- The three read-only verbs are dispatched by `runToolVerb()` in
+- The four read-only verbs are dispatched by `runToolVerb()` in
   `tools/hermes-node/hermes-node.cpp` **before `runHermesNode`**, so no
   runtime, event loop or `napi_env` exists while they run: a tool that
   describes a file must not fail for reasons belonging to a runtime it never
@@ -356,7 +461,7 @@ Four diagnostic flags, none of them on the run path. Design
   matrix, all of it after the parse loop so that flag order never matters.
   The rows are the table under "Flag surface" in the design doc: two verbs
   at once, a container verb with no `--bundle`, `--extract-module` without
-  `--out` (and `--out` without it), `--verbose` with none of its three
+  `--out` (and `--out` without it), `--verbose` with none of its four
   consumers, `--dump-bytecode` with `--bundle`/`--build-bundle`, and any
   verb with `--inspect`/`--inspect-brk`. Each message names both flags. Two
   checks beyond the table live there too: `--dump-bytecode=` and `--out=`
@@ -364,23 +469,24 @@ Four diagnostic flags, none of them on the run path. Design
   file with no filename in it. An empty `--extract-module=` is deliberately
   not among them -- that flag takes a lookup key, where empty is a lookup
   that legitimately misses, and the miss is reported by the lookup code.
-- `--dump` and `--extract-module` open through
+- `--dump`, `--extract-module` and `--verify-natives` open through
+  `openBundleForTool()`, one copy of the map/validate sequence that calls
   `BundleReader::openForInspection`, which reports the generation tag
   instead of enforcing it (`MISMATCH` line in the dump); structural
   validation is unchanged and a format-version mismatch stays fatal.
   `open()` keeps its hard error, so nothing on the run path can reach a
   mismatched container.
 - Two new libraries, split by dependency: `hermesNodeBundleTools`
-  (`lib/bundle/bundle_tools.cpp`, dump and extract) links only
+  (`lib/bundle/bundle_tools.cpp`, dump, extract and verify) links only
   `hermesNodeBundle` and stays free of the Hermes VM, which is what lets
   `BundleToolsTest` run with no runtime; `hermesNodeBytecodeDump`
   (`lib/bytecode-dump/`) links `hermesvm_a` because Hermes's disassembler
   lives there; it includes `bundle_format.h` for `kBundleMagic` alone (so a
   container pointed at it is named), which is a header of constants and
-  costs no link dependency. Folding them together would give dump and
-  extract a VM dependency neither needs.
+  costs no link dependency. Folding them together would give dump, extract
+  and verify a VM dependency none of them needs.
 - Tests:
-  `test/bundle-{verbose,dump,extract,dump-bytecode,tool-errors,tool-no-runtime}.js`
+  `test/bundle-{verbose,dump,extract,dump-bytecode,verify-natives,tool-errors,tool-no-runtime}.js`
   plus `BundleToolsTest` and the inspection-mode cases in
   `BundleFormatTest`. `bundle-tool-no-runtime.js` pins the pre-runtime
   dispatch: a verb given `--compile-cache=<dir>` never creates the

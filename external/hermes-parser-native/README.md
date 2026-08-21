@@ -10,7 +10,8 @@ has no WebAssembly support, so that package cannot run here.
 
 The native addon exposes the identical parse result (the same ESTree JSON,
 verified byte-for-byte by `unittests/HermesParserNative` and by the
-`examples/flow-bundler` end-to-end example) through a `.node` addon instead
+`examples/flow-bundler` and `examples/hermes-parser-ast` end-to-end
+examples) through a `.node` addon instead
 of a `.wasm` module. It lives on a Hermes fork branch that the `hermes/`
 submodule -- pinned to a specific upstream commit for the rest of this
 project -- cannot simultaneously point at, so it is vendored here as a
@@ -115,8 +116,9 @@ flag the drift.
 - `package/dist/` is generated code, not source. Edit `package/src/` and
   regenerate with the opt-in `hermes-parser-native-dist` target (see "How to
   re-sync" above); do not hand-edit `dist/`.
-- A consumer that depends on this package through a `file:` path (as
-  `examples/flow-bundler` does, pointing at `external/hermes-parser-native/package`)
+- A consumer that depends on this package through a `file:` path -- both
+  `examples/flow-bundler` and `examples/hermes-parser-ast` do, pointing at
+  `external/hermes-parser-native/package` --
   must work around npm 11's default of `install-links=false`. That default
   symlinks a `file:` dependency into `node_modules` instead of copying it,
   and Node then resolves that package's own requires relative to the
@@ -124,7 +126,7 @@ flag the drift.
   vendored package's own dependency (`hermes-estree`) is not found even if
   the consumer declares it. Setting `install-links=true` makes npm copy the
   package instead, which fixes resolution regardless of what else is
-  declared. `examples/flow-bundler/.npmrc` sets `install-links=true`; its
+  declared. Each example's `.npmrc` sets `install-links=true`, and each
   `package.json` also declares `hermes-estree` directly as a belt-and-braces
   measure.
 
@@ -138,20 +140,37 @@ builds (e.g. `cmake-build-asan`) abort on such input; Release builds are
 unaffected because `resolveASTForParser` runs only the resolver and never
 reads the result the assertion would guard.
 
-Nothing under `examples/flow-bundler` triggers this. The fix lives on the
+Nothing under `examples/flow-bundler` or `examples/hermes-parser-ast`
+triggers this (`hermes-parser-ast/sample.js` deliberately parses a class
+private field and an optional chain, no `try`/`finally`). The fix lives on the
 `sema-implicit-return-fixes` branch, intended for upstream; it has not been
 pulled into `parser-native` or into this vendored copy.
 
 ## When to delete this directory
 
 Once `hermes-node` supports WebAssembly, this vendored copy is no longer
-needed. `examples/flow-bundler` stays, but it does **not** survive untouched:
-it names the addon and the `file:` dependency in four places, listed below.
+needed. **Two examples depend on it, and they have different fates.**
+
+`examples/flow-bundler` stays, but it does **not** survive untouched: it
+names the addon and the `file:` dependency in four places (steps 3 to 6).
+
+`examples/hermes-parser-ast` does **not** stay as it is. Its subject *is* a
+native `.node` addon -- it exists to exercise the AOT bundle format's
+native-addon support end to end, with an `--include` naming the addon, an
+assertion that a sidecar was produced, and a `--verify-natives` check. The
+published `hermes-parser` is a WebAssembly module, so repointing the
+dependency leaves the example with nothing native to package and three
+checks that can no longer pass. Delete it, or repoint it at some other real
+`.node` addon (step 8). The lit coverage of bundled natives does not depend
+on this decision: `test/bundle-natives.js`,
+`test/bundle-natives-errors.js` and `test/bundle-verify-natives.js` use the
+`hello_addon` fixture the top-level `CMakeLists.txt` builds, not this
+package.
 
 Do the CMake edits before the `git rm`, so that no reconfigure in the middle
 of the sequence dies with `add_subdirectory given source ... which is not an
-existing directory`. Better still, treat steps 1 to 6 as one change and build
-nothing until the end.
+existing directory`. Better still, treat steps 1 to 6 and step 8 as one
+change and build nothing until the end -- step 7 is that build.
 
 1. Remove the CMake references, in this order and before deleting anything:
    - `add_subdirectory(external/hermes-parser-native)` in the top-level
@@ -167,6 +186,10 @@ nothing until the end.
    `POST_BUILD` step that stages the addon into `package/prebuilds/` and the
    `hermes-parser-native-dist` target with it, since both live in
    `external/hermes-parser-native/CMakeLists.txt`.
+
+   Steps 3 to 7 below are `examples/flow-bundler`; step 8 is
+   `examples/hermes-parser-ast`.
+
 3. In `examples/flow-bundler/run.sh`, delete the whole block between the
    `# --- BEGIN vendored native parser addon` and
    `# --- END vendored native parser addon` marker lines, markers included.
@@ -207,12 +230,39 @@ nothing until the end.
    ./examples/flow-bundler/run.sh cmake-build-release
    ```
    It must still print `PASS: 6 bundles match expected/`.
-8. Update the prose that still describes a vendored addon:
-   - `CLAUDE.md`, the bullet about `external/hermes-parser-native/`;
-   - `examples/README.md`, the `flow-bundler/` paragraph;
+8. Deal with `examples/hermes-parser-ast`. It has the same four touch
+   points as flow-bundler -- a `# --- BEGIN vendored native parser addon` /
+   `# --- END` marker block in its `run.sh`, the `file:` dependency in its
+   `package.json`, `install-links=true` in its `.npmrc`, and the `file:`
+   path twice in its `package-lock.json` -- but they cannot be fixed the
+   same way, for the reason given at the top of this section.
+
+   Note also that its marker block is **not self-contained**: it derives
+   `PLATFORM_ARCH` from `hermes-node` itself and copies the built addon into
+   `node_modules/hermes-parser/prebuilds/$PLATFORM_ARCH/`, and
+   `PLATFORM_ARCH` is used further down by the `--include=` argument. So
+   deleting the block alone leaves an undefined variable, and the three
+   native-specific checks below it (the `--include`, the
+   `out/hermes-parser.node` sidecar assertion, and `--verify-natives`) have
+   nothing to assert against either way.
+
+   Either `git rm -r examples/hermes-parser-ast` and drop its paragraph
+   from `examples/README.md`, or repoint it at a real `.node` addon: keep
+   `ast.js` and `sample.js` if the replacement parses, otherwise the
+   example is really a new one and only the run.sh shape is worth reusing.
+9. Update the prose that still describes a vendored addon:
+   - `CLAUDE.md`, the bullet about `external/hermes-parser-native/`, and --
+     if step 8 deleted the example -- the reference to
+     `examples/hermes-parser-ast` in the AOT Bundles natives bullet;
+   - `examples/README.md`, the `flow-bundler/` paragraph, and the
+     `hermes-parser-ast/` paragraph if step 8 deleted it;
    - `examples/flow-bundler/README.md`, which mentions the vendored addon in
      its opening paragraph, in the `babel.config.js`/`package.json`/`.npmrc`
      layout bullets, and in the `hermes-parser-napi` build command under
      "Running it";
-   - `history/plans/2026-08-12-flow-bundler-example-design.md` and its plan
-     are historical records; leave them.
+   - `examples/hermes-parser-ast/README.md`, if the example survives step 8:
+     it names `external/hermes-parser-native/package/dist/HermesParserAddon.js`
+     as the loader whose computed requires motivate `--include`;
+   - `history/plans/2026-08-12-flow-bundler-example-design.md`, its plan, and
+     `history/plans/2026-08-21-bundle-natives-{design,plan}.md` are
+     historical records; leave them.

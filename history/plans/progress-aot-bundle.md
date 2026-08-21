@@ -905,3 +905,189 @@ A relative specifier does not have this problem -- `includeSuggestion()`
 computes the exact value from the importer's identity, and
 `test/bundle-include.js` runs the suggested command to prove it resolves.
 The bare case is the one with no correct answer to print.
+
+
+## 2026-08-21: native addons in a bundle (format v4)
+
+Tracks `history/plans/2026-08-21-bundle-natives-plan.md` and its design doc
+`history/plans/2026-08-21-bundle-natives-design.md`. Eleven tasks, all done;
+the per-task ledger is in
+`.superpowers/sdd/2026-08-21-bundle-natives-plan/progress.md`.
+
+### What shipped
+
+A `.node` addon is no longer skipped by the producer and refused by the
+loader. It is packaged as a `kNative` module record with an empty payload,
+and its bytes are copied to a flat sidecar file in the bundle's own
+directory. `dlopen(3)` takes a path and there is no portable way to load a
+shared object out of memory, so the bytes have to be a real file at load
+time whatever else is true; the decision was to make that visible -- the
+artifact is a container plus N named files, and the producer says so --
+rather than extracting to a cache directory at startup, where the
+verify-then-`dlopen` gap cannot be closed by any amount of checksumming.
+
+- **Format v4** adds a native table: one
+  `BundleNativeRecord {moduleIndex, sidecarString, byteLength, hashString}`
+  per `kNative` module, in its own section
+  (`nativeTableOffset`/`nativeCount`), keyed by module index.
+- Sidecar naming is three passes. An addon that already *is* the file it
+  would be copied to claims its plain basename first, so the ordinary
+  `proj/binding.node` plus `node_modules/foo/build/Release/binding.node`
+  pair costs zero writes rather than one that overwrites a build input;
+  everyone else takes the basename or, on collision, a
+  `-<crc32 of the identity>` suffix; then destinations are computed. Two
+  addons that still want one name, a sidecar that would land on the
+  container, and a sidecar that is another addon's source file are all hard
+  build errors. The copies run after compilation, so a build that fails
+  leaves no sidecar from this run beside a container from the last one.
+- The loader builds an identity-to-sidecar map once from `bundle.natives()`
+  (`__bundleNatives`) and `dlopen`s `<bundle dir>/<sidecar>`;
+  `module.filename` stays the identity path, like every other bundled
+  module. `__bundleLoad` refuses a native, since its bytes are not there.
+- `--verify-natives` is a fourth read-only verb: it hashes each sidecar and
+  compares against the record, printing `OK`/`MISSING`/`MISMATCH` and
+  exiting 1 on any failure. It is an audit, not an enforcement -- the run
+  path never hashes an addon, and nothing closes the gap between the check
+  and the later `dlopen`. SHA-256 rather than the CRC32 the generation tag
+  uses, because a CRC can be forged to any value.
+- `--dump` grew a `NATIVES` section and a `natives` row in `SECTIONS`;
+  `--extract-module` refuses a native by name, since "extracting" it would
+  write the empty payload and call it the addon.
+
+### Two findings from the design round
+
+**`MODULE_NOT_FOUND` for a missing addon is continuity, not a new choice.**
+The design argued for `MODULE_NOT_FOUND` over `ERR_DLOPEN_FAILED` on the
+grounds that the code which exists in the world to handle an unavailable
+addon -- an optional-dependency probe, a napi-rs try/catch chain --
+branches on it. Checking the code it was replacing showed the argument had
+already been made: the old "Native addons are not supported in a bundle
+yet" error set `err.code = 'MODULE_NOT_FOUND'` too. So this round did not
+pick a code; it kept one, for both the unrecorded-addon case (now the
+ordinary not-in-bundle error, with a working `--include` suggestion) and
+the recorded-but-missing-sidecar case (`missingSidecar()`, which names the
+file to ship). `test/bundle-natives-errors.js` pins `e.code` for both.
+
+**Absolute-path resolution worked only by accident, and is now explicit.**
+`require(path.join(__dirname, 'build', 'Release', 'x.node'))` is how
+`bindings`, `node-gyp-build` and hermes-parser's own loader all ask for an
+addon, so a bundle that packages natives resolves absolute specifiers
+constantly. `resolveSpecifier()` had no absolute branch: the bare
+`node_modules` walk produced the right answer anyway, because
+`joinNormalized()` ends in `fs::path::operator/`, which discards its left
+operand when the right one is absolute. Correct behaviour resting on a
+detail of a helper that has nothing to do with resolution. There is now an
+explicit branch, mirroring what Node does (`Module._findPath` overrides the
+lookup paths to `['']` for an absolute request and probes the path itself;
+`Module._resolveLookupPaths` has no absolute case at all and hands back a
+`node_modules` list `_findPath` then throws away -- the same shape as the
+accident). `BundleResolveTest` covers it.
+
+### Measured: `examples/hermes-parser-ast`
+
+New example, the native-addon sibling of `examples/babel-parser/ast.js`:
+parse a file with the native Hermes parser addon and print the AST. The
+addon is reached through three computed `require()` calls inside
+hermes-parser's own loader, so static discovery cannot see it and it is
+named with one `--include`. Numbers from a Release build on linux-x64,
+2026-08-21:
+
+| Artifact | Bytes |
+|----------|-------|
+| `ast.hbb` (the container: 37 modules, 61 edges) | 240,560 |
+| `hermes-parser.node` (the addon, verbatim, beside the container) | 2,521,344 |
+
+Container sections: strings 3,403 B, modules 740 B, edges 732 B, payload
+235,600 B, natives 16 B. The bundled AST is byte-identical to the
+unbundled one, and `--verify-natives` exits 0:
+
+```
+OK       hermes-parser.node       (node_modules/hermes-parser/prebuilds/linux-x64/hermes-parser.node)
+    expected 2521344 bytes sha256:4f9e454bf80ac5122ba6333ee539cdf84b8ba47f5e518fd8e3245b0393c4147b
+    actual   2521344 bytes sha256:4f9e454bf80ac5122ba6333ee539cdf84b8ba47f5e518fd8e3245b0393c4147b
+```
+
+### Measured, because the design only predicted it: bufferutil falls back
+
+The design's "What does not work" section claims `examples/bufferutil-addon`
+silently falls back to its pure JavaScript `./fallback` in a bundle, because
+`node-gyp-build` stats a directory before it requires. That was a reading of
+the package, not an observation, so it was run.
+
+**It does fall back, silently.** But the mechanism is not the one the design
+described, and which half fails depends on where the bundle sits.
+
+Nothing packages the addon at all: `bufferutil/index.js` is
+`try { module.exports = require('node-gyp-build')(__dirname) } catch (e) { module.exports = require('./fallback') }`,
+no `.node` appears as a literal specifier anywhere, and the example is built
+with no `--include`. So the build prints no `native:` line and writes no
+sidecar -- an 11,448-byte container and nothing else.
+
+With the bundle at its printed root and the source tree still on disk beside
+it (`--build-bundle=examples/bufferutil-addon/bu.hbb` then `--bundle` of the
+same path), `HERMES_NODE_DEBUG_NATIVE=BUNDLE` shows what actually happens:
+
+```
+[bundle] edge: bufferutil from mask.js -> node_modules/bufferutil/index.js
+[bundle] edge: node-gyp-build from node_modules/bufferutil/index.js -> node_modules/node-gyp-build/index.js
+[bundle] miss: .../node_modules/bufferutil/package.json from node_modules/node-gyp-build/node-gyp-build.js
+[bundle] miss: .../node_modules/bufferutil/prebuilds/linux-x64/bufferutil.node from node_modules/node-gyp-build/node-gyp-build.js
+[bundle] edge: ./fallback from node_modules/bufferutil/index.js -> node_modules/bufferutil/fallback.js
+```
+
+node-gyp-build's `readdirSync` reached the **real disk** and found the real
+prebuild, so `load.resolve()` returned a real absolute path and did not
+throw. What threw was the `require()` of that path, refused by the closed
+world. The design's sentence -- "that check fails against a path that
+genuinely is not there, and the `require` interception never gets a turn" --
+is right only when the source tree is gone. When it is present, the
+interception gets exactly one turn, and takes it.
+
+The program then runs to completion on the fallback and prints `PASS`. Worse
+for anyone debugging this: `mask.js`'s own self-check calls
+`require('node-gyp-build').path(...)` and asserts the result ends in
+`.node`. That check **passes and prints the real prebuild path**, while the
+module actually loaded is the JavaScript fallback. A `require.resolve`-shaped
+probe cannot tell you which one you got.
+
+Move the bundle away from the source tree (`--build-bundle=/tmp/bu.hbb`,
+then `--bundle=/tmp/bu.hbb`, which also violates the "bundle must sit at the
+printed root" rule and so re-roots the identities at `/tmp`) and the other
+half fails instead: `readdirSync` finds nothing, node-gyp-build throws its
+own error, the same catch fires, the same fallback loads --
+
+```
+bufferutil loaded, exports: [ 'mask', 'unmask' ]
+Error: No native build was found for platform=linux arch=x64 runtime=node abi=undefined uv=1 libc=glibc node=24.13.0
+    loaded from: /tmp/node_modules/bufferutil
+```
+
+-- and the failure is the example's own assertion, which re-runs the search
+outside bufferutil's try/catch. `require('bufferutil')` itself succeeded in
+both runs.
+
+The design doc's claim was corrected in place to match this.
+
+### Limitations recorded rather than fixed
+
+- **A loader that stats before it requires does not find a flat sidecar.**
+  `node-gyp-build` and `node-pre-gyp` `readdirSync`/`existsSync` a candidate
+  directory and only then require the winner. The escape hatch costs no
+  code: additionally place the real file beside the bundle, at
+  `<bundle dir>/<identity>`, and the stat succeeds -- flat is the contract,
+  the tree remains available to whoever needs it.
+- **`fs` was not taught to answer for recorded native identities.** It is
+  small and purely additive, and it was deliberately deferred: it is a
+  half-truth discoverable in one line of user code, since `existsSync`
+  would say yes where `readFileSync` on the same path says no.
+- **Nothing hashes an addon on the load path.** The digest exists for
+  `--verify-natives` alone; hashing at load would read the whole addon on
+  every launch, and would still not close the TOCTOU gap it looks like it
+  closes.
+- **`--preload=<x>.node` is not refused.** It works through the existing
+  preload machinery, and a special case forbidding something harmless would
+  cost code and buy nothing.
+- **A sibling shared library an addon pulls in is still the user's job.**
+  Nothing `require()`s it, so nothing discovers it. Flat placement does make
+  this better rather than worse: every native lands in one directory, so an
+  `$ORIGIN`-relative RPATH finds a sibling dropped beside the bundle.
