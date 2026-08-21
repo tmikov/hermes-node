@@ -6,13 +6,13 @@
 // The `require` a bundled module is handed must be Node's own -- the same
 // object internal/modules/helpers.makeRequireFunction builds for a module
 // compiled from disk. Identical source must not mean different semantics
-// depending on whether the producer happened to package the file, and a
-// module that misses the edge table gets the real one, so the two shapes sit
-// side by side in a single program.
+// depending on whether the producer happened to package the file.
 //
-// The one deliberate difference is require.resolve, which consults the edge
-// table first so it keeps answering after the source tree is gone. See
-// libjs/bundle-loader.js.
+// The one deliberate difference is require.resolve, which answers from the
+// container -- edge table first, then the container's resolver -- so it
+// keeps answering after the source tree is gone, and throws
+// MODULE_NOT_FOUND rather than consulting a filesystem when neither can
+// place the specifier. See libjs/bundle-loader.js.
 
 // RUN: rm -rf %t.req && mkdir -p %t.req/lib %t.req/node_modules/pkg
 // RUN: echo "module.exports = { v: 1 };" > %t.req/lib/dep.js
@@ -115,16 +115,63 @@
 // require.resolve(request, { paths }) is the caller replacing the search
 // path outright -- a different question from the one the edge table answers,
 // which is where THIS importer's specifier resolved at build time. Node
-// honours the option, so the edge table must be skipped when one is present.
-// The near copy is the one that got bundled; the explicit path names the far
-// one, and the tree stays in place because resolving against caller-supplied
-// paths is necessarily a filesystem question.
+// honours the option, so the edge table is skipped when one is present and
+// the container's resolver runs the option's own algorithm instead: resolve
+// as if from each entry in turn, first hit wins.
+//
+// In a closed world that resolver is the last word. It used to be bounded
+// to each entry's own nearest node_modules, because a climb past an
+// ancestor that merely had not been PACKAGED could land on a different,
+// real package of the same name while the disk fallback behind it knew
+// better. There is no such thing as "merely unpackaged" now: the far copy
+// below is not in the container, so it does not exist, and the walk climbs
+// past its directory exactly as Node's would past one that is not there --
+// landing on the near copy, which IS in the container. Answering NEAR here
+// is the closed world's correct answer, and the old FAR expectation was
+// the disk's.
+//
+// The whole tree is deleted before the run, so neither answer can be the
+// filesystem's, and a specifier the container cannot place under any paths
+// throws rather than falling through to a resolver that would go looking.
 // RUN: rm -rf %t.optpaths && mkdir -p %t.optpaths/node_modules/pkg %t.optpaths/other/node_modules/pkg
 // RUN: echo "module.exports = { who: 'NEAR' };" > %t.optpaths/node_modules/pkg/index.js
 // RUN: echo "module.exports = { who: 'FAR' };" > %t.optpaths/other/node_modules/pkg/index.js
-// RUN: echo "const p = require('pkg'); console.log('OPTPATHS', p.who, require.resolve('pkg', { paths: [__dirname + '/other'] }));" > %t.optpaths/cli.js
+// RUN: echo "const p = require('pkg'); var miss; try { require.resolve('ghost-pkg', { paths: [__dirname + '/other'] }); miss = 'NO THROW'; } catch (e) { miss = e.code; } console.log('OPTPATHS', p.who, require.resolve('pkg', { paths: [__dirname + '/other'] }), miss);" > %t.optpaths/cli.js
 // RUN: %hermes-node --build-bundle=%t.optpaths/app.bundle %t.optpaths/cli.js
+// RUN: rm -rf %t.optpaths/node_modules %t.optpaths/other %t.optpaths/cli.js
 // RUN: %hermes-node --bundle=%t.optpaths/app.bundle | %FileCheck --check-prefix=OPTPATHS %s
-// OPTPATHS: OPTPATHS NEAR {{.*}}.optpaths/other/node_modules/pkg/index.js
+// OPTPATHS: OPTPATHS NEAR {{.*}}.optpaths/node_modules/pkg/index.js MODULE_NOT_FOUND
+
+// A `paths` that is present but not an array is neither "absent" (use the
+// edge table/container) nor "a real search list" (use it) -- it is
+// malformed, and Node's own Module._resolveFilename throws
+// ERR_INVALID_ARG_VALUE for it before ever touching a filesystem. That
+// validation must still happen for a bundled module: makeRequire's
+// resolve() must not mistake a malformed paths for "no paths" and quietly
+// answer from the container or the edge table instead of raising. The tree
+// is deleted before the run: the throw does not depend on anything being
+// on disk, so a pass here cannot be masked by the tree still being present.
+// RUN: rm -rf %t.badpaths && mkdir -p %t.badpaths/node_modules/pkg
+// RUN: echo "module.exports = {};" > %t.badpaths/node_modules/pkg/index.js
+// RUN: echo "try { require.resolve('pkg', { paths: 'not-an-array' }); console.log('BADPATHS NO THROW'); } catch (e) { console.log('BADPATHS', e.constructor.name, e.code); }" > %t.badpaths/cli.js
+// RUN: %hermes-node --build-bundle=%t.badpaths/app.bundle %t.badpaths/cli.js
+// RUN: rm -rf %t.badpaths/node_modules %t.badpaths/cli.js
+// RUN: %hermes-node --bundle=%t.badpaths/app.bundle | %FileCheck --check-prefix=BADPATHS %s
+// BADPATHS: BADPATHS TypeError ERR_INVALID_ARG_VALUE
+
+// A non-string request is Node's to reject. The closed world throws
+// MODULE_NOT_FOUND where nothing can place a specifier, and 123 is
+// certainly not in the container -- but "not found" is the wrong answer to
+// "that is not a specifier", and it is the answer this loader would invent
+// if it tried to place the argument before checking it. Node's own
+// validateString() lives inside the require.resolve makeRequireFunction
+// builds, so reaching it means passing the request through untouched.
+// RUN: rm -rf %t.argtype && mkdir -p %t.argtype
+// RUN: echo "try { require(123); } catch (e) { console.log('ARGT', e.code); } try { require.resolve(123); } catch (e) { console.log('ARGR', e.code); }" > %t.argtype/cli.js
+// RUN: %hermes-node --build-bundle=%t.argtype/app.bundle %t.argtype/cli.js
+// RUN: find %t.argtype -name '*.js' -delete
+// RUN: %hermes-node --bundle=%t.argtype/app.bundle | %FileCheck --check-prefix=ARGTYPE %s
+// ARGTYPE: ARGT ERR_INVALID_ARG_TYPE
+// ARGTYPE: ARGR ERR_INVALID_ARG_TYPE
 
 // This file is a lit driver only; the RUN lines above are the test.

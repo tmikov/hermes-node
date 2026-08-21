@@ -599,18 +599,17 @@ int runBundle(
   napi_value global;
   napi_get_global(env, &global);
 
-  // installBundleLoader(Module, bundle, path) -> runEntry()
+  // installBundleLoader(Module, bundle, path) -> run()
   napi_value installArgs[3] = {moduleCtor, bundleObject, pathModule};
-  napi_value runEntryFn;
-  if (napi_call_function(env, global, installFn, 3, installArgs, &runEntryFn) !=
+  napi_value runFn;
+  if (napi_call_function(env, global, installFn, 3, installArgs, &runFn) !=
       napi_ok) {
     printAndClearException(env);
     return 1;
   }
 
   napi_value result;
-  if (napi_call_function(env, global, runEntryFn, 0, nullptr, &result) !=
-      napi_ok) {
+  if (napi_call_function(env, global, runFn, 0, nullptr, &result) != napi_ok) {
     printAndClearException(env);
     return 1;
   }
@@ -1277,7 +1276,18 @@ int runHermesNode(const HermesNodeConfig &config) {
   // each request against a dummy parent module in the current directory, so
   // relative paths, bare package names, and requires made *by* a preloaded
   // module all behave as they do in Node.
-  if (exitCode == 0 && !config.requireModules.empty()) {
+  //
+  // Never in bundle mode: the CLI already refuses -r/--require together
+  // with --bundle (checkToolOptions() in tools/hermes-node/hermes-node.cpp,
+  // with the user-facing message), so config.bundlePath and
+  // config.requireModules cannot both be set through that front door today.
+  // This guard is defence in depth for hermes_node_runtime.h being a public
+  // header with a different caller than the check that currently protects
+  // it: a bundle's preloads are the container's own (config.preloadModules,
+  // run from inside runBundle), and a disk -r must not run in front of
+  // them -- see history/plans/2026-08-20-bundle-preload-design.md.
+  if (exitCode == 0 && !config.requireModules.empty() &&
+      config.bundlePath.empty()) {
     napi_value cjsLoader;
     if (loader.require(env, "internal/modules/cjs/loader", &cjsLoader) !=
         napi_ok) {
@@ -1333,7 +1343,12 @@ int runHermesNode(const HermesNodeConfig &config) {
         exitCode = 1;
       } else {
         exitCode = buildBundle(
-            env, config.scriptPath, config.buildBundlePath, config.verbose);
+            env,
+            config.scriptPath,
+            config.buildBundlePath,
+            config.verbose,
+            config.includeModules,
+            config.preloadModules);
       }
     } else if (!config.scriptPath.empty()) {
       napi_value loadUserScriptFn;

@@ -46,11 +46,12 @@
 // STUBEXEC: THREW SyntaxError
 // STUBEXEC: AFTER
 
-// The stub is IN the container, not a hole the disk fallback happens to
-// fill. With the whole source tree deleted the exception is unchanged --
-// which is what distinguishes packaging a stub from leaving the file out:
-// leaving it out would surface Error/MODULE_NOT_FOUND here instead, from a
-// filesystem lookup that no longer has anything to find.
+// The stub is IN the container. With the whole source tree deleted the
+// exception is unchanged -- which is what distinguishes packaging a stub
+// from leaving the file out: leaving it out would surface
+// Error/MODULE_NOT_FOUND here instead, from the closed world's own
+// not-found path. Nothing consults the filesystem either way, so the tree
+// being gone is not what produces the SyntaxError; the container is.
 // RUN: rm -f %t.stub/cli.js %t.stub/dyn.cjs
 // RUN: %hermes-node --bundle=%t.stub/app.hbb | %FileCheck --check-prefix=STUBGONE %s
 // STUBGONE: THREW SyntaxError
@@ -121,3 +122,29 @@
 // RUN: rm -f %t.mixed/cli.js %t.mixed/ok.js %t.mixed/dyn.cjs
 // RUN: %hermes-node --bundle=%t.mixed/app.hbb | %FileCheck --check-prefix=MIXED %s
 // MIXED: MIXED 42
+
+// A bundle never reads code off the disk. A specifier the container cannot
+// answer is an error naming the importer and the remedy, not a filesystem
+// lookup -- which is both the point of shipping a bundle and the reason a
+// computed specifier cannot be made to load arbitrary code.
+// RUN: rm -rf %t.closed && mkdir -p %t.closed
+// RUN: echo "module.exports = { v: 1 };" > %t.closed/ghost.js
+// RUN: echo "const n = 'gh' + 'ost'; try { require('./' + n); } catch (e) { console.log('CLOSED', e.code); }" > %t.closed/cli.js
+// RUN: %hermes-node --build-bundle=%t.closed/app.hbb %t.closed/cli.js
+// RUN: %hermes-node --bundle=%t.closed/app.hbb | %FileCheck --check-prefix=CLOSED %s
+// CLOSED: CLOSED MODULE_NOT_FOUND
+
+// A .node native addon is the one specifier whose message is not "--include
+// it": the producer skips .node files because they are not JavaScript and
+// there is nothing to compile, so naming the flag would be advice that
+// cannot work. The code stays MODULE_NOT_FOUND -- a probing caller branches
+// on that and must still see the "no" it expects -- and only the text
+// differs. Addons work unbundled (examples/bufferutil-addon); in a bundle
+// they wait for a mechanism of their own.
+// RUN: rm -rf %t.addon && mkdir -p %t.addon/native
+// RUN: touch %t.addon/native/thing.node
+// RUN: echo "try { require('./native/thing.node'); } catch (e) { console.log('ADDON', e.code, e.message.split('\\n').pop().trim()); }" > %t.addon/cli.js
+// RUN: %hermes-node --build-bundle=%t.addon/app.hbb %t.addon/cli.js 2>&1 | %FileCheck --check-prefix=ADDONWARN %s
+// ADDONWARN: warning: skipping {{.*}}thing.node (.node is not packageable)
+// RUN: %hermes-node --bundle=%t.addon/app.hbb | %FileCheck --check-prefix=ADDON %s
+// ADDON: ADDON MODULE_NOT_FOUND Native addons are not supported in a bundle yet.

@@ -87,6 +87,22 @@ struct HermesNodeConfig {
   /// producer mode; never changes the bytes buildBundle writes.
   bool verbose = false;
 
+  /// --include=<specifier>, repeatable. Extra roots to seed into the
+  /// --build-bundle worklist alongside scriptPath, for a module the static
+  /// require() scanner cannot discover -- e.g. a preset name Babel resolves
+  /// from configuration at run time. Each is resolved from scriptPath's
+  /// directory exactly like a require() the entry made. No effect outside
+  /// bundle producer mode.
+  std::vector<std::string> includeModules;
+
+  /// --preload=<specifier>, repeatable. Like includeModules, an extra root
+  /// seeded into the --build-bundle worklist alongside scriptPath and
+  /// resolved from scriptPath's directory the same way -- but also recorded
+  /// in the container's preload table (BundleWriter::addPreload), so the
+  /// bundle consumer runs it before the entry point. No effect outside
+  /// bundle producer mode.
+  std::vector<std::string> preloadModules;
+
   /// When non-empty, run in AOT bundle consumer mode: map the container at
   /// this path (see hermes/node-compat/bundle/bundle_run.h), install the
   /// bundle-aware Module._load wrapper, and execute the bundle's entry

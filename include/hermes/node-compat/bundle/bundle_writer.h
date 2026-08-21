@@ -26,14 +26,22 @@ namespace node_compat {
 /// tested with no runtime, exactly as CompileCache is.
 class BundleWriter {
  public:
-  /// Copies \p payload. Returns the new module's index.
+  /// Copies \p payload. \p flags is a bitwise OR of the module-record flag
+  /// bits (see bundle_format.h), typically just kRequirable. Returns the new
+  /// module's index.
   uint32_t addModule(
       std::string_view identity,
       ModuleKind kind,
+      uint32_t flags,
       std::string_view payload);
 
   /// Records that \p importer resolved \p specifier to \p target.
   void addEdge(uint32_t importer, std::string_view specifier, uint32_t target);
+
+  /// Records that \p moduleIndex must run before the entry point. Call
+  /// order is preload order -- see the preload table's documentation in
+  /// bundle_format.h.
+  void addPreload(uint32_t moduleIndex);
 
   void setEntry(uint32_t moduleIndex);
 
@@ -64,6 +72,7 @@ class BundleWriter {
   struct PendingModule {
     uint32_t identityString;
     ModuleKind kind;
+    uint32_t flags;
     std::string payload;
   };
   struct PendingEdge {
@@ -74,6 +83,7 @@ class BundleWriter {
 
   std::vector<PendingModule> modules_;
   std::vector<PendingEdge> edges_;
+  std::vector<uint32_t> preloads_;
   std::map<std::string, uint32_t, std::less<>> internTable_;
   std::string stringBytes_;
   uint32_t entry_ = 0;

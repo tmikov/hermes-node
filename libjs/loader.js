@@ -33,6 +33,26 @@
     var vendoredPackages = vendoredData.packages;      // e.g. { 'ws': 'vendored/ws/index' }
     var vendoredIdSet = new Set(vendoredData.moduleIds); // Set of all vendored embedded IDs
 
+    // True once a bundle is running. A bundle is a closed world: the
+    // container is the only source of module code, and this loader's disk
+    // fallback below is a second one -- it reads an arbitrary path and
+    // compiles it. That fallback exists to serve __loadUserScript, which
+    // bundle mode never uses, so a bundle can close it outright.
+    //
+    // It matters because this loader IS globalThis.require. An ordinary
+    // require() inside a bundled module does not reach it (the CommonJS
+    // wrapper's own `require` parameter shadows the global), but
+    // `(0, eval)('require')`, `global.require` and
+    // `new Function('return require')()` all do, and each of those would
+    // otherwise compile and run any file named by a computed specifier --
+    // exactly the containment property a bundle is supposed to have.
+    //
+    // Deleting the global instead would not work: libjs/shims/domain.js
+    // calls globalThis.require('events') at its own load time, so
+    // require('domain') inside a bundle needs it to still be there. The
+    // flag is what goes away, not the function.
+    var diskLoadingClosed = false;
+
     // The module wrapper template. Node uses:
     // (function(exports, require, module, __filename, __dirname) { ... })
     // We add primordials and internalBinding as closure variables rather than
@@ -43,6 +63,19 @@
       // Try embedded bytecode first.
       var compiledFn = loadBytecodeModule(id);
       if (!compiledFn) {
+        // Not embedded, and in a closed world there is nowhere else to
+        // look: the container is the only source of module code, and this
+        // is the path that would otherwise read and compile an arbitrary
+        // file. See diskLoadingClosed above.
+        if (diskLoadingClosed) {
+          var closed = new Error(
+            "Cannot find module '" + id + "'\n" +
+            '  A bundle is running, so the container is the only source of' +
+            ' module code.\n' +
+            '  Nothing is loaded from the filesystem.');
+          closed.code = 'MODULE_NOT_FOUND';
+          throw closed;
+        }
         // Disk fallback for user scripts.
         var source = readFileSync(filepath);
 
@@ -122,6 +155,21 @@
       return require;
     }
 
+    // Does this path name a readable file? Answers false without asking the
+    // filesystem once a bundle is running: resolution is module code
+    // loading's other half, and a closed world does not consult the disk
+    // for either. Every candidate then misses, resolveRelative() returns
+    // its default, and loadModule() reports the closed-world error.
+    function probeFile(p) {
+      if (diskLoadingClosed) return false;
+      try {
+        readFileSync(p);
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
     // Resolve a relative require to a file path, trying CJS conventions:
     // 1. exact path, 2. path + .js, 3. path + .ts,
     // 4. path/index.js, 5. path/index.ts
@@ -134,38 +182,15 @@
           return base;
         }
       }
-      // Try base.js first.
       var withJs = base + '.js';
-      try {
-        readFileSync(withJs);
-        return withJs;
-      } catch (e) {
-        // fall through
-      }
-      // Try base.ts.
+      if (probeFile(withJs)) return withJs;
       var withTs = base + '.ts';
-      try {
-        readFileSync(withTs);
-        return withTs;
-      } catch (e) {
-        // fall through
-      }
-      // Try base/index.js (directory with index).
+      if (probeFile(withTs)) return withTs;
+      // A directory with an index file.
       var indexJs = base + '/index.js';
-      try {
-        readFileSync(indexJs);
-        return indexJs;
-      } catch (e) {
-        // fall through
-      }
-      // Try base/index.ts.
+      if (probeFile(indexJs)) return indexJs;
       var indexTs = base + '/index.ts';
-      try {
-        readFileSync(indexTs);
-        return indexTs;
-      } catch (e) {
-        // fall through
-      }
+      if (probeFile(indexTs)) return indexTs;
       // Default to .js extension (will fail at load time with a clear error).
       return withJs;
     }
@@ -231,6 +256,39 @@
       globalThis.primordials = primordials;
       globalThis.internalBinding = internalBinding;
       globalThis.require = requireModule;
+
+      // Closes this loader's disk fallback for the rest of the process.
+      // Called by libjs/bundle-loader.js's installBundleLoader(), before
+      // the bundle's entry module runs.
+      //
+      // One-way on purpose: there is no matching re-open, so the fact that
+      // user code can reach this global buys it nothing -- calling it again
+      // is a no-op and deleting it cannot undo a close that already
+      // happened. globalThis.require has to stay reachable (domain.js
+      // requires 'events' through it, lazily), so what the bundle takes
+      // away is the disk path inside it, not the function itself.
+      //
+      // Non-writable, non-configurable: an ordinary assignment would let a
+      // -r/--require preload -- which runs before installBundleLoader()
+      // ever calls this function -- replace it with a no-op before the
+      // close happens, reopening disk loading with no error at all. Deleting
+      // the global was already harmless (loadModule() would just throw
+      // "globalThis.__closeDiskModuleLoading is not a function" from
+      // installBundleLoader()'s call below), but replacing it failed open,
+      // silently. defineProperty makes both failure modes closed: a preload
+      // assigning to the property in sloppy mode is now a silent no-op (the
+      // assignment is dropped, the original closer survives), the same
+      // assignment in strict mode throws TypeError, and `delete` returns
+      // false and leaves the property in place. Either way the function
+      // installBundleLoader() calls is still the real one.
+      Object.defineProperty(globalThis, '__closeDiskModuleLoading', {
+        value: function() {
+          diskLoadingClosed = true;
+        },
+        writable: false,
+        configurable: false,
+        enumerable: true,
+      });
 
       // Expose loadUserScript for the C++ bootstrap to run user scripts
       // as CJS modules with full Node.js module resolution (node_modules/,

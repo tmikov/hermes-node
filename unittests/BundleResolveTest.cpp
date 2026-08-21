@@ -6,12 +6,15 @@
  */
 
 #include <hermes/node-compat/bundle/bundle_resolve.h>
+#include <hermes/node-compat/bundle/file_source.h>
 
 #include <gtest/gtest.h>
 
 #include <sys/stat.h>
 
 #include <fstream>
+#include <map>
+#include <set>
 #include <string>
 
 using namespace hermes::node_compat;
@@ -296,6 +299,47 @@ TEST_F(BundleResolveTest, WalkNeverProbesNodeModulesInsideNodeModules) {
       "module.exports = 0;\n");
   EXPECT_FALSE(resolveSpecifier(appDir_ + "/node_modules/dep/main.js", "ghost")
                    .has_value());
+}
+
+// A backend that answers from an in-memory set rather than the disk is the
+// whole point of the seam: if resolveSpecifier still reaches the real
+// filesystem anywhere, this resolves against files that do not exist there
+// and fails.
+namespace {
+class FakeFileSource : public FileSource {
+ public:
+  std::set<std::string> files;
+  std::map<std::string, std::string> packageJson;
+
+  bool isRegularFile(const std::string &path) const override {
+    return files.count(path) != 0;
+  }
+  bool isDirectory(const std::string &path) const override {
+    std::string prefix = path + "/";
+    for (const std::string &f : files)
+      if (f.compare(0, prefix.size(), prefix) == 0)
+        return true;
+    return false;
+  }
+  std::optional<std::string> readPackageJson(const std::string &dir) override {
+    auto it = packageJson.find(dir);
+    if (it == packageJson.end())
+      return std::nullopt;
+    return it->second;
+  }
+};
+} // namespace
+
+TEST(BundleResolveFileSourceTest, ResolvesThroughAnInjectedFileSource) {
+  FakeFileSource fs;
+  fs.files.insert("/app/cli.js");
+  fs.files.insert("/app/node_modules/dep/main.js");
+  fs.packageJson["/app/node_modules/dep"] = "{\"main\": \"main.js\"}";
+
+  EXPECT_EQ(
+      resolveSpecifier(fs, "/app/cli.js", "dep"),
+      std::optional<std::string>("/app/node_modules/dep/main.js"));
+  EXPECT_FALSE(resolveSpecifier(fs, "/app/cli.js", "ghost").has_value());
 }
 
 TEST(IsBuiltinSpecifierTest, RecognizesBareAndNodeSchemeBuiltins) {

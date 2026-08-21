@@ -63,12 +63,12 @@ class TempDir {
 /// that printed insertion order rather than table order would be visible.
 std::vector<uint8_t> makeBundle() {
   BundleWriter writer;
-  uint32_t cli =
-      writer.addModule("cli.js", ModuleKind::kJavaScript, "BC-CLI!!!!!!");
-  uint32_t util =
-      writer.addModule("lib/util.js", ModuleKind::kJavaScript, "BC-UTIL");
-  uint32_t cfg =
-      writer.addModule("cfg.json", ModuleKind::kJSON, "{ \"v\": 2 }");
+  uint32_t cli = writer.addModule(
+      "cli.js", ModuleKind::kJavaScript, kRequirable, "BC-CLI!!!!!!");
+  uint32_t util = writer.addModule(
+      "lib/util.js", ModuleKind::kJavaScript, kRequirable, "BC-UTIL");
+  uint32_t cfg = writer.addModule(
+      "cfg.json", ModuleKind::kJSON, kRequirable, "{ \"v\": 2 }");
   writer.addEdge(cli, "./lib/util", util);
   writer.addEdge(cli, "./cfg.json", cfg);
   writer.setEntry(cli);
@@ -129,7 +129,7 @@ TEST(BundleToolsTest, DumpPrintsHeaderTablesAndTotals) {
   const std::string text = out.str();
 
   EXPECT_TRUE(
-      contains(text, "bundle: " + path + "   format v1  generation 0xabcd1234"))
+      contains(text, "bundle: " + path + "   format v3  generation 0xabcd1234"))
       << text;
   EXPECT_TRUE(contains(text, "\nentry:  [0] cli.js\n")) << text;
 
@@ -155,17 +155,17 @@ TEST(BundleToolsTest, DumpPrintsHeaderTablesAndTotals) {
   //
   // strings  65: five interned entries -- three identities (6 + 11 + 8) and
   //              two specifiers (10 + 10) -- each behind a 4-byte length.
-  // modules  48: 3 records of sizeof(BundleModuleRecord) == 16.
+  // modules  60: 3 records of sizeof(BundleModuleRecord) == 20.
   // edges    24: 2 records of sizeof(BundleEdgeRecord) == 12.
   // payload  40: 12, 7 and 10 bytes of payload, each padded up to the next
   //              multiple of kBundlePayloadAlign (16 + 8 + 16).
   //
   // The two record sizes the literals above are derived from, checked here
   // so the derivation is not just a comment.
-  EXPECT_EQ(sizeof(BundleModuleRecord), 16u);
+  EXPECT_EQ(sizeof(BundleModuleRecord), 20u);
   EXPECT_EQ(sizeof(BundleEdgeRecord), 12u);
   EXPECT_TRUE(contains(text, "\nSECTIONS\n")) << text;
-  EXPECT_TRUE(contains(text, "\n  strings  65 B    modules  48 B\n")) << text;
+  EXPECT_TRUE(contains(text, "\n  strings  65 B    modules  60 B\n")) << text;
   EXPECT_TRUE(contains(text, "\n  edges    24 B    payload  40 B\n")) << text;
   // The total is the size of the file, which exceeds the sum of the four
   // sections by the header and the payload alignment padding.
@@ -191,12 +191,14 @@ TEST(BundleToolsTest, DumpPrintsHeaderTablesAndTotals) {
 // and specifier order the same sequence.
 TEST(BundleToolsTest, EdgesPrintInStoredOrder) {
   BundleWriter writer;
-  uint32_t entry =
-      writer.addModule("z-entry.js", ModuleKind::kJavaScript, "BC-Z");
-  uint32_t lib = writer.addModule("a-lib.js", ModuleKind::kJavaScript, "BC-A");
-  uint32_t dep = writer.addModule("z-dep.js", ModuleKind::kJavaScript, "BC-D");
-  uint32_t helper =
-      writer.addModule("a-helper.js", ModuleKind::kJavaScript, "BC-H");
+  uint32_t entry = writer.addModule(
+      "z-entry.js", ModuleKind::kJavaScript, kRequirable, "BC-Z");
+  uint32_t lib = writer.addModule(
+      "a-lib.js", ModuleKind::kJavaScript, kRequirable, "BC-A");
+  uint32_t dep = writer.addModule(
+      "z-dep.js", ModuleKind::kJavaScript, kRequirable, "BC-D");
+  uint32_t helper = writer.addModule(
+      "a-helper.js", ModuleKind::kJavaScript, kRequirable, "BC-H");
   writer.addEdge(lib, "./a-helper", helper);
   writer.addEdge(entry, "./z-dep", dep);
   writer.addEdge(entry, "./a-lib", lib);
@@ -275,10 +277,14 @@ TEST(BundleToolsTest, ColumnsWidenToTheWidestValuePresent) {
       "node_modules/@scope/a-package-with-a-long-name/lib/internal/thing.js";
 
   BundleWriter writer;
-  uint32_t cli = writer.addModule("cli.js", ModuleKind::kJavaScript, "BC");
+  uint32_t cli =
+      writer.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "BC");
   // Six digits, wider than the "bytes" heading.
   uint32_t big = writer.addModule(
-      longIdentity, ModuleKind::kJavaScript, std::string(123456, 'x'));
+      longIdentity,
+      ModuleKind::kJavaScript,
+      kRequirable,
+      std::string(123456, 'x'));
   writer.addEdge(cli, "@scope/a-package-with-a-long-name", big);
   writer.setEntry(cli);
 
@@ -300,6 +306,42 @@ TEST(BundleToolsTest, ColumnsWidenToTheWidestValuePresent) {
   // The identity is last on its line, so nothing pads or truncates it.
   EXPECT_TRUE(
       contains(text, "  cli.js  '@scope/a-package-with-a-long-name'  -> [1]\n"))
+      << text;
+}
+
+// A module packaged only so the resolver could read it (flags == 0, no
+// kRequirable) is never itself require()d. The dump marks it in the kind
+// column, which is what makes a container's growth from such a record
+// explained rather than mysterious.
+TEST(BundleToolsTest, DumpMarksResolveOnlyModules) {
+  BundleWriter writer;
+  uint32_t cli =
+      writer.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "BC");
+  writer.addModule(
+      "node_modules/dep/package.json",
+      ModuleKind::kJSON,
+      /*flags*/ 0,
+      "{}");
+  writer.setEntry(cli);
+
+  TempDir dir;
+  std::string path = dir.path() + "/resolve-only.hbb";
+  writeFile(path, writer.serialize(kGen));
+
+  std::ostringstream out;
+  std::ostringstream err;
+  ASSERT_EQ(dumpBundle(path, kGen, /*verbose*/ false, out, err), 0);
+  const std::string text = out.str();
+
+  // The requirable module's row is unmarked; the resolve-only one's kind
+  // column carries the marker, which widens the column for both rows.
+  EXPECT_TRUE(contains(text, "  idx  kind               bytes  identity\n"))
+      << text;
+  EXPECT_TRUE(contains(text, "\n    0  js                     2  cli.js\n"))
+      << text;
+  EXPECT_TRUE(contains(
+      text,
+      "\n    1  json resolve-only      2  node_modules/dep/package.json\n"))
       << text;
 }
 
@@ -453,13 +495,13 @@ TEST(BundleToolsTest, ExtractSuggestsNothingForAWildTypo) {
 // order suggestIdentities() encounters them in, since it is a stable sort.
 TEST(BundleToolsTest, ExtractSuggestsAtMostThreeClosestIdentities) {
   BundleWriter writer;
-  uint32_t entry =
-      writer.addModule("entry.js", ModuleKind::kJavaScript, "BC-E");
-  writer.addModule("mod1.js", ModuleKind::kJavaScript, "BC-1");
-  writer.addModule("mod2.js", ModuleKind::kJavaScript, "BC-2");
-  writer.addModule("mod3.js", ModuleKind::kJavaScript, "BC-3");
-  writer.addModule("mod4.js", ModuleKind::kJavaScript, "BC-4");
-  writer.addModule("mod5.js", ModuleKind::kJavaScript, "BC-5");
+  uint32_t entry = writer.addModule(
+      "entry.js", ModuleKind::kJavaScript, kRequirable, "BC-E");
+  writer.addModule("mod1.js", ModuleKind::kJavaScript, kRequirable, "BC-1");
+  writer.addModule("mod2.js", ModuleKind::kJavaScript, kRequirable, "BC-2");
+  writer.addModule("mod3.js", ModuleKind::kJavaScript, kRequirable, "BC-3");
+  writer.addModule("mod4.js", ModuleKind::kJavaScript, kRequirable, "BC-4");
+  writer.addModule("mod5.js", ModuleKind::kJavaScript, kRequirable, "BC-5");
   writer.setEntry(entry);
 
   TempDir dir;

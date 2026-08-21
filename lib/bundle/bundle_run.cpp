@@ -9,6 +9,8 @@
 
 #include <hermes/node-compat/bundle/bundle_generation.h>
 #include <hermes/node-compat/bundle/bundle_reader.h>
+#include <hermes/node-compat/bundle/bundle_resolve.h>
+#include <hermes/node-compat/bundle/file_source.h>
 #include <hermes/node-compat/bundle/mapped_file.h>
 
 #include <napi/hermes_napi.h>
@@ -45,6 +47,13 @@ struct OpenBundle {
   /// Directory holding the bundle file, with symlinks resolved. Module
   /// identities are relative to it, so it is what __filename is built from.
   std::string root;
+  /// The FileSource bundleResolveCallback answers a require() the edge
+  /// table has no row for from. Built once here rather than per call: its
+  /// constructor builds a sorted identity vector over every module in the
+  /// container, and it holds only a reference to `reader` plus a copy of
+  /// `root`, both stable for the life of the process (see the comment on
+  /// this struct).
+  std::optional<BundleFileSource> fileSource;
 };
 
 OpenBundle &openBundleState() {
@@ -114,6 +123,119 @@ napi_value bundleLookupCallback(napi_env env, napi_callback_info info) {
   std::string_view identity = state.reader->identity(*target);
   napi_value result;
   if (napi_create_string_utf8(env, identity.data(), identity.size(), &result) !=
+      napi_ok)
+    return nullptr;
+  return result;
+}
+
+/// Strips \p root (a "root + '/' + rest" prefix) off \p absPath, returning
+/// the identity it names -- or nullopt when \p absPath is not lexically
+/// under \p root. Mirrors BundleFileSource::stripRoot()'s exact-prefix rule
+/// byte for byte, including its root == "/" special case (appending "/" to
+/// a root that already ends in one would turn the prefix into "//" and
+/// reject every real path) -- resolveSpecifier() can only ever have
+/// produced \p absPath by asking that same BundleFileSource whether paths
+/// under \p root exist, so the two must agree on what "under root" means.
+std::optional<std::string> identityUnderRoot(
+    const std::string &root,
+    const std::string &absPath) {
+  bool rootEndsInSlash = !root.empty() && root.back() == '/';
+  std::string prefix = rootEndsInSlash ? root : root + "/";
+  if (absPath.compare(0, prefix.size(), prefix) != 0)
+    return std::nullopt;
+  return absPath.substr(prefix.size());
+}
+
+/// __bundleResolve(fromIdentity, request[, paths]) -> identity | undefined.
+///
+/// Answers a require() the edge table has no row for, running the same
+/// resolveSpecifier() algorithm the producer used to decide what to
+/// package (bundle_resolve.h), against the container's own identity set
+/// (state.fileSource) instead of the real filesystem.
+///
+/// With no third argument, resolves as if from `root + "/" + fromIdentity`
+/// -- i.e. from the importer's own file, same as the edge table would
+/// have. With `paths` (a JS array of directory strings, the same shape
+/// require.resolve(request, {paths}) takes), resolves as if from
+/// "<entry>/x" for each entry in turn and returns the first hit, which is
+/// what Node does with the option. Either way \p request goes to
+/// resolveSpecifier() exactly as given, full ancestor climb included: one
+/// algorithm, one set of inputs, on both sides of the build.
+///
+/// The `paths` branch was briefly bounded to each entry's own nearest
+/// node_modules, because while a disk fallback still stood behind this a
+/// climb past an ancestor that merely had not been PACKAGED could land on
+/// a different, real package of the same name several levels up -- a
+/// confident wrong answer where the fallback would have found the right
+/// one. With the fallback gone the container is the only source, so there
+/// is no unpackaged ancestor to be wrong about: a level with no records is
+/// a level with nothing there, and climbing past it answers exactly what
+/// the producer's own walk answered.
+///
+/// An entry outside the bundle root -- or a request that only resolves to
+/// something outside it -- simply misses: BundleFileSource answers false to
+/// every isRegularFile/isDirectory question about a path it cannot strip
+/// root off of, so nothing here has to special-case containment.
+///
+/// A resolved identity that names a module packaged only for the resolver
+/// (kRequirable clear -- a package.json read for its "main" field, never
+/// itself require()d) is reported as a miss, not as that identity: such a
+/// module must stay unloadable through require(), and returning its
+/// identity here would hand the loader exactly that.
+napi_value bundleResolveCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3];
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+      argc < 2)
+    return undefinedValue(env);
+
+  std::string fromIdentity;
+  std::string request;
+  if (!stringArg(env, argv[0], &fromIdentity) ||
+      !stringArg(env, argv[1], &request))
+    return undefinedValue(env);
+
+  OpenBundle &state = openBundleState();
+  FileSource &fileSource = *state.fileSource;
+
+  bool hasPaths = false;
+  if (argc >= 3)
+    napi_is_array(env, argv[2], &hasPaths);
+
+  std::optional<std::string> resolved;
+  if (hasPaths) {
+    // Each entry stands in for the importer's directory in turn, exactly as
+    // Node expands options.paths through Module._nodeModulePaths, and the
+    // first hit wins.
+    uint32_t length = 0;
+    if (napi_get_array_length(env, argv[2], &length) != napi_ok)
+      length = 0;
+    for (uint32_t i = 0; i < length && !resolved; ++i) {
+      napi_value element;
+      std::string entry;
+      if (napi_get_element(env, argv[2], i, &element) == napi_ok &&
+          stringArg(env, element, &entry)) {
+        resolved = resolveSpecifier(fileSource, entry + "/x", request);
+      }
+    }
+  } else {
+    std::string fromFile = state.root + "/" + fromIdentity;
+    resolved = resolveSpecifier(fileSource, fromFile, request);
+  }
+
+  if (!resolved)
+    return undefinedValue(env);
+
+  std::optional<std::string> identity =
+      identityUnderRoot(state.root, *resolved);
+  std::optional<uint32_t> index = identity ? indexOf(*identity) : std::nullopt;
+  if (!index || !state.reader->isRequirable(*index))
+    return undefinedValue(env);
+
+  std::string_view canonicalIdentity = state.reader->identity(*index);
+  napi_value result;
+  if (napi_create_string_utf8(
+          env, canonicalIdentity.data(), canonicalIdentity.size(), &result) !=
       napi_ok)
     return nullptr;
   return result;
@@ -216,6 +338,28 @@ napi_value bundleEntryCallback(napi_env env, napi_callback_info /*info*/) {
   return result;
 }
 
+/// __bundlePreloads() -> array of identity strings, in run order.
+///
+/// The producer records preload MODULE INDICES; JavaScript speaks
+/// identities everywhere else in this file (loadIdentity() takes one), so
+/// this translates the whole table once rather than handing indices across
+/// the boundary for the caller to translate one at a time.
+napi_value bundlePreloadsCallback(napi_env env, napi_callback_info /*info*/) {
+  const OpenBundle &state = openBundleState();
+  uint32_t n = state.reader->preloadCount();
+  napi_value result;
+  if (napi_create_array_with_length(env, n, &result) != napi_ok)
+    return nullptr;
+  for (uint32_t i = 0; i < n; ++i) {
+    std::string_view id = state.reader->identity(state.reader->preload(i));
+    napi_value item;
+    if (napi_create_string_utf8(env, id.data(), id.size(), &item) != napi_ok)
+      return nullptr;
+    napi_set_element(env, result, i, item);
+  }
+  return result;
+}
+
 /// __bundleRoot() -> the directory identities are relative to.
 napi_value bundleRootCallback(napi_env env, napi_callback_info /*info*/) {
   const OpenBundle &state = openBundleState();
@@ -288,6 +432,7 @@ bool openBundle(const std::string &path, std::string *error) {
   state.byIdentity.reserve(state.reader->moduleCount());
   for (uint32_t i = 0; i < state.reader->moduleCount(); ++i)
     state.byIdentity.emplace(state.reader->identity(i), i);
+  state.fileSource.emplace(*state.reader, state.root);
 
   return true;
 }
@@ -308,11 +453,24 @@ napi_status installBundleGlobals(napi_env env, napi_value *bundleObject) {
   if (status != napi_ok)
     return status;
   status = defineNative(
+      env, global, bundle, "__bundleResolve", "resolve", bundleResolveCallback);
+  if (status != napi_ok)
+    return status;
+  status = defineNative(
       env, global, bundle, "__bundleLoad", "load", bundleLoadCallback);
   if (status != napi_ok)
     return status;
   status = defineNative(
       env, global, bundle, "__bundleEntry", "entry", bundleEntryCallback);
+  if (status != napi_ok)
+    return status;
+  status = defineNative(
+      env,
+      global,
+      bundle,
+      "__bundlePreloads",
+      "preloads",
+      bundlePreloadsCallback);
   if (status != napi_ok)
     return status;
   status = defineNative(

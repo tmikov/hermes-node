@@ -22,7 +22,8 @@ constexpr uint32_t kGen = 0xABCD1234;
 
 TEST(BundleFormatTest, RoundTripSingleModule) {
   BundleWriter w;
-  uint32_t m = w.addModule("cli.js", ModuleKind::kJavaScript, "BYTECODE");
+  uint32_t m =
+      w.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "BYTECODE");
   w.setEntry(m);
   std::vector<uint8_t> bytes = w.serialize(kGen);
 
@@ -36,12 +37,33 @@ TEST(BundleFormatTest, RoundTripSingleModule) {
   EXPECT_EQ(r->kind(m), ModuleKind::kJavaScript);
 }
 
+TEST(BundleFormatTest, RoundTripsModuleFlags) {
+  BundleWriter w;
+  uint32_t a = w.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "A");
+  uint32_t b = w.addModule(
+      "node_modules/dep/package.json",
+      ModuleKind::kJSON,
+      /*flags*/ 0,
+      "{}");
+  w.setEntry(a);
+  std::vector<uint8_t> bytes = w.serialize(bundleGenerationTag());
+
+  std::string error;
+  auto r = BundleReader::open(
+      bytes.data(), bytes.size(), bundleGenerationTag(), &error);
+  ASSERT_TRUE(r.has_value()) << error;
+  EXPECT_TRUE(r->isRequirable(a));
+  EXPECT_FALSE(r->isRequirable(b));
+  EXPECT_EQ(r->formatVersion(), 3u);
+}
+
 TEST(BundleFormatTest, EdgeLookupHitAndMiss) {
   BundleWriter w;
-  uint32_t a = w.addModule("a.js", ModuleKind::kJavaScript, "A");
-  uint32_t b =
-      w.addModule("node_modules/b/index.js", ModuleKind::kJavaScript, "B");
-  uint32_t c = w.addModule("c.json", ModuleKind::kJSON, "{\"x\":1}");
+  uint32_t a = w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "A");
+  uint32_t b = w.addModule(
+      "node_modules/b/index.js", ModuleKind::kJavaScript, kRequirable, "B");
+  uint32_t c =
+      w.addModule("c.json", ModuleKind::kJSON, kRequirable, "{\"x\":1}");
   w.addEdge(a, "b", b);
   w.addEdge(a, "./c.json", c);
   w.setEntry(a);
@@ -64,9 +86,10 @@ TEST(BundleFormatTest, EdgeLookupHitAndMiss) {
 // Specifiers that share a prefix must not collide in the binary search.
 TEST(BundleFormatTest, PrefixSpecifiersDoNotCollide) {
   BundleWriter w;
-  uint32_t a = w.addModule("a.js", ModuleKind::kJavaScript, "A");
-  uint32_t p = w.addModule("p.js", ModuleKind::kJavaScript, "P");
-  uint32_t pp = w.addModule("pp.js", ModuleKind::kJavaScript, "PP");
+  uint32_t a = w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "A");
+  uint32_t p = w.addModule("p.js", ModuleKind::kJavaScript, kRequirable, "P");
+  uint32_t pp =
+      w.addModule("pp.js", ModuleKind::kJavaScript, kRequirable, "PP");
   w.addEdge(a, "./p", p);
   w.addEdge(a, "./pp", pp);
   w.setEntry(a);
@@ -81,10 +104,13 @@ TEST(BundleFormatTest, PrefixSpecifiersDoNotCollide) {
 
 TEST(BundleFormatTest, StringTableDeduplicates) {
   BundleWriter w;
-  uint32_t a = w.addModule("a.js", ModuleKind::kJavaScript, "A");
-  uint32_t b = w.addModule("b.js", ModuleKind::kJavaScript, "B");
+  uint32_t a = w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "A");
+  uint32_t b = w.addModule("b.js", ModuleKind::kJavaScript, kRequirable, "B");
   uint32_t t = w.addModule(
-      "node_modules/path-ish/index.js", ModuleKind::kJavaScript, "T");
+      "node_modules/path-ish/index.js",
+      ModuleKind::kJavaScript,
+      kRequirable,
+      "T");
   // Same specifier from two importers -- one string, two edges.
   w.addEdge(a, "path-ish", t);
   w.addEdge(b, "path-ish", t);
@@ -92,10 +118,13 @@ TEST(BundleFormatTest, StringTableDeduplicates) {
   std::vector<uint8_t> small = w.serialize(kGen);
 
   BundleWriter w2;
-  uint32_t a2 = w2.addModule("a.js", ModuleKind::kJavaScript, "A");
-  uint32_t b2 = w2.addModule("b.js", ModuleKind::kJavaScript, "B");
+  uint32_t a2 = w2.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "A");
+  uint32_t b2 = w2.addModule("b.js", ModuleKind::kJavaScript, kRequirable, "B");
   uint32_t t2 = w2.addModule(
-      "node_modules/path-ish/index.js", ModuleKind::kJavaScript, "T");
+      "node_modules/path-ish/index.js",
+      ModuleKind::kJavaScript,
+      kRequirable,
+      "T");
   w2.addEdge(a2, "path-ish", t2);
   w2.addEdge(b2, "path-ish-other-longer-name", t2);
   w2.setEntry(a2);
@@ -109,8 +138,9 @@ TEST(BundleFormatTest, StringTableDeduplicates) {
 TEST(BundleFormatTest, PayloadEntriesAreAligned) {
   BundleWriter w;
   // Deliberately unaligned sizes.
-  w.addModule("a.js", ModuleKind::kJavaScript, "1");
-  uint32_t b = w.addModule("b.js", ModuleKind::kJavaScript, "22222");
+  w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "1");
+  uint32_t b =
+      w.addModule("b.js", ModuleKind::kJavaScript, kRequirable, "22222");
   w.setEntry(0);
   std::vector<uint8_t> bytes = w.serialize(kGen);
 
@@ -123,7 +153,7 @@ TEST(BundleFormatTest, PayloadEntriesAreAligned) {
 
 TEST(BundleFormatTest, RejectsBadMagic) {
   BundleWriter w;
-  w.addModule("a.js", ModuleKind::kJavaScript, "A");
+  w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "A");
   w.setEntry(0);
   std::vector<uint8_t> bytes = w.serialize(kGen);
   bytes[0] = 'X';
@@ -136,7 +166,7 @@ TEST(BundleFormatTest, RejectsBadMagic) {
 
 TEST(BundleFormatTest, RejectsGenerationMismatch) {
   BundleWriter w;
-  w.addModule("a.js", ModuleKind::kJavaScript, "A");
+  w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "A");
   w.setEntry(0);
   std::vector<uint8_t> bytes = w.serialize(kGen);
 
@@ -149,7 +179,7 @@ TEST(BundleFormatTest, RejectsGenerationMismatch) {
 
 TEST(BundleFormatTest, RejectsFormatVersionMismatch) {
   BundleWriter w;
-  w.addModule("a.js", ModuleKind::kJavaScript, "A");
+  w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "A");
   w.setEntry(0);
   std::vector<uint8_t> bytes = w.serialize(kGen);
   // formatVersion sits immediately after the 8 magic bytes.
@@ -162,12 +192,74 @@ TEST(BundleFormatTest, RejectsFormatVersionMismatch) {
   EXPECT_NE(error.find("format version"), std::string::npos) << error;
 }
 
+// A flags bit outside kRequirable is rejected the same way an unrecognized
+// kind is: a reader that let it through would silently ignore whatever that
+// bit was meant to say.
+TEST(BundleFormatTest, RejectsUnknownFlags) {
+  BundleWriter w;
+  w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "A");
+  w.setEntry(0);
+  std::vector<uint8_t> bytes = w.serialize(kGen);
+  BundleHeader header;
+  std::memcpy(&header, bytes.data(), sizeof(header));
+  uint32_t bogus = kRequirable | (1u << 31);
+  std::memcpy(
+      bytes.data() + header.moduleTableOffset +
+          offsetof(BundleModuleRecord, flags),
+      &bogus,
+      sizeof(bogus));
+
+  std::string error;
+  auto r = BundleReader::open(bytes.data(), bytes.size(), kGen, &error);
+  EXPECT_FALSE(r.has_value());
+  EXPECT_NE(error.find("unknown flags"), std::string::npos) << error;
+}
+
+// Identities cannot contain ".." today only because the producer derives
+// them with lexically_relative() against a common ancestor -- the reader
+// itself never validated identity shape. That was inert while an identity
+// only indexed a payload inside the container; a bundle consumer turns an
+// identity into a `root + "/" + identity` path (__filename, a
+// Module._cache key, and what BundleFileSource answers questions about),
+// so a container carrying an identity like "../etc/passwd" stops being
+// inert. Built through BundleWriter, which does not validate identities
+// itself, so this states what a container may contain rather than how the
+// bytes happen to be laid out.
+TEST(BundleFormatTest, RejectsMalformedIdentities) {
+  auto expectRejected = [](std::string_view identity) {
+    SCOPED_TRACE(identity);
+    BundleWriter w;
+    uint32_t m =
+        w.addModule(identity, ModuleKind::kJavaScript, kRequirable, "X");
+    w.setEntry(m);
+    std::vector<uint8_t> bytes = w.serialize(kGen);
+
+    std::string error;
+    auto r = BundleReader::open(bytes.data(), bytes.size(), kGen, &error);
+    EXPECT_FALSE(r.has_value());
+    EXPECT_NE(error.find("malformed identity"), std::string::npos) << error;
+  };
+
+  expectRejected(""); // empty
+  expectRejected("/etc/passwd"); // absolute
+  expectRejected(std::string_view("a\0b.js", 6)); // embedded NUL
+  expectRejected("."); // "." segment, whole identity
+  expectRejected(".."); // ".." segment, whole identity
+  expectRejected("../etc/passwd"); // ".." segment, leading
+  expectRejected("a/../b.js"); // ".." segment, interior
+  expectRejected("a/b/.."); // ".." segment, trailing
+  expectRejected("./a.js"); // "." segment, leading
+  expectRejected("a/./b.js"); // "." segment, interior
+}
+
 // Truncation at every byte length must be rejected, never crash. This is the
 // test that catches missing bounds checks in the reader.
 TEST(BundleFormatTest, RejectsTruncationAtEveryLength) {
   BundleWriter w;
-  uint32_t a = w.addModule("a.js", ModuleKind::kJavaScript, "AAAA");
-  uint32_t b = w.addModule("b.js", ModuleKind::kJavaScript, "BBBB");
+  uint32_t a =
+      w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "AAAA");
+  uint32_t b =
+      w.addModule("b.js", ModuleKind::kJavaScript, kRequirable, "BBBB");
   w.addEdge(a, "./b", b);
   w.setEntry(a);
   std::vector<uint8_t> bytes = w.serialize(kGen);
@@ -183,7 +275,7 @@ TEST(BundleFormatTest, RejectsTruncationAtEveryLength) {
 
 TEST(BundleFormatTest, RejectsOutOfRangeEntry) {
   BundleWriter w;
-  w.addModule("a.js", ModuleKind::kJavaScript, "A");
+  w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "A");
   w.setEntry(0);
   std::vector<uint8_t> bytes = w.serialize(kGen);
   uint32_t bogus = 99;
@@ -217,8 +309,10 @@ TEST(BundleFormatTest, RejectsOutOfRangeEntry) {
 // only thing standing between this input and acceptance.
 TEST(BundleFormatTest, RejectsMisalignedModuleTableOffset) {
   BundleWriter w;
-  uint32_t a = w.addModule("a.js", ModuleKind::kJavaScript, "AAAA");
-  uint32_t b = w.addModule("b.js", ModuleKind::kJavaScript, "BBBB");
+  uint32_t a =
+      w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "AAAA");
+  uint32_t b =
+      w.addModule("b.js", ModuleKind::kJavaScript, kRequirable, "BBBB");
   w.addEdge(a, "./b", b);
   w.setEntry(a);
   std::vector<uint8_t> good = w.serialize(kGen);
@@ -258,8 +352,10 @@ TEST(BundleFormatTest, RejectsMisalignedModuleTableOffset) {
 
 TEST(BundleFormatTest, RejectsMisalignedEdgeTableOffset) {
   BundleWriter w;
-  uint32_t a = w.addModule("a.js", ModuleKind::kJavaScript, "AAAA");
-  uint32_t b = w.addModule("b.js", ModuleKind::kJavaScript, "BBBB");
+  uint32_t a =
+      w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "AAAA");
+  uint32_t b =
+      w.addModule("b.js", ModuleKind::kJavaScript, kRequirable, "BBBB");
   w.addEdge(a, "./b", b);
   w.setEntry(a);
   std::vector<uint8_t> good = w.serialize(kGen);
@@ -299,7 +395,8 @@ TEST(BundleFormatTest, EmptyBundleIsRejected) {
 
 TEST(BundleFormatTest, OpenForInspectionAcceptsGenerationMismatch) {
   BundleWriter writer;
-  uint32_t entry = writer.addModule("a.js", ModuleKind::kJavaScript, "bc-a");
+  uint32_t entry =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "bc-a");
   writer.setEntry(entry);
   std::vector<uint8_t> bytes = writer.serialize(0xAAAAAAAA);
 
@@ -320,7 +417,8 @@ TEST(BundleFormatTest, OpenForInspectionAcceptsGenerationMismatch) {
 
 TEST(BundleFormatTest, OpenForInspectionStillRejectsStructuralDamage) {
   BundleWriter writer;
-  uint32_t entry = writer.addModule("a.js", ModuleKind::kJavaScript, "bc-a");
+  uint32_t entry =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "bc-a");
   writer.setEntry(entry);
   std::vector<uint8_t> good = writer.serialize(0xAAAAAAAA);
 
@@ -349,8 +447,10 @@ TEST(BundleFormatTest, OpenForInspectionStillRejectsStructuralDamage) {
 
 TEST(BundleFormatTest, EdgeAccessorMatchesLookup) {
   BundleWriter writer;
-  uint32_t a = writer.addModule("a.js", ModuleKind::kJavaScript, "bc-a");
-  uint32_t b = writer.addModule("b.js", ModuleKind::kJavaScript, "bc-b");
+  uint32_t a =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "bc-a");
+  uint32_t b =
+      writer.addModule("b.js", ModuleKind::kJavaScript, kRequirable, "bc-b");
   writer.addEdge(a, "./b", b);
   writer.addEdge(b, "./a", a);
   writer.setEntry(a);
@@ -371,6 +471,74 @@ TEST(BundleFormatTest, EdgeAccessorMatchesLookup) {
     ASSERT_TRUE(found);
     EXPECT_EQ(*found, e.target);
   }
+}
+
+TEST(BundleFormatTest, RoundTripsPreloads) {
+  BundleWriter w;
+  uint32_t entry =
+      w.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "A");
+  uint32_t setup =
+      w.addModule("setup.js", ModuleKind::kJavaScript, kRequirable, "B");
+  w.setEntry(entry);
+  w.addPreload(setup);
+  std::vector<uint8_t> bytes = w.serialize(bundleGenerationTag());
+
+  std::string error;
+  auto r = BundleReader::open(
+      bytes.data(), bytes.size(), bundleGenerationTag(), &error);
+  ASSERT_TRUE(r.has_value()) << error;
+  EXPECT_EQ(r->formatVersion(), 3u);
+  ASSERT_EQ(r->preloadCount(), 1u);
+  EXPECT_EQ(r->preload(0), setup);
+}
+
+// Order is the meaning of this table: it is why preloads are a section
+// rather than another flag bit on the module record.
+TEST(BundleFormatTest, PreservesPreloadOrder) {
+  BundleWriter w;
+  uint32_t a = w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "A");
+  uint32_t b = w.addModule("b.js", ModuleKind::kJavaScript, kRequirable, "B");
+  uint32_t c = w.addModule("c.js", ModuleKind::kJavaScript, kRequirable, "C");
+  w.setEntry(c);
+  w.addPreload(b);
+  w.addPreload(a);
+  std::vector<uint8_t> bytes = w.serialize(bundleGenerationTag());
+  std::string error;
+  auto r = BundleReader::open(
+      bytes.data(), bytes.size(), bundleGenerationTag(), &error);
+  ASSERT_TRUE(r.has_value()) << error;
+  ASSERT_EQ(r->preloadCount(), 2u);
+  EXPECT_EQ(r->preload(0), b);
+  EXPECT_EQ(r->preload(1), a);
+}
+
+TEST(BundleFormatTest, RejectsPreloadIndexOutOfRange) {
+  BundleWriter w;
+  uint32_t a = w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "A");
+  w.setEntry(a);
+  w.addPreload(7); // there is one module
+  std::vector<uint8_t> bytes = w.serialize(bundleGenerationTag());
+  std::string error;
+  EXPECT_FALSE(BundleReader::open(
+                   bytes.data(), bytes.size(), bundleGenerationTag(), &error)
+                   .has_value());
+  EXPECT_NE(
+      error.find("preload references an unknown module"), std::string::npos)
+      << error;
+}
+
+TEST(BundleFormatTest, RejectsNonRequirablePreload) {
+  BundleWriter w;
+  uint32_t a = w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "A");
+  uint32_t pkg = w.addModule("package.json", ModuleKind::kJSON, 0, "{}");
+  w.setEntry(a);
+  w.addPreload(pkg);
+  std::vector<uint8_t> bytes = w.serialize(bundleGenerationTag());
+  std::string error;
+  EXPECT_FALSE(BundleReader::open(
+                   bytes.data(), bytes.size(), bundleGenerationTag(), &error)
+                   .has_value());
+  EXPECT_NE(error.find("non-requirable"), std::string::npos) << error;
 }
 
 TEST(BundleGenerationTest, IsStableWithinOneBuild) {

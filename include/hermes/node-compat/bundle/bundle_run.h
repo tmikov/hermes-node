@@ -29,12 +29,13 @@ namespace node_compat {
 /// open at a time; a second call fails.
 bool openBundle(const std::string &path, std::string *error);
 
-/// Defines the four bundle natives on globalThis --
-/// `__bundleLookup(importerIdentity, specifier)`, `__bundleLoad(identity)`,
+/// Defines the five bundle natives on globalThis --
+/// `__bundleLookup(importerIdentity, specifier)`,
+/// `__bundleResolve(fromIdentity, request, paths?)`, `__bundleLoad(identity)`,
 /// `__bundleEntry()`, `__bundleRoot()` -- and returns, through
-/// \p bundleObject, a plain `{lookup, load, entry, root}` object bound to
-/// the same four functions. That object is what libjs/bundle-loader.js takes
-/// as its `bundle` parameter.
+/// \p bundleObject, a plain `{lookup, resolve, load, entry, root}` object
+/// bound to the same five functions. That object is what
+/// libjs/bundle-loader.js takes as its `bundle` parameter.
 ///
 /// openBundle() must have succeeded first.
 napi_status installBundleGlobals(napi_env env, napi_value *bundleObject);

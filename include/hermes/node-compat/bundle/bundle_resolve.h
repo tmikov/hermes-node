@@ -8,6 +8,8 @@
 #ifndef HERMES_NODE_COMPAT_BUNDLE_BUNDLE_RESOLVE_H
 #define HERMES_NODE_COMPAT_BUNDLE_BUNDLE_RESOLVE_H
 
+#include <hermes/node-compat/bundle/file_source.h>
+
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,6 +17,16 @@
 
 namespace hermes {
 namespace node_compat {
+
+/// Resolves \p specifier the same way as the two-argument overload below,
+/// but answering every filesystem question through \p src instead of the
+/// real filesystem. The two-argument overload constructs a DiskFileSource
+/// and forwards here; a caller with its own FileSource (e.g. a container's
+/// identity set) calls this overload directly.
+std::optional<std::string> resolveSpecifier(
+    FileSource &src,
+    std::string_view fromFile,
+    std::string_view specifier);
 
 /// Resolves \p specifier as written in a `require()` call inside \p
 /// fromFile to an absolute file on disk, approximating the subset of Node's

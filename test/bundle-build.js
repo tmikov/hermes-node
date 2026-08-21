@@ -135,6 +135,32 @@
 // RUN: %hermes-node --bundle=%t.vendored/app.bundle | %FileCheck --check-prefix=VENDOREDOUT %s
 // VENDOREDOUT: VENDORED function true
 
+// The embedded copy is served WITHOUT a filesystem lookup, which the case
+// above cannot show: it runs with nothing on disk, so a loader that walked
+// node_modules and found nothing would look identical. Here a decoy ws is
+// planted after the build -- the situation on any deployment machine that
+// happens to have one -- and it must be ignored.
+//
+// Getting this wrong is not a cosmetic leak. A bare 'ws' is not a builtin
+// to Module._resolveFilename (normalizeRequirableId does not answer for it,
+// deliberately, so an installed copy can win in a run with no bundle), so
+// forwarding the bare name runs _findPath over the module record's `paths`
+// and would find, compile and RUN the decoy -- arbitrary code off the
+// deployment machine, inside a bundle whose whole point is that it does not
+// do that. libjs/bundle-loader.js forwards 'node:ws' instead, which returns
+// from _resolveFilename's first line. require.resolve must answer without
+// walking either, so it is pinned in the same run: 'node:ws', not a path
+// into the decoy.
+// RUN: rm -rf %t.wsdecoy && mkdir -p %t.wsdecoy
+// RUN: echo "const w = require('ws'); console.log('WSDECOY', w.mark, typeof w.WebSocketServer, require.resolve('ws'));" > %t.wsdecoy/cli.js
+// RUN: %hermes-node --build-bundle=%t.wsdecoy/app.bundle %t.wsdecoy/cli.js 2>&1 | %FileCheck --check-prefix=WSDECOYWARN %s
+// WSDECOYWARN: warning: not packaging 'ws' from {{.*}}cli.js (vendored package, served by the runtime)
+// RUN: rm %t.wsdecoy/cli.js && mkdir -p %t.wsdecoy/node_modules/ws
+// RUN: echo '{ "main": "index.js" }' > %t.wsdecoy/node_modules/ws/package.json
+// RUN: echo "module.exports = { mark: 'DECOY' };" > %t.wsdecoy/node_modules/ws/index.js
+// RUN: %hermes-node --bundle=%t.wsdecoy/app.bundle | %FileCheck --check-prefix=WSDECOY --implicit-check-not=DECOY %s
+// WSDECOY: WSDECOY undefined function node:ws
+
 // The companion direction, unchanged by the above and pinned here so it
 // stays that way: when a node_modules copy of a vendored package IS
 // installed, it is an ordinary dependency -- packaged like any other, and

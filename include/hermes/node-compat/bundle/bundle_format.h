@@ -19,7 +19,7 @@ constexpr char kBundleMagic[8] = {'H', 'N', 'B', 'U', 'N', 'D', 'L', 'E'};
 
 /// Bumped whenever the layout below changes in a way older readers cannot
 /// interpret. A mismatch is a hard error; there is no forward compatibility.
-constexpr uint32_t kBundleFormatVersion = 1;
+constexpr uint32_t kBundleFormatVersion = 3;
 
 /// Every payload entry starts at a multiple of this. Hermes bytecode is
 /// executed in place from the mapping and requires alignment.
@@ -29,6 +29,13 @@ enum class ModuleKind : uint32_t {
   kJavaScript = 0,
   kJSON = 1,
 };
+
+/// Set on a `BundleModuleRecord` whose module `require()` may load. Clear
+/// on a record that exists only so the resolver can read it -- a
+/// `package.json` consulted for its `main` field but never itself
+/// `require()`d -- which must stay invisible to `require()` even though its
+/// bytes are in the container.
+constexpr uint32_t kRequirable = 1u << 0;
 
 /// Fixed-width. Offsets are byte offsets from the start of the file.
 struct BundleHeader {
@@ -42,6 +49,13 @@ struct BundleHeader {
   uint32_t moduleCount;
   uint32_t edgeTableOffset;
   uint32_t edgeCount;
+  // The preload table: an array of uint32_t module indices, one per
+  // preload, in the order the modules must run before the entry point.
+  // Order is the whole point of this table -- it is why a preload is a
+  // section of its own rather than another flag bit on the module record,
+  // which could say "this module preloads" but not "before that one".
+  uint32_t preloadTableOffset;
+  uint32_t preloadCount;
   uint32_t payloadOffset;
   uint32_t payloadSize;
 };
@@ -50,6 +64,7 @@ struct BundleHeader {
 struct BundleModuleRecord {
   uint32_t identityString;
   uint32_t kind; // ModuleKind
+  uint32_t flags; // bitwise OR of kRequirable and (currently) nothing else
   uint32_t payloadOffset; // from payloadOffset in the header
   uint32_t payloadSize;
 };

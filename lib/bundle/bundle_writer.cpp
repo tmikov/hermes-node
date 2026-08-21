@@ -51,9 +51,11 @@ uint32_t BundleWriter::internString(std::string_view s) {
 uint32_t BundleWriter::addModule(
     std::string_view identity,
     ModuleKind kind,
+    uint32_t flags,
     std::string_view payload) {
   uint32_t identityString = internString(identity);
-  modules_.push_back(PendingModule{identityString, kind, std::string(payload)});
+  modules_.push_back(
+      PendingModule{identityString, kind, flags, std::string(payload)});
   return static_cast<uint32_t>(modules_.size() - 1);
 }
 
@@ -62,6 +64,10 @@ void BundleWriter::addEdge(
     std::string_view specifier,
     uint32_t target) {
   edges_.push_back(PendingEdge{importer, std::string(specifier), target});
+}
+
+void BundleWriter::addPreload(uint32_t moduleIndex) {
+  preloads_.push_back(moduleIndex);
 }
 
 size_t BundleWriter::stringCount() const {
@@ -100,9 +106,9 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
   for (size_t i = 0; i < edges_.size(); ++i)
     edgeSpecifierStrings[i] = internString(edges_[i].specifier);
 
-  // Layout: header, strings, module table, edge table, payload. Each
-  // section is computed before any bytes are emitted so offsets in the
-  // header are known up front.
+  // Layout: header, strings, module table, edge table, preload table,
+  // payload. Each section is computed before any bytes are emitted so
+  // offsets in the header are known up front.
   //
   // String entries are packed with no padding (length header immediately
   // followed by bytes, back to back), so the string table's raw size is
@@ -119,8 +125,10 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
   size_t moduleTableSize = modules_.size() * sizeof(BundleModuleRecord);
   size_t edgeTableOffset = moduleTableOffset + moduleTableSize;
   size_t edgeTableSize = edges_.size() * sizeof(BundleEdgeRecord);
+  size_t preloadTableOffset = edgeTableOffset + edgeTableSize;
+  size_t preloadTableSize = preloads_.size() * sizeof(uint32_t);
   size_t payloadOffset =
-      alignUp(edgeTableOffset + edgeTableSize, kBundlePayloadAlign);
+      alignUp(preloadTableOffset + preloadTableSize, kBundlePayloadAlign);
 
   // Each payload's offset (relative to payloadOffset) and the total,
   // aligned payload size.
@@ -147,6 +155,8 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
   header.moduleCount = static_cast<uint32_t>(modules_.size());
   header.edgeTableOffset = static_cast<uint32_t>(edgeTableOffset);
   header.edgeCount = static_cast<uint32_t>(edges_.size());
+  header.preloadTableOffset = static_cast<uint32_t>(preloadTableOffset);
+  header.preloadCount = static_cast<uint32_t>(preloads_.size());
   header.payloadOffset = static_cast<uint32_t>(payloadOffset);
   header.payloadSize = static_cast<uint32_t>(payloadSize);
   appendPod(out, header);
@@ -159,6 +169,7 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
     BundleModuleRecord record{};
     record.identityString = m.identityString;
     record.kind = static_cast<uint32_t>(m.kind);
+    record.flags = m.flags;
     record.payloadOffset = payloadOffsets[i];
     record.payloadSize = static_cast<uint32_t>(m.payload.size());
     appendPod(out, record);
@@ -172,6 +183,9 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
     record.target = e.target;
     appendPod(out, record);
   }
+
+  for (uint32_t moduleIndex : preloads_)
+    appendPod(out, moduleIndex);
 
   appendPadding(out, payloadOffset - out.size());
 

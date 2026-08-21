@@ -4,9 +4,42 @@
 // LICENSE file in the root directory of this source tree.
 //
 // Wraps Node's CJS Module._load so a bundled (importer, specifier) pair is
-// served from the container without touching the filesystem. Anything that
-// misses falls through to the original _load, which resolves and compiles
-// from disk exactly as it does without a bundle.
+// served from the container without touching the filesystem. A pair with no
+// row in the edge table -- a computed require(), typically -- gets a second
+// chance from the container's resolver.
+//
+// A bundle is a closed world: those two are the ONLY sources of module code.
+// What neither can place is an error naming the importer and the remedy
+// (--include), not a filesystem lookup. That is the point of shipping a
+// bundle -- "self-contained" is unverifiable while a container that quietly
+// still needs node_modules behaves exactly like one that does not -- and it
+// is also a containment property: a computed specifier must not be able to
+// name any file on the machine and have the loader compile and run it.
+//
+// What is still handed to the original loader is what the binary itself
+// carries rather than what the disk does, and the two get there by
+// different routes:
+//
+//   - Builtins ('fs', 'node:path', ...) are intercepted at the top of the
+//     wrapper by normalizeRequirableId() and forwarded VERBATIM, request
+//     text unchanged. Module._resolveFilename returns them on its first
+//     line, so a bare builtin name reaches nothing on disk.
+//   - The vendored packages ('ws') the runtime serves when no node_modules
+//     copy was packaged are the only requests embeddedRequest() rewrites.
+//     A bare 'ws' is NOT a builtin to Module._resolveFilename, so
+//     forwarding it unchanged really would reopen the filesystem; the
+//     'node:ws' spelling is what stops that. See embeddedRequest().
+//
+// Two other doors into the filesystem are shut here rather than being
+// reasoned away. globalThis.require -- this loader's bootstrap sibling in
+// libjs/loader.js -- reads and compiles an arbitrary path for an id it has
+// no embedded bytecode for, and a bundled module can still reach it via
+// `(0, eval)('require')` or `global.require` even though its own `require`
+// parameter shadows it; installBundleLoader() calls
+// __closeDiskModuleLoading() below to take that path away. And a `require`
+// built by Module.createRequire() carries no __bundleIdentity, so
+// identityOf() derives one from its filename when that filename lies under
+// the bundle root, rather than leaving it to fall out of the closed world.
 
 (function() {
   'use strict';
@@ -33,14 +66,172 @@
   // a module (Module.prototype._compile calls it). Reusing it is what keeps
   // require.cache, require.extensions, require.resolve.paths and
   // require.main identical between a module served from the container and
-  // the same file compiled from disk after an edge-table miss -- identical
-  // source must not mean different semantics depending on whether the
-  // producer happened to package it.
+  // the same file compiled from disk without a bundle -- identical source
+  // must not mean different semantics depending on whether the program was
+  // bundled.
   var makeRequireFunction =
     globalThis.require('internal/modules/helpers').makeRequireFunction;
 
   return function installBundleLoader(Module, bundle, path) {
     var root = bundle.root();
+    var entryIdentity = bundle.entry();
+
+    // Shut libjs/loader.js's disk fallback before anything from the
+    // container runs. That loader is globalThis.require, which a bundled
+    // module can still reach around its own wrapper parameter, and its
+    // fallback reads and compiles whatever path it is handed. Nothing in
+    // bundle mode needs it: it exists for __loadUserScript, which a bundle
+    // never uses. One-way -- see the comment on the global itself.
+    globalThis.__closeDiskModuleLoading();
+
+    // True for what the binary carries rather than what the disk does: the
+    // builtins plus the vendored packages ('ws'). Module.isBuiltin is
+    // BuiltinModule.isBuiltin, which answers for allRequirableIds, and that
+    // is exactly the set this predicate wants -- the deliberate opposite of
+    // the normalizeRequirableId() check above, which decides PRECEDENCE and
+    // must not let 'ws' pre-empt a packaged node_modules copy. This one runs
+    // last, after the container has had both of its chances, and only says
+    // "the runtime can still serve this without opening a file".
+    function isEmbedded(request) {
+      return Module.isBuiltin(request);
+    }
+
+    // ...and the spelling under which it must be asked for. A bare 'ws' is
+    // NOT a builtin as far as Module._resolveFilename is concerned --
+    // normalizeRequirableId deliberately does not answer for it, which is
+    // what lets an installed node_modules/ws win in a run with no bundle --
+    // so handing the bare name to the original loader takes the ordinary
+    // path: _findPath over parent.paths, a filesystem walk that would find,
+    // compile and run whatever node_modules/ws happens to sit on the
+    // deployment machine, in preference to the copy in the binary. That is
+    // precisely the hole this whole change closes, so it must not be
+    // reopened for the one specifier the closed world still forwards.
+    //
+    // 'node:ws' returns from Module._resolveFilename's very first line
+    // (`if (BuiltinModule.normalizeRequirableId(request)) return request`)
+    // and reaches loadBuiltinWithHooks with no resolution at all. Identity
+    // is unaffected: require('node:ws') === require('ws') is asserted by
+    // test/bundle-build.js's VENDORED case, and the runtime keeps one
+    // record under the bare name.
+    function embeddedRequest(request) {
+      return request.slice(0, 5) === 'node:' ? request : 'node:' + request;
+    }
+
+    // A specifier that names a native addon. The producer skips .node files
+    // deliberately -- they are not JavaScript and there is nothing to
+    // compile -- so "add it with --include" would be advice that cannot
+    // work, and the message says so instead. See notInBundle().
+    function isAddonRequest(request) {
+      return request.length > 5 &&
+        request.slice(request.length - 5) === '.node';
+    }
+
+    // The --include value that would have packaged this request, ready to
+    // be copied onto a command line -- or undefined when there is no
+    // correct value to print.
+    //
+    // --include resolves from the ENTRY's directory, not from the
+    // importer's, so a relative request cannot be echoed back verbatim. A
+    // computed require('./helper') inside node_modules/foo/index.js was
+    // suggested as `--include=./helper`, and that invocation fails with
+    // "--include=./helper cannot be resolved"; the one that works is
+    // `--include=./node_modules/foo/helper`. Advice that does not run is
+    // worse than no advice, and a computed relative require inside a
+    // dependency is the common shape, not an exotic one.
+    //
+    // Both identities are relative to the bundle root, so the value is
+    // path arithmetic and nothing else: join the request onto the
+    // importer's directory, then express the result relative to the
+    // entry's directory. A bare specifier ('@babel/preset-env') and an
+    // absolute path resolve the same way from any directory, so they are
+    // suggested as written.
+    function includeSuggestion(request, importer, importerIsIdentity) {
+      if (request.charAt(0) !== '.') return request;
+      // A request relative to an importer this loader cannot place in the
+      // tree has no correct value; the caller says where --include
+      // resolves from instead of printing one that fails.
+      if (!importerIsIdentity) return undefined;
+      var target = path.join(path.dirname(importer), request);
+      var value = path.relative(path.dirname(entryIdentity), target);
+      if (value === '') return undefined;
+      return value.charAt(0) === '.' ? value : './' + value;
+    }
+
+    // The error a closed world reports where the old loader read the disk.
+    //
+    // `code` is MODULE_NOT_FOUND in every case, including the addon one:
+    // programs branch on it -- an optional-dependency probe is a require()
+    // in a try/catch that tests e.code -- and in a closed world the probe's
+    // answer is legitimately "no". Only the human-readable text differs, and
+    // it names the importer, because a bundled module's stack trace points
+    // at bytecode with no source on disk behind it.
+    function notInBundle(request, importer, importerIsIdentity) {
+      var err;
+      if (isAddonRequest(request)) {
+        err = new Error(
+          "Cannot find module '" + request + "'\n" +
+          "  required by " + importer + "\n" +
+          "  Native addons are not supported in a bundle yet.");
+      } else {
+        var suggestion =
+          includeSuggestion(request, importer, importerIsIdentity);
+        err = new Error(
+          "Cannot find module '" + request + "'\n" +
+          "  required by " + importer + "\n" +
+          (suggestion !== undefined
+            ? "  Not in the bundle. Add it with:\n" +
+              "    --include=" + suggestion
+            : "  Not in the bundle. Add it with --include, whose value is\n" +
+              "  resolved from the entry's directory."));
+      }
+      err.code = 'MODULE_NOT_FOUND';
+      return err;
+    }
+
+    // The trace of what a failing bundle asked for. It used to mark the
+    // handful of requires that took the disk fallback; now that a miss is
+    // fatal it is the record of everything the container was asked for and
+    // could not place, which is what a --include list is built from.
+    function logMiss(request, importer) {
+      if (process.env.HERMES_NODE_DEBUG_NATIVE &&
+          process.env.HERMES_NODE_DEBUG_NATIVE.indexOf('BUNDLE') >= 0) {
+        console.error('[bundle] miss: ' + request + ' from ' + importer);
+      }
+    }
+
+    // The identity of the module a require() came from, given the `parent`
+    // Node's loader hands over, or undefined when there is none.
+    //
+    // A record loadIdentity() built carries __bundleIdentity outright. A
+    // Module built by Module.createRequire() does not -- it is an ordinary
+    // Module with a filename and nothing else -- and createRequire
+    // (__filename) is plain CommonJS that real packages use. Without this,
+    // every specifier such a require() names, INCLUDING one the container
+    // holds, took the "no bundled importer" throw.
+    //
+    // A filename under the bundle root is an identity once the root is
+    // stripped, by exactly the rule BundleFileSource::stripRoot uses
+    // natively: a lexical prefix, no ".." climbing and no symlink
+    // resolution. path.relative() answers with a leading ".." for anything
+    // outside, and outside the root there is genuinely nothing to name, so
+    // that stays undefined and the closed world reports it.
+    //
+    // Nothing checks that the derived identity is itself packaged, and
+    // nothing should: the container's resolver takes it as the directory
+    // to resolve FROM, which is a meaningful question even for a file the
+    // container does not hold -- createRequire(path.join(__dirname, 'x'))
+    // where 'x' was never packaged is exactly that.
+    function identityOf(parent) {
+      if (!parent) return undefined;
+      if (parent.__bundleIdentity !== undefined)
+        return parent.__bundleIdentity;
+      if (typeof parent.filename !== 'string') return undefined;
+      var rel = path.relative(root, parent.filename);
+      if (rel === '' || rel === '..' || rel.slice(0, 3) === '../' ||
+          rel.charAt(0) === '/')
+        return undefined;
+      return rel;
+    }
 
     // The `require` a bundled module sees. Everything except resolve() is
     // Node's own, built by makeRequireFunction off this module record, so
@@ -49,14 +240,22 @@
     //
     // resolve() is the one thing a bundle has to answer differently.
     // Module._resolveFilename walks the filesystem, and a bundled program's
-    // tree may not exist any more, so the edge table is consulted first: a
-    // hit answers path.join(root, identity), which is exactly the
-    // __filename that module sees when it loads. Anything with no edge -- a
-    // builtin, a computed specifier, a .node addon -- falls through to the
-    // real resolver, which is also where a builtin gets its bare-name
-    // answer. The builtin check comes first for the same reason it does in
-    // the Module._load wrapper below: whatever _load would hand to the
-    // original loader, resolve() must resolve the same way.
+    // tree may not exist any more -- and in a closed world may not be
+    // consulted even when it does -- so the two container-backed answers are
+    // all there is: the edge table first, then bundle.resolve(), running the
+    // producer's own algorithm against the container's identity set. A hit
+    // from either answers path.join(root, identity), which is exactly the
+    // __filename that module sees when it loads. A miss throws the same
+    // MODULE_NOT_FOUND the Module._load wrapper below throws, for the same
+    // reason and by the same helper: a resolve() that succeeded where the
+    // require() that follows it fails would be worse than either, so the two
+    // must agree about what the container holds.
+    //
+    // Only what the binary itself carries still reaches the real resolver --
+    // a builtin, or a vendored package the runtime serves -- which is also
+    // where a builtin gets its bare-name answer. That check comes first for
+    // the same reason it does in the wrapper below: whatever _load would
+    // hand to the original loader, resolve() must resolve the same way.
     //
     // Returning the specifier text unchanged (what this used to do) is
     // worse than an error: `path.dirname(require.resolve('pkg'))` is a
@@ -67,20 +266,46 @@
     // answers: the edge records where THIS importer's specifier resolved at
     // build time, not where it resolves from some other directory. Node
     // honours the option, so the edge table is skipped whenever one is
-    // present -- including a malformed one, which Module._resolveFilename
-    // then rejects with the error Node gives.
+    // present. bundle.resolve() is not skipped for a well-formed paths,
+    // though: it runs the same algorithm Node does for a paths option
+    // (resolve as if from each entry in turn, first hit wins), so it can
+    // answer a paths-qualified request from the container exactly as well
+    // as an unqualified one. Babel reaches exactly this path --
+    // require.resolve(id, { paths: [dirname] }) in
+    // @babel/core/lib/config/files/plugins.js -- so it is not a corner case.
+    //
+    // A `paths` that is present but not an array is neither well-formed nor
+    // absent -- it is Node's own error to throw
+    // (Module._resolveFilename's ERR_INVALID_ARG_VALUE), and only
+    // baseResolve knows how to construct that error, so a malformed paths
+    // bypasses the edge table AND bundle.resolve() entirely and falls
+    // straight through to it, exactly as it would with no bundle at all. A
+    // non-string request goes the same way for the same reason: baseResolve
+    // opens with validateString(), and reporting MODULE_NOT_FOUND for
+    // require.resolve(123) instead of ERR_INVALID_ARG_TYPE would be this
+    // loader inventing an answer where Node has one.
     function makeRequire(mod, identity) {
       var req = makeRequireFunction(mod);
       var baseResolve = req.resolve;
       function resolve(request, options) {
         var hasPaths = options !== undefined && options !== null &&
           options.paths !== undefined;
-        if (!hasPaths &&
-            BuiltinModule.normalizeRequirableId(request) === undefined) {
+        var pathsUsable = !hasPaths || Array.isArray(options.paths);
+        if (typeof request !== 'string' || !pathsUsable ||
+            BuiltinModule.normalizeRequirableId(request) !== undefined) {
+          return baseResolve(request, options);
+        }
+        if (!hasPaths) {
           var target = bundle.lookup(identity, request);
           if (target !== undefined) return path.join(root, target);
         }
-        return baseResolve(request, options);
+        var viaContainer = bundle.resolve(identity, request,
+          hasPaths ? options.paths : undefined);
+        if (viaContainer !== undefined) return path.join(root, viaContainer);
+        if (isEmbedded(request))
+          return baseResolve(embeddedRequest(request), options);
+        logMiss(request, identity);
+        throw notInBundle(request, identity, true);
       }
       resolve.paths = baseResolve.paths;
       req.resolve = resolve;
@@ -115,14 +340,15 @@
     }
 
     // The one place a bundled module is instantiated. The entry point goes
-    // through it too (see the returned runEntry), so there is no second copy
+    // through it too (see the returned run()), so there is no second copy
     // of this logic for the main module to drift away from.
     //
     // The record this builds stands in for a real Module wherever Node's own
-    // loader can see it -- it is handed back to Module._load as `parent` on
-    // every fallback, and published into Module._cache -- so it carries the
-    // fields that loader reads off a parent, not just the five the module
-    // wrapper needs. Each one below is there because something in
+    // loader can see it -- it is published into Module._cache, and handed
+    // back to Module._load as `parent` whenever a bundled module requires a
+    // builtin or a vendored package -- so it carries the fields that loader
+    // reads off a parent, not just the five the module wrapper needs. Each
+    // one below is there because something in
     // libjs-node/internal/modules/cjs/loader.js reads it.
     //
     // It is a plain object, though, not a `new Module(...)`: it duck-types
@@ -152,10 +378,11 @@
       // same code on disk re-executes it. A cache the loader keeps to itself
       // is a cache the program cannot invalidate.
       //
-      // Sharing this one also means a module reached through the disk
-      // fallback and a module reached through the edge table are the same
-      // record: the fallback resolves to exactly this filename, so a
-      // singleton stays a singleton across the boundary.
+      // Sharing this one also means a module reached through the edge table
+      // and the same module reached through the container's resolver (a
+      // computed specifier) are one record: both routes end at the same
+      // identity and therefore at this filename, so a singleton stays a
+      // singleton across them.
       // `!== undefined`, not a truthiness test, because that is the test
       // Node's _load makes and a program can put anything in require.cache.
       // `require.cache[f] = null` followed by require(f) throws a TypeError
@@ -176,21 +403,21 @@
         loaded: false,
         filename: filename,
         // Module._load keys its relativeResolveCache on
-        // `${parent.path}\x00${request}`. Without `path` every bundled
-        // module keys as "undefined", so two of them in different
-        // directories falling back on the same specifier text -- say two
-        // packages each requiring './build/Release/binding.node' -- would
-        // share one entry and the second would be handed the first's module.
+        // `${parent.path}\x00${request}`, and reads it on every call with a
+        // parent -- which is every builtin or vendored require() a bundled
+        // module makes. Without `path` every bundled module keys as
+        // "undefined" and two of them requiring different things under the
+        // same specifier text would share one entry.
         path: dirname,
         // Module._resolveLookupPaths tests parent?.paths?.length; without
-        // this a bare specifier that falls back to disk never searches the
-        // importer's node_modules chain, only the global paths.
+        // this a bare specifier handed to the original loader reaches only
+        // the global paths, never the importer's node_modules chain.
         paths: Module._nodeModulePaths(dirname),
         // Node's main module has parent === null, and the legacy
         // `if (!module.parent)` entry idiom keys on exactly that: leaving it
         // undefined everywhere would fire that guard in every bundled
-        // module. updateChildren() pushes into children on the fallback
-        // path, so it has to be an array.
+        // module. Node's own updateChildren() pushes into children when one
+        // of these records is a parent, so it has to be an array.
         parent: parentMod || null,
         children: [],
         __bundleIdentity: target,
@@ -254,40 +481,145 @@
 
     var originalLoad = Module._load;
     Module._load = function(request, parent, isMain) {
-      // No bundled importer means no row in the edge table to look up: the
-      // edges are keyed by (importer, specifier), and only a bundled module
-      // can be an importer. Builtins are handed to the original loader for
-      // the same reason plus one more -- they must win over the bundle.
-      // Written as a conditional rather than `parent && ...` so that a null
-      // parent yields undefined rather than null: null would slip past the
-      // guard below and reach the miss branch, which would log a bogus
-      // "[bundle] miss: X from null" under HERMES_NODE_DEBUG_NATIVE.
-      var importer = parent ? parent.__bundleIdentity : undefined;
-      if (importer === undefined ||
-          BuiltinModule.normalizeRequirableId(request) !== undefined) {
+      // A non-string request is Node's to reject, not this loader's to
+      // guess at -- the same reasoning as makeRequire's resolve() above.
+      // It reaches nothing on disk either way: the original loader stops in
+      // its own validation long before a filesystem lookup.
+      if (typeof request !== 'string')
         return originalLoad.call(this, request, parent, isMain);
+
+      // Builtins are decided before anything else, because they must win
+      // over the bundle: normalizeRequirableId() is the same predicate
+      // Node's own _load uses, and it is exactly the list the producer
+      // skipped when it walked the graph, so a specifier that is a builtin
+      // here never had an edge to find in the first place.
+      if (BuiltinModule.normalizeRequirableId(request) !== undefined)
+        return originalLoad.call(this, request, parent, isMain);
+
+      // No bundled importer means no row in the edge table to look up: the
+      // edges are keyed by (importer, specifier), and only a module inside
+      // the bundle's tree can be an importer. identityOf() also covers the
+      // `require` a module built with Module.createRequire() hands out,
+      // whose Module carries a filename but no __bundleIdentity.
+      var importer = identityOf(parent);
+      if (importer === undefined) {
+        // Nothing in a bundled program's own graph reaches here: the entry
+        // is bundled and so is everything it loads, so every importer
+        // carries an identity. If it does happen, it is reported rather
+        // than quietly reopening the disk -- which is the whole point --
+        // except for what the binary carries, which is not a disk read.
+        if (isEmbedded(request))
+          return originalLoad.call(
+            this, embeddedRequest(request), parent, isMain);
+        logMiss(request, '<no bundled importer>');
+        throw notInBundle(request, '<no bundled importer>', false);
       }
 
       var target = bundle.lookup(importer, request);
-      if (target === undefined) {
-        // A miss inside a valid bundle is not an error: a computed require()
-        // is invisible to static discovery, and a .node addon is deliberately
-        // left out. Both fall back to disk. The log line is the only way to
-        // tell a fallback from a bundled load, so it is worth a flag.
-        if (process.env.HERMES_NODE_DEBUG_NATIVE &&
-            process.env.HERMES_NODE_DEBUG_NATIVE.indexOf('BUNDLE') >= 0) {
-          console.error('[bundle] miss: ' + request + ' from ' + importer);
-        }
-        return originalLoad.call(this, request, parent, isMain);
-      }
+      if (target !== undefined) return loadIdentity(target, parent, false);
 
-      return loadIdentity(target, parent, false);
+      // A miss in the edge table is not necessarily a miss in the
+      // container: a computed require() is invisible to the static scanner
+      // that built the edge table, but the file it names may still be
+      // sitting in the container regardless, if some other, literal
+      // require() elsewhere caused it to be packaged -- or an --include
+      // put it there. Answering from the container the same way the
+      // producer would have -- same algorithm, same identity set -- is what
+      // makes a computed specifier work after the source tree is gone.
+      var resolved = bundle.resolve(importer, request);
+      if (resolved !== undefined) return loadIdentity(resolved, parent, false);
+
+      // A vendored package with no packaged copy is served by the runtime
+      // out of the binary, and asking for it by its 'node:' name is what
+      // keeps that from becoming a filesystem read -- see embeddedRequest().
+      // The container had both of its chances first, which is what lets an
+      // installed node_modules/ws that WAS packaged win over the embedded
+      // one (test/bundle-build.js's WSCOPY case).
+      if (isEmbedded(request))
+        return originalLoad.call(
+          this, embeddedRequest(request), parent, isMain);
+
+      // Nothing can answer. In a closed world that is the end of it: the
+      // disk is not a source of module code, so this is an error naming
+      // the importer and the remedy rather than a filesystem lookup.
+      logMiss(request, importer);
+      throw notInBundle(request, importer, true);
     };
 
-    // Runs the bundle's entry module, through the same path as every other
-    // bundled module. It is the main module: the bundle is the program, and
-    // like Node's main module it has no parent.
-    return function runEntry() {
+    // The resolution half of the same closure, for the one `require` this
+    // loader does not build itself.
+    //
+    // makeRequire() above overrides resolve() on every require handed to a
+    // bundled module, so that one never reaches here. A require built by
+    // Module.createRequire() does: its resolve() is Node's own, which calls
+    // Module._resolveFilename, which walks the real filesystem -- stat by
+    // stat, through node_modules directories that may not exist and may not
+    // be the artifact's. That loads nothing, so it is a resolution leak
+    // rather than an execution hole, but a closed world does not answer
+    // resolution off the disk either, and an answer naming a real path
+    // outside the container is one a caller will act on.
+    //
+    // The four passthroughs are makeRequire()'s, for its reasons: a builtin
+    // (which _resolveFilename answers on its own first line), a non-string
+    // request, a malformed options.paths (ERR_INVALID_ARG_VALUE is Node's
+    // to construct), and a request the binary carries. The embedded
+    // forwards this loader makes elsewhere never reach here at all --
+    // Module._load short-circuits a 'node:' request before resolution --
+    // so wrapping this cannot affect them.
+    var originalResolveFilename = Module._resolveFilename;
+    Module._resolveFilename = function(request, parent, isMain, options) {
+      var hasPaths = options !== undefined && options !== null &&
+        options.paths !== undefined;
+      if (typeof request !== 'string' ||
+          (hasPaths && !Array.isArray(options.paths)) ||
+          BuiltinModule.normalizeRequirableId(request) !== undefined) {
+        return originalResolveFilename.call(
+          this, request, parent, isMain, options);
+      }
+
+      var importer = identityOf(parent);
+      if (!hasPaths) {
+        if (importer === undefined) {
+          if (isEmbedded(request)) {
+            return originalResolveFilename.call(
+              this, embeddedRequest(request), parent, isMain, options);
+          }
+          logMiss(request, '<no bundled importer>');
+          throw notInBundle(request, '<no bundled importer>', false);
+        }
+        var target = bundle.lookup(importer, request);
+        if (target !== undefined) return path.join(root, target);
+      }
+
+      // With an explicit paths, the importer is not what resolution starts
+      // from -- each entry in paths is -- so an unknown importer is not an
+      // obstacle there, and the empty identity is only ever a placeholder
+      // the native side never reads.
+      var resolved = bundle.resolve(
+        importer === undefined ? '' : importer,
+        request,
+        hasPaths ? options.paths : undefined);
+      if (resolved !== undefined) return path.join(root, resolved);
+
+      if (isEmbedded(request)) {
+        return originalResolveFilename.call(
+          this, embeddedRequest(request), parent, isMain, options);
+      }
+      var named = importer === undefined ? '<no bundled importer>' : importer;
+      logMiss(request, named);
+      throw notInBundle(request, named, importer !== undefined);
+    };
+
+    // Runs the bundle: its recorded preloads, in order, then its entry.
+    // Each goes through loadIdentity like every other bundled module, so a
+    // preload's own require() is a container require and there is no second
+    // code path. A preload is not the main module -- the entry is -- and it
+    // runs before the entry exists, so require.main is unset while it runs,
+    // exactly as it is for Node's -r.
+    return function run() {
+      var preloads = bundle.preloads();
+      for (var i = 0; i < preloads.length; i++)
+        loadIdentity(preloads[i], null, false);
       return loadIdentity(bundle.entry(), null, true);
     };
   };

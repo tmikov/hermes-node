@@ -16,12 +16,29 @@
 # the same reason and the same shape: the producer (bundle_build.cpp) and
 # the extractor (bundle_tools.cpp) both need the temp-file-then-rename
 # guarantee, and this is one copy of it rather than two.
+# disk_file_source.cpp is POSIX (stat) and ifstream, and nothing more, for
+# the same VM-free reason: it is one of the two FileSource backends
+# resolveSpecifier() (bundle_resolve.cpp, below) uses.
+# bundle_file_source.cpp is the other backend: it answers isRegularFile /
+# isDirectory / readPackageJson from a BundleReader's identity set instead
+# of the filesystem, needing only bundle_reader.h (already in this
+# library), so it stays VM-free too.
+# bundle_resolve.cpp (resolveSpecifier() and friends) has no Hermes
+# dependency of its own -- it is pure std::filesystem string manipulation
+# over the FileSource interface -- and lives here, rather than in the build
+# layer below, because both the build layer (DiskFileSource) and the run
+# layer (BundleFileSource, for a require() the edge table has no row for)
+# call it. Putting it in the VM-free base library is what lets both link it
+# without either one pulling in the parser/compiler it doesn't need.
 add_hermes_library(hermesNodeBundle STATIC
   bundle_writer.cpp
   bundle_reader.cpp
   bundle_generation.cpp
   mapped_file.cpp
   atomic_write.cpp
+  disk_file_source.cpp
+  bundle_file_source.cpp
+  bundle_resolve.cpp
 )
 
 target_include_directories(hermesNodeBundle
@@ -48,10 +65,11 @@ target_link_libraries(hermesNodeBundle PRIVATE
 # Kept as a separate target from hermesNodeBundle so that BundleFormatTest and
 # any other consumer of the format layer alone stays free of the Hermes VM
 # link dependency; only producer-side code that needs to scan and compile
-# sources links this one.
+# sources links this one. resolveSpecifier() itself (bundle_resolve.cpp)
+# lives in hermesNodeBundle, not here -- see the comment there -- and
+# reaches this target's callers through the PUBLIC link below.
 add_hermes_library(hermesNodeBundleBuild STATIC
   require_scanner.cpp
-  bundle_resolve.cpp
   bundle_build.cpp
 )
 
@@ -99,7 +117,9 @@ target_link_libraries(hermesNodeBundleTools PUBLIC
   hermesNodeBundle
 )
 
-# Run layer: maps a container and executes bytecode straight out of it. Kept
+# Run layer: maps a container, resolves a require() the edge table has no
+# row for straight out of it (BundleFileSource + resolveSpecifier(), both
+# from hermesNodeBundle), and executes bytecode straight out of it. Kept
 # separate from hermesNodeBundleBuild for the same reason that one is kept
 # separate from hermesNodeBundle: running a bundle needs neither the parser
 # nor the compiler, only hermes_run_bytecode.

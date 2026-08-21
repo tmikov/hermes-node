@@ -49,6 +49,19 @@ std::string kindName(ModuleKind kind) {
   return "?" + std::to_string(static_cast<uint32_t>(kind));
 }
 
+/// What the "kind" column prints for module \p moduleIndex: the kind name,
+/// plus a "resolve-only" marker when kRequirable is clear. Such a record
+/// (a package.json the resolver read but require() must never reach, see
+/// kRequirable in bundle_format.h) is otherwise indistinguishable from an
+/// ordinary module in this table, and the whole point of the marker is that
+/// it not be.
+std::string kindColumn(const BundleReader &reader, uint32_t moduleIndex) {
+  std::string label = kindName(reader.kind(moduleIndex));
+  if (!reader.isRequirable(moduleIndex))
+    label += " resolve-only";
+  return label;
+}
+
 /// How many characters \p value occupies when printed.
 size_t widthOf(uint64_t value) {
   return std::to_string(value).size();
@@ -211,7 +224,7 @@ int dumpBundle(
   size_t outWidth = std::strlen("out");
   for (uint32_t i = 0; i < moduleCount; ++i) {
     idxWidth = std::max(idxWidth, widthOf(i));
-    kindWidth = std::max(kindWidth, kindName(reader->kind(i)).size());
+    kindWidth = std::max(kindWidth, kindColumn(*reader, i).size());
     bytesWidth = std::max(bytesWidth, widthOf(reader->payload(i).size()));
     if (verbose) {
       inWidth = std::max(inWidth, widthOf(edgesIn[i]));
@@ -230,8 +243,8 @@ int dumpBundle(
   out << "  identity\n";
   for (uint32_t i = 0; i < moduleCount; ++i) {
     out << "  " << std::right << std::setw(idxWidth) << i << "  " << std::left
-        << std::setw(kindWidth) << kindName(reader->kind(i)) << "  "
-        << std::right << std::setw(bytesWidth) << reader->payload(i).size();
+        << std::setw(kindWidth) << kindColumn(*reader, i) << "  " << std::right
+        << std::setw(bytesWidth) << reader->payload(i).size();
     if (verbose) {
       out << "  " << std::setw(inWidth) << edgesIn[i] << "  "
           << std::setw(outWidth) << edgesOut[i];
@@ -262,6 +275,19 @@ int dumpBundle(
     out << "  " << std::left << std::setw(importerWidth)
         << reader->identity(e.importer) << "  " << std::setw(specifierWidth)
         << quoted << "  -> [" << e.target << "]\n";
+  }
+
+  // Only when there is at least one preload, so an ordinary container's
+  // dump -- the overwhelming majority, until something produces preloads --
+  // is unchanged.
+  const uint32_t preloadCount = reader->preloadCount();
+  if (preloadCount > 0) {
+    out << "\nPRELOADS (" << preloadCount << ")\n";
+    for (uint32_t i = 0; i < preloadCount; ++i) {
+      uint32_t moduleIndex = reader->preload(i);
+      out << "  [" << moduleIndex << "] " << reader->identity(moduleIndex)
+          << "\n";
+    }
   }
 
   const uint32_t strings = reader->stringsSize();

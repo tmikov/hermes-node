@@ -11,6 +11,7 @@
 #include <node_api.h>
 
 #include <string>
+#include <vector>
 
 namespace hermes {
 namespace node_compat {
@@ -84,12 +85,37 @@ namespace node_compat {
 /// because three of its lines describe the laid-out container, but still
 /// before the file is written.
 ///
+/// \p includes names extra modules to seed into the worklist alongside \p
+/// entryPath, each resolved from \p entryPath's directory exactly like a
+/// require() the entry made (see resolveSpecifier). This is how a module
+/// the static require() scanner cannot discover -- a specifier assembled at
+/// run time, the shape Babel's preset loading has -- gets into the bundle
+/// anyway: the caller names it explicitly with --include, and the walk
+/// below packages it and everything it requires, the same as if the entry
+/// had required it directly. An include that fails to resolve, or resolves
+/// to something classifyFile() marks kSkip (a .node addon, an .mjs file),
+/// is a hard build error rather than a silent skip: the caller named it, so
+/// silence would hide a mistake rather than tolerate one.
+///
+/// \p preloads names extra modules to seed into the worklist the same way \p
+/// includes does -- each resolved from \p entryPath's directory, and subject
+/// to the same hard-error treatment for a specifier that fails to resolve or
+/// resolves to something classifyFile() marks kSkip. What sets a preload
+/// apart is that it is also recorded, in the order given (duplicates
+/// collapsed to their first occurrence), in the container's preload table
+/// (BundleWriter::addPreload), so the consumer runs it before the entry
+/// point. A preload the entry (or an include) already reaches is packaged
+/// once, same as any module reached two ways, and still recorded once as a
+/// preload.
+///
 /// \return 0 on success, non-zero on any error.
 int buildBundle(
     napi_env env,
     const std::string &entryPath,
     const std::string &outPath,
-    bool verbose);
+    bool verbose,
+    const std::vector<std::string> &includes,
+    const std::vector<std::string> &preloads);
 
 } // namespace node_compat
 } // namespace hermes

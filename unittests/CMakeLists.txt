@@ -61,8 +61,15 @@ target_link_libraries(BundleToolsTest hermesNodeBundleTools)
 add_node_compat_unittest(RequireScannerTest RequireScannerTest.cpp)
 target_link_libraries(RequireScannerTest hermesNodeBundleBuild)
 
+# hermesNodeBundle, not hermesNodeBundleBuild: resolveSpecifier()
+# (bundle_resolve.cpp) and both FileSource backends live in the VM-free
+# format layer, so neither this test nor the agreement test below needs the
+# parser, the compiler, or hermesvm_a to link.
 add_node_compat_unittest(BundleResolveTest BundleResolveTest.cpp)
-target_link_libraries(BundleResolveTest hermesNodeBundleBuild)
+target_link_libraries(BundleResolveTest hermesNodeBundle)
+
+add_node_compat_unittest(BundleFileSourceTest BundleFileSourceTest.cpp)
+target_link_libraries(BundleFileSourceTest hermesNodeBundle)
 
 add_node_compat_unittest(NodeProcessTest NodeProcessTest.cpp)
 target_link_libraries(NodeProcessTest

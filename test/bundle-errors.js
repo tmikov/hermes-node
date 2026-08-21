@@ -55,3 +55,16 @@
 // left for the bundle to supply once eval code wins.
 // RUN: %not %hermes-node --bundle=%t.good -e "1" 2>&1 | %FileCheck --check-prefix=EVALFLAGS %s
 // EVALFLAGS: --bundle cannot be combined with -e or --eval
+
+// -r/--require is refused in bundle mode. A bundle carries its own
+// preloads (--preload at build time); the operator of a sealed artifact
+// does not get to insert code into it. This is also what makes the
+// injection point unreachable: a preload running before the bundle loader
+// was installed could plant Module._cache[<root>/<identity>] and replace a
+// bundled module's exports, and there is now no such phase to occupy.
+// RUN: rm -rf %t.rtree && mkdir -p %t.rtree
+// RUN: echo "console.log('ok');" > %t.rtree/cli.js
+// RUN: %hermes-node --build-bundle=%t.rtree/app.hbb %t.rtree/cli.js
+// RUN: echo "console.log('PRELOAD RAN');" > %t.rtree/pre.js
+// RUN: %not %hermes-node --bundle=%t.rtree/app.hbb -r %t.rtree/pre.js 2>&1 | %FileCheck --check-prefix=NORFLAG --implicit-check-not="PRELOAD RAN" %s
+// NORFLAG: --bundle cannot be combined with -r or --require

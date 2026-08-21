@@ -59,6 +59,48 @@ bool validateStringIndex(
   return end <= static_cast<uint64_t>(tableSize);
 }
 
+/// Reads the string at \p offset within a string table of \p tableBase.
+/// Only valid to call once validateStringIndex() has confirmed \p offset is
+/// in range -- unlike BundleReader::stringAt(), this is a free function so
+/// it can run during openImpl(), before reader.data_/header_ exist.
+std::string_view stringViewAt(const uint8_t *tableBase, uint32_t offset) {
+  uint32_t length;
+  std::memcpy(&length, tableBase + offset, sizeof(length));
+  return std::string_view(
+      reinterpret_cast<const char *>(
+          tableBase + offset + sizeof(BundleStringHeader)),
+      length);
+}
+
+/// True if \p identity is safe to use as a `root + "/" + identity` path
+/// (BundleFileSource's contract) and as a Module._cache key: non-empty, not
+/// absolute, no embedded NUL, and no "." or ".." path segment. Structure
+/// validation alone (the checks around this one) never looked at identity
+/// bytes -- identities happened to be safe because the producer only ever
+/// derives them via lexically_relative() against a common ancestor, which
+/// cannot produce ".." or an absolute path. That was inert while an
+/// identity only indexed a payload inside the container; it stops being
+/// inert once an identity becomes a filesystem-shaped path a hand-edited or
+/// adversarial container could point outside root (e.g. "../etc/passwd").
+bool isValidIdentity(std::string_view identity) {
+  if (identity.empty() || identity[0] == '/')
+    return false;
+  if (identity.find('\0') != std::string_view::npos)
+    return false;
+  size_t start = 0;
+  while (true) {
+    size_t slash = identity.find('/', start);
+    std::string_view segment = slash == std::string_view::npos
+        ? identity.substr(start)
+        : identity.substr(start, slash - start);
+    if (segment == "." || segment == "..")
+      return false;
+    if (slash == std::string_view::npos)
+      return true;
+    start = slash + 1;
+  }
+}
+
 } // namespace
 
 std::optional<BundleReader> BundleReader::openImpl(
@@ -109,6 +151,12 @@ std::optional<BundleReader> BundleReader::openImpl(
           header->edgeCount,
           sizeof(BundleEdgeRecord)))
     return fail("hermes-node bundle: edge table out of range");
+  if (!tableInRange(
+          size,
+          header->preloadTableOffset,
+          header->preloadCount,
+          sizeof(uint32_t)))
+    return fail("hermes-node bundle: preload table out of range");
   if (!inRange(size, header->payloadOffset, header->payloadSize))
     return fail("hermes-node bundle: payload out of range");
 
@@ -118,7 +166,8 @@ std::optional<BundleReader> BundleReader::openImpl(
   // it. The writer always emits both tables 4-byte aligned; a corrupt or
   // adversarial file might not.
   if (header->moduleTableOffset % alignof(BundleModuleRecord) != 0 ||
-      header->edgeTableOffset % alignof(BundleEdgeRecord) != 0)
+      header->edgeTableOffset % alignof(BundleEdgeRecord) != 0 ||
+      header->preloadTableOffset % alignof(uint32_t) != 0)
     return fail("hermes-node bundle: table offset is misaligned");
 
   if (header->moduleCount == 0)
@@ -137,9 +186,13 @@ std::optional<BundleReader> BundleReader::openImpl(
     if (!validateStringIndex(
             stringsBase, header->stringsSize, m.identityString))
       return fail("hermes-node bundle: module identity string out of range");
+    if (!isValidIdentity(stringViewAt(stringsBase, m.identityString)))
+      return fail("hermes-node bundle: module has a malformed identity");
     if (m.kind != static_cast<uint32_t>(ModuleKind::kJavaScript) &&
         m.kind != static_cast<uint32_t>(ModuleKind::kJSON))
       return fail("hermes-node bundle: module has an unknown kind");
+    if ((m.flags & ~kRequirable) != 0)
+      return fail("hermes-node bundle: module has unknown flags");
     if (!inRange(header->payloadSize, m.payloadOffset, m.payloadSize))
       return fail("hermes-node bundle: module payload out of range");
   }
@@ -153,11 +206,24 @@ std::optional<BundleReader> BundleReader::openImpl(
       return fail("hermes-node bundle: edge specifier string out of range");
   }
 
+  const auto *preloads =
+      reinterpret_cast<const uint32_t *>(data + header->preloadTableOffset);
+  for (uint32_t i = 0; i < header->preloadCount; ++i) {
+    if (preloads[i] >= header->moduleCount)
+      return fail("hermes-node bundle: preload references an unknown module");
+    // A preload names something the run will require(). A resolution-input
+    // package.json cannot be required, so naming one is a malformed
+    // container rather than a run-time surprise.
+    if ((modules[preloads[i]].flags & kRequirable) == 0)
+      return fail("hermes-node bundle: preload names a non-requirable module");
+  }
+
   BundleReader reader;
   reader.data_ = data;
   reader.header_ = header;
   reader.modules_ = modules;
   reader.edges_ = edges;
+  reader.preloads_ = preloads;
   return reader;
 }
 
@@ -230,6 +296,14 @@ ModuleKind BundleReader::kind(uint32_t moduleIndex) const {
   return static_cast<ModuleKind>(modules_[moduleIndex].kind);
 }
 
+uint32_t BundleReader::flags(uint32_t moduleIndex) const {
+  return modules_[moduleIndex].flags;
+}
+
+bool BundleReader::isRequirable(uint32_t moduleIndex) const {
+  return (modules_[moduleIndex].flags & kRequirable) != 0;
+}
+
 uint32_t BundleReader::entry() const {
   return header_->entryModule;
 }
@@ -253,6 +327,14 @@ uint32_t BundleReader::edgeCount() const {
 BundleReader::EdgeView BundleReader::edge(uint32_t edgeIndex) const {
   const BundleEdgeRecord &e = edges_[edgeIndex];
   return EdgeView{e.importer, stringAt(e.specifierString), e.target};
+}
+
+uint32_t BundleReader::preloadCount() const {
+  return header_->preloadCount;
+}
+
+uint32_t BundleReader::preload(uint32_t i) const {
+  return preloads_[i];
 }
 
 uint32_t BundleReader::stringsSize() const {

@@ -125,7 +125,7 @@
 // RUN: cmp %t.nc/app.hbb %t.nc/plain.hbb
 
 // A require() the scanner cannot follow is counted in the default output
-// (test/bundle-fallback.js) and located here. Two of them in one file, so
+// (test/bundle-scanner.js) and located here. Two of them in one file, so
 // this fails if only the first is recorded -- the positions are the whole
 // point, and one line saying "there are some" is what the summary already
 // does. Deliberately not deduplicated: two computed calls are two holes

@@ -2,14 +2,16 @@
 //
 // `presets: ['@babel/preset-env']` makes Babel resolve the preset by name at
 // run time, which no static bundler can follow -- not hermes-node's
-// --build-bundle and not rollup. The bundle builds without complaint, runs
-// while node_modules is still there, and dies with "Cannot find module
-// '@babel/preset-env'" once it is not.
+// --build-bundle and not rollup. The bundle builds without complaint and
+// then fails at run time with "Cannot find module '@babel/preset-env' ...
+// Not in the bundle", because a bundle never falls back to the disk.
 //
 // Requiring the preset makes it an ordinary static dependency, and the
-// bundle becomes self-contained. Nothing else here differs from
-// transform.js; the two files are meant to be diffed, so the duplication is
-// the point and not an oversight.
+// bundle becomes self-contained with no flags. `--include=@babel/preset-env`
+// is the other way to get there, and leaves transform.js unedited; run.sh
+// builds both. Nothing else here differs from transform.js; the two files
+// are meant to be diffed, so the duplication is the point and not an
+// oversight.
 //
 // Usage:
 //   hermes-node transform-static.js

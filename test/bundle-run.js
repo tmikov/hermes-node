@@ -26,35 +26,69 @@
 // CHECK: MAIN OK
 // CHECK: SUM 111
 
-// A require() that misses the edge table falls back to disk, and must fall
-// back the way it would with no bundle at all. Node's Module._load keys its
-// relativeResolveCache on `${parent.path}\x00${request}`, so two bundled
-// modules in different directories doing the same computed require must not
-// collide: without a `path` on the module record both key as "undefined" and
-// the second one is silently handed the first one's module. The bundle sits
-// inside the tree because identities are resolved against the directory that
-// holds it.
+// A require() the edge table has no row for is answered by the container's
+// resolver, from the requesting module's own identity -- so two bundled
+// modules in different directories doing the SAME computed require must get
+// two different modules. The specifier text is identical in both, which is
+// what makes this a real test: anything that keys an answer on the request
+// alone, rather than on (importer, request), hands the second importer the
+// first one's module and nothing else notices. --include is how the two
+// targets get into the container at all, since nothing names them
+// literally. The tree is deleted before the run, so both answers can only
+// have come from the container.
 // RUN: rm -rf %t.coll && mkdir -p %t.coll/a %t.coll/b
 // RUN: echo "console.log('RESULT', require('./a/mod').name, require('./b/mod').name);" > %t.coll/cli.js
 // RUN: echo "module.exports = require('./' + 'dyn');" > %t.coll/a/mod.js
 // RUN: echo "module.exports = require('./' + 'dyn');" > %t.coll/b/mod.js
 // RUN: echo "module.exports = { name: 'A' };" > %t.coll/a/dyn.js
 // RUN: echo "module.exports = { name: 'B' };" > %t.coll/b/dyn.js
-// RUN: %hermes-node --build-bundle=%t.coll/app.bundle %t.coll/cli.js
+// RUN: %hermes-node --build-bundle=%t.coll/app.bundle --include=./a/dyn --include=./b/dyn %t.coll/cli.js
+// RUN: find %t.coll -name '*.js' -delete
 // RUN: %hermes-node --bundle=%t.coll/app.bundle | %FileCheck --check-prefix=COLLIDE %s
 // COLLIDE: RESULT A B
 
-// A computed require() of a bare specifier falls back too, and has to search
-// the importer's node_modules chain: Module._resolveLookupPaths reads
-// parent.paths, so a record without one reaches only the global paths and
-// the require throws.
+// A computed require() of a BARE specifier is answered the same way, which
+// means the container's resolver has to run the node_modules walk itself:
+// there is no Module._resolveLookupPaths behind it any more and no disk to
+// walk. The package's package.json is packaged too (the resolver reads
+// "main" out of it), which is the format-v2 half of this working at all.
 // RUN: rm -rf %t.bare && mkdir -p %t.bare/node_modules/dep2
 // RUN: echo "const n = 'dep' + '2'; console.log('RESULT', require(n).v);" > %t.bare/cli.js
 // RUN: echo '{ "main": "main.js" }' > %t.bare/node_modules/dep2/package.json
 // RUN: echo "module.exports = { v: 42 };" > %t.bare/node_modules/dep2/main.js
-// RUN: %hermes-node --build-bundle=%t.bare/app.bundle %t.bare/cli.js
+// RUN: %hermes-node --build-bundle=%t.bare/app.bundle --include=dep2 %t.bare/cli.js
+// RUN: rm -rf %t.bare/node_modules %t.bare/cli.js
 // RUN: %hermes-node --bundle=%t.bare/app.bundle | %FileCheck --check-prefix=BARE %s
 // BARE: RESULT 42
+
+// A module must not exist twice. It used to be possible for one file to be
+// instantiated once from the container and once from disk, so this pinned
+// the two halves that prevented it; in a closed world both routes end at
+// the same identity and the assertion holds trivially, which is exactly why
+// it is worth keeping -- it is the statement that the two routes really did
+// collapse into one. './state' has an edge; './state' + '.js' has none and
+// goes through the container's resolver. Module-level state, singletons and
+// instanceof all break silently if those produce two records.
+// RUN: rm -rf %t.single && mkdir -p %t.single
+// RUN: echo "module.exports = { n: 0 };" > %t.single/state.js
+// RUN: echo "const s1 = require('./state'); s1.n = 41; const s2 = require('./state' + '.js'); console.log('SINGLE', s1 === s2, s2.n);" > %t.single/cli.js
+// RUN: %hermes-node --build-bundle=%t.single/app.bundle %t.single/cli.js
+// RUN: find %t.single -name '*.js' -delete
+// RUN: %hermes-node --bundle=%t.single/app.bundle | %FileCheck --check-prefix=SINGLE %s
+// SINGLE: SINGLE true 41
+
+// The same thing in the other order: the computed specifier is resolved
+// first and instantiates the module, and the bundled edge that follows must
+// hand back that copy rather than instantiating the container's a second
+// time. The two orders reach Module._cache through different branches of
+// the loader, so one does not cover the other.
+// RUN: rm -rf %t.rev && mkdir -p %t.rev
+// RUN: echo "module.exports = { n: 0 };" > %t.rev/state.js
+// RUN: echo "const s1 = require('./state' + '.js'); s1.n = 7; const s2 = require('./state'); console.log('REVERSE', s1 === s2, s2.n);" > %t.rev/cli.js
+// RUN: %hermes-node --build-bundle=%t.rev/app.bundle %t.rev/cli.js
+// RUN: find %t.rev -name '*.js' -delete
+// RUN: %hermes-node --bundle=%t.rev/app.bundle | %FileCheck --check-prefix=REVERSE %s
+// REVERSE: REVERSE true 7
 
 // __dirname is a real directory under the bundle root, not a synthetic
 // prefix -- that is the single reason the design rejected a virtual
@@ -74,11 +108,16 @@
 
 // A bundled module that throws while loading must not stay cached: requiring
 // it again has to throw again, not hand back the empty exports of a module
-// that never finished running.
+// that never finished running. The tree is deleted before the run, so the
+// SECOND line is the container re-running the module rather than a fresh
+// disk compile of it -- with a fallback behind the loader, a cache entry
+// that had been dropped could be re-satisfied off the disk and this would
+// pass without the container ever being asked twice.
 // RUN: rm -rf %t.throw && mkdir -p %t.throw
 // RUN: echo "try { require('./boom'); } catch (e) { console.log('FIRST', e.message); } try { require('./boom'); } catch (e) { console.log('SECOND', e.message); } console.log('END');" > %t.throw/cli.js
 // RUN: echo "throw new Error('boom');" > %t.throw/boom.js
 // RUN: %hermes-node --build-bundle=%t.throw/app.bundle %t.throw/cli.js
+// RUN: find %t.throw -name '*.js' -delete
 // RUN: %hermes-node --bundle=%t.throw/app.bundle | %FileCheck --check-prefix=THROW %s
 // THROW: FIRST boom
 // THROW: SECOND boom

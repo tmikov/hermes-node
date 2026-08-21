@@ -5,8 +5,14 @@
 # LICENSE file in the root directory of this source tree.
 #
 # Runs the Babel examples under hermes-node: the two scripts from disk, then
-# the AOT bundle of the self-contained variant, checked with the source tree
-# hidden so a bundle that quietly still needs node_modules fails here.
+# their AOT bundles, checked with the source tree hidden. A bundle is a
+# closed world -- it never reads a module off the disk -- so hiding the tree
+# is what tells a self-contained container from one that is not.
+#
+# transform.js names its preset in a string, which no static bundler can
+# follow, and is bundled with --include=@babel/preset-env. transform-static.js
+# requires the preset instead and needs nothing. Both end up self-contained,
+# by the two different routes, and that pair is the point of this example.
 #
 # The rollup section is optional. It runs only when rollup and node are both
 # present, and reports SKIP otherwise, so `npm install --omit=dev` leaves a
@@ -67,8 +73,9 @@ expect_pass() {
 }
 
 # Hides node_modules for the duration of one command. A bundle that is
-# genuinely self-contained does not notice; one that still resolves through
-# the disk fallback fails, which is the only way to tell the two apart.
+# genuinely self-contained does not notice; one with a hole in it fails with
+# "Cannot find module ... Not in the bundle", which is the only way to tell
+# the two apart.
 without_node_modules() {
   local status=0
   mv node_modules .node_modules_hidden
@@ -85,10 +92,17 @@ expect_pass "transform-static.js" "$HERMES_NODE" transform-static.js
 echo "hermes-node --build-bundle:"
 "$HERMES_NODE" --build-bundle=parse.hbb parse.js >/dev/null 2>&1
 "$HERMES_NODE" --build-bundle=transform-static.hbb transform-static.js >/dev/null 2>&1
+# The unmodified transform.js, whose preset is named by a string the bundler
+# cannot follow. --include packages it anyway. This is the case the closed
+# world exists for: the idiomatic source, no edit, self-contained.
+"$HERMES_NODE" --build-bundle=transform.hbb --include=@babel/preset-env \
+  transform.js >/dev/null 2>&1
 expect_pass "parse.hbb, no source tree" \
   without_node_modules "$HERMES_NODE" --bundle=parse.hbb
 expect_pass "transform-static.hbb, no source tree" \
   without_node_modules "$HERMES_NODE" --bundle=transform-static.hbb
+expect_pass "transform.hbb (--include), no source tree" \
+  without_node_modules "$HERMES_NODE" --bundle=transform.hbb
 
 # Optional: rollup is a devDependency, and running it needs node itself.
 if [ ! -d "$HERE/node_modules/rollup" ]; then

@@ -196,6 +196,34 @@ static bool checkToolOptions(
     return false;
   }
 
+  // --include only means anything while building a bundle: it seeds the
+  // producer's worklist with a module the require() scanner cannot reach on
+  // its own. Anywhere else there is no worklist for it to seed.
+  if (!config.includeModules.empty() && config.buildBundlePath.empty()) {
+    std::fprintf(stderr, "Error: --include requires --build-bundle.\n");
+    return false;
+  }
+
+  // --preload, likewise: it seeds the producer's worklist and records the
+  // module in the container's preload table. Neither means anything without
+  // a bundle being built.
+  if (!config.preloadModules.empty() && config.buildBundlePath.empty()) {
+    std::fprintf(stderr, "Error: --preload requires --build-bundle.\n");
+    return false;
+  }
+
+  // A bundle carries its own preloads, recorded at build time by --preload
+  // and resolved from inside the container. Run-time -r/--require resolved
+  // from the real filesystem before the bundle loader was even installed,
+  // which made it an injection point into a sealed artifact; refusing the
+  // combination removes that by construction. -r with --build-bundle is
+  // untouched -- a build runs in the disk world.
+  if (!config.bundlePath.empty() && !config.requireModules.empty()) {
+    std::fprintf(
+        stderr, "Error: --bundle cannot be combined with -r or --require.\n");
+    return false;
+  }
+
   // None of the verbs runs a program, so an inspector session would have
   // nothing to attach to. This is a different reason from the --bundle
   // refusal below -- that one is about bytecode compiled without full debug
@@ -239,6 +267,15 @@ static void printUsage(const char *argv0) {
       "  --no-compile-cache             Disable the bytecode cache\n"
       "  --build-bundle=<file>          Compile the script and its requires "
       "into <file>\n"
+      "  --include=<specifier>          With --build-bundle, also package a "
+      "module the\n"
+      "                                 require() scanner cannot discover "
+      "(repeatable)\n"
+      "  --preload=<specifier>          With --build-bundle, also package a "
+      "module and\n"
+      "                                 record it to run before the entry "
+      "point\n"
+      "                                 (repeatable)\n"
       "  --verbose                      With --build-bundle, narrate the "
       "walk to stderr;\n"
       "                                 with --dump, add per-module edge "
@@ -368,6 +405,10 @@ int main(int argc, char **argv) {
       config.process.disableCompileCache = true;
     } else if (std::strncmp(argv[i], "--build-bundle=", 15) == 0) {
       config.buildBundlePath = argv[i] + 15;
+    } else if (std::strncmp(argv[i], "--include=", 10) == 0) {
+      config.includeModules.push_back(argv[i] + 10);
+    } else if (std::strncmp(argv[i], "--preload=", 10) == 0) {
+      config.preloadModules.push_back(argv[i] + 10);
     } else if (std::strcmp(argv[i], "--verbose") == 0) {
       config.verbose = true;
     } else if (std::strncmp(argv[i], "--bundle=", 9) == 0) {

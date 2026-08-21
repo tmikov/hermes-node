@@ -17,6 +17,7 @@
 
 #include <napi/hermes_napi_compile.h>
 
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cstdio>
@@ -255,6 +256,10 @@ struct BuildSummary {
   /// exactly when two files require the same thing by the same name, which
   /// is what makes it worth printing next to the edge count.
   uint32_t distinctSpecifiers = 0;
+  /// Modules recorded in the container's preload table. Zero for the
+  /// overwhelming majority of builds -- no --preload was given -- so the
+  /// summary line only appears when this is non-zero.
+  uint32_t preloads = 0;
   /// Entries in the container's string table, and its size in bytes. One
   /// table holds identities and specifiers together, so this is neither the
   /// module count nor the specifier count.
@@ -329,6 +334,15 @@ class BuildReporter {
     if (!enabled_)
       return;
     std::fprintf(stderr, "discover [%u] %s\n", index, path.c_str());
+  }
+
+  /// A module recorded to run before the entry. Reported separately from
+  /// discovered() because being packaged and being a preload are different
+  /// facts about the same module.
+  void preloaded(uint32_t index, const std::string &path) {
+    if (!enabled_)
+      return;
+    std::fprintf(stderr, "preload [%u] %s\n", index, path.c_str());
   }
 
   void resolved(const std::string &specifier, const std::string &target) {
@@ -420,6 +434,8 @@ class BuildReporter {
         "edges:      %u  (%u distinct specifiers)\n",
         s.edges,
         s.distinctSpecifiers);
+    if (s.preloads != 0)
+      std::fprintf(stderr, "preloads:   %u\n", s.preloads);
     std::fprintf(
         stderr,
         "strings:    %zu %s, %zu bytes\n",
@@ -455,6 +471,13 @@ struct FileInfo {
   /// file (see classifyFile). Builtins and skipped-with-a-warning
   /// specifiers are not recorded here.
   std::vector<std::pair<std::string, std::string>> edges;
+  /// Passed straight to BundleWriter::addModule(). Defaults to
+  /// requirable -- every module discovered by the walk below is something
+  /// require() can load. The one exception is a package.json packaged
+  /// afterward purely for the resolver (see the loop after the walk in
+  /// buildBundle), which sets this to 0 so require() cannot see it even
+  /// though its bytes are in the container.
+  uint32_t flags = kRequirable;
 };
 
 } // namespace
@@ -463,7 +486,9 @@ int buildBundle(
     napi_env env,
     const std::string &entryPath,
     const std::string &outPath,
-    bool verbose) {
+    bool verbose,
+    const std::vector<std::string> &includes,
+    const std::vector<std::string> &preloads) {
   BuildReporter reporter(verbose);
   uint32_t generation = bundleGenerationTag();
 
@@ -528,11 +553,86 @@ int buildBundle(
   std::vector<std::string> paths{absEntry};
   std::unordered_map<std::string, uint32_t> pathIndex{{absEntry, 0}};
   std::unordered_map<std::string, FileInfo> files;
+  // One instance for the whole walk (not one per resolveSpecifier call):
+  // readPackageJsonPaths() accumulates on this object as resolution reads
+  // package.json files, and the loop below (after the walk) packages
+  // whatever it recorded.
+  DiskFileSource disk;
   size_t computedRequires = 0;
   size_t filesWithComputedRequires = 0;
   size_t escapedRequires = 0;
   size_t filesWithEscapedRequires = 0;
   reporter.discovered(0, absEntry);
+
+  // Seed --include's extra roots before the walk starts, so the worklist
+  // loop below walks each of them exactly as it walks the entry -- there is
+  // no second walk. Resolved from absEntry the same way a require() inside
+  // the entry would be, and against the same `disk` instance the walk uses,
+  // so a package.json read while resolving an include is recorded and
+  // packaged like any other.
+  for (const std::string &spec : includes) {
+    std::optional<std::string> resolved =
+        resolveSpecifier(disk, absEntry, spec);
+    if (!resolved) {
+      std::fprintf(
+          stderr, "error: --include=%s cannot be resolved\n", spec.c_str());
+      return 1;
+    }
+    if (classifyFile(*resolved) == Packageability::kSkip) {
+      std::fprintf(
+          stderr,
+          "error: --include=%s resolves to %s, which is not packageable "
+          "(%s)\n",
+          spec.c_str(),
+          resolved->c_str(),
+          formatSkipReason(*resolved).c_str());
+      return 1;
+    }
+    if (pathIndex.count(*resolved) != 0)
+      continue; // already reached from the entry
+    pathIndex.emplace(*resolved, static_cast<uint32_t>(paths.size()));
+    paths.push_back(*resolved);
+    reporter.discovered(static_cast<uint32_t>(paths.size() - 1), *resolved);
+  }
+
+  // --preload is a third caller of the seed-a-root mechanism above: the
+  // walk below packages it exactly as it packages the entry and each
+  // --include. What makes it a preload is the index recorded here. A
+  // recorded preload that was not packaged would be a container that
+  // cannot run, which is why this seeds rather than requiring the user to
+  // pass --include as well.
+  std::vector<std::string> preloadPaths;
+  for (const std::string &spec : preloads) {
+    std::optional<std::string> resolved =
+        resolveSpecifier(disk, absEntry, spec);
+    if (!resolved) {
+      std::fprintf(
+          stderr, "error: --preload=%s cannot be resolved\n", spec.c_str());
+      return 1;
+    }
+    if (classifyFile(*resolved) == Packageability::kSkip) {
+      std::fprintf(
+          stderr,
+          "error: --preload=%s resolves to %s, which is not packageable "
+          "(%s)\n",
+          spec.c_str(),
+          resolved->c_str(),
+          formatSkipReason(*resolved).c_str());
+      return 1;
+    }
+    // The same module named twice runs once -- the second load is a
+    // Module._cache hit -- so recording it twice would promise something
+    // the loader cannot do.
+    if (std::find(preloadPaths.begin(), preloadPaths.end(), *resolved) !=
+        preloadPaths.end())
+      continue;
+    preloadPaths.push_back(*resolved);
+    if (pathIndex.count(*resolved) != 0)
+      continue; // already reached from the entry or an --include
+    pathIndex.emplace(*resolved, static_cast<uint32_t>(paths.size()));
+    paths.push_back(*resolved);
+    reporter.discovered(static_cast<uint32_t>(paths.size() - 1), *resolved);
+  }
 
   for (size_t i = 0; i < paths.size(); ++i) {
     // A copy, not a reference: the loop body appends newly discovered paths
@@ -569,14 +669,24 @@ int buildBundle(
     if (!scanRequires(source, isTS, &specifiers, &parseError, &gaps)) {
       // The entry is the one file the program is certain to load, so a
       // build that cannot read it has produced nothing runnable and fails.
-      // Every other file may never be reached at run time, and packaging it
-      // as a module that throws when required reproduces what running from
-      // disk does: nothing at all unless something requires it, and the
-      // same SyntaxError if something does. See makeThrowingStub.
-      if (i == 0) {
+      // A preload is certain to run too -- it is not reached through the
+      // require() graph the tolerant-stub policy below is written for, it
+      // is seeded onto the worklist and always executed by run() before the
+      // entry -- so it gets the same hard error, not a throwing stub that
+      // would only surface the SyntaxError once the run already can't
+      // recover from it. Every other file may never be reached at run
+      // time, and packaging it as a module that throws when required
+      // reproduces what running from disk does: nothing at all unless
+      // something requires it, and the same SyntaxError if something does.
+      // See makeThrowingStub.
+      bool isPreload =
+          std::find(preloadPaths.begin(), preloadPaths.end(), path) !=
+          preloadPaths.end();
+      if (i == 0 || isPreload) {
         std::fprintf(
             stderr,
-            "error: failed to parse %s: %s\n",
+            "error: failed to parse %s %s: %s\n",
+            i == 0 ? "entry" : "preload",
             path.c_str(),
             parseError.c_str());
         return 1;
@@ -626,7 +736,8 @@ int buildBundle(
       if (isBuiltinSpecifier(specifier))
         continue;
 
-      std::optional<std::string> resolved = resolveSpecifier(path, specifier);
+      std::optional<std::string> resolved =
+          resolveSpecifier(disk, path, specifier);
       if (!resolved) {
         // A vendored package ('ws', and anything else realm.js lists
         // alongside it) is embedded in the binary, so the runtime serves it
@@ -711,10 +822,32 @@ int buildBundle(
     files.emplace(path, std::move(info));
   }
 
+  // Package every package.json resolveSpecifier read while answering a
+  // "main" field. Nothing require()s these -- a bundle's closed-world
+  // property otherwise depends on a source tree that stays on disk after
+  // the build, since a future run-time resolver needs the same "main"
+  // answers the producer got. Added here, after the walk but before the
+  // root is computed just below, so these files count toward it like any
+  // other packaged file.
+  for (const std::string &pkgPath : disk.readPackageJsonPaths()) {
+    if (pathIndex.count(pkgPath) != 0)
+      continue; // the program requires it too; it is already kRequirable.
+    std::string text;
+    if (!readFile(pkgPath, &text))
+      continue; // read once already; a disappearance now is not fatal.
+    FileInfo info;
+    info.kind = ModuleKind::kJSON;
+    info.flags = 0; // resolve-only: require() must not see it.
+    info.payload = std::move(text);
+    pathIndex.emplace(pkgPath, static_cast<uint32_t>(paths.size()));
+    paths.push_back(pkgPath);
+    files.emplace(pkgPath, std::move(info));
+  }
+
   // Step 3: compute and announce the build root -- the longest path prefix
-  // shared by every visited file's directory. The consumer (Task 6) needs
-  // this to know which directory a disk-fallback path (e.g. for a skipped
-  // native addon) is relative to.
+  // shared by every visited file's directory. Module identities are
+  // relative to it, and the consumer recovers it from the bundle file's own
+  // directory, which is why the bundle has to sit at the printed root.
   // Once, after the walk, rather than per site during it -- and naming
   // --verbose, because that is where the positions are. Two lines rather
   // than a combined one: a computed argument leaves a call site the reader
@@ -723,8 +856,9 @@ int buildBundle(
   if (computedRequires != 0) {
     std::fprintf(
         stderr,
-        "warning: %zu computed require() %s in %zu %s: not packaged, "
-        "resolved from disk at run time (--verbose lists them)\n",
+        "warning: %zu computed require() %s in %zu %s: not packaged; "
+        "answered at run time only if the container already holds the "
+        "target, else --include it (--verbose lists them)\n",
         computedRequires,
         computedRequires == 1 ? "call" : "calls",
         filesWithComputedRequires,
@@ -780,12 +914,17 @@ int buildBundle(
     if (status != napi_ok) {
       // The pending exception has to be taken before anything else is
       // compiled on this env, and it is the text both the warning and the
-      // stub carry. Entry handling matches the parse failure above.
+      // stub carry. Entry and preload handling matches the parse failure
+      // above, for the same reason: both are certain to run.
       std::string error = takeCompileErrorText(env);
-      if (i == 0) {
+      bool isPreload =
+          std::find(preloadPaths.begin(), preloadPaths.end(), path) !=
+          preloadPaths.end();
+      if (i == 0 || isPreload) {
         std::fprintf(
             stderr,
-            "error: failed to compile %s: %s\n",
+            "error: failed to compile %s %s: %s\n",
+            i == 0 ? "entry" : "preload",
             path.c_str(),
             error.c_str());
         return 1;
@@ -858,9 +997,19 @@ int buildBundle(
       summary.largestBytes = info.payload.size();
       summary.largestIdentity = identity;
     }
-    uint32_t idx = writer.addModule(identity, info.kind, info.payload);
+    uint32_t idx =
+        writer.addModule(identity, info.kind, info.flags, info.payload);
     moduleIndex.emplace(path, idx);
   }
+  // Every module now has an index, so the preload table -- which stores
+  // indices, not paths -- can be filled in, in the order --preload was
+  // given (preloadPaths already collapsed duplicates to one entry each).
+  for (const std::string &p : preloadPaths) {
+    uint32_t idx = moduleIndex.at(p);
+    writer.addPreload(idx);
+    reporter.preloaded(idx, p);
+  }
+  summary.preloads = static_cast<uint32_t>(preloadPaths.size());
   uint32_t edgeCount = 0;
   for (const std::string &path : paths) {
     const FileInfo &info = files.at(path);

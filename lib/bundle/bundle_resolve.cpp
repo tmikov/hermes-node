@@ -7,13 +7,9 @@
 
 #include <hermes/node-compat/bundle/bundle_resolve.h>
 
-#include <sys/stat.h>
-
 #include <cctype>
 #include <filesystem>
-#include <fstream>
 #include <initializer_list>
-#include <sstream>
 #include <unordered_set>
 
 namespace hermes {
@@ -22,16 +18,6 @@ namespace node_compat {
 namespace {
 
 namespace fs = std::filesystem;
-
-bool isRegularFile(const std::string &path) {
-  struct stat st {};
-  return ::stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
-}
-
-bool isDirectory(const std::string &path) {
-  struct stat st {};
-  return ::stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
-}
 
 /// Joins \p base and \p rel the way a require() path join would, and
 /// collapses "." / ".." segments purely lexically (no filesystem access, no
@@ -165,13 +151,13 @@ bool skipValue(const std::string &content, size_t &i) {
 /// object, no such key, missing colon, missing/unterminated string,
 /// non-string value) is treated as absent, per the caller's fallback to
 /// the index.* probe.
-std::optional<std::string> readPackageMain(const std::string &dir) {
-  std::ifstream f(dir + "/package.json", std::ios::binary);
-  if (!f)
+std::optional<std::string> readPackageMain(
+    FileSource &src,
+    const std::string &dir) {
+  std::optional<std::string> fileContent = src.readPackageJson(dir);
+  if (!fileContent)
     return std::nullopt;
-  std::ostringstream ss;
-  ss << f.rdbuf();
-  const std::string content = ss.str();
+  const std::string &content = *fileContent;
   const size_t n = content.size();
 
   auto skipWs = [&](size_t &i) {
@@ -226,28 +212,29 @@ std::optional<std::string> readPackageMain(const std::string &dir) {
 
 constexpr int kMaxResolveDepth = 32;
 
-std::optional<std::string> resolveBase(const std::string &base, int depth) {
+std::optional<std::string>
+resolveBase(FileSource &src, const std::string &base, int depth) {
   if (depth > kMaxResolveDepth)
     return std::nullopt;
 
-  if (isRegularFile(base))
+  if (src.isRegularFile(base))
     return base;
   for (const char *ext : {".js", ".ts", ".json"}) {
     std::string candidate = base + ext;
-    if (isRegularFile(candidate))
+    if (src.isRegularFile(candidate))
       return candidate;
   }
 
-  if (isDirectory(base)) {
-    if (std::optional<std::string> main = readPackageMain(base)) {
+  if (src.isDirectory(base)) {
+    if (std::optional<std::string> main = readPackageMain(src, base)) {
       std::string mainBase = joinNormalized(fs::path(base), *main);
       if (std::optional<std::string> resolved =
-              resolveBase(mainBase, depth + 1))
+              resolveBase(src, mainBase, depth + 1))
         return resolved;
     }
     for (const char *name : {"index.js", "index.ts", "index.json"}) {
       std::string candidate = (fs::path(base) / name).string();
-      if (isRegularFile(candidate))
+      if (src.isRegularFile(candidate))
         return candidate;
     }
   }
@@ -332,6 +319,7 @@ std::vector<std::string> splitAbsPath(const std::string &path) {
 } // namespace
 
 std::optional<std::string> resolveSpecifier(
+    FileSource &src,
     std::string_view fromFile,
     std::string_view specifier) {
   fs::path fromDir = fs::path(std::string(fromFile)).parent_path();
@@ -351,7 +339,7 @@ std::optional<std::string> resolveSpecifier(
       (specifier.size() == 1 || specifier[1] == '.' || specifier[1] == '/');
   if (isRelative) {
     std::string base = joinNormalized(fromDir, specifier);
-    return resolveBase(base, 0);
+    return resolveBase(src, base, 0);
   }
 
   // Bare specifier: walk node_modules from fromDir up to the filesystem
@@ -363,7 +351,7 @@ std::optional<std::string> resolveSpecifier(
   while (true) {
     if (dir.filename() != "node_modules") {
       std::string candidate = joinNormalized(dir / "node_modules", specifier);
-      if (std::optional<std::string> resolved = resolveBase(candidate, 0))
+      if (std::optional<std::string> resolved = resolveBase(src, candidate, 0))
         return resolved;
     }
 
@@ -373,6 +361,13 @@ std::optional<std::string> resolveSpecifier(
     dir = parent;
   }
   return std::nullopt;
+}
+
+std::optional<std::string> resolveSpecifier(
+    std::string_view fromFile,
+    std::string_view specifier) {
+  DiskFileSource disk;
+  return resolveSpecifier(disk, fromFile, specifier);
 }
 
 bool isBuiltinSpecifier(std::string_view specifier) {

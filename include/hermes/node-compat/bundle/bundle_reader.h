@@ -70,6 +70,16 @@ class BundleReader {
   std::string_view identity(uint32_t moduleIndex) const;
   std::string_view payload(uint32_t moduleIndex) const;
   ModuleKind kind(uint32_t moduleIndex) const;
+
+  /// The raw flags bitfield stored on the module record (see
+  /// bundle_format.h).
+  uint32_t flags(uint32_t moduleIndex) const;
+
+  /// True when kRequirable is set -- the module require() may load. False
+  /// for a record that exists only so the resolver can read it (a
+  /// package.json consulted for `main` but never itself required).
+  bool isRequirable(uint32_t moduleIndex) const;
+
   uint32_t entry() const;
   uint32_t moduleCount() const;
 
@@ -89,6 +99,14 @@ class BundleReader {
   /// Only valid for \p edgeIndex below edgeCount(), exactly like identity()
   /// is only valid for a module index below moduleCount(): no runtime check.
   EdgeView edge(uint32_t edgeIndex) const;
+
+  /// How many modules the container names as preloads -- modules that must
+  /// run before the entry point, in the order returned by preload().
+  uint32_t preloadCount() const;
+
+  /// The module index of preload \p i. Only valid for \p i below
+  /// preloadCount(), exactly like edge() above.
+  uint32_t preload(uint32_t i) const;
 
   /// Section sizes, straight from the header, for a dump that reports them.
   /// stringsSize() and payloadSize() are byte counts, same as the header
@@ -120,6 +138,7 @@ class BundleReader {
   const BundleHeader *header_ = nullptr;
   const BundleModuleRecord *modules_ = nullptr;
   const BundleEdgeRecord *edges_ = nullptr;
+  const uint32_t *preloads_ = nullptr;
 };
 
 } // namespace node_compat

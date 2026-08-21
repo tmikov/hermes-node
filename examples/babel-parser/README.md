@@ -13,7 +13,7 @@ npm install
 | file | what it is |
 | --- | --- |
 | `parse.js` | `@babel/parser` only: parse a snippet, print the AST shape |
-| `transform.js` | `@babel/core` + `@babel/preset-env`, preset named by string |
+| `transform.js` | `@babel/core` + `@babel/preset-env`, preset named by string; bundled with `--include` |
 | `transform-static.js` | the same, with the preset `require`d instead |
 | `rollup.config.mjs` | optional: bundle `transform-static.js` with rollup |
 
@@ -26,28 +26,42 @@ babel.transformSync(code, { presets: ['@babel/preset-env'] });
 ```
 
 Babel resolves that name at run time, from configuration. No static
-bundler can follow it -- not `hermes-node --build-bundle`, not rollup.
-The bundle builds with no complaint and runs fine while `node_modules` is
-still on disk, because the missing module is answered by the disk
-fallback. Delete the tree and it dies:
+bundler can follow it -- not `hermes-node --build-bundle`, not rollup. The
+bundle builds with no complaint and is missing the preset. A bundle is a
+closed world, so running it says exactly that:
 
 ```
 Error: Cannot find module '@babel/preset-env'
+  required by node_modules/@babel/core/lib/config/files/plugins.js
+  Not in the bundle. Add it with:
+    --include=@babel/preset-env
 ```
 
-`transform-static.js` differs by two lines -- it requires the preset and
-passes the object -- and that is enough to make the dependency ordinary
-and the bundle self-contained:
+There are two ways to fix it, and this directory shows both.
+
+**Name it at build time.** `--include` packages a root the walk cannot
+find, and then walks it exactly like the entry. The source is untouched:
+
+```sh
+hermes-node --build-bundle=transform.hbb --include=@babel/preset-env transform.js
+mv node_modules /tmp/ && hermes-node --bundle=transform.hbb   # PASS
+```
+
+**Or make the dependency static.** `transform-static.js` differs from
+`transform.js` by two lines -- it requires the preset and passes the
+object -- which turns it into an ordinary edge the walk follows on its
+own:
 
 ```sh
 hermes-node --build-bundle=app.hbb transform-static.js
-mv node_modules /tmp/ && hermes-node --bundle=app.hbb   # still PASS
+mv node_modules /tmp/ && hermes-node --bundle=app.hbb   # PASS
 ```
 
-This is the general shape of the problem, not a Babel quirk: if you want
-a dynamic dependency in the bundle, make it a static one. `run.sh` checks
-both bundles with the tree hidden, which is the only way to tell a
-self-contained container from one that is quietly still reading the disk.
+Prefer `--include` when the source is not yours to edit, which is the
+usual case for a dependency several packages down. This is the general
+shape of the problem, not a Babel quirk. `run.sh` checks all three
+bundles with the tree hidden, which is the only way to tell a
+self-contained container from one with a hole in it.
 
 ## Build-time warnings
 
@@ -55,7 +69,7 @@ self-contained container from one that is quietly still reading the disk.
 
 ```
 warning: not packaging '@babel/preset-typescript' ... (cannot be resolved, ...)
-warning: 5 computed require() calls in 2 files: not packaged, ...
+warning: 5 computed require() calls in 2 files: not packaged; ...
 warning: require used as a value in 1 place in 1 file: ...
 warning: cannot compile .../import.cjs (SyntaxError: ...); packaged as a
          module that throws when required
@@ -63,8 +77,11 @@ warning: cannot compile .../import.cjs (SyntaxError: ...); packaged as a
 
 None of them stop the build, and none of them stop this program: they are
 optional-dependency probes, configuration-driven loads, and a three-line
-module that exists only to call dynamic `import()`. `--verbose` lists the
-positions. `run.sh` silences them, since it is checking behavior.
+module that exists only to call dynamic `import()`. What they do is
+predict where a closed world can fail -- a warning here is a candidate
+for `--include`, and the run-time error names the specifier when one of
+them turns out to matter. `--verbose` lists the positions. `run.sh`
+silences them, since it is checking behavior.
 
 ## Optional: rollup
 
