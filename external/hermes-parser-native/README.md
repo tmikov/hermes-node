@@ -230,21 +230,28 @@ change and build nothing until the end -- step 7 is that build.
    ./examples/flow-bundler/run.sh cmake-build-release
    ```
    It must still print `PASS: 6 bundles match expected/`.
-8. Deal with `examples/hermes-parser-ast`. It has the same four touch
-   points as flow-bundler -- a `# --- BEGIN vendored native parser addon` /
-   `# --- END` marker block in its `run.sh`, the `file:` dependency in its
-   `package.json`, `install-links=true` in its `.npmrc`, and the `file:`
-   path twice in its `package-lock.json` -- but they cannot be fixed the
-   same way, for the reason given at the top of this section.
+8. Deal with `examples/hermes-parser-ast`. It has the same touch points as
+   flow-bundler -- `# --- BEGIN vendored native parser addon` / `# --- END`
+   marker blocks, the `file:` dependency in its `package.json`,
+   `install-links=true` in its `.npmrc`, and the `file:` path twice in its
+   `package-lock.json` -- but they cannot be fixed the same way, for the
+   reason given at the top of this section.
 
-   Note also that its marker block is **not self-contained**: it derives
-   `PLATFORM_ARCH` from `hermes-node` itself and copies the built addon into
+   Note that it has **two** marker blocks, not one, and that neither is
+   self-contained.
+
+   `build-bundle.sh` holds the real one: it derives `PLATFORM_ARCH` from
+   `hermes-node` itself and copies the built addon into
    `node_modules/hermes-parser/prebuilds/$PLATFORM_ARCH/`, and
-   `PLATFORM_ARCH` is used further down by the `--include=` argument. So
-   deleting the block alone leaves an undefined variable, and the three
-   native-specific checks below it (the `--include`, the
-   `out/hermes-parser.node` sidecar assertion, and `--verify-natives`) have
-   nothing to assert against either way.
+   `PLATFORM_ARCH` is used just below the block by the `--include=`
+   argument, which is outside it. So deleting the block alone leaves an
+   undefined variable.
+
+   `run.sh` holds a second, shorter one that only resolves `$ADDON`, used
+   by the negative `HERMES_PARSER_NATIVE_ADDON` check further down. That
+   check, the `out/hermes-parser.node` sidecar assertion and
+   `--verify-natives` have nothing to assert against once the addon is
+   gone, either way.
 
    Either `git rm -r examples/hermes-parser-ast` and drop its paragraph
    from `examples/README.md`, or repoint it at a real `.node` addon: keep

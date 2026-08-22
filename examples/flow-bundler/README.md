@@ -71,6 +71,59 @@ expected/` and exits 0 on success.
 Run under `cmake-build-release`, not an ASan build: the bundler run takes
 several seconds under a release build but exceeds ten minutes under ASan.
 
+## Why there is no build-bundle.sh
+
+The other bundleable examples ship a `build-bundle.sh` that produces an AOT
+bundle you can keep. This one does not, because this example cannot be
+bundled -- not "has not been", cannot.
+
+There are two independent reasons, and the second is the one that matters.
+
+The first is visible immediately. `--build-bundle` compiles every module it
+packages with Hermes's own compiler, and `bundler/buildBundleCLI.js` is
+Flow-typed ESM:
+
+```
+$ hermes-node --build-bundle=dist/app.hbb --preload=../babel-register.js \
+    bundler/buildBundleCLI.js
+error: failed to parse entry .../bundler/buildBundleCLI.js: 11:12: 'from' expected
+```
+
+The entry is the one file the program is certain to load, so the producer
+treats a parse failure there as a hard error rather than packaging a module
+that throws.
+
+The second reason survives every way around the first. The bundler's
+sources are *meant* to be untranspiled: `babel-register.js` installs
+`@babel/register`, which compiles them on the way in by hooking
+`require.extensions`. A bundle refuses `-r` at run time and takes
+`--preload` at build time instead, so the hook can be packaged and run --
+but it will have nothing to do. In a bundle, `Module._load` is intercepted
+and answered from the container, and `require.extensions` sits outside that
+boundary by design, so the hook never gets a turn.
+
+That is observable in three lines. A preload that wraps
+`require.extensions['.js']` and prints on every call prints twice under
+`hermes-node -r pre.js main.js`, and prints nothing at all under
+`--preload=./pre.js` plus `--bundle`, while the program still runs
+correctly from the container.
+
+Routing around the entry-parse error therefore only moves the failure to
+run time. Bundling a CommonJS wrapper that `require`s the Flow entry builds
+successfully -- the producer packages the unparseable module as one that
+throws when required, which is what it does for any file the run may never
+reach -- and then:
+
+```
+$ hermes-node --bundle=dist/app.hbb -- -c build.config.js
+SyntaxError: .../bundler/buildBundleCLI.js: 11:12: 'from' expected
+```
+
+Pre-transpiling `bundler/` to CommonJS on disk and bundling that would
+produce a working container, but it would no longer be this example: what
+this one demonstrates is Babel parsing Flow with the native `hermes-parser`
+addon as the sources load.
+
 ## A note on reproducibility
 
 The whole point of this example is that its output is byte-identical to

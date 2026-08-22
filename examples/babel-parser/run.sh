@@ -15,6 +15,12 @@
 # requires the preset instead and needs nothing. Both end up self-contained,
 # by the two different routes, and that pair is the point of this example.
 #
+# The bundles are built by build-bundle.sh, into a temporary directory this
+# script deletes on the way out. That script is also how a person gets the
+# bundles to keep -- ./build-bundle.sh writes them to ./dist. The flags live
+# there and only there, so the artifact you ship and the artifact this
+# script checks are built the same way.
+#
 # ast.js takes a file to parse as an argument. It shows the other half of
 # "closed world": the bundle still won't read a *module* off disk, but the
 # program's own input keeps coming from wherever its argument points, tree
@@ -52,13 +58,18 @@ fi
 
 cd "$HERE"
 
+# The bundles go somewhere temporary rather than into the example: what a
+# person keeps comes from ./build-bundle.sh with no argument, and a check
+# should not leave artifacts behind that look like it.
+BUNDLES="$(mktemp -d)"
+
 # without_node_modules() below moves the tree aside, so an interrupted run
 # would otherwise leave the example uninstalled. Restoring it here costs
 # nothing and is the difference between a failed check and a broken
 # checkout. The `if` rather than `&&` keeps the trap's own exit status out
 # of the script's.
 cleanup() {
-  rm -f "$HERE"/*.hbb
+  rm -rf "$BUNDLES"
   if [ -d "$HERE/.node_modules_hidden" ]; then
     mv "$HERE/.node_modules_hidden" "$HERE/node_modules"
   fi
@@ -117,26 +128,24 @@ expect_pass "transform-static.js" "$HERMES_NODE" transform-static.js
 expect_ast "ast.js parse.js" "$HERMES_NODE" ast.js parse.js
 
 echo "hermes-node --build-bundle:"
-"$HERMES_NODE" --build-bundle=parse.hbb parse.js >/dev/null 2>&1
-"$HERMES_NODE" --build-bundle=transform-static.hbb transform-static.js >/dev/null 2>&1
-# The unmodified transform.js, whose preset is named by a string the bundler
-# cannot follow. --include packages it anyway. This is the case the closed
-# world exists for: the idiomatic source, no edit, self-contained.
-"$HERMES_NODE" --build-bundle=transform.hbb --include=@babel/preset-env \
-  transform.js >/dev/null 2>&1
-# @babel/parser is a static require, so ast.js needs no --include.
-"$HERMES_NODE" --build-bundle=ast.hbb ast.js >/dev/null 2>&1
+# The producer's warnings are expected here and explained in README.md, so
+# the output is captured and shown only if the build actually fails.
+if ! build_log="$("$HERE/build-bundle.sh" "$BUNDLES" "$BUILD_DIR" 2>&1)"; then
+  echo "$build_log" 1>&2
+  echo "FAIL: build-bundle.sh" 1>&2
+  exit 1
+fi
 expect_pass "parse.hbb, no source tree" \
-  without_node_modules "$HERMES_NODE" --bundle=parse.hbb
+  without_node_modules "$HERMES_NODE" --bundle="$BUNDLES/parse.hbb"
 expect_pass "transform-static.hbb, no source tree" \
-  without_node_modules "$HERMES_NODE" --bundle=transform-static.hbb
+  without_node_modules "$HERMES_NODE" --bundle="$BUNDLES/transform-static.hbb"
 expect_pass "transform.hbb (--include), no source tree" \
-  without_node_modules "$HERMES_NODE" --bundle=transform.hbb
+  without_node_modules "$HERMES_NODE" --bundle="$BUNDLES/transform.hbb"
 # The point of this one: modules come from the container (node_modules is
 # hidden), and the input file -- parse.js, an ordinary argument -- still
 # comes from the disk.
 expect_ast "ast.hbb, no source tree, parse.js from disk" \
-  without_node_modules "$HERMES_NODE" --bundle=ast.hbb parse.js
+  without_node_modules "$HERMES_NODE" --bundle="$BUNDLES/ast.hbb" parse.js
 
 # ast.js with no argument is a usage error, not silence dressed as success.
 if err="$("$HERMES_NODE" ast.js 2>&1 1>/dev/null)"; then
@@ -162,9 +171,12 @@ else
     without_node_modules "$HERMES_NODE" rollup-out.cjs
   # Rollup collapses the graph into one module; the container then holds one
   # bytecode blob instead of 574, which is both smaller and faster to load.
-  "$HERMES_NODE" --build-bundle=rollup-out.hbb rollup-out.cjs >/dev/null 2>&1
+  # Not in build-bundle.sh: rollup is a devDependency and running it needs a
+  # Node install, so this is a comparison rather than an artifact of the
+  # example. It also needs no flags, so there is nothing here to drift.
+  "$HERMES_NODE" --build-bundle="$BUNDLES/rollup-out.hbb" rollup-out.cjs >/dev/null 2>&1
   expect_pass "rollup-out.hbb, no source tree" \
-    without_node_modules "$HERMES_NODE" --bundle=rollup-out.hbb
+    without_node_modules "$HERMES_NODE" --bundle="$BUNDLES/rollup-out.hbb"
 fi
 
 echo "PASS: babel-parser"

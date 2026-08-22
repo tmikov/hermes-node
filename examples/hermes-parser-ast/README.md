@@ -10,12 +10,14 @@ format's native-addon support end to end on a real package.
 npm install
 ../../cmake-build-release/bin/hermes-node ast.js sample.js
 ./run.sh                      # everything below, checked
+./build-bundle.sh             # the AOT bundle + its sidecar, kept in ./dist
 ```
 
 | file | what it is |
 | --- | --- |
 | `ast.js` | reads a file named by argument, parses it with `hermes-parser`, prints the AST |
 | `sample.js` | a small file with a class private field and an optional chain, so the AST assertion is specific to this input |
+| `build-bundle.sh` | stages the addon, builds the bundle; `run.sh` calls it too |
 
 ## Why this one and not the babel sibling
 
@@ -57,8 +59,8 @@ path meaningful on the build machine alone, which no container records.
 (`run.sh` also `unset`s it, so a shell that has it exported from
 flow-bundler does not turn this into a confusing hard failure -- and then
 asserts that a bundled run *with* it set exits non-zero, which is the
-demonstration.) Instead, `run.sh` copies the freshly built addon into the
-package's own
+demonstration.) Instead, `build-bundle.sh` copies the freshly built addon
+into the package's own
 `node_modules/hermes-parser/prebuilds/<platform>-<arch>/hermes-parser.node`
 -- a path the walk can reach, where `--include` can name it and the
 container can record it. The `<platform>-<arch>` pair comes from
@@ -66,6 +68,15 @@ container can record it. The `<platform>-<arch>` pair comes from
 + process.arch)'`), not the host `node`, so the copy matches the runtime
 that will load it and the example works on machines the repository's
 committed `linux-x64` prebuilt does not fit.
+
+That copy and the `--include` that names it live in `build-bundle.sh`, not
+in `run.sh`. `run.sh` calls it with a temporary output directory and checks
+what came out, so the bundle a person keeps (`./build-bundle.sh`, which
+writes `./dist`) and the bundle the check exercises are built by the same
+two flags. `run.sh` runs the build first for a reason that is easy to miss:
+staging the addon is a side effect of building, and the from-disk run has
+to load that freshly built copy rather than whatever `npm install` left in
+`prebuilds/`.
 
 ## Measured build output
 

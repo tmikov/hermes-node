@@ -18,6 +18,12 @@
 # addon has to be named explicitly with --include, and the bundle it
 # produces is a file plus a shared object (the addon's sidecar).
 #
+# The bundle is built by build-bundle.sh, into out/, which this script
+# deletes on the way out. That script is also how a person gets the bundle
+# to keep -- ./build-bundle.sh writes it to ./dist. The addon staging and
+# the --include live there and only there, so the artifact you ship and the
+# artifact this script checks are built the same way.
+#
 # Usage: ./run.sh [build-dir]     (default: cmake-build-release)
 
 set -e
@@ -58,9 +64,9 @@ OUT="$HERE/out"
 
 # The bundle directory is removed on every run so a stale sidecar from a
 # previous build can never be mistaken for this one's. Unlike
-# babel-parser's node_modules, the prebuilds/ copy below is left in place:
-# it is inside the gitignored node_modules tree already, costs nothing to
-# leave, and a following run overwrites it.
+# babel-parser's node_modules, the prebuilds/ copy that build-bundle.sh
+# makes is left in place: it is inside the gitignored node_modules tree
+# already, costs nothing to leave, and a following run overwrites it.
 cleanup() {
   rm -rf "$OUT"
 }
@@ -71,7 +77,10 @@ trap cleanup EXIT
 # away and this example switches to the published hermes-parser package. See
 # "When to delete this directory" in
 # external/hermes-parser-native/README.md; that recipe refers to these
-# markers, so keep them in sync with it.
+# markers, so keep them in sync with it. build-bundle.sh in this directory
+# has a marker block of its own -- it is the one that stages the addon where
+# --include can name it; this one only resolves the path, for the negative
+# HERMES_PARSER_NATIVE_ADDON check further down.
 ADDON="$BUILD_DIR/external/hermes-parser-native/hermes-parser.node"
 
 if [ ! -f "$ADDON" ]; then
@@ -79,20 +88,6 @@ if [ ! -f "$ADDON" ]; then
   echo "  cmake --build $BUILD_DIR --target hermes-node hermes-parser-napi" 1>&2
   exit 1
 fi
-
-# Unlike flow-bundler, this example does NOT export
-# HERMES_PARSER_NATIVE_ADDON for the bundled run: a bundle serves only what
-# its container records, and that override is an absolute build-tree path
-# that no container records. Copying the addon into the package's own
-# prebuilds/ directory instead puts it somewhere the walk can reach, where
-# --include can name it and the container can record it. The platform-arch
-# pair is derived from hermes-node itself, not the host node, so the copy
-# matches the runtime that will load it -- and so this works on a machine
-# the committed linux-x64 prebuilt does not fit.
-PLATFORM_ARCH="$("$HERMES_NODE" -e 'console.log(process.platform + "-" + process.arch)')"
-TARGET_DIR="$HERE/node_modules/hermes-parser/prebuilds/$PLATFORM_ARCH"
-mkdir -p "$TARGET_DIR"
-cp "$ADDON" "$TARGET_DIR/hermes-parser.node"
 # --- END vendored native parser addon --------------------------------------
 
 # Every check below asserts something specific, so a run that dies halfway
@@ -118,6 +113,35 @@ expect_ast() {
   fi
 }
 
+# Built first, not because the bundle is checked first -- it is not -- but
+# because build-bundle.sh is what copies the freshly built addon into the
+# package's prebuilds/ directory, and the from-disk run below has to load
+# that copy rather than whatever npm install happened to leave there.
+echo "hermes-node --build-bundle:"
+rm -rf "$OUT"
+# The producer's output (bundle root, the native sidecar note, the file
+# summary) is what a person building an artifact wants to see and is noise
+# in a check, so it is captured and shown only if the build fails.
+if ! build_log="$("$HERE/build-bundle.sh" "$OUT" "$BUILD_DIR" 2>&1)"; then
+  echo "$build_log" 1>&2
+  echo "FAIL: build-bundle.sh" 1>&2
+  exit 1
+fi
+
+if [ ! -f "$OUT/ast.hbb" ]; then
+  echo "FAIL: $OUT/ast.hbb was not produced" 1>&2
+  exit 1
+fi
+if [ ! -f "$OUT/hermes-parser.node" ]; then
+  echo "FAIL: $OUT/hermes-parser.node (the native addon's sidecar) was not produced" 1>&2
+  exit 1
+fi
+if [ -e "$OUT/node_modules" ]; then
+  echo "FAIL: $OUT contains node_modules -- the bundle is not self-contained" 1>&2
+  exit 1
+fi
+echo "  ok: $OUT holds ast.hbb + hermes-parser.node, no node_modules"
+
 echo "from disk:"
 expect_ast "ast.js sample.js" "$HERMES_NODE" "$HERE/ast.js" "$HERE/sample.js"
 UNBUNDLED_OUT="$("$HERMES_NODE" "$HERE/ast.js" "$HERE/sample.js")"
@@ -133,31 +157,6 @@ else
   echo "FAIL: ast.js with no argument printed no usage message" 1>&2
   exit 1
 fi
-
-echo "hermes-node --build-bundle:"
-rm -rf "$OUT"
-mkdir -p "$OUT"
-# hermes-parser's own require() calls for the addon are computed (a
-# path.resolve() of an env var, and two path.join()s tried in a try/catch
-# loop), so the scanner cannot see them; --include names the one this
-# platform will actually load.
-"$HERMES_NODE" --build-bundle="$OUT/ast.hbb" \
-  --include="./node_modules/hermes-parser/prebuilds/$PLATFORM_ARCH/hermes-parser.node" \
-  "$HERE/ast.js"
-
-if [ ! -f "$OUT/ast.hbb" ]; then
-  echo "FAIL: $OUT/ast.hbb was not produced" 1>&2
-  exit 1
-fi
-if [ ! -f "$OUT/hermes-parser.node" ]; then
-  echo "FAIL: $OUT/hermes-parser.node (the native addon's sidecar) was not produced" 1>&2
-  exit 1
-fi
-if [ -e "$OUT/node_modules" ]; then
-  echo "FAIL: $OUT contains node_modules -- the bundle is not self-contained" 1>&2
-  exit 1
-fi
-echo "  ok: $OUT holds ast.hbb + hermes-parser.node, no node_modules"
 
 echo "hermes-node --bundle:"
 BUNDLED_OUT="$("$HERMES_NODE" --bundle="$OUT/ast.hbb" "$HERE/sample.js")"

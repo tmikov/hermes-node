@@ -9,6 +9,7 @@ npm install
 ../../cmake-build-release/bin/hermes-node transform.js
 ../../cmake-build-release/bin/hermes-node ast.js parse.js
 ./run.sh                      # everything below, checked
+./build-bundle.sh             # the four AOT bundles, kept in ./dist
 ```
 
 | file | what it is |
@@ -18,6 +19,7 @@ npm install
 | `transform-static.js` | the same, with the preset `require`d instead |
 | `ast.js` | `@babel/parser` on a file named by argument; prints the full AST as JSON -- see "Modules vs. data" below |
 | `rollup.config.mjs` | optional: bundle `transform-static.js` with rollup |
+| `build-bundle.sh` | builds the four AOT bundles; `run.sh` calls it too |
 
 ## Why there are two transform scripts
 
