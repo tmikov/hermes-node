@@ -2,3 +2,6 @@ cmake-build-*/
 .idea/
 *.swp
 *~
+
+# Scratch notes kept in the working tree, deliberately not shared.
+TODO.md
