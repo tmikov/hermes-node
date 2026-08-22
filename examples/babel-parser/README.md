@@ -76,8 +76,10 @@ warning: not packaging '@babel/preset-typescript/package.json' ... (cannot be re
 warning: not packaging '@babel/preset-typescript' ... (cannot be resolved, ...)
 warning: not packaging 'v8' ... (cannot be resolved, ...)
 warning: not packaging 'supports-color' ... (cannot be resolved, ...)
-warning: 9 computed require()/require.resolve() calls in 4 files: not packaged; ...
-warning: require used as a value in 1 place in 1 file: ...
+warning: 9 computed require()/require.resolve() calls in 4 files, not packaged:
+  ... (one line per call site, up to 10; --verbose lists the rest)
+warning: require used as a value in 1 place in 1 file, not packaged:
+  ...
 warning: cannot compile .../import.cjs (SyntaxError: ...); packaged as a
          module that throws when required
 ```

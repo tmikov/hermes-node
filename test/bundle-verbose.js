@@ -129,17 +129,40 @@
 // STUBQUIET: warning: cannot compile {{.*}}dyn.cjs
 // RUN: cmp %t.nc/app.hbb %t.nc/plain.hbb
 
-// A require() the scanner cannot follow is counted in the default output
-// (test/bundle-scanner.js) and located here. Two of them in one file, so
-// this fails if only the first is recorded -- the positions are the whole
-// point, and one line saying "there are some" is what the summary already
-// does. Deliberately not deduplicated: two computed calls are two holes
-// even when they compute the same string.
+// A require() the scanner cannot follow is counted in the default output,
+// and (see test/bundle-scanner.js for the single-gap case, and
+// bundle_build.cpp's kGapWarningCap for the cap beyond which positions give
+// way to a count) its position prints right there too, not only under
+// --verbose. Two of them in one file here, so this fails if only the first
+// is recorded -- the positions are the whole point. Deliberately not
+// deduplicated: two computed calls are two holes even when they compute
+// the same string.
 // RUN: rm -rf %t.dyn && mkdir -p %t.dyn
 // RUN: echo "const a = 'x'; require('./' + a); require(a + '.js'); console.log('V', 1);" > %t.dyn/cli.js
 // RUN: %hermes-node --build-bundle=%t.dyn/app.hbb --verbose %t.dyn/cli.js 2>&1 | %FileCheck --check-prefix=DYN %s
 // DYN: dynamic {{.*}}cli.js:1:16
 // DYN: dynamic {{.*}}cli.js:1:35
 // RUN: %hermes-node --build-bundle=%t.dyn/plain.hbb %t.dyn/cli.js 2>&1 | %FileCheck --check-prefix=DYNQUIET --implicit-check-not=dynamic %s
-// DYNQUIET: warning: 2 computed require()/require.resolve() calls in 1 file
+// DYNQUIET: warning: 2 computed require()/require.resolve() calls in 1 file, not packaged:
+// DYNQUIET-NEXT: {{.*}}cli.js:1:16
+// DYNQUIET-NEXT: {{.*}}cli.js:1:35
 // RUN: cmp %t.dyn/app.hbb %t.dyn/plain.hbb
+
+// Beyond kGapWarningCap (10) the default warning falls back to a count for
+// the rest, so a large tree does not bury the positions a reader can act
+// on under dozens of lines. 12 gaps here: 10 printed, "... and 2 more".
+// RUN: rm -rf %t.cap && mkdir -p %t.cap
+// RUN: printf 'try { require("m" + 1); } catch (e) {}\ntry { require("m" + 2); } catch (e) {}\ntry { require("m" + 3); } catch (e) {}\ntry { require("m" + 4); } catch (e) {}\ntry { require("m" + 5); } catch (e) {}\ntry { require("m" + 6); } catch (e) {}\ntry { require("m" + 7); } catch (e) {}\ntry { require("m" + 8); } catch (e) {}\ntry { require("m" + 9); } catch (e) {}\ntry { require("m" + 10); } catch (e) {}\ntry { require("m" + 11); } catch (e) {}\ntry { require("m" + 12); } catch (e) {}\nconsole.log("V", 1);\n' > %t.cap/cli.js
+// RUN: %hermes-node --build-bundle=%t.cap/app.hbb %t.cap/cli.js 2>&1 | %FileCheck --check-prefix=CAP %s
+// CAP: warning: 12 computed require()/require.resolve() calls in 1 file, not packaged:
+// CAP-NEXT: {{.*}}cli.js:1:7
+// CAP-NEXT: {{.*}}cli.js:2:7
+// CAP-NEXT: {{.*}}cli.js:3:7
+// CAP-NEXT: {{.*}}cli.js:4:7
+// CAP-NEXT: {{.*}}cli.js:5:7
+// CAP-NEXT: {{.*}}cli.js:6:7
+// CAP-NEXT: {{.*}}cli.js:7:7
+// CAP-NEXT: {{.*}}cli.js:8:7
+// CAP-NEXT: {{.*}}cli.js:9:7
+// CAP-NEXT: {{.*}}cli.js:10:7
+// CAP-NEXT: ... and 2 more; --verbose lists them all

@@ -597,6 +597,55 @@ class BuildReporter {
   double totalCompileMs_ = 0;
 };
 
+/// A require-gap position, with the file it was found in. Collected during
+/// the walk so the default (non---verbose) warnings below can name a call
+/// site instead of only counting them; --verbose keeps naming every one of
+/// these through BuildReporter::requireGap as the walk finds it, so this is
+/// purely additional bookkeeping, not a replacement for that.
+struct GapSite {
+  std::string path; // absolute; made relative to the bundle root at print
+                    // time, once the root is known.
+  uint32_t line;
+  uint32_t column;
+};
+
+/// How many positions the default require-gap warnings print before falling
+/// back to a count. A large tree can have many gaps and a line each would
+/// bury the ones a user can act on -- see the warning's own comment at the
+/// call site -- but the common case (the motivating one: a handful of gaps
+/// in one or two files) has few enough that printing them outright is what
+/// makes the warning usable at all.
+constexpr size_t kGapWarningCap = 10;
+
+/// Prints up to kGapWarningCap of \p sites, each as an indented
+/// "path:line:col" relative to \p rootPath, followed by an "... and N more"
+/// line when there are more than that. Shared by the two require-gap
+/// warnings in buildBundle -- the header and the trailing explanation are
+/// each warning's own, since a computed argument and an escaped require
+/// have different honest things to say about the target.
+void printGapPositions(
+    const std::vector<GapSite> &sites,
+    const fs::path &rootPath) {
+  size_t shown = std::min(sites.size(), kGapWarningCap);
+  for (size_t i = 0; i < shown; ++i) {
+    std::fprintf(
+        stderr,
+        "  %s:%u:%u\n",
+        fs::path(sites[i].path)
+            .lexically_relative(rootPath)
+            .generic_string()
+            .c_str(),
+        sites[i].line,
+        sites[i].column);
+  }
+  if (sites.size() > shown) {
+    std::fprintf(
+        stderr,
+        "  ... and %zu more; --verbose lists them all\n",
+        sites.size() - shown);
+  }
+}
+
 } // namespace
 
 int buildBundle(
@@ -679,6 +728,13 @@ int buildBundle(
   size_t filesWithComputedRequires = 0;
   size_t escapedRequires = 0;
   size_t filesWithEscapedRequires = 0;
+  // Every gap's file and position, kept so the default warnings below
+  // (after the walk) can point at call sites rather than only count them.
+  // Not capped here -- the cap applies only where these are printed, so
+  // --verbose (which narrates every one of these as the walk finds it) is
+  // unaffected by it.
+  std::vector<GapSite> computedGapSites;
+  std::vector<GapSite> escapedGapSites;
   reporter.discovered(0, absEntry);
 
   // Seed --include's extra roots before the walk starts, so the worklist
@@ -848,25 +904,29 @@ int buildBundle(
     // from the container and answered by the run-time fallback -- correct
     // wherever the source tree is still there, and a hole in the bundle the
     // moment it is not. The walk cannot close it; what it can do is stop
-    // being silent about it. Counted here and reported once at the end: a
-    // large tree has many, and a line each would bury the warnings a user
-    // can act on.
-    if (!gaps.empty()) {
-      bool computedHere = false;
-      bool escapedHere = false;
-      for (const RequireGap &gap : gaps) {
-        reporter.requireGap(gap, path);
-        if (gap.kind == RequireGapKind::kComputedArgument) {
-          ++computedRequires;
-          computedHere = true;
-        } else {
-          ++escapedRequires;
-          escapedHere = true;
-        }
+    // being silent about it. Every position is kept (not just counted) so
+    // the default warning below, printed once after the walk, can point at
+    // up to kGapWarningCap call sites instead of only a number; the file
+    // count is kept too because it stays meaningful past the cap, where the
+    // printed positions alone can no longer say whether the rest are
+    // concentrated in one file or spread across many.
+    bool computedHere = false;
+    bool escapedHere = false;
+    for (const RequireGap &gap : gaps) {
+      reporter.requireGap(gap, path);
+      GapSite site{path, gap.line, gap.column};
+      if (gap.kind == RequireGapKind::kComputedArgument) {
+        ++computedRequires;
+        computedHere = true;
+        computedGapSites.push_back(std::move(site));
+      } else {
+        ++escapedRequires;
+        escapedHere = true;
+        escapedGapSites.push_back(std::move(site));
       }
-      filesWithComputedRequires += computedHere;
-      filesWithEscapedRequires += escapedHere;
     }
+    filesWithComputedRequires += computedHere;
+    filesWithEscapedRequires += escapedHere;
 
     // Pass A: resolve and classify every specifier, reporting (and, for a
     // hard error, returning) before anything is added to the graph.
@@ -1047,42 +1107,71 @@ int buildBundle(
     files.emplace(pkgPath, std::move(info));
   }
 
-  // Step 3: compute and announce the build root -- the longest path prefix
-  // shared by every visited file's directory (modules and the package.json
-  // files kept just above). Module identities are relative to it, and the
-  // consumer recovers it from the bundle file's own directory, which is
-  // why the bundle has to sit at the printed root. Once, after the walk,
-  // rather than per site during it -- and naming --verbose, because that is
-  // where the positions are. Two lines rather than a combined one: a
-  // computed argument leaves a call site the reader can go and look at,
-  // while an escaped require leaves only the point where it stopped being
-  // traceable, and the second is the worse news.
+  // Step 3: compute the build root -- the longest path prefix shared by
+  // every visited file's directory (modules and the package.json files kept
+  // just above). Module identities are relative to it, and the consumer
+  // recovers it from the bundle file's own directory, which is why the
+  // bundle has to sit at the printed root. Computed here, before the
+  // require-gap warnings below, so their positions can be printed relative
+  // to the root instead of as unreadably long absolute build-machine paths.
+  // The "bundle root:" line is still announced after them: warnings go to
+  // stderr and that line goes to stdout, so the two streams can interleave
+  // however the consumer likes and nothing else depends on this order.
+  std::string root = commonAncestor(paths);
+  fs::path rootPath(root);
+
+  // Two warnings rather than a combined one: a computed argument leaves a
+  // call site the reader can go and look at, while an escaped require
+  // leaves only the point where it stopped being traceable, and the second
+  // is the worse news. Each prints up to kGapWarningCap positions (relative
+  // to the root, so a line stays scannable instead of running off the
+  // screen) and falls back to "... and N more" beyond that; --verbose
+  // (BuildReporter::requireGap) remains where every position is listed,
+  // uncapped.
   if (computedRequires != 0) {
     std::fprintf(
         stderr,
-        "warning: %zu computed require()/require.resolve() %s in %zu %s: "
-        "not packaged; "
-        "answered at run time only if the container already holds the "
-        "target, else --include it (--verbose lists them)\n",
+        "warning: %zu computed require()/require.resolve() %s in %zu %s, "
+        "not packaged:\n",
         computedRequires,
         computedRequires == 1 ? "call" : "calls",
         filesWithComputedRequires,
         filesWithComputedRequires == 1 ? "file" : "files");
+    printGapPositions(computedGapSites, rootPath);
+    // Honest about "the target": a computed specifier is exactly the case
+    // where it cannot be known statically, so the message says that
+    // instead of leaving the reader to wonder why nothing is named.
+    // Hard-wrapped to stay a short, scannable paragraph rather than one
+    // line long enough to soft-wrap under a terminal's own margin and
+    // blur back into the block of positions above it.
+    std::fprintf(
+        stderr,
+        "  no target is named: a computed specifier is not knowable "
+        "until the\n"
+        "  program runs. It resolves at run time only if the container "
+        "already\n"
+        "  holds it -- name it with --include to be certain.\n");
   }
   if (escapedRequires != 0) {
     std::fprintf(
         stderr,
-        "warning: require used as a value in %zu %s in %zu %s: whatever it "
-        "goes on to load is not packaged (--verbose lists them)\n",
+        "warning: require used as a value in %zu %s in %zu %s, not "
+        "packaged:\n",
         escapedRequires,
         escapedRequires == 1 ? "place" : "places",
         filesWithEscapedRequires,
         filesWithEscapedRequires == 1 ? "file" : "files");
+    printGapPositions(escapedGapSites, rootPath);
+    std::fprintf(
+        stderr,
+        "  no target is named either -- there is not even a call site: "
+        "require\n"
+        "  escaped before being called. Whatever it goes on to load is "
+        "not\n"
+        "  packaged; --include it by name to be certain.\n");
   }
 
-  std::string root = commonAncestor(paths);
   std::printf("bundle root: %s\n", root.c_str());
-  fs::path rootPath(root);
 
   // Step 3b: give every native addon a flat sidecar name and work out where
   // its copy goes. Flat, rather than mirroring the identity's own subtree:

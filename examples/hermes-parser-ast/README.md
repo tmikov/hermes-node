@@ -85,7 +85,12 @@ $ hermes-node --build-bundle=out/ast.hbb --verbose \
     --include=./node_modules/hermes-parser/prebuilds/linux-x64/hermes-parser.node \
     ast.js
 ...
-warning: 2 computed require()/require.resolve() calls in 1 file: not packaged; answered at run time only if the container already holds the target, else --include it (--verbose lists them)
+warning: 2 computed require()/require.resolve() calls in 1 file, not packaged:
+  node_modules/hermes-parser/dist/HermesParserAddon.js:11:12
+  node_modules/hermes-parser/dist/HermesParserAddon.js:20:14
+  no target is named: a computed specifier is not knowable until the
+  program runs. It resolves at run time only if the container already
+  holds it -- name it with --include to be certain.
 ...
 native  node_modules/hermes-parser/prebuilds/linux-x64/hermes-parser.node -> hermes-parser.node
   from .../examples/hermes-parser-ast/node_modules/hermes-parser/prebuilds/linux-x64/hermes-parser.node

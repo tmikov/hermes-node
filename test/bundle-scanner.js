@@ -15,17 +15,17 @@
 // not of the loader -- and the three that turned on the fallback are
 // rewritten around the container.
 
-// A require() the scanner cannot follow is counted. Counted rather than
-// listed by default (a large tree has many, and burying the actionable
-// warnings under them would cost more than the positions are worth); the
-// positions are under --verbose, pinned in test/bundle-verbose.js. The
+// A require() the scanner cannot follow is counted, and its call site is
+// printed by default too (up to a cap; the uncapped --verbose listing is
+// pinned in test/bundle-verbose.js, which also covers the cap itself). The
 // singular forms are asserted here because a count of one is the common
 // case and "1 calls" is what a missing agreement looks like.
 // RUN: rm -rf %t.tree && mkdir -p %t.tree
 // RUN: echo "module.exports = { v: 7 };" > %t.tree/dyn.js
 // RUN: echo "const n = 'dyn' + ''; try { console.log('GOT', require('./' + n).v); } catch (e) { console.log('CAUGHT', e.code); } require('path');" > %t.tree/cli.js
 // RUN: %hermes-node --build-bundle=%t.tree/app.bundle %t.tree/cli.js 2>&1 | %FileCheck --check-prefix=DYNWARN %s
-// DYNWARN: warning: 1 computed require()/require.resolve() call in 1 file: not packaged; answered at run time only if the container already holds the target, else --include it
+// DYNWARN: warning: 1 computed require()/require.resolve() call in 1 file, not packaged:
+// DYNWARN-NEXT: {{.*}}cli.js:1:48
 
 // dyn.js is still sitting on the disk, right where the specifier names it,
 // and that must make no difference: nothing outside the container is a
@@ -123,13 +123,15 @@
 
 // `require` passed somewhere instead of called. Nothing it goes on to load
 // can be discovered -- there is no require() call in the source at all --
-// so the count is all the build can offer. @babel/core does exactly this,
-// which is what makes a bundle of it need an --include or two.
+// so the position where it escaped is all the build can offer, and that is
+// what it prints. @babel/core does exactly this, which is what makes a
+// bundle of it need an --include or two.
 // RUN: rm -rf %t.escape && mkdir -p %t.escape
 // RUN: echo "module.exports = { v: 4 };" > %t.escape/dep.js
 // RUN: echo "const load = (function (r) { return r; })(require); console.log('ESCAPE', load('./dep').v);" > %t.escape/cli.js
 // RUN: %hermes-node --build-bundle=%t.escape/app.bundle --include=./dep %t.escape/cli.js 2>&1 | %FileCheck --check-prefix=ESCWARN %s
-// ESCWARN: warning: require used as a value in 1 place in 1 file: whatever it goes on to load is not packaged
+// ESCWARN: warning: require used as a value in 1 place in 1 file, not packaged:
+// ESCWARN-NEXT: {{.*}}cli.js:1:43
 //
 // The escaped require is still a real require: what --include put in the
 // container is reached through it, with the tree gone. Named explicitly
