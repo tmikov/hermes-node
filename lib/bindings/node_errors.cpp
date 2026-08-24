@@ -18,25 +18,14 @@ namespace hermes {
 namespace node_compat {
 
 // ---------------------------------------------------------------------------
-// triggerUncaughtException(error, fromPromise)
+// Reporting an error that nothing handled
 // ---------------------------------------------------------------------------
 
-static napi_value triggerUncaughtException(
-    napi_env env,
-    napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-
-  if (argc < 1) {
-    napi_throw_error(
-        env, nullptr, "triggerUncaughtException requires at least 1 argument");
-    return nullptr;
-  }
-
-  napi_value error = argv[0];
-
-  // Try to get the stack trace (Error objects have .stack).
+/// Write \p error to stderr the way a crashing program should report itself:
+/// the stack when there is one, since that is what names the line that
+/// threw, and the coerced value otherwise -- `throw 'a string'` is legal and
+/// still has to print something.
+static void reportError(napi_env env, napi_value error) {
   napi_value stack;
   napi_status st = napi_get_named_property(env, error, "stack", &stack);
   napi_valuetype stackType = napi_undefined;
@@ -59,6 +48,79 @@ static napi_value triggerUncaughtException(
   size_t len = 0;
   napi_get_value_string_utf8(env, msg, buf, sizeof(buf), &len);
   std::fprintf(stderr, "%.*s\n", static_cast<int>(len), buf);
+}
+
+bool triggerUncaughtException(napi_env env, napi_value error) {
+  // Ask JavaScript first. process._fatalException runs the
+  // 'uncaughtException' listeners and answers whether one of them took
+  // responsibility; when none did, it has already set process.exitCode and
+  // emitted 'exit' before answering, so nothing is left here but to report
+  // and go. That division is Node's, and keeping it means a listener sees
+  // an exception from a timer exactly as it sees one from the main script.
+  bool handled = false;
+
+  napi_value global;
+  napi_value processObj;
+  napi_valuetype processType = napi_undefined;
+  if (napi_get_global(env, &global) == napi_ok &&
+      napi_get_named_property(env, global, "process", &processObj) == napi_ok &&
+      napi_typeof(env, processObj, &processType) == napi_ok &&
+      processType == napi_object) {
+    napi_value fatalFn;
+    napi_valuetype fnType = napi_undefined;
+    if (napi_get_named_property(env, processObj, "_fatalException", &fatalFn) ==
+            napi_ok &&
+        napi_typeof(env, fatalFn, &fnType) == napi_ok &&
+        fnType == napi_function) {
+      napi_value args[1] = {error};
+      napi_value result;
+      if (napi_call_function(env, processObj, fatalFn, 1, args, &result) ==
+          napi_ok) {
+        napi_get_value_bool(env, result, &handled);
+      } else {
+        // The handler itself threw. Node treats that as fatal rather than
+        // recursing, and so do we: report the original error, which is the
+        // one the program was actually about.
+        bool pending = false;
+        napi_is_exception_pending(env, &pending);
+        if (pending) {
+          napi_value ignored;
+          napi_get_and_clear_last_exception(env, &ignored);
+        }
+        handled = false;
+      }
+    }
+  }
+
+  if (handled)
+    return true;
+
+  reportError(env, error);
+  // 'exit' handlers have already run in JavaScript and may have written
+  // something; flush before leaving, or the explanation goes missing along
+  // with the program.
+  std::fflush(nullptr);
+  std::exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// triggerUncaughtException(error, fromPromise)
+// ---------------------------------------------------------------------------
+
+static napi_value triggerUncaughtExceptionCallback(
+    napi_env env,
+    napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  if (argc < 1) {
+    napi_throw_error(
+        env, nullptr, "triggerUncaughtException requires at least 1 argument");
+    return nullptr;
+  }
+
+  reportError(env, argv[0]);
 
   std::exit(1);
   return nullptr;
@@ -125,7 +187,7 @@ napi_value initErrorsBinding(napi_env env, napi_value exports) {
         env,
         "triggerUncaughtException",
         NAPI_AUTO_LENGTH,
-        triggerUncaughtException,
+        triggerUncaughtExceptionCallback,
         nullptr,
         &fn);
     napi_set_named_property(env, exports, "triggerUncaughtException", fn);

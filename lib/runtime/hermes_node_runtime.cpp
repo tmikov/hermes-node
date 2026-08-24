@@ -337,8 +337,16 @@ static void drainTicksImpl(TickDrainData *data) {
       napi_status st =
           napi_call_function(data->env, global, tickCb, 0, nullptr, &result);
       if (st != napi_ok) {
-        // Print and clear any exception from the tick callback.
-        printAndClearException(data->env);
+        bool pending = false;
+        napi_is_exception_pending(data->env, &pending);
+        if (pending) {
+          napi_value exc;
+          napi_get_and_clear_last_exception(data->env, &exc);
+          // A throw from process.nextTick is an uncaught exception like any
+          // other; it reaches the listeners and, failing that, exits 1.
+          // Does not come back in the second case -- see node_errors.h.
+          triggerUncaughtException(data->env, exc);
+        }
       }
     }
   }
@@ -1505,8 +1513,12 @@ int runHermesNode(const HermesNodeConfig &config) {
 
       bool pending = false;
       napi_is_exception_pending(env, &pending);
-      if (pending)
-        printAndClearException(env);
+      if (pending) {
+        napi_value exc;
+        napi_get_and_clear_last_exception(env, &exc);
+        // As in drainTicksImpl: the listeners get it, or the process exits 1.
+        triggerUncaughtException(env, exc);
+      }
     }
 
     // uv_run() returns as soon as nothing keeps the loop alive, but a

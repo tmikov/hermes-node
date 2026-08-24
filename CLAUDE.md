@@ -103,6 +103,41 @@ validating accessor with backing storage on the `process` object; ignoring is
 the safer of the two answers available without one, since guessing what the
 program meant would turn a typo into a status a shell script branches on.
 
+## Uncaught Exceptions From Async Callbacks
+
+An exception that escapes a **timer, immediate or tick** callback goes to
+`process._fatalException`, and the answer decides what happens: `true` means a
+listener took it and the program carries on, `false` means the error is
+reported and the process exits 1. That is Node's split
+(`node::errors::TriggerUncaughtException` asks the same property), and the
+reason for it is that only JavaScript knows which listeners exist.
+
+Until 2026-08-24 the native callback that caught the exception printed it and
+returned. So `process.on('uncaughtException')` never fired for these
+callbacks, and **the process exited 0** -- an assertion that failed inside a
+`setTimeout` looked green, the same failure mode `process.exitCode` had above.
+A third symptom came from the same line: timers share one libuv handle and the
+early return skipped the code that re-arms it, so every timer still pending
+after a throw stopped firing. `test/test-repl-features.js` had an assertion
+that had been failing unnoticed for precisely this reason.
+
+- `triggerUncaughtException()` (`lib/bindings/node_errors.h`,
+  `.cpp`) is the one copy. It **does not return** when nothing handled the
+  error, so callers need no unhandled path; a caller holding a libuv handle
+  must put it back the way a normal return would have (the timers binding
+  re-arms its shared timer).
+- `process._fatalException` is built in `libjs/process-events.js`. Node
+  installs it from `internal/bootstrap/node.js`, which this runtime does not
+  run. There is no `setUncaughtExceptionCaptureCallback`, so that branch of
+  Node's version has no equivalent yet.
+- Pinned by `test/test-uncaught-exception-async.js`, whose cases were each
+  checked against node v24.13.1.
+- **Not yet done:** the same swallow-and-continue is still in about ten I/O
+  bindings (`node_file.cpp`, `node_tcp_wrap.cpp`, `node_zlib.cpp`,
+  `libuv_stream_base.cpp` and others) -- a throw in an `fs.readFile` callback
+  still exits 0, and `net`'s `listen` callback hangs. The helper is written to
+  be their fix too, but each needs its own decision about what resuming means.
+
 ## Module Loader
 
 - `libjs/loader.js`: CJS module loading with shim override (`libjs/shims/` before `libjs-node/`)

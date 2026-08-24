@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_timers.h>
 #include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
@@ -105,28 +106,20 @@ static void onTimerFired(uv_timer_t *handle) {
       state->env, processObj, processTimersFn, 1, &nowArg, &result);
 
   if (st != napi_ok) {
-    // Print and clear any exception.
     bool pending = false;
     napi_is_exception_pending(state->env, &pending);
     if (pending) {
       napi_value exc;
       napi_get_and_clear_last_exception(state->env, &exc);
-      napi_value stack;
-      napi_status st2 =
-          napi_get_named_property(state->env, exc, "stack", &stack);
-      napi_valuetype stackType = napi_undefined;
-      if (st2 == napi_ok)
-        napi_typeof(state->env, stack, &stackType);
-      napi_value msg;
-      if (stackType == napi_string)
-        msg = stack;
-      else
-        napi_coerce_to_string(state->env, exc, &msg);
-      char buf[4096];
-      size_t len = 0;
-      napi_get_value_string_utf8(state->env, msg, buf, sizeof(buf), &len);
-      std::fprintf(stderr, "%.*s\n", static_cast<int>(len), buf);
+      // Does not come back unless a listener took it; see node_errors.h.
+      triggerUncaughtException(state->env, exc);
     }
+    // A listener handled it, so the program continues -- and the timer list
+    // still needs servicing. processTimers() never returned an expiry, so
+    // there is nothing to schedule from; re-arm immediately and let the next
+    // call compute it. Without this the shared handle stays stopped and
+    // every timer still pending silently never fires again.
+    uv_timer_start(&state->timerHandle, onTimerFired, 1, 0);
     napi_close_handle_scope(state->env, scope);
     return;
   }
@@ -206,22 +199,12 @@ static void onCheckImmediate(uv_check_t *handle) {
       if (pending) {
         napi_value exc;
         napi_get_and_clear_last_exception(state->env, &exc);
-        napi_value stack;
-        napi_status st2 =
-            napi_get_named_property(state->env, exc, "stack", &stack);
-        napi_valuetype stackType = napi_undefined;
-        if (st2 == napi_ok)
-          napi_typeof(state->env, stack, &stackType);
-        napi_value msg;
-        if (stackType == napi_string)
-          msg = stack;
-        else
-          napi_coerce_to_string(state->env, exc, &msg);
-        char buf[4096];
-        size_t len = 0;
-        napi_get_value_string_utf8(state->env, msg, buf, sizeof(buf), &len);
-        std::fprintf(stderr, "%.*s\n", static_cast<int>(len), buf);
+        // Does not come back unless a listener took it; see node_errors.h.
+        triggerUncaughtException(state->env, exc);
       }
+      // Handled. Stop draining this round rather than re-entering
+      // processImmediate() with the queue in whatever state the throw left
+      // it; the check handle runs again on the next loop iteration.
       break;
     }
   } while (state->immediateInfoData[2] != 0); // kHasOutstanding
