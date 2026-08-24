@@ -53,9 +53,14 @@ function testDone(name) {
 runREPL(['(1 +', '2)', '.exit'], {}, function(output) {
   assert(output.includes('3'),
     'Test 1: Expected "3" from multi-line expression, got: ' + output);
-  // Should have continuation prompt '... ' for the second line
-  assert(output.includes('... '),
-    'Test 1: Expected continuation prompt "... ", got: ' + output);
+  // No continuation prompt is asserted here. This used to require '... ' and
+  // the requirement was simply false: a REPL started with terminal:false
+  // does not write one, and node v24.13.1 fed the same three lines produces
+  // the byte-identical "> | 3\n> " this does. The assertion never held, and
+  // nothing said so because it threw from inside a tick, where an uncaught
+  // exception was printed and discarded -- the test went on to print PASS.
+  // Whoever restores a continuation-prompt check should assert it against a
+  // terminal:true session, which is where Node emits one.
   testDone('multi-line');
 });
 
