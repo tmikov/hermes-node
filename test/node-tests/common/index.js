@@ -293,9 +293,26 @@ var localhostIPv4 = '127.0.0.1';
 // --- PIPE (Unix domain socket path for tests) ---
 var tmpdir = require('./tmpdir');
 var PIPE = (function() {
-  var localRelative = path.relative(process.cwd(), tmpdir.path + '/');
   var pipeName = 'node-test.' + process.pid + '.sock';
-  return localRelative + pipeName;
+  // Two spellings of one socket. The relative one exists because the path
+  // has to fit in sockaddr_un.sun_path -- 104 bytes on macOS, 108 on Linux
+  // -- and it is usually the shorter of the two. It is not always: when the
+  // working directory is far from the repo, path.relative walks up to the
+  // root and back down again, and the result is longer than the absolute
+  // path it was supposed to shorten. Tests append their own suffix to this,
+  // so a few bytes decide whether bind() silently truncates -- and two
+  // truncated names that collide fail as EADDRINUSE, naming a length
+  // problem after something else entirely.
+  // path.join, not concatenation. Upstream joins, and concatenating dropped
+  // the separator: the socket became a sibling of the temp directory rather
+  // than a file inside it, so tmpdir.refresh() -- which removes the
+  // directory and everything in it -- never cleaned it up, and every run
+  // left a dead socket behind. Both users of PIPE call refresh(), so the
+  // directory exists by the time anything binds inside it.
+  var relative = path.join(
+      path.relative(process.cwd(), tmpdir.path + '/'), pipeName);
+  var absolute = path.join(tmpdir.path, pipeName);
+  return relative.length < absolute.length ? relative : absolute;
 })();
 
 // --- spawnArgs: construct args for spawning hermes-node children ---

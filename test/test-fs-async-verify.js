@@ -682,8 +682,14 @@ expected++;
 // --- Test 38: fsp.access + ENOENT ---
 expected++;
 (function() {
-  var f = path.join(tmpDir, 'fsp-chmod.txt');
-  fsp.access(f, fs.constants.R_OK).then(function() {
+  // Its own file. This used to read fsp-chmod.txt, which Test 36 creates --
+  // but the two chains start together and nothing orders them, so whenever
+  // this access() won the race it failed with ENOENT on a file that was
+  // about to exist. Every test here owns the files it names.
+  var f = path.join(tmpDir, 'fsp-access.txt');
+  fsp.writeFile(f, 'access').then(function() {
+    return fsp.access(f, fs.constants.R_OK);
+  }).then(function() {
     return fsp.access('/nonexistent-' + Date.now()).then(function() {
       assert(false, 'should throw ENOENT');
     }, function(e) {

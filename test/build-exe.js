@@ -94,11 +94,28 @@
 // The magic is the container's first eight bytes and the payload is the
 // container verbatim, so a string unique to the program sits the same
 // distance past the start of both files. The `test` line asserts the marker
-// really is unique in the executable, so a future build that inlined it a
-// second time fails loudly here rather than quietly corrupting some other
-// part of the binary and testing nothing.
-// RUN: test $(grep -abo MARKER_BUILD_EXE_PAYLOAD %t.app/app.exe | wc -l) = 1
-// RUN: OE=$(grep -abo MARKER_BUILD_EXE_PAYLOAD %t.app/app.exe | cut -d: -f1); OH=$(grep -abo MARKER_BUILD_EXE_PAYLOAD %t.keep.hbb | cut -d: -f1); printf 'X' | dd of=%t.app/app.exe bs=1 seek=$(($OE - $OH)) count=1 conv=notrunc 2>/dev/null
+// appears exactly once per architecture slice, so a future build that
+// inlined it an extra time fails loudly here rather than quietly corrupting
+// some other part of the binary and testing nothing.
+//
+// One per slice, not one outright: a universal Mach-O carries a complete
+// payload in each slice, so the count is 2 for the x86_64+arm64 build that
+// release.yml produces. `lipo -archs` gives the number where lipo exists;
+// where it does not, the file is ELF and there is exactly one. Every
+// occurrence is then patched, so whichever slice this machine executes
+// finds its own payload corrupted.
+// (`wc` pads its output on macOS, so both counts are stripped before they
+// are compared -- unquoted word splitting hid that on Linux.)
+// RUN: N=$(lipo -archs %t.app/app.exe 2>/dev/null | wc -w | tr -d '[:space:]'); [ "$N" -gt 0 ] 2>/dev/null || N=1; [ "$(grep -abo MARKER_BUILD_EXE_PAYLOAD %t.app/app.exe | wc -l | tr -d '[:space:]')" = "$N" ]
+// RUN: OH=$(grep -abo MARKER_BUILD_EXE_PAYLOAD %t.keep.hbb | cut -d: -f1); for OE in $(grep -abo MARKER_BUILD_EXE_PAYLOAD %t.app/app.exe | cut -d: -f1); do printf 'X' | dd of=%t.app/app.exe bs=1 seek=$(($OE - $OH)) count=1 conv=notrunc 2>/dev/null; done
+// Patching the file invalidated the ad-hoc signature ld64 gave it, and on
+// Apple Silicon the kernel SIGKILLs a Mach-O whose pages no longer match its
+// CodeDirectory -- the process dies with signal 9 before main() runs, so
+// without this the check below would be testing the OS rather than us. A
+// no-op off Darwin. Note what it means: on macOS a corrupted payload is
+// caught by the system first, and the check below is the second line of
+// defence, not the first.
+// RUN: %resign %t.app/app.exe
 // RUN: %not %t.app/app.exe 2>&1 | %FileCheck --check-prefix=BADPAYLOAD %s
 // BADPAYLOAD: error: hermes-node bundle: not a hermes-node bundle (bad magic)
 

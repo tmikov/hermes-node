@@ -11,6 +11,13 @@ force=0
 interactive=0
 verbose=0
 check=0
+any_version=0
+
+# CI installs clang-format-18 and makes it the default (.github/workflows/ci.yml),
+# so 18 is what --check is judged against and anything else produces churn that
+# CI then rejects. A macOS session formatting with 21.1.2 discovered this by
+# having its output reflowed; the version was not checked anywhere.
+REQUIRED_CLANG_FORMAT_MAJOR=18
 
 # Process multiple options
 while [ "$#" -gt 0 ]; do
@@ -35,6 +42,10 @@ while [ "$#" -gt 0 ]; do
       check=1
       shift
       ;;
+    --any-version)
+      any_version=1
+      shift
+      ;;
     *)
       echo "Usage: $0 [-a] [-f] [-i] [-v] [--check]" >&2
       echo "  -a:      Format all files" >&2
@@ -42,17 +53,49 @@ while [ "$#" -gt 0 ]; do
       echo "  -i:      Interactive mode, show diff and ask before applying changes" >&2
       echo "  -v:      Verbose mode, show additional information about which files are being processed" >&2
       echo "  --check: Dry-run over all files in FORMAT_DIRS; exit non-zero if any need formatting (no files modified)" >&2
+      echo "  --any-version: Skip the clang-format version check (produces output CI may reject)" >&2
       exit 1
       ;;
   esac
 done
 
-# Fall back to one in $PATH if not found.
-clang_format="$(which clang-format)" || true
+# $CLANG_FORMAT wins; then the version CI pins, by its versioned name; then
+# whatever is called clang-format. Preferring the versioned name is what makes
+# this work on a machine whose default clang-format is some other release.
+if [ -n "${CLANG_FORMAT:-}" ]; then
+  clang_format="$CLANG_FORMAT"
+else
+  clang_format="$(which "clang-format-$REQUIRED_CLANG_FORMAT_MAJOR" 2>/dev/null)" || true
+  if [ ! -x "$clang_format" ]; then
+    clang_format="$(which clang-format)" || true
+  fi
+fi
 
 if [ ! -x "$clang_format" ]; then
-  echo "ERROR: Must have clang-format in PATH"
+  echo "ERROR: Must have clang-format in PATH" >&2
   exit 1
+fi
+
+# Two clang-format releases disagree about this file's formatting, so the
+# version is part of the contract rather than an implementation detail. Without
+# this check the disagreement surfaces as unrelated reflow churn in a commit,
+# or as a CI failure on a diff that formatted cleanly locally.
+if [ "$any_version" -eq 0 ]; then
+  cf_version="$("$clang_format" --version 2>/dev/null)"
+  cf_major="$(echo "$cf_version" | sed -n 's/.*version \([0-9][0-9]*\).*/\1/p')"
+  if [ "$cf_major" != "$REQUIRED_CLANG_FORMAT_MAJOR" ]; then
+    echo "ERROR: this project formats with clang-format $REQUIRED_CLANG_FORMAT_MAJOR, and CI checks against it." >&2
+    echo "  found:  $clang_format" >&2
+    echo "          $cf_version" >&2
+    echo "" >&2
+    echo "  Debian/Ubuntu:  apt-get install clang-format-$REQUIRED_CLANG_FORMAT_MAJOR" >&2
+    echo "  macOS:          brew install llvm@$REQUIRED_CLANG_FORMAT_MAJOR" >&2
+    echo "                  then CLANG_FORMAT=\$(brew --prefix llvm@$REQUIRED_CLANG_FORMAT_MAJOR)/bin/clang-format $0 ..." >&2
+    echo "" >&2
+    echo "  Or set CLANG_FORMAT to a clang-format $REQUIRED_CLANG_FORMAT_MAJOR binary," >&2
+    echo "  or pass --any-version to format with this one anyway." >&2
+    exit 1
+  fi
 fi
 
 # Determine which diff command to use

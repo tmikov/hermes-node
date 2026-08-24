@@ -88,14 +88,14 @@
 // newer make-kit.py recording something that would otherwise be dropped in
 // silence.
 // RUN: mkdir -p %t.d/unknownkit
-// RUN: printf 'version: 1\ncc: /bin/false\nbogus: x\n' > %t.d/unknownkit/kit.manifest
+// RUN: printf 'version: 1\ncc: %false\nbogus: x\n' > %t.d/unknownkit/kit.manifest
 // RUN: %not %hermes-node --build-exe=%t.d/app.exe --kit=%t.d/unknownkit %t.d/app.hbb 2>&1 | %FileCheck --check-prefix=UNKNOWNKEY %s
 // UNKNOWNKEY: error: {{.*}}unknownkit/kit.manifest: unknown key 'bogus'
 
 // The two required keys, each missing in turn, and a line that is not a
 // key/value pair at all (reported with its line number).
 // RUN: mkdir -p %t.d/noversionkit %t.d/missingcckit %t.d/malformedkit
-// RUN: printf 'cc: /bin/false\n' > %t.d/noversionkit/kit.manifest
+// RUN: printf 'cc: %false\n' > %t.d/noversionkit/kit.manifest
 // RUN: %not %hermes-node --build-exe=%t.d/app.exe --kit=%t.d/noversionkit %t.d/app.hbb 2>&1 | %FileCheck --check-prefix=NOVERSION %s
 // NOVERSION: error: {{.*}}kit.manifest: missing required key 'version'
 // RUN: printf 'version: 1\n' > %t.d/missingcckit/kit.manifest
@@ -111,7 +111,7 @@
 // away. The remedy is not guessable -- hermes-node-kit is EXCLUDE_FROM_ALL,
 // so an ordinary build did not re-cut it -- and the note spells it out.
 // RUN: mkdir -p %t.d/oldkit
-// RUN: printf 'version: 0.0.0-some-other-build\ncc: /bin/false\n' > %t.d/oldkit/kit.manifest
+// RUN: printf 'version: 0.0.0-some-other-build\ncc: %false\n' > %t.d/oldkit/kit.manifest
 // RUN: %not %hermes-node --build-exe=%t.d/app.exe --kit=%t.d/oldkit %t.d/app.hbb 2>&1 | %FileCheck --check-prefix=OLDKIT %s
 // OLDKIT: error: kit {{.*}}oldkit was cut from hermes-node 0.0.0-some-other-build, but this is hermes-node
 // OLDKIT-NEXT: note: re-cut the kit with: cmake --build <build dir> --target hermes-node-kit
@@ -123,7 +123,7 @@
 // just as well.
 // RUN: mkdir -p %t.d/fakekit
 // RUN: echo "version: $(%hermes-node --version | cut -d' ' -f2)" > %t.d/fakekit/kit.manifest
-// RUN: echo "cc: /bin/false" >> %t.d/fakekit/kit.manifest
+// RUN: echo "cc: %false" >> %t.d/fakekit/kit.manifest
 
 // The output naming the container. The link would write over its own input,
 // and the user would be left diagnosing a missing file they are sure they
@@ -149,12 +149,15 @@
 // NOCCBIN: error: cannot run {{.*}}no-such-compiler: No such file or directory
 // NOCCBIN-NEXT: command: {{.*}}no-such-compiler -Qunused-arguments -c {{.*}}.s -o {{.*}}.o
 
-// A driver that runs and fails. /bin/false is the smallest honest stand-in
-// for a compiler that rejects what it was handed; the exit status and the
-// command line are both reported, and nothing is left behind.
+// A driver that runs and fails. `false` is the smallest honest stand-in for
+// a compiler that rejects what it was handed; the exit status and the
+// command line are both reported, and nothing is left behind. It comes from
+// the %false substitution because it is /bin/false on Linux and
+// /usr/bin/false on macOS, so the CHECK lines cannot name a fixed directory
+// either.
 // RUN: %not %hermes-node --build-exe=%t.d/app.exe --kit=%t.d/fakekit %t.d/app.hbb 2>&1 | %FileCheck --check-prefix=CCFAILS %s
-// CCFAILS: error: /bin/false failed with exit status 1
-// CCFAILS-NEXT: command: /bin/false -Qunused-arguments -c {{.*}}.s -o {{.*}}.o
+// CCFAILS: error: {{.*}}false failed with exit status 1
+// CCFAILS-NEXT: command: {{.*}}false -Qunused-arguments -c {{.*}}.s -o {{.*}}.o
 // RUN: %not ls %t.d/app.exe.hnexe.*
 // RUN: %not ls %t.d/app.exe
 
@@ -164,13 +167,13 @@
 // slice -- which is the failure the macOS release build would hit, since it
 // configures CMAKE_OSX_ARCHITECTURES="x86_64;arm64" and then runs the test
 // suite that cuts a kit. That link cannot be run here, so what is checked
-// is the command line: /bin/false reports it verbatim, and the flags are in
+// is the command line: `false` reports it verbatim, and the flags are in
 // it, in order, before the input.
 // RUN: mkdir -p %t.d/archkit
 // RUN: echo "version: $(%hermes-node --version | cut -d' ' -f2)" > %t.d/archkit/kit.manifest
-// RUN: printf 'cc: /bin/false\ndriverflag: -arch\ndriverflag: hnexe-fake-arch\ndriverflag: -rdynamic\n' >> %t.d/archkit/kit.manifest
+// RUN: printf 'cc: %false\ndriverflag: -arch\ndriverflag: hnexe-fake-arch\ndriverflag: -rdynamic\n' >> %t.d/archkit/kit.manifest
 // RUN: %not %hermes-node --build-exe=%t.d/app.exe --kit=%t.d/archkit %t.d/app.hbb 2>&1 | %FileCheck --check-prefix=ARCHFLAGS %s
-// ARCHFLAGS: error: /bin/false failed with exit status 1
-// ARCHFLAGS-NEXT: command: /bin/false -Qunused-arguments -arch hnexe-fake-arch -rdynamic -c {{.*}}.s -o {{.*}}.o
+// ARCHFLAGS: error: {{.*}}false failed with exit status 1
+// ARCHFLAGS-NEXT: command: {{.*}}false -Qunused-arguments -arch hnexe-fake-arch -rdynamic -c {{.*}}.s -o {{.*}}.o
 
 // This file is a lit driver only; the RUN lines above are the test.

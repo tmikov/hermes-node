@@ -146,25 +146,51 @@ var testsPassed = 0;
   var eventFilename = '';
 
   var ev = new fsEventWrap.FSEvent();
+  // Closing exactly once, from whichever path gets there first. A started
+  // FSEvent is ref'd, so an unclosed one keeps the event loop alive for
+  // ever: when the watcher used to be closed only from onchange, an event
+  // that never arrived turned this test into a HANG rather than a failure.
+  var closed = false;
+  function closeOnce() {
+    if (!closed) {
+      closed = true;
+      ev.close();
+    }
+  }
   ev.onchange = function(status, type, filename) {
     if (!eventFired) {
       eventFired = true;
       eventType = type;
       eventFilename = filename;
     }
-    ev.close();
+    closeOnce();
   };
 
   var err = ev.start(tmpDir, true, false, 'utf8');
   assert(err === 0, 'start should succeed');
 
-  // After a short delay, create a file in the watched directory.
+  // After a short delay, create a file in the watched directory, and only
+  // then start looking for the event. The wait is chained onto the write
+  // rather than run alongside it: a watcher can report activity that is not
+  // ours (the directory's own creation), and a verify that finished early
+  // would remove tmpDir before this write ran.
   setTimeout(function() {
     fs.writeFileSync(tmpDir + '/newfile.txt', 'hello');
+    waitForEvent();
   }, 50);
 
-  // After a longer delay, verify the event was fired.
-  setTimeout(function() {
+  // Poll until the event arrives rather than sampling once at a fixed
+  // delay. macOS coalesces FSEvents with a latency, and under the load of a
+  // parallel test run 500 ms was not enough: 4 of 16 concurrent copies of
+  // this test missed it. Polling finishes as fast as the event allows and
+  // only gives up after a deadline no healthy machine should reach.
+  var deadline = Date.now() + 10000;
+  function waitForEvent() {
+    if (!eventFired && Date.now() < deadline) {
+      setTimeout(waitForEvent, 25);
+      return;
+    }
+    closeOnce();
     assert(eventFired, 'fs event should have fired');
     assert(eventType === 'rename' || eventType === 'change',
            'event type should be rename or change, got: ' + eventType);
@@ -175,7 +201,7 @@ var testsPassed = 0;
     testsPassed++;
     console.log('  FSEvent: watch directory OK');
     finishTests();
-  }, 500);
+  }
 })();
 
 // ==========================================================================
@@ -191,28 +217,45 @@ var testsPassed = 0;
   var changeFired = false;
 
   var ev = new fsEventWrap.FSEvent();
+  // See Test 9: closed once, from whichever path arrives first, so that a
+  // missed event cannot leave a ref'd handle holding the loop open.
+  var closed = false;
+  function closeOnce() {
+    if (!closed) {
+      closed = true;
+      ev.close();
+    }
+  }
   ev.onchange = function(status, type, filename) {
     if (!changeFired) {
       changeFired = true;
     }
-    ev.close();
+    closeOnce();
   };
 
   var err = ev.start(tmpDir, true, false, 'utf8');
   assert(err === 0, 'start should succeed');
 
-  // Trigger a change.
+  // Trigger a change, then start looking for it -- chained, for the reason
+  // given in Test 9.
   setTimeout(function() {
     fs.writeFileSync(watchFile, 'changed');
+    waitForChange();
   }, 50);
 
-  setTimeout(function() {
+  var deadline = Date.now() + 10000;
+  function waitForChange() {
+    if (!changeFired && Date.now() < deadline) {
+      setTimeout(waitForChange, 25);
+      return;
+    }
+    closeOnce();
     assert(changeFired, 'change event should have fired');
     fs.rmSync(tmpDir, { recursive: true });
     testsPassed++;
     console.log('  FSEvent: watch file change OK');
     finishTests();
-  }, 500);
+  }
 })();
 
 // ==========================================================================

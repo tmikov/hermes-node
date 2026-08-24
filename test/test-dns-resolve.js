@@ -98,7 +98,14 @@ pending++;
     // Querying "localhost" via c-ares might fail (depends on /etc/hosts config
     // and whether the system resolver supports it via c-ares). That's OK.
     // We just verify the callback was called with the right shape.
-    assert(typeof status === 'number', 'status is number');
+    // Node's contract, which node_cares_wrap.cpp follows: 0 on success, and
+    // on failure a c-ares error code STRING rather than a libuv errno -- that
+    // is what makes the JS layer raise a DNSException instead of a
+    // UVException. Which one arrives depends on whether the resolver answers
+    // for this query; it does on Linux, and returns ECONNREFUSED on macOS.
+    // The test is about the callback's shape, not about the outcome.
+    assert(typeof status === 'number' || typeof status === 'string',
+      'status is a number or a c-ares code');
     if (status === 0) {
       assert(Array.isArray(result), 'result is array');
       if (result.length > 0) {
@@ -116,7 +123,8 @@ pending++;
   var ch = new cares.ChannelWrap(0, 4, 0);
   var req = new cares.QueryReqWrap();
   req.oncomplete = function(status, result) {
-    assert(typeof status === 'number', 'reverse status is number');
+    assert(typeof status === 'number' || typeof status === 'string',
+      'reverse status is a number or a c-ares code');
     if (status === 0) {
       assert(Array.isArray(result), 'reverse result is array');
     }
@@ -135,9 +143,16 @@ dns.resolve4('localhost', function(err, addresses) {
       assert(typeof addresses[0] === 'string', 'address is string');
     }
   } else {
-    // Acceptable errors: ENODATA, ENOTFOUND, ESERVFAIL.
+    // Acceptable errors: ENODATA, ENOTFOUND, ESERVFAIL, ECANCELLED, and
+    // ECONNREFUSED. The last is the ordinary answer on macOS, which states
+    // in /etc/resolv.conf itself that the file "is not consulted for DNS
+    // hostname resolution" -- the system resolver lives elsewhere, so
+    // c-ares, which reads exactly that file, ends up with a nameserver that
+    // refuses. Nothing is wrong when it does; this test is about the shape
+    // of the reply, as its own first line says.
     assert(err.code === 'ENODATA' || err.code === 'ENOTFOUND' ||
-           err.code === 'ESERVFAIL' || err.code === 'ECANCELLED',
+           err.code === 'ESERVFAIL' || err.code === 'ECANCELLED' ||
+           err.code === 'ECONNREFUSED',
            'expected DNS error, got: ' + err.code);
   }
   done();

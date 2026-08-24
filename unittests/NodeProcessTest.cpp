@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <thread>
@@ -216,9 +217,16 @@ TEST_F(NodeProcessTest, CwdReturnsString) {
 TEST_F(NodeProcessTest, ChdirWorks) {
   std::string origCwd = evalString("process.cwd()");
 
+  // getcwd() reports the directory with symlinks already resolved, so the
+  // path asked for and the path reported are not always spelled the same:
+  // on macOS /tmp is a symlink to /private/tmp and this returned the latter.
+  // Canonicalizing the target is the comparison that was always meant, and
+  // it is the identity wherever /tmp is a real directory.
+  std::string tmpDir = std::filesystem::canonical("/tmp").string();
+
   eval("process.chdir('/tmp')");
   std::string newCwd = evalString("process.cwd()");
-  EXPECT_EQ(newCwd, "/tmp");
+  EXPECT_EQ(newCwd, tmpDir);
 
   // Restore.
   std::string script = "process.chdir('" + origCwd + "')";

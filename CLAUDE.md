@@ -40,6 +40,14 @@ Before any commit, format C++ code and run tests:
 cmake --build cmake-build-asan --target check-hermes-node
 ```
 
+**clang-format 18 specifically.** CI installs `clang-format-18` and checks
+against it, and other releases disagree with it about this file set -- a
+macOS session formatting with 21.1.2 had unrelated parts of a file reflowed
+under it. `format.sh` now refuses to run on a different major version and
+says how to get the right one; it prefers a `clang-format-18` on `PATH` over
+a bare `clang-format`, `$CLANG_FORMAT` overrides both, and `--any-version`
+skips the check for anyone who means it.
+
 ## Hermes JS Limitations
 
 - No `Atomics`, no `AbortSignal`/`AbortController` globals (`FinalizationRegistry` is supported natively)
@@ -828,7 +836,7 @@ failing unit test fails the build.
 
 ### Known flaky tests
 
-Three JS tests fail intermittently under the suite's 16-way parallel load and
+Two JS tests fail intermittently under the suite's 16-way parallel load and
 pass in isolation. **A single red run naming one of these is not a
 regression**; confirm before chasing it, because each has cost a session time
 already:
@@ -840,23 +848,28 @@ for i in 1 2 3 4 5 6; do
 done
 ```
 
-Measured 6/6 passing in isolation for all three, on both sides of an
+Measured 6/6 passing in isolation for both, on both sides of an
 unrelated change:
 
 - `test-inspect.js` -- spawns a child and waits for
   `Debugger listening on ws://` on its stderr with a timeout. The most
-  frequent of the three, and the timing dependency is explicit in the test.
+  frequent of the two, and the timing dependency is explicit in the test.
 - `test-repl-history.js` -- same shape, a spawned REPL session read through
   a pipe.
-- `test-fs-async-verify.js` -- was measured at 2/6 and 5/6 failures in
-  isolation during the single-executable work, so it may be genuinely
-  racy rather than only load-sensitive. It is currently 6/6; if it starts
-  failing in isolation again, that is a real bug and not this note.
 
-None is understood, none has been fixed, and none is quarantined -- a
-`XFAIL`ed flake stops reporting the day it becomes a real failure. The
-honest state is that they are known, reproducible only under load, and
-someone should eventually find out why.
+`test-fs-async-verify.js` was the third entry here and is no longer one.
+This note suspected it of being genuinely racy rather than load-sensitive,
+on the strength of 2/6 and 5/6 failures in isolation; that suspicion was
+right. Test 38 read a file test 36 creates, with nothing ordering the two
+chains, and `bbfa4f2` fixed it. Measured 12/12 on Linux after, against
+roughly five failures in six before. Recorded rather than deleted because
+the reasoning is the useful part: a flake that fails in *isolation* is a
+race, not a scheduling artifact, and is worth chasing rather than listing.
+
+Neither of the two remaining is understood, neither has been fixed, and
+neither is quarantined -- an `XFAIL`ed flake stops reporting the day it
+becomes a real failure. The honest state is that they are known,
+reproducible only under load, and someone should eventually find out why.
 
 `check-hermes-node-examples` runs the examples under `examples/` and is
 **not** part of `check-hermes-node`: examples need a network `npm install`,
