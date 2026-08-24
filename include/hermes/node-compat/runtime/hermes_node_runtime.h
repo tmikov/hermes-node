@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -110,6 +111,15 @@ struct HermesNodeConfig {
   /// mode; process.argv[1] is this path, exactly as given on the command
   /// line.
   std::string bundlePath;
+
+  /// Non-null when this binary was linked with a bundle rather than given
+  /// one. Set only by tools/hermes-node/bundle_main.cpp, which is the one
+  /// translation unit that knows the payload symbols exist; the CLI never
+  /// sets it, and the runtime never looks for the symbols itself. That is
+  /// what makes "am I an app?" a link-time fact rather than a run-time
+  /// question, with no fuse and no weak symbols.
+  const uint8_t *embeddedBundleData = nullptr;
+  size_t embeddedBundleSize = 0;
 
   /// Inline JS code to eval after bootstrap, before event loop.
   /// Useful for programmatic use (e.g. inspector runtime).

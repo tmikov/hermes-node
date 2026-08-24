@@ -3,5 +3,8 @@ cmake-build-*/
 *.swp
 *~
 
+# utils/make-kit.py runs as a link launcher and leaves bytecode behind.
+__pycache__/
+
 # Scratch notes kept in the working tree, deliberately not shared.
 TODO.md

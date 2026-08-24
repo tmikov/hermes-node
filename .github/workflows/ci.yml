@@ -116,6 +116,13 @@ jobs:
         if: always()
         run: ccache -s
 
+      # The --build-exe tests deliberately keep their output when they fail,
+      # so the evidence survives the run. That output is a linked
+      # hermes-node -- 185 MB under ASAN -- and build-exe-escapes.js keeps
+      # two of them. Without the exclusion below, one gated failure turns
+      # this step into a multi-hundred-megabyte upload of binaries nobody
+      # will debug out of a zip. The exclusion is a pattern, not a YAML
+      # comment: `path` is a block scalar, so every line in it is a glob.
       - name: Upload test logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -124,4 +131,5 @@ jobs:
           path: |
             build/test/
             build/unittests/
+            !build/test/Output/build-exe*
           if-no-files-found: ignore

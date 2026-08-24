@@ -28,6 +28,24 @@ set(LLVH_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/hermes/external/llvh)
 # Derive hermes-node version (from -DHERMES_NODE_VERSION, git tag, or fallback).
 include(cmake/version.cmake)
 
+# Section-splitting, so that the --gc-sections/-dead_strip on the hermes-node
+# link (tools/hermes-node/CMakeLists.txt) drops unreferenced code at the
+# granularity of a function rather than a whole object file. Hermes already
+# builds with these inside its own scope -- which is why that link flag is
+# worth 8% at all, its archives dominating the binary -- and this extends the
+# same treatment to everything added after add_subdirectory(hermes): our
+# libraries, the vendored externals and the unit tests. Deliberately set after
+# that call, not before, so Hermes is not re-flagged redundantly and forced to
+# rebuild.
+#
+# Measured contribution on Linux x86_64, Release: 9,336 bytes of the 1,131,376
+# the link flag saves. Small, because our own code is a few percent of the
+# binary; kept because it costs nothing and is the half of the pair that
+# applies to the code we add.
+if (NOT MSVC)
+  add_compile_options(-ffunction-sections -fdata-sections)
+endif()
+
 # Match Hermes sanitizer flags for our own targets.
 # Hermes sets these inside its subdirectory scope, so they don't propagate.
 if (HERMES_ENABLE_ADDRESS_SANITIZER)
@@ -71,6 +89,7 @@ add_subdirectory(lib/module-loader)
 add_subdirectory(lib/compile-cache)
 add_subdirectory(lib/bundle)
 add_subdirectory(lib/bytecode-dump)
+add_subdirectory(lib/build-exe)
 add_subdirectory(lib/process)
 add_subdirectory(lib/bindings)
 add_subdirectory(lib/inspector)
@@ -107,12 +126,21 @@ set(HERMES_NODE_LIT_PARAMS
   source_dir=${CMAKE_CURRENT_SOURCE_DIR}
   test_exec_root=${CMAKE_CURRENT_BINARY_DIR}/test
   hello_addon=$<TARGET_FILE:hello_addon>
+  kit_dir=${HERMES_NODE_KIT_DIR}
 )
 
+# hermes-node-kit is EXCLUDE_FROM_ALL (see tools/hermes-node/CMakeLists.txt:
+# the merged archive is 40 MB in a Release build and 755 MB in an ASAN one),
+# so an ordinary build does not produce it. The test suite depends on it
+# anyway: --build-exe links against the kit, so a suite that ran with whatever
+# kit happened to be lying around would be testing a link nobody performs --
+# and the version check inside --build-exe would fail every test the moment
+# the version string moved. Re-cutting is a few seconds; running against a
+# stale kit is a silent wrong answer.
 add_lit_testsuite(check-hermes-node-js "Running hermes-node JS tests"
   ${CMAKE_CURRENT_SOURCE_DIR}/test
   PARAMS ${HERMES_NODE_LIT_PARAMS}
-  DEPENDS hermes hermes-node hello_addon
+  DEPENDS hermes hermes-node hello_addon hermes-node-kit
 )
 
 # Unit tests (GTest, discovered and run by Lit)

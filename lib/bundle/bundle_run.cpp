@@ -7,6 +7,7 @@
 
 #include <hermes/node-compat/bundle/bundle_run.h>
 
+#include <hermes/node-compat/bundle/bundle_format.h>
 #include <hermes/node-compat/bundle/bundle_generation.h>
 #include <hermes/node-compat/bundle/bundle_reader.h>
 #include <hermes/node-compat/bundle/bundle_resolve.h>
@@ -15,6 +16,7 @@
 
 #include <napi/hermes_napi.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -444,6 +446,38 @@ napi_status defineNative(
   return napi_set_named_property(env, bundleObject, shortName, fn);
 }
 
+/// Publishes a validated reader plus its root into the process-wide state.
+/// Shared by both open paths: everything below this point is identical
+/// whether the bytes came from a mapping or from the executable's own
+/// __const/.rodata, which is the point.
+void publishBundle(OpenBundle &state, BundleReader reader, std::string root) {
+  state.reader = std::move(reader);
+  state.root = std::move(root);
+  state.byIdentity.reserve(state.reader->moduleCount());
+  for (uint32_t i = 0; i < state.reader->moduleCount(); ++i)
+    state.byIdentity.emplace(state.reader->identity(i), i);
+  state.fileSource.emplace(*state.reader, state.root);
+}
+
+/// realpath'd parent directory of \p path, falling back to the absolute
+/// parent when the path cannot be canonicalized. One copy, because the file
+/// case and the embedded case must agree on what "the root" means.
+///
+/// realpath, so that a bundle reached through a symlinked directory
+/// resolves identities against the directory the file really lives in.
+/// This is also where a native addon's sidecar is found -- root plus its
+/// recorded sidecar name, see the dispatch in libjs/bundle-loader.js --
+/// and verifyNatives() in bundle_tools.cpp recomputes this exact sequence
+/// independently, so it can check a container this binary refuses to run.
+/// If the two ever drift apart, they stop agreeing on where a sidecar
+/// lives.
+std::string rootDirectoryFor(const std::string &path) {
+  std::error_code ec;
+  fs::path canonical = fs::canonical(fs::path(path), ec);
+  return ec ? fs::absolute(fs::path(path)).parent_path().string()
+            : canonical.parent_path().string();
+}
+
 } // namespace
 
 bool openBundle(const std::string &path, std::string *error) {
@@ -474,25 +508,47 @@ bool openBundle(const std::string &path, std::string *error) {
   // one caller that releases; a tool's mapping dies with the call.
   file->release();
 
-  // realpath, so that a bundle reached through a symlinked directory
-  // resolves identities against the directory the file really lives in.
-  // This is also where a native addon's sidecar is found -- root plus its
-  // recorded sidecar name, see the dispatch in libjs/bundle-loader.js --
-  // and verifyNatives() in bundle_tools.cpp recomputes this exact sequence
-  // independently, so it can check a container this binary refuses to run.
-  // If the two ever drift apart, they stop agreeing on where a sidecar
-  // lives.
-  std::error_code ec;
-  fs::path canonical = fs::canonical(fs::path(path), ec);
-  fs::path rootPath =
-      ec ? fs::absolute(fs::path(path)).parent_path() : canonical.parent_path();
+  publishBundle(state, std::move(*reader), rootDirectoryFor(path));
 
-  state.reader = std::move(reader);
-  state.root = rootPath.string();
-  state.byIdentity.reserve(state.reader->moduleCount());
-  for (uint32_t i = 0; i < state.reader->moduleCount(); ++i)
-    state.byIdentity.emplace(state.reader->identity(i), i);
-  state.fileSource.emplace(*state.reader, state.root);
+  return true;
+}
+
+bool openEmbeddedBundle(
+    const uint8_t *data,
+    size_t size,
+    const std::string &exePath,
+    std::string *error) {
+  OpenBundle &state = openBundleState();
+  if (state.reader) {
+    *error = "a bundle is already open";
+    return false;
+  }
+
+  // The reader validates every offset in the header for alignment, but
+  // those checks are modulo the offset, which is only sufficient when the
+  // base is already aligned. mmap made that true for free -- a mapping
+  // starts on a page boundary -- so openBundle never had to ask. An
+  // embedded payload starts wherever the generated object's alignment
+  // directive put it, so the same guarantee has to be demanded here. Get
+  // it wrong and every reinterpret_cast onto a table is misaligned while
+  // the reader's own checks still pass: undefined behavior that x86-64
+  // executes without complaint and a strict-alignment target does not.
+  // One comparison turns that into a message naming the generator.
+  if (reinterpret_cast<std::uintptr_t>(data) % kBundlePayloadAlign != 0) {
+    *error = "hermes-node bundle: the embedded payload is not " +
+        std::to_string(kBundlePayloadAlign) +
+        "-byte aligned; the object that carries it must align the symbol";
+    return false;
+  }
+
+  std::optional<BundleReader> reader =
+      BundleReader::open(data, size, bundleGenerationTag(), error);
+  if (!reader)
+    return false;
+
+  // No mapping to release: the payload is a read-only section of this
+  // executable, mapped by the loader and live for as long as the process.
+  publishBundle(state, std::move(*reader), rootDirectoryFor(exePath));
 
   return true;
 }

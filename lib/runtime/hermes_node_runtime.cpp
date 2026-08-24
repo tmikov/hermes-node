@@ -547,25 +547,12 @@ CompileCache *createCompileCache(const HermesNodeConfig &config) {
   return cache.release();
 }
 
-/// Bundle consumer mode: map the container, install the bundle-aware
-/// Module._load wrapper, and run the bundle's entry module. Returns the
-/// process exit code.
-///
-/// Every failure before user code starts is fatal and reported here rather
-/// than falling back to running something else. A bundle is a deliverable:
-/// if it cannot be mapped, does not validate, or was built by a different
-/// hermes-node, silently recompiling from a source tree that may not even
-/// be present is worse than refusing to start.
-int runBundle(
-    napi_env env,
-    ModuleLoader &loader,
-    const std::string &bundlePath) {
-  std::string error;
-  if (!openBundle(bundlePath, &error)) {
-    std::fprintf(stderr, "error: %s\n", error.c_str());
-    return 1;
-  }
-
+/// The half of bundle consumer mode that follows a successful open: install
+/// the bundle-aware Module._load wrapper and run the bundle's entry module.
+/// Returns the process exit code. Shared by the two ways a container
+/// arrives -- mapped from a file, or linked into this executable -- so they
+/// cannot diverge on how the bundle is run.
+int runOpenBundle(napi_env env, ModuleLoader &loader) {
   napi_value bundleObject;
   if (installBundleGlobals(env, &bundleObject) != napi_ok) {
     std::fprintf(stderr, "Error: failed to install the bundle natives\n");
@@ -619,6 +606,46 @@ int runBundle(
     return 1;
   }
   return 0;
+}
+
+/// Bundle consumer mode: map the container, install the bundle-aware
+/// Module._load wrapper, and run the bundle's entry module. Returns the
+/// process exit code.
+///
+/// Every failure before user code starts is fatal and reported here rather
+/// than falling back to running something else. A bundle is a deliverable:
+/// if it cannot be mapped, does not validate, or was built by a different
+/// hermes-node, silently recompiling from a source tree that may not even
+/// be present is worse than refusing to start.
+int runBundle(napi_env env, ModuleLoader &loader, const std::string &path) {
+  std::string error;
+  if (!openBundle(path, &error)) {
+    std::fprintf(stderr, "error: %s\n", error.c_str());
+    return 1;
+  }
+  return runOpenBundle(env, loader);
+}
+
+/// The same, for a bundle that arrived as a section of this executable.
+/// uv_exepath rather than argv[0]: argv[0] is whatever the caller chose and
+/// need not be a path at all, and the root decides where sidecars are found.
+int runEmbeddedBundle(
+    napi_env env,
+    ModuleLoader &loader,
+    const uint8_t *data,
+    size_t size) {
+  char exePath[4096];
+  size_t len = sizeof(exePath);
+  if (uv_exepath(exePath, &len) != 0) {
+    std::fprintf(stderr, "Error: cannot determine the executable path\n");
+    return 1;
+  }
+  std::string error;
+  if (!openEmbeddedBundle(data, size, std::string(exePath, len), &error)) {
+    std::fprintf(stderr, "error: %s\n", error.c_str());
+    return 1;
+  }
+  return runOpenBundle(env, loader);
 }
 
 } // namespace
@@ -1290,9 +1317,13 @@ int runHermesNode(const HermesNodeConfig &config) {
   // header with a different caller than the check that currently protects
   // it: a bundle's preloads are the container's own (config.preloadModules,
   // run from inside runBundle), and a disk -r must not run in front of
-  // them -- see history/plans/2026-08-20-bundle-preload-design.md.
+  // them -- see history/plans/2026-08-20-bundle-preload-design.md. An
+  // embedded bundle is the same situation reached by a different route, and
+  // is guarded here for the same reason: bundle_main.cpp parses no flags, so
+  // it cannot set requireModules, but the guard belongs to the mode rather
+  // than to the front door that happens to select it.
   if (exitCode == 0 && !config.requireModules.empty() &&
-      config.bundlePath.empty()) {
+      config.bundlePath.empty() && config.embeddedBundleData == nullptr) {
     napi_value cjsLoader;
     if (loader.require(env, "internal/modules/cjs/loader", &cjsLoader) !=
         napi_ok) {
@@ -1339,7 +1370,10 @@ int runHermesNode(const HermesNodeConfig &config) {
   // or, in AOT bundle producer mode, build the bundle instead of running
   // anything, or, in consumer mode, run the bundle's entry module.
   if (exitCode == 0) {
-    if (!config.bundlePath.empty()) {
+    if (config.embeddedBundleData != nullptr) {
+      exitCode = runEmbeddedBundle(
+          env, loader, config.embeddedBundleData, config.embeddedBundleSize);
+    } else if (!config.bundlePath.empty()) {
       exitCode = runBundle(env, loader, config.bundlePath);
     } else if (!config.buildBundlePath.empty()) {
       if (config.scriptPath.empty()) {

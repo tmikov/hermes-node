@@ -5,12 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <hermes/node-compat/build-exe/build_exe.h>
 #include <hermes/node-compat/bundle/bundle_generation.h>
 #include <hermes/node-compat/bundle/bundle_tools.h>
 #include <hermes/node-compat/bytecode-dump/bytecode_dump.h>
 #include <hermes/node-compat/runtime/hermes_node_runtime.h>
 #include <hermes/node-compat/version.h>
 
+#include <uv.h>
+
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -55,7 +59,48 @@ struct ToolOptions {
   /// --bundle against the lengths and hashes it recorded at build time. A
   /// bool, not an optional<string>, because it takes no value.
   bool verifyNatives = false;
+  /// --build-exe=<output>: link a standalone executable from the container
+  /// named by the positional argument. std::nullopt when the verb was not
+  /// requested; an empty value ("--build-exe=") is still a request, for an
+  /// output path that cannot be written, and the two must stay
+  /// distinguishable.
+  std::optional<std::string> buildExe;
+  /// --kit=<dir>: where to find the kit. std::nullopt means "beside this
+  /// binary", resolved at use.
+  std::optional<std::string> kitDir;
 };
+
+/// Resolves the kit directory for --build-exe. std::nullopt (no --kit)
+/// means "beside this binary": the directory of the running executable,
+/// plus "kit".
+///
+/// Found with uv_exepath, not argv[0] -- argv[0] is whatever the caller
+/// chose to exec with and need not be a path at all, let alone the real
+/// one. Realpath'd so a binary reached through a symlink resolves the kit
+/// relative to where it actually lives, not to the symlink's directory.
+/// buildExecutable() itself reports a clear error if nothing is there
+/// (readKitManifest's "cannot open kit manifest"), so a failure to locate
+/// the running binary just falls back to a relative "kit" and lets that
+/// same error fire.
+static std::string resolveKitDir(const std::optional<std::string> &kitDir) {
+  if (kitDir.has_value())
+    return *kitDir;
+
+  char execBuf[PATH_MAX];
+  size_t execSize = sizeof(execBuf);
+  if (uv_exepath(execBuf, &execSize) != 0)
+    return "kit";
+  std::string exePath(execBuf, execSize);
+
+  char realBuf[PATH_MAX];
+  if (const char *resolved = realpath(exePath.c_str(), realBuf))
+    exePath = resolved;
+
+  size_t slash = exePath.find_last_of('/');
+  std::string dir = (slash == std::string::npos) ? std::string(".")
+                                                 : exePath.substr(0, slash);
+  return dir + "/kit";
+}
 
 /// Runs whichever read-only verb the arguments asked for. Returns false if
 /// they asked for none, leaving \p exitCode untouched; otherwise runs it and
@@ -74,9 +119,15 @@ struct ToolOptions {
 /// The order of the branches carries no meaning: checkToolOptions() has
 /// already rejected any invocation naming more than one verb, so at most one
 /// of them can be taken.
+///
+/// \p containerPath is the positional argument, read directly from argv
+/// rather than from config.scriptPath: runToolVerb() runs before main()
+/// assigns that field (see the comment at its call site), and reading it
+/// here would silently see an empty string.
 static bool runToolVerb(
     const HermesNodeConfig &config,
     const ToolOptions &tools,
+    const std::string &containerPath,
     int &exitCode) {
   if (tools.dump) {
     exitCode = hermes::node_compat::dumpBundle(
@@ -102,6 +153,16 @@ static bool runToolVerb(
         config.bundlePath, config.verbose, std::cout, std::cerr);
     return true;
   }
+  if (tools.buildExe.has_value()) {
+    exitCode = hermes::node_compat::buildExecutable(
+        containerPath,
+        *tools.buildExe,
+        resolveKitDir(tools.kitDir),
+        config.verbose,
+        std::cout,
+        std::cerr);
+    return true;
+  }
   return false;
 }
 
@@ -118,7 +179,9 @@ static bool runToolVerb(
 /// arguments" is not something a user can act on.
 static bool checkToolOptions(
     const HermesNodeConfig &config,
-    const ToolOptions &tools) {
+    const ToolOptions &tools,
+    bool hasEvalCode,
+    const std::string &containerPath) {
   const bool inspecting = config.inspect || config.inspectBrk;
 
   // Two verbs in one invocation. Each of these is a different job on a
@@ -158,6 +221,32 @@ static bool checkToolOptions(
     return false;
   }
 
+  // --build-exe is a fifth verb, checked against each of the other four the
+  // same way: two jobs on two files, with no sensible winner to pick.
+  if (tools.buildExe.has_value() && tools.dump) {
+    std::fprintf(
+        stderr, "Error: --build-exe cannot be combined with --dump.\n");
+    return false;
+  }
+  if (tools.buildExe.has_value() && tools.extractModule.has_value()) {
+    std::fprintf(
+        stderr,
+        "Error: --build-exe cannot be combined with --extract-module.\n");
+    return false;
+  }
+  if (tools.buildExe.has_value() && tools.dumpBytecode.has_value()) {
+    std::fprintf(
+        stderr,
+        "Error: --build-exe cannot be combined with --dump-bytecode.\n");
+    return false;
+  }
+  if (tools.buildExe.has_value() && tools.verifyNatives) {
+    std::fprintf(
+        stderr,
+        "Error: --build-exe cannot be combined with --verify-natives.\n");
+    return false;
+  }
+
   // At most one verb survives the checks above, so the name of the verb in
   // play is well defined from here on.
   const char *verb = nullptr;
@@ -169,6 +258,8 @@ static bool checkToolOptions(
     verb = "--dump-bytecode";
   else if (tools.verifyNatives)
     verb = "--verify-natives";
+  else if (tools.buildExe.has_value())
+    verb = "--build-exe";
 
   // --dump-bytecode names its own file. A container is neither an input nor
   // an output of it, so naming one alongside describes two jobs.
@@ -201,6 +292,50 @@ static bool checkToolOptions(
     return false;
   }
 
+  // --build-exe reads its container from the positional argument, not from
+  // --bundle: linking happens before there is a program to run one, and
+  // --bundle names a container to run. The two describe different jobs on
+  // what could be the same file, so naming both still asks for two jobs at
+  // once, the same as the pairs above.
+  if (tools.buildExe.has_value() && !config.bundlePath.empty()) {
+    std::fprintf(
+        stderr, "Error: --build-exe cannot be combined with --bundle.\n");
+    return false;
+  }
+  // --build-bundle produces a container from source; --build-exe consumes
+  // an already-built one. Both are producers of a different artifact, and
+  // there is no order to run them in within one invocation.
+  if (tools.buildExe.has_value() && !config.buildBundlePath.empty()) {
+    std::fprintf(
+        stderr, "Error: --build-exe cannot be combined with --build-bundle.\n");
+    return false;
+  }
+  // -e/--eval supplies a program to run instead of reading one from disk;
+  // --build-exe links a container that was already built. Neither leaves
+  // anything for the other to do.
+  if (tools.buildExe.has_value() && hasEvalCode) {
+    std::fprintf(
+        stderr, "Error: --build-exe cannot be combined with -e or --eval.\n");
+    return false;
+  }
+  // The container --build-exe links is its positional argument, the same
+  // slot a script path or --bundle's own argument occupies for the other
+  // modes -- there is nothing to link without one.
+  if (tools.buildExe.has_value() && containerPath.empty()) {
+    std::fprintf(
+        stderr,
+        "Error: --build-exe requires a bundle file argument, e.g. "
+        "hermes-node --build-exe=<output> <bundle.hbb>.\n");
+    return false;
+  }
+
+  // --kit only means anything while linking an executable: it says where
+  // the prebuilt kit lives. Anywhere else there is nothing consuming it.
+  if (tools.kitDir.has_value() && !tools.buildExe.has_value()) {
+    std::fprintf(stderr, "Error: --kit requires --build-exe.\n");
+    return false;
+  }
+
   // --out is never inferred from the identity and never serves anything
   // else: writing a file the user did not name is how a tool overwrites
   // something it should not.
@@ -217,14 +352,15 @@ static bool checkToolOptions(
     return false;
   }
 
-  // --verbose has exactly four consumers. Anywhere else it promises output
+  // --verbose has exactly five consumers. Anywhere else it promises output
   // that will never appear, which is worse than a refusal.
   if (config.verbose && config.buildBundlePath.empty() && !tools.dump &&
-      !tools.verifyNatives && !tools.dumpBytecode.has_value()) {
+      !tools.verifyNatives && !tools.dumpBytecode.has_value() &&
+      !tools.buildExe.has_value()) {
     std::fprintf(
         stderr,
-        "Error: --verbose requires --build-bundle, --dump, --verify-natives "
-        "or --dump-bytecode.\n");
+        "Error: --verbose requires --build-bundle, --dump, --verify-natives, "
+        "--dump-bytecode or --build-exe.\n");
     return false;
   }
 
@@ -282,6 +418,14 @@ static bool checkToolOptions(
     std::fprintf(stderr, "Error: --out requires a file path.\n");
     return false;
   }
+  if (tools.buildExe.has_value() && tools.buildExe->empty()) {
+    std::fprintf(stderr, "Error: --build-exe requires a file path.\n");
+    return false;
+  }
+  if (tools.kitDir.has_value() && tools.kitDir->empty()) {
+    std::fprintf(stderr, "Error: --kit requires a directory path.\n");
+    return false;
+  }
 
   return true;
 }
@@ -315,7 +459,8 @@ static void printUsage(const char *argv0) {
       "                                 with --verify-natives, add expected "
       "and actual\n"
       "                                 hashes; with --dump-bytecode, add "
-      "source locations\n"
+      "source locations;\n"
+      "                                 with --build-exe, narrate the link\n"
       "  --bundle=<file>                Run an application from a bundle file\n"
       "  --dump                         With --bundle, print the container's "
       "tables\n"
@@ -330,6 +475,12 @@ static void printUsage(const char *argv0) {
       "  --dump-bytecode=<file>         Disassemble a Hermes bytecode file "
       "or a\n"
       "                                 compile cache entry\n"
+      "  --build-exe=<output>           Link a standalone executable from "
+      "the container\n"
+      "                                 named by the positional argument\n"
+      "  --kit=<dir>                    With --build-exe, the link kit "
+      "directory\n"
+      "                                 (default: beside this binary)\n"
       "  --optimize=<default|on|off>    Optimize compiled code. default is on\n"
       "                                 with the cache, off without it\n"
       "  --inspect-open                 Open the DevTools URL in the system browser\n"
@@ -461,6 +612,10 @@ int main(int argc, char **argv) {
       tools.out = argv[i] + 6;
     } else if (std::strcmp(argv[i], "--verify-natives") == 0) {
       tools.verifyNatives = true;
+    } else if (std::strncmp(argv[i], "--build-exe=", 12) == 0) {
+      tools.buildExe = argv[i] + 12;
+    } else if (std::strncmp(argv[i], "--kit=", 6) == 0) {
+      tools.kitDir = argv[i] + 6;
     } else if (std::strncmp(argv[i], "--optimize=", 11) == 0) {
       const char *value = argv[i] + 11;
       if (std::strcmp(value, "default") == 0) {
@@ -526,11 +681,45 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // The positional argument, read directly from argv rather than from
+  // config.scriptPath: that field is not assigned until after the read-only
+  // verbs are dispatched (see below, where it is set from this same
+  // scriptArgIndex), and --build-exe's container -- the positional argument
+  // in its invocation -- is validated and consumed before that point.
+  const std::string containerPath = (!hasEvalCode && scriptArgIndex < argc)
+      ? std::string(argv[scriptArgIndex])
+      : std::string();
+
   // The read-only verbs and the flags that serve them, as one block, before
   // the refusals that belong to running a program: a verb that never starts
   // the program should not be explained in terms of the debugger.
-  if (!checkToolOptions(config, tools))
+  if (!checkToolOptions(config, tools, hasEvalCode, containerPath))
     return 1;
+
+  // Everything after the first positional belongs to the program being run,
+  // so the parse loop stops there -- ordinary CLI convention, and every
+  // other verb takes its container through --bundle= and never meets it.
+  // --build-exe is the one whose input IS the positional, and it runs no
+  // program, so a flag typed after the container is not the program's
+  // either: it is simply dropped. `--build-exe=out app.hbb --verbose`
+  // narrated nothing and `... --kit=/other` used the default kit, both in
+  // silence. Refuse instead, naming the flag. Checked here, after
+  // checkToolOptions(), so that the flag-conflict messages keep their
+  // precedence, and outside the parse loop for the reason that whole matrix
+  // is: flag order must not decide which error comes out.
+  if (tools.buildExe.has_value() && scriptArgIndex < argc) {
+    for (int i = scriptArgIndex + 1; i < argc; ++i) {
+      if (argv[i][0] == '-') {
+        std::fprintf(
+            stderr,
+            "Error: '%s' appears after the bundle file '%s'; options must "
+            "come before it.\n",
+            argv[i],
+            argv[scriptArgIndex]);
+        return 1;
+      }
+    }
+  }
 
   // Same reasoning, same shape: a bundle's bytecode was produced by
   // hermes_compile_to_bytecode, which emits DebugInfoSetting::THROWING, and
@@ -568,7 +757,7 @@ int main(int argc, char **argv) {
   // neither need nor start a runtime, so they are answered here and nothing
   // below this point executes for them.
   int toolExitCode = 0;
-  if (runToolVerb(config, tools, toolExitCode))
+  if (runToolVerb(config, tools, containerPath, toolExitCode))
     return toolExitCode;
 
   // Build process.argv: [binary, script-or-arg1, ...].

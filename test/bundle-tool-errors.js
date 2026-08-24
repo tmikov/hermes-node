@@ -63,7 +63,7 @@
 // --verbose has exactly four consumers. Naming it anywhere else asks for
 // output that will never come, so it is refused rather than ignored.
 // RUN: %not %hermes-node --verbose %t.tree/cli.js 2>&1 | %FileCheck --check-prefix=VERBALONE %s
-// VERBALONE: Error: --verbose requires --build-bundle, --dump, --verify-natives or --dump-bytecode
+// VERBALONE: Error: --verbose requires --build-bundle, --dump, --verify-natives, --dump-bytecode or --build-exe
 
 // RUN: %not %hermes-node --verbose --bundle=%t.tree/app.hbb 2>&1 | %FileCheck --check-prefix=VERBALONE %s
 

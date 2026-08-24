@@ -71,6 +71,9 @@ target_link_libraries(BundleResolveTest hermesNodeBundle)
 add_node_compat_unittest(BundleFileSourceTest BundleFileSourceTest.cpp)
 target_link_libraries(BundleFileSourceTest hermesNodeBundle)
 
+add_node_compat_unittest(BuildExeTest BuildExeTest.cpp)
+target_link_libraries(BuildExeTest hermesNodeBuildExe)
+
 add_node_compat_unittest(NodeProcessTest NodeProcessTest.cpp)
 target_link_libraries(NodeProcessTest
   hermesNodeProcess

@@ -10,6 +10,8 @@
 
 #include <node_api.h>
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 
 namespace hermes {
@@ -28,6 +30,28 @@ namespace node_compat {
 /// process lives. On failure nothing is left mapped. Only one bundle can be
 /// open at a time; a second call fails.
 bool openBundle(const std::string &path, std::string *error);
+
+/// Opens a bundle that was linked into this executable rather than mapped
+/// from a file. \p data and \p size name the payload object's contents; the
+/// linker computed the size from the two symbols, so it cannot disagree with
+/// the bytes. Validation is identical to openBundle(), generation tag
+/// included -- a container linked into a binary built from a different kit
+/// is refused exactly as a mismatched file would be.
+///
+/// \p exePath is the path of the running executable, used only to derive the
+/// bundle root: identities resolve against the executable's own directory,
+/// and native addon sidecars sit beside it. It is passed in rather than
+/// discovered here so this library keeps needing nothing but the format
+/// layer -- the caller already links libuv, which answers the question
+/// portably (uv_exepath).
+///
+/// Only one bundle can be open at a time; a second call to either open
+/// function fails.
+bool openEmbeddedBundle(
+    const uint8_t *data,
+    size_t size,
+    const std::string &exePath,
+    std::string *error);
 
 /// Defines six functions on globalThis -- called "bundle natives" here in
 /// the Node-API sense (native code exposed to JavaScript), not to be

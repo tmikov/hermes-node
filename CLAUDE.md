@@ -52,6 +52,14 @@ cmake --build cmake-build-asan --target check-hermes-node
 `hermes-node` binary in `tools/hermes-node/hermes-node.cpp`. Boot order:
 runtime -> event loop -> napi_env -> console -> bindings -> primordials -> process -> module loader -> timers globals -> `globalThis.Buffer` -> debuglog -> user script -> drainJobs -> uv_run -> emit 'exit' -> cleanup
 
+**Known divergence: `process.exitCode` is ignored.** `runHermesNode()` in
+`lib/runtime/hermes_node_runtime.cpp` computes a local exit code and never
+reads the property, so `process.exitCode = 3` exits 0 (node v24.13.1 exits 3)
+and the `'exit'` event handler receives 0. True in every mode -- a plain
+script, `--bundle`, and a `--build-exe` executable alike -- so it is
+pre-existing and mode-independent, not a defect of the bundle or
+single-executable work. Use `process.exit(code)` meanwhile.
+
 ## Module Loader
 
 - `libjs/loader.js`: CJS module loading with shim override (`libjs/shims/` before `libjs-node/`)
@@ -491,6 +499,224 @@ Five diagnostic flags, none of them on the run path. Design
   `BundleFormatTest`. `bundle-tool-no-runtime.js` pins the pre-runtime
   dispatch: a verb given `--compile-cache=<dir>` never creates the
   directory, while running the same container does.
+
+## Single-File Executables
+
+`--build-exe=<out> <bundle.hbb>` turns an AOT container into a standalone
+executable. Design `history/plans/2026-08-23-single-executable-design.md`,
+plan `history/plans/2026-08-23-single-executable-plan.md`, progress
+`history/plans/progress-single-executable.md`.
+
+- It takes **a container, not an entry script**, deliberately: `--build-bundle`
+  already produces containers, and the container going in can be inspected
+  first with the five diagnostic flags above -- `--dump`, `--extract-module`,
+  `--verify-natives`, `--dump-bytecode` and `--verbose`. Node's SEA blob has
+  no equivalent. Accepting a `.js` entry directly, dispatched on the magic
+  bytes, is strictly additive later and nothing here forecloses it.
+- **We link a new binary rather than inject a blob into a prebuilt one**, and
+  the payoff is macOS. Node's SEA (postject), Deno (libsui) and Bun all patch
+  a copy of their runtime, and all pay the same tax: Apple prohibits appending
+  to a Mach-O, and on Apple Silicon a signature that does not verify is a
+  SIGKILL rather than a warning. libsui hand-writes an ad-hoc CodeDirectory in
+  Rust whose flags read `adhoc|linkerSigned` -- it is reimplementing `ld64`.
+  Use `ld64` and it is free: measured on macOS arm64, our linked binary comes
+  out `flags=0x20002(adhoc,linker-signed)` and passes `codesign --verify`,
+  with no signing step of our own, payload-carrying builds included. So there
+  is no fuse, no sentinel, no self-mmap, no `/proc/self/exe` and no backwards
+  scan for a magic -- the payload is a symbol. The price is a linker on the
+  build machine (and the Xcode command line tools on macOS), which Static
+  Hermes native compilation needs anyway.
+- **The kit** is what an app links against: `libhermes-node-kit.a` (every
+  archive in the closure, merged), `libhermesNapi.a` kept separate,
+  `hermes-node-bundle-main.o`, and `kit.manifest`. It is cut by
+  `utils/make-kit.py`, which intercepts CMake's own link line: a
+  `RULE_LAUNCH_LINK` on the `hermes-node-kit` probe target in
+  `tools/hermes-node/CMakeLists.txt`, built with `add_hermes_tool` rather
+  than `add_executable` so `HERMES_EXTRA_LINKER_FLAGS` cannot drift between
+  probe and binary. That is the point: the manifest cannot disagree with what
+  actually links. The spike's hand-written system-library list had `-lresolv`
+  missing and `-ldl` spurious, which is exactly the class of error a manifest
+  removes. Grammar is four keys -- `version`, `cc`, `driverflag`, `linkarg`
+  -- with `{kit}` substituted for the kit directory; `readKitManifest()` in
+  `lib/build-exe/kit_manifest.cpp` parses them.
+- **A merged archive, not one `ld -r` object.** The `-r` object is smaller
+  (14.1 MB against 28 MB) and it is one file, but it drops
+  `MH_SUBSECTIONS_VIA_SYMBOLS`. Mach-O has no per-function sections; that flag
+  is the linker's permission to synthesize atoms from symbols, so without it
+  the final link can neither fold identical code nor dead-strip -- about 12%
+  of the produced binary. The loss is macOS-only: on Linux the section already
+  is the granularity unit, and an `-r` object dead-strips to within 0.035% of
+  the original inputs. One story across both platforms was worth more than the
+  kit size. The merged archive linked 8 bytes smaller than CMake's own binary,
+  with identical exports and identical lit results.
+- **Two constraints that fall out of merging, and will bite whoever edits
+  this.** Nothing may `-force_load` the merged archive: merging preserves
+  duplicate symbols the real link never sees because it never pulls both
+  members (`hermes::vm::matchTypeOfIs` in two `Operations.cpp.o` members,
+  `llvh::DisplayGraph` in two `GraphWriter.cpp.o`) -- harmless in an ordinary
+  archive, a duplicate-symbol failure the moment something force-loads it.
+  That is why `libhermesNapi.a`, which genuinely is force-loaded so `dlopen`ed
+  addons resolve the NAPI surface, ships beside it rather than inside it. And
+  entry objects stay out: with `hermes-node.cpp.o` in the archive, `main`
+  would be pulled from it and the two link configurations below would collapse
+  into one.
+- **Two link configurations, no fuse and no weak symbols.** `hermes-node`
+  links the CLI entry `hermes-node.cpp`; an app links the generated payload
+  object plus `tools/hermes-node/bundle_main.cpp` (compiled as the
+  `hermesNodeBundleMain` OBJECT library and copied into the kit). "Am I an
+  app?" is a link-time fact, not a run-time question. An app carries neither
+  the CLI parser nor the tool verbs, which dead-stripping turns into a real
+  difference: measured 154,032 bytes smaller than `hermes-node` itself.
+  `bundle_main.cpp` pushes `argv[0]` twice, so `process.argv` is
+  `[exe, exe, ...userArgs]` and `process.argv.slice(2)` means what it means
+  under `--bundle=<f> arg`, and what it means to Node's SEA.
+- **The payload is `.incbin` in a generated `.s`** -- lowercase, because
+  clang preprocesses `.S` and not `.s`, and the assemble step forwards the
+  kit's `-D` flags over a file holding a user-supplied path
+  (`payloadAssembly()` in `lib/build-exe/build_exe.cpp`) -- not a C array whose
+  multi-megabyte initializer would explode compile time for nothing. Size is
+  `end - start`, computed by the linker, so no stored length can disagree with
+  the bytes. Two directives are load-bearing rather than decorative.
+  `.p2align 4` clears the format's `kBundlePayloadAlign`
+  (`include/hermes/node-compat/bundle/bundle_format.h`), and
+  `openEmbeddedBundle()` (`lib/bundle/bundle_run.cpp`) now enforces that base
+  alignment: the reader's offset checks are modulo the offset and sufficient
+  only when the base is already aligned, which `mmap` gave `openBundle()` for
+  free and a linked section does not -- so a generator mistake is a message
+  rather than undefined behaviour that x86-64 happens to execute. And on ELF
+  the file MUST end with `.section .note.GNU-stack,"",@progbits`: without it
+  the linker cannot tell that a hand-written object needs no executable stack
+  and marks the whole program `GNU_STACK RWE` (measured with `readelf`;
+  `hermes-node` itself is `RW`) -- a security regression in every binary the
+  feature ships. Mach-O needs no equivalent. Both spellings are compiled on
+  every host: `ObjectFormat` is a parameter
+  (`include/hermes/node-compat/build-exe/build_exe.h`), not an `#ifdef`,
+  because the branch for the platform you are not on is the one a typo
+  survives in. The container's path goes into a quoted assembler string, so it
+  is made absolute and rejected if it holds `"`, `\`, CR or LF -- GAS resolves
+  `\t` inside a path and would happily `.incbin` a file the literal path does
+  not name. The toolchain is run through `posix_spawnp` with an argv, never a
+  shell.
+- **The root is the executable's own directory**, realpath'd, where
+  `openBundle()` uses the container's; `rootDirectoryFor()` in
+  `lib/bundle/bundle_run.cpp` is the one copy both call. Everything downstream
+  is unchanged -- the closed world, the resolver and its two backends,
+  preloads -- except that a native addon's sidecar now sits beside the
+  **executable**, and so does the `<root>/<identity>` copy that the
+  stat-before-require escape hatch needs.
+- **Version agreement is checked twice, in different currencies.**
+  `buildExecutable()` opens the container through `BundleReader::open()` with
+  this binary's own `bundleGenerationTag()`, so a container the produced
+  executable could not run is a build-time error rather than a startup
+  failure in the customer's hands; and `kit.manifest`'s `version:` is compared
+  for exact string equality against `HERMES_NODE_VERSION_STRING`, so a kit cut
+  from a different build than the producer is one too. The manifest
+  deliberately does not record the generation tag: that is computed in C++
+  from the bytecode version and build configuration, and is not available to
+  CMake, which writes the file. **Both currencies are commit-granular, so
+  neither catches an edit to an already-dirty tree**: the first edit to a
+  clean tree does move `git describe` (it gains `-dirty`), but every edit
+  after that leaves it unchanged, and `hermes-node-kit` is
+  `EXCLUDE_FROM_ALL`, so rebuilding `hermes-node` after fixing a runtime bug
+  does not re-cut the kit -- a hand-run `--kit=<build dir>/kit` then links
+  the app against the *previous* runtime, with the two version strings
+  agreeing and nothing warning. The in-tree suite is safe (`check-hermes-node-js`
+  DEPENDS on the kit target, so it re-cuts), so the exposure is exactly the
+  manual path documented below: re-cut the kit yourself after touching
+  runtime code.
+- The `hermes-node-kit` target is `EXCLUDE_FROM_ALL` -- the merged archive is
+  a full copy of every archive in the closure, ~40 MB in a Release build and
+  ~755 MB in an ASAN one -- and `check-hermes-node-js` `DEPENDS` on it. That
+  dependency is load-bearing, not belt-and-braces: `kit.manifest` pins the
+  `git describe` version, so **every commit invalidates the kit**, and without
+  it every gated test would go red on the first commit after a cut. Re-cutting
+  takes a few seconds and both error paths name the command
+  (`cmake --build <build dir> --target hermes-node-kit`). The kit's real
+  outputs are written behind the build system's back, so the probe link's `-o`
+  is aimed at a stamp *inside* the kit directory: `rm -rf kit` then re-cuts it
+  rather than reporting nothing to do.
+- **The default kit location is "beside the running binary"**
+  (`resolveKitDir()` in `tools/hermes-node/hermes-node.cpp`, via `uv_exepath`
+  and `realpath` -- `argv[0]` is whatever the caller chose to exec with). That
+  is where a release layout WOULD put one, and is not this repo's build
+  tree, where the binary is in `bin/` and the kit in `kit/`: pass
+  `--kit=<build dir>/kit` when running `--build-exe` by hand. **No release
+  ships a kit today.** `.github/workflows/release.yml` stages the binary
+  alone and there is no `install()` rule for the kit, so `--build-exe` on a
+  released `hermes-node` fails with the missing-manifest error. Packaging
+  one is a product decision (a Release kit is ~40 MB, several times the
+  binary) and is deliberately not made here.
+- `--build-exe` is dispatched by `runToolVerb()` **before `runHermesNode`**,
+  alongside the four read-only verbs. It writes files, so it is not read-only
+  -- but the criterion for that dispatch point was never read-only-ness, it is
+  whether the verb needs a runtime, and this one reads an already-compiled
+  container and runs the toolchain: no parser, compiler, event loop or
+  `napi_env`. `checkToolOptions()` gains its rows, each naming both flags:
+  `--build-exe` against `--bundle`, `--build-bundle`, `-e`/`--eval`, each of
+  the four verbs, and `--inspect`/`--inspect-brk`; `--kit` without
+  `--build-exe`; `--build-exe` with no positional container; and an empty
+  `--build-exe=` or `--kit=`, which name the flag rather than reporting a
+  missing file with no filename in it. Separately, and just after that
+  block: an argument beginning with `-` that appears **after** the
+  container is refused by name. The parse loop stops at the first
+  positional, as everywhere else, and `--build-exe` is the only verb whose
+  own input sits in that slot -- so it is the only one where the
+  convention is observable, and it used to be observable only as a flag
+  having no effect (`--build-exe=out app.hbb --verbose` narrated nothing;
+  `--kit=/other` there silently used the default kit).
+  `--verbose` narrates the kit, the
+  container, the generated assembly and both toolchain commands, to stderr.
+  The producer is `hermesNodeBuildExe` (`lib/build-exe/`), VM-free like
+  `hermesNodeBundleTools`, which is what lets `BuildExeTest` run with no
+  runtime.
+- **Every produced executable creates a compile-cache tree it never uses.**
+  Startup makes `~/.cache/hermes-node/compile-cache/v1/<generation>/` (or
+  the `XDG_CACHE_HOME` equivalent) and writes nothing into it, because a
+  bundled program compiles nothing. Identical under `--bundle`, so this is
+  pre-existing rather than something linking introduced -- but a
+  `--build-exe` artifact is shipped to people who have never heard of
+  hermes-node, and they cannot pass `--no-compile-cache`: every argument
+  belongs to the program. `HERMES_NODE_DISABLE_COMPILE_CACHE=1` still works,
+  since the native side reads it directly.
+- **What does not work.** Windows is unwritten and unclaimed -- nothing here
+  is Windows-hostile, we simply cannot test it. Cross-compilation is the one
+  capability injection has that linking does not; that is the accepted trade,
+  since a linker is a prerequisite Static Hermes brings anyway. Universal
+  macOS binaries are unproven end to end, and carry a trap worth respecting:
+  `ld -r`, `libtool` and `lipo` emit a valid-looking **empty slice** for a
+  missing architecture -- warnings only, exit 0, a slice `lipo -info` reports
+  as real -- which surfaces as an undefined `_main` at the customer's link, so
+  whatever cuts a universal kit must assert per-slice symbol counts and never
+  trust exit status. `utils/make-kit.py` therefore warns, loudly and by
+  architecture, when the link line it was handed names more than one --
+  release CI's macOS job configures `CMAKE_OSX_ARCHITECTURES="x86_64;arm64"`
+  and then runs `check-hermes-node`, which depends on the kit target, so
+  that job is where a two-slice kit gets cut first. A warning and not an
+  error, because failing there would block macOS releases outright to report
+  something that may well be fine. (Its `libtool -static` branch has never
+  executed anywhere either; the macOS spike predates the script.) The
+  payload object at least reaches that link built for the right targets:
+  `buildAssembleCommand()` forwards the manifest's whole `driverflag` list,
+  `-arch` included. And a produced **Linux** executable is not
+  self-contained: it needs ICU 74, `libstdc++.so.6` and `libgcc_s.so.1`, where
+  a macOS one needs only OS-provided libraries.
+  `HERMES_USE_STATIC_ICU=ON` would fix the ICU half, at the cost of a static
+  system ICU at build time; its own round.
+- Tests: `test/build-exe{,-errors,-tool-errors,-natives,-escapes}.js` plus
+  `BuildExeTest`. Three of the five -- `build-exe.js`, `build-exe-natives.js`
+  and `build-exe-escapes.js` -- carry `REQUIRES: linker-available`, the lit
+  feature (`test/lit.cfg`) that is on when lit was given `--param kit_dir`
+  naming a directory holding a `kit.manifest`; a bare `hermes-lit`
+  invocation without the param reports those three UNSUPPORTED rather than
+  failing them. `build-exe-errors.js` and `build-exe-tool-errors.js` are
+  deliberately **not** gated, and each says so in its own header: every case
+  in them is refused before the toolchain is reached (the kit-shaped ones
+  use a two-line hand-written `kit.manifest`, and the two that do run a
+  driver name one chosen to fail), so they need neither a linker nor a
+  built kit and are the coverage that survives a kitless checkout.
+  `BuildExeTest` is a GTest, run by `check-hermes-node-unit`, which lit's
+  feature list does not reach at all -- it links `hermesNodeBuildExe`, which
+  is VM-free, and never runs a toolchain.
 
 ## Test Infrastructure
 

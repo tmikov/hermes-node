@@ -380,6 +380,51 @@ itself is never printed: a bytecode file does not carry it. `--verbose` is
 an error anywhere else, as is any combination of two of the verbs, and so
 is `--out` without `--extract-module`.
 
+## Single-file executables
+
+A bundle still needs two files to arrive: a `hermes-node` you installed, and
+the container. `--build-exe` turns those into one executable that runs on a
+machine with neither.
+
+```sh
+# Build a container, then link an executable from it.
+$ hermes-node --build-bundle=app.bundle ./greet.js
+$ hermes-node --build-exe=greet --kit=<kit dir> app.bundle
+wrote greet (12682552 bytes)
+
+$ rm app.bundle
+$ ./greet -- hello --name World
+```
+
+It takes a **container, not a script**, on purpose: `--build-bundle` already
+makes containers, and the container going in can be inspected first with
+`--dump`, `--extract-module` and `--verify-natives`. Accepting a `.js` entry
+directly is a strictly additive change later.
+
+Unlike Node's single-executable applications, Deno and Bun -- all of which
+inject a blob into a copy of a prebuilt runtime -- this **links a new
+binary**. That is why it needs a linker on the machine doing the build, and
+why it does not cross-compile. It is also why nothing here has to work around
+macOS code signing: `ld64` ad-hoc signs what it links, so a produced binary
+arrives `adhoc,linker-signed` and passes `codesign --verify` with no step of
+ours. Injecting cannot do that -- Apple prohibits appending to a Mach-O, and
+on Apple Silicon a signature that does not verify is a SIGKILL rather than a
+warning.
+
+The linker is fed a **kit**: a merged static archive plus a manifest recording
+the real link line, produced by the `hermes-node-kit` build target. **Released
+binaries do not ship one yet**, so today `--build-exe` works from a build tree,
+with `--kit=<build dir>/kit`. The kit is stamped with the version it was cut
+from and the errors name the command to re-cut it.
+
+Native addons still ship beside the executable rather than inside it --
+`dlopen` takes a path, and that has not changed. What does change is *which*
+directory: sidecars sit beside the produced binary, not beside the container,
+and `--build-exe` says so when it packages one.
+
+A produced Linux executable still needs the system's ICU, `libstdc++` and
+`libgcc_s`; a macOS one needs only what the OS ships. Windows is not supported.
+
 ## Command-line options
 
 ```
@@ -392,16 +437,29 @@ Options:
   --compile-cache=<dir>          Bytecode cache directory
   --no-compile-cache             Disable the bytecode cache
   --build-bundle=<file>          Compile the script and its requires into <file>
+  --include=<specifier>          With --build-bundle, also package a module the
+                                 require() scanner cannot discover (repeatable)
+  --preload=<specifier>          With --build-bundle, also package a module and
+                                 record it to run before the entry point
+                                 (repeatable)
   --verbose                      With --build-bundle, narrate the walk to stderr;
                                  with --dump, add per-module edge counts;
-                                 with --dump-bytecode, add source locations
+                                 with --verify-natives, add expected and actual
+                                 hashes; with --dump-bytecode, add source locations;
+                                 with --build-exe, narrate the link
   --bundle=<file>                Run an application from a bundle file
   --dump                         With --bundle, print the container's tables
   --extract-module=<identity>    With --bundle and --out, write one module's
                                  payload to <file>
   --out=<file>                   Destination for --extract-module
+  --verify-natives               With --bundle, check the native addons
+                                 shipped beside it (audit, not enforcement)
   --dump-bytecode=<file>         Disassemble a Hermes bytecode file or a
                                  compile cache entry
+  --build-exe=<output>           Link a standalone executable from the container
+                                 named by the positional argument
+  --kit=<dir>                    With --build-exe, the link kit directory
+                                 (default: beside this binary)
   --optimize=<default|on|off>    Optimize compiled code. default is on
                                  with the cache, off without it
   --inspect-open                 Open the DevTools URL in the system browser
