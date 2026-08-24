@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_file.h>
 #include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
@@ -729,28 +730,16 @@ static void fsAfterAsync(uv_fs_t *req) {
     }
   }
 
-  // Clear any pending exception (shouldn't propagate from callbacks).
-  bool pending = false;
-  napi_is_exception_pending(env, &pending);
-  if (pending) {
-    napi_value exc;
-    napi_get_and_clear_last_exception(env, &exc);
-    // Print to stderr for debugging.
-    napi_value stack;
-    napi_status st = napi_get_named_property(env, exc, "stack", &stack);
-    napi_valuetype stackType = napi_undefined;
-    if (st == napi_ok)
-      napi_typeof(env, stack, &stackType);
-    napi_value msg;
-    if (stackType == napi_string)
-      msg = stack;
-    else
-      napi_coerce_to_string(env, exc, &msg);
-    char buf[4096];
-    size_t len = 0;
-    napi_get_value_string_utf8(env, msg, buf, sizeof(buf), &len);
-    std::fprintf(stderr, "%.*s\n", static_cast<int>(len), buf);
-  }
+  // This used to print the stack here and swallow the error, which is how
+  // a throw from an fs callback exited 0. Reporting is now
+  // triggerUncaughtException's job and happens only when nothing handled
+  // it; a listener that does handle it gets the cleanup below, exactly as
+  // a normal return would.
+  //
+  // Does not come back unless a listener took it; see node_errors.h. The
+  // cleanup below is therefore skipped when the error is fatal, which
+  // costs nothing -- the process is leaving.
+  handleCallbackException(env);
 
   napi_close_handle_scope(env, scope);
 
@@ -1411,6 +1400,79 @@ static napi_value fsUnlink(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
+/// Create \p path and every missing parent, the way `mkdir -p` does.
+/// Returns 0, or a negative libuv error with \p errPath set to the component
+/// the error is about. \p firstCreated receives the topmost directory this
+/// actually created, which is what Node reports back from a recursive mkdir.
+///
+/// One copy, deliberately. The synchronous and asynchronous recursive paths
+/// each had their own, and they had drifted: only the synchronous one
+/// checked, after the loop, that the finished path is a directory. EEXIST on
+/// a component is benign for a parent and fatal for the target, so without
+/// that check `fs.mkdir(existingFile, {recursive: true}, cb)` called back
+/// with no error where Node reports EEXIST. That divergence sat behind a
+/// swallowed callback exception and was invisible until the swallow was
+/// removed.
+static int mkdirRecursive(
+    const std::string &path,
+    int mode,
+    std::string &firstCreated,
+    std::string &errPath) {
+  std::string current;
+  size_t pos = 0;
+  if (!path.empty() && path[0] == '/') {
+    current = "/";
+    pos = 1;
+  }
+
+  while (pos <= path.size()) {
+    size_t slash = path.find('/', pos);
+    if (slash == std::string::npos)
+      slash = path.size();
+    std::string component = path.substr(pos, slash - pos);
+    pos = slash + 1;
+    if (component.empty() || component == ".")
+      continue;
+    if (!current.empty() && current.back() != '/')
+      current += '/';
+    current += component;
+
+    uv_fs_t req;
+    int result = uv_fs_mkdir(nullptr, &req, current.c_str(), mode, nullptr);
+    uv_fs_req_cleanup(&req);
+    if (result == 0) {
+      if (firstCreated.empty())
+        firstCreated = current;
+    } else if (result != UV_EEXIST) {
+      // The full requested path, not the component that failed. Node names
+      // what the caller asked for -- `mkdir -p a/b/c` where `a` is a file
+      // reports ENOTDIR on `a/b/c`, not on `a/b` -- and a test that pins
+      // err.path is pinning the request.
+      errPath = path;
+      return result;
+    }
+    // UV_EEXIST: something is there. Whether that is acceptable depends on
+    // what it is, which only the check below can say.
+  }
+
+  uv_fs_t statReq;
+  int statRes = uv_fs_stat(nullptr, &statReq, path.c_str(), nullptr);
+  if (statRes != 0) {
+    uv_fs_req_cleanup(&statReq);
+    // Nothing is there after creating every component, so an intermediate
+    // one is not a directory.
+    errPath = path;
+    return UV_ENOTDIR;
+  }
+  bool isDir = (uv_fs_get_statbuf(&statReq)->st_mode & S_IFMT) == S_IFDIR;
+  uv_fs_req_cleanup(&statReq);
+  if (!isDir) {
+    errPath = path;
+    return UV_EEXIST;
+  }
+  return 0;
+}
+
 // binding.mkdir(path, mode, recursive, req?)
 static napi_value fsMkdir(napi_env env, napi_callback_info info) {
   size_t argc = 4;
@@ -1432,54 +1494,24 @@ static napi_value fsMkdir(napi_env env, napi_callback_info info) {
       wrap->resultType = FSReqResultType::MkdirResult;
       wrap->path = path;
 
-      // Do recursive mkdir synchronously.
       std::string firstCreated;
-      std::string current;
-      size_t pos = 0;
-      if (!path.empty() && path[0] == '/') {
-        current = "/";
-        pos = 1;
-      }
-      bool hadError = false;
-      int errResult = 0;
-      while (pos <= path.size()) {
-        size_t slash = path.find('/', pos);
-        if (slash == std::string::npos)
-          slash = path.size();
-        std::string component = path.substr(pos, slash - pos);
-        pos = slash + 1;
-        if (component.empty() || component == ".")
-          continue;
-        if (!current.empty() && current.back() != '/')
-          current += '/';
-        current += component;
-        uv_fs_t mkReq;
-        int mkResult =
-            uv_fs_mkdir(nullptr, &mkReq, current.c_str(), mode, nullptr);
-        uv_fs_req_cleanup(&mkReq);
-        if (mkResult == 0) {
-          if (firstCreated.empty())
-            firstCreated = current;
-        } else if (mkResult != UV_EEXIST) {
-          hadError = true;
-          errResult = mkResult;
-          wrap->path = current;
-          break;
-        }
-      }
+      std::string errPath;
+      int errResult = mkdirRecursive(path, mode, firstCreated, errPath);
+      bool hadError = errResult != 0;
+      if (hadError)
+        wrap->path = errPath;
 
       wrap->firstCreated = firstCreated;
       napi_value result = startAsyncFsOp(env, wrap, asyncReq, fsData);
 
-      if (hadError) {
-        // Simulate error by setting req.result and calling callback.
-        wrap->req.result = errResult;
-        fsAfterAsync(&wrap->req);
-      } else {
-        // Simulate success.
-        wrap->req.result = 0;
-        fsAfterAsync(&wrap->req);
-      }
+      // This request never went to libuv -- the work above was done inline --
+      // so nothing has filled in the fields fsAfterAsync reads back. It
+      // derives the syscall name from uv_fs_get_type(), which on an untouched
+      // request is UV_FS_UNKNOWN, and reported `syscall: 'unknown'` on the
+      // error. Say what it was.
+      wrap->req.fs_type = UV_FS_MKDIR;
+      wrap->req.result = hadError ? errResult : 0;
+      fsAfterAsync(&wrap->req);
       return result;
     }
 
@@ -1506,61 +1538,12 @@ static napi_value fsMkdir(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
-  // Recursive mkdir: create each component.
+  // Recursive mkdir: one helper, shared with the asynchronous branch above.
   std::string firstCreated;
-  std::string current;
-  size_t pos = 0;
-
-  if (!path.empty() && path[0] == '/') {
-    current = "/";
-    pos = 1;
-  }
-
-  while (pos <= path.size()) {
-    size_t slash = path.find('/', pos);
-    if (slash == std::string::npos)
-      slash = path.size();
-
-    std::string component = path.substr(pos, slash - pos);
-    pos = slash + 1;
-
-    if (component.empty() || component == ".")
-      continue;
-
-    if (!current.empty() && current.back() != '/')
-      current += '/';
-    current += component;
-
-    uv_fs_t req;
-    int result = uv_fs_mkdir(nullptr, &req, current.c_str(), mode, nullptr);
-    uv_fs_req_cleanup(&req);
-
-    if (result == 0) {
-      if (firstCreated.empty())
-        firstCreated = current;
-    } else if (result != UV_EEXIST) {
-      return throwUVException(env, result, "mkdir", path.c_str());
-    }
-    // UV_EEXIST: path exists — continue (may be a dir or a file).
-  }
-
-  // After iterating all components, verify the full path is a directory.
-  // If it's a file (or doesn't exist), throw the appropriate error.
-  {
-    uv_fs_t statReq;
-    int statRes = uv_fs_stat(nullptr, &statReq, path.c_str(), nullptr);
-    if (statRes == 0) {
-      bool isDir = (uv_fs_get_statbuf(&statReq)->st_mode & S_IFMT) == S_IFDIR;
-      uv_fs_req_cleanup(&statReq);
-      if (!isDir) {
-        return throwUVException(env, UV_EEXIST, "mkdir", path.c_str());
-      }
-    } else {
-      uv_fs_req_cleanup(&statReq);
-      // The path doesn't exist — an intermediate component was a file.
-      return throwUVException(env, UV_ENOTDIR, "mkdir", path.c_str());
-    }
-  }
+  std::string errPath;
+  int recResult = mkdirRecursive(path, mode, firstCreated, errPath);
+  if (recResult != 0)
+    return throwUVException(env, recResult, "mkdir", errPath.c_str());
 
   if (!firstCreated.empty()) {
     napi_value jsResult;
@@ -3204,12 +3187,8 @@ static void onStatPoll(
   napi_value retval;
   napi_call_function(env, thisObj, onchange, 2, args, &retval);
 
-  bool hasPending = false;
-  napi_is_exception_pending(env, &hasPending);
-  if (hasPending) {
-    napi_value exc;
-    napi_get_and_clear_last_exception(env, &exc);
-  }
+  // Does not come back unless a listener took it; see node_errors.h.
+  handleCallbackException(env);
 
   napi_close_handle_scope(env, scope);
 }
