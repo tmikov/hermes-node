@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/bindings/handle_wrap_base.h>
+#include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 #include <uv.h>
@@ -120,13 +121,8 @@ void HandleWrapBase::invokeCloseCallback() {
     napi_value retval;
     napi_call_function(env_, undefined, cb, 0, nullptr, &retval);
 
-    // Clear any pending exception.
-    bool hasPending = false;
-    napi_is_exception_pending(env_, &hasPending);
-    if (hasPending) {
-      napi_value exc;
-      napi_get_and_clear_last_exception(env_, &exc);
-    }
+    // Does not come back unless a listener took it; see node_errors.h.
+    handleCallbackException(env_);
   }
 
   napi_close_handle_scope(env_, scope);

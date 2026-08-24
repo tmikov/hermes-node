@@ -7,6 +7,7 @@
  * Ported from Node.js src/node_zlib.cc (MIT licensed).
  */
 
+#include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_zlib.h>
 #include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
@@ -1053,12 +1054,9 @@ class CompressionStream {
               napi_get_reference_value(env, stream->callbackRef_, &cb);
               napi_call_function(env, thisVal, cb, 0, nullptr, nullptr);
 
-              bool pending = false;
-              napi_is_exception_pending(env, &pending);
-              if (pending) {
-                napi_value exc;
-                napi_get_and_clear_last_exception(env, &exc);
-              }
+              // Does not come back unless a listener took it; see
+              // node_errors.h.
+              handleCallbackException(env);
             }
           }
 
@@ -1148,12 +1146,8 @@ class CompressionStream {
     napi_value args[3] = {msgVal, errnoVal, codeVal};
     napi_call_function(env, thisVal, onerrorFn, 3, args, nullptr);
 
-    bool pending = false;
-    napi_is_exception_pending(env, &pending);
-    if (pending) {
-      napi_value exc;
-      napi_get_and_clear_last_exception(env, &exc);
-    }
+    // Does not come back unless a listener took it; see node_errors.h.
+    handleCallbackException(env);
 
     write_in_progress_ = false;
     if (pending_close_) {

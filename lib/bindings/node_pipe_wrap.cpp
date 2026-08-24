@@ -7,6 +7,7 @@
 
 #include <hermes/node-compat/bindings/handle_wrap_base.h>
 #include <hermes/node-compat/bindings/libuv_stream_base.h>
+#include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_pipe_wrap.h>
 #include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
@@ -231,12 +232,8 @@ class PipeWrap : public LibuvStreamBase {
       napi_value retval;
       napi_call_function(env, serverObj, onconnection, 2, args, &retval);
 
-      bool hasPending = false;
-      napi_is_exception_pending(env, &hasPending);
-      if (hasPending) {
-        napi_value exc;
-        napi_get_and_clear_last_exception(env, &exc);
-      }
+      // Does not come back unless a listener took it; see node_errors.h.
+      handleCallbackException(env);
     }
 
     napi_close_handle_scope(env, scope);
@@ -319,12 +316,8 @@ class PipeWrap : public LibuvStreamBase {
       napi_value retval;
       napi_call_function(env, reqObj, oncomplete, 5, args, &retval);
 
-      bool hasPending = false;
-      napi_is_exception_pending(env, &hasPending);
-      if (hasPending) {
-        napi_value exc;
-        napi_get_and_clear_last_exception(env, &exc);
-      }
+      // Does not come back unless a listener took it; see node_errors.h.
+      handleCallbackException(env);
     }
 
     napi_delete_reference(env, reqData->reqRef);

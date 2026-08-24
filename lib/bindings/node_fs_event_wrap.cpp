@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_fs_event_wrap.h>
 #include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
@@ -326,14 +327,8 @@ onFsEvent(uv_fs_event_t *handle, const char *filename, int events, int status) {
   napi_value retval;
   napi_call_function(env, thisObj, onchange, 3, args, &retval);
 
-  // Check for exception and clear it (don't crash).
-  bool hasPending = false;
-  napi_is_exception_pending(env, &hasPending);
-  if (hasPending) {
-    napi_value exc;
-    napi_get_and_clear_last_exception(env, &exc);
-    // TODO: route to uncaughtException handler
-  }
+  // Does not come back unless a listener took it; see node_errors.h.
+  handleCallbackException(env);
 
   napi_close_handle_scope(env, scope);
 }

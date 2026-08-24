@@ -7,6 +7,7 @@
 
 #include <hermes/node-compat/bindings/handle_wrap_base.h>
 #include <hermes/node-compat/bindings/libuv_stream_base.h>
+#include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_process_wrap.h>
 #include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
@@ -539,12 +540,8 @@ class ProcessWrap : public HandleWrapBase {
       napi_value retval;
       napi_call_function(env, thisObj, onexit, 2, args, &retval);
 
-      bool hasPending = false;
-      napi_is_exception_pending(env, &hasPending);
-      if (hasPending) {
-        napi_value exc;
-        napi_get_and_clear_last_exception(env, &exc);
-      }
+      // Does not come back unless a listener took it; see node_errors.h.
+      handleCallbackException(env);
     }
 
     napi_close_handle_scope(env, scope);

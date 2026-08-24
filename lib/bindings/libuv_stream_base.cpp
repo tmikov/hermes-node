@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/bindings/libuv_stream_base.h>
+#include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
 #include <uv.h>
@@ -214,13 +215,8 @@ void LibuvStreamBase::emitRead(ssize_t nread, const uv_buf_t *buf) {
   napi_value retval;
   napi_call_function(env, thisObj, onread, 1, args, &retval);
 
-  // Clear any pending exception.
-  bool hasPending = false;
-  napi_is_exception_pending(env, &hasPending);
-  if (hasPending) {
-    napi_value exc;
-    napi_get_and_clear_last_exception(env, &exc);
-  }
+  // Does not come back unless a listener took it; see node_errors.h.
+  handleCallbackException(env);
 
   napi_close_handle_scope(env, scope);
 }
@@ -294,12 +290,8 @@ void LibuvStreamBase::afterWrite(uv_write_t *req, int status) {
     napi_value retval;
     napi_call_function(env, reqObj, oncomplete, 1, args, &retval);
 
-    bool hasPending = false;
-    napi_is_exception_pending(env, &hasPending);
-    if (hasPending) {
-      napi_value exc;
-      napi_get_and_clear_last_exception(env, &exc);
-    }
+    // Does not come back unless a listener took it; see node_errors.h.
+    handleCallbackException(env);
   }
 
   // Cleanup.
@@ -671,12 +663,8 @@ void LibuvStreamBase::afterShutdown(uv_shutdown_t *req, int status) {
     napi_value retval;
     napi_call_function(env, reqObj, oncomplete, 1, args, &retval);
 
-    bool hasPending = false;
-    napi_is_exception_pending(env, &hasPending);
-    if (hasPending) {
-      napi_value exc;
-      napi_get_and_clear_last_exception(env, &exc);
-    }
+    // Does not come back unless a listener took it; see node_errors.h.
+    handleCallbackException(env);
   }
 
   napi_delete_reference(env, reqData->reqRef);

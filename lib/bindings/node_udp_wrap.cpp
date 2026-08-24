@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/bindings/handle_wrap_base.h>
+#include <hermes/node-compat/bindings/node_errors.h>
 #include <hermes/node-compat/bindings/node_udp_wrap.h>
 #include <hermes/node-compat/runtime/runtime_state.h>
 #include <node_api.h>
@@ -537,12 +538,8 @@ class UDPWrap : public HandleWrapBase {
         napi_value retval;
         napi_call_function(env, reqObj, oncomplete, 2, args, &retval);
 
-        bool hasPending = false;
-        napi_is_exception_pending(env, &hasPending);
-        if (hasPending) {
-          napi_value exc;
-          napi_get_and_clear_last_exception(env, &exc);
-        }
+        // Does not come back unless a listener took it; see node_errors.h.
+        handleCallbackException(env);
       }
     }
 
@@ -679,12 +676,8 @@ class UDPWrap : public HandleWrapBase {
       napi_value retval;
       napi_call_function(env, handleObj, onmessage, 4, args, &retval);
 
-      bool hasPending = false;
-      napi_is_exception_pending(env, &hasPending);
-      if (hasPending) {
-        napi_value exc;
-        napi_get_and_clear_last_exception(env, &exc);
-      }
+      // Does not come back unless a listener took it; see node_errors.h.
+      handleCallbackException(env);
     }
 
     napi_close_handle_scope(env, scope);

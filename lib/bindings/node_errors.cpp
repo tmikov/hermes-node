@@ -11,6 +11,8 @@
 
 #include <cstdio>
 #include <cstdlib>
+
+#include <unistd.h>
 #include <cstring>
 #include <string>
 
@@ -100,7 +102,28 @@ bool triggerUncaughtException(napi_env env, napi_value error) {
   // something; flush before leaving, or the explanation goes missing along
   // with the program.
   std::fflush(nullptr);
-  std::exit(1);
+  // _exit and not std::exit, for the reason processExit() gives: the Hermes
+  // runtime is a stack variable in the bootstrap frame and exit() does not
+  // unwind to it, so ASAN's leak check runs against a live runtime, reports
+  // it as thousands of leaks, and then hangs symbolizing them against a
+  // binary that size. Release exits either way; under ASAN the difference
+  // is a clean exit 1 against a test run that never returns. Everything
+  // that had to happen has: 'exit' handlers ran inside
+  // process._fatalException, the error is reported, and the line above
+  // flushed.
+  _exit(1);
+}
+
+bool handleCallbackException(napi_env env) {
+  bool pending = false;
+  napi_is_exception_pending(env, &pending);
+  if (!pending)
+    return true;
+  napi_value error;
+  if (napi_get_and_clear_last_exception(env, &error) != napi_ok)
+    return true;
+  // Does not come back unless a listener took it; see node_errors.h.
+  return triggerUncaughtException(env, error);
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +145,8 @@ static napi_value triggerUncaughtExceptionCallback(
 
   reportError(env, argv[0]);
 
-  std::exit(1);
+  std::fflush(nullptr);
+  _exit(1); // see the note above
   return nullptr;
 }
 

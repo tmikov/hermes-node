@@ -37,6 +37,27 @@ napi_value initErrorsBinding(napi_env env, napi_value exports);
 /// decision belongs in one place rather than in every callback.
 bool triggerUncaughtException(napi_env env, napi_value error);
 
+/// The shape every native callback that calls into JavaScript needs: if an
+/// exception is pending, take it and hand it to triggerUncaughtException.
+///
+/// Returns true when there was nothing pending, or when a listener took
+/// responsibility -- either way the caller carries on. As above, it **does
+/// not return** when nothing handled the error, so no caller needs an
+/// unhandled path.
+///
+/// Carrying on is the caller's problem and not the same everywhere. A
+/// callback that owns a libuv request must still free it; one that owns a
+/// handle must leave it as a normal return would have. Getting that wrong
+/// is how a handled throw turns into a leak or a stalled handle -- the
+/// timers binding re-arms its shared timer for exactly this reason.
+///
+/// What this replaces, at around ten sites, was `napi_get_and_clear_last_
+/// exception` and nothing else: the error was dropped on the floor, mostly
+/// without even being printed. That exited 0 where Node exits 1, and where
+/// the callback owned a live handle it was worse than that -- the handle
+/// stayed refed and the program hung instead of failing.
+bool handleCallbackException(napi_env env);
+
 } // namespace node_compat
 } // namespace hermes
 
