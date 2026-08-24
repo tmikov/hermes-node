@@ -826,6 +826,38 @@ failing unit test fails the build.
 
 - Run one binary directly: `cmake-build-asan/unittests/NodeProcessTest --gtest_filter=...`
 
+### Known flaky tests
+
+Three JS tests fail intermittently under the suite's 16-way parallel load and
+pass in isolation. **A single red run naming one of these is not a
+regression**; confirm before chasing it, because each has cost a session time
+already:
+
+```bash
+for i in 1 2 3 4 5 6; do
+  TEST_THREAD_ID=$i cmake-build-asan/bin/hermes-node test/<name>.js >/dev/null 2>&1
+  echo -n "$? "
+done
+```
+
+Measured 6/6 passing in isolation for all three, on both sides of an
+unrelated change:
+
+- `test-inspect.js` -- spawns a child and waits for
+  `Debugger listening on ws://` on its stderr with a timeout. The most
+  frequent of the three, and the timing dependency is explicit in the test.
+- `test-repl-history.js` -- same shape, a spawned REPL session read through
+  a pipe.
+- `test-fs-async-verify.js` -- was measured at 2/6 and 5/6 failures in
+  isolation during the single-executable work, so it may be genuinely
+  racy rather than only load-sensitive. It is currently 6/6; if it starts
+  failing in isolation again, that is a real bug and not this note.
+
+None is understood, none has been fixed, and none is quarantined -- a
+`XFAIL`ed flake stops reporting the day it becomes a real failure. The
+honest state is that they are known, reproducible only under load, and
+someone should eventually find out why.
+
 `check-hermes-node-examples` runs the examples under `examples/` and is
 **not** part of `check-hermes-node`: examples need a network `npm install`,
 while the default suite stays offline. Run it against `cmake-build-release`
