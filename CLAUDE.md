@@ -74,6 +74,28 @@ wins.
 Pinned by `test/test-process-exit-code.js`, whose fourteen cases were each
 checked against the status the same program produces under node v24.13.1.
 
+**`process.exit()` emits `'exit'` and flushes first.** It used to do neither.
+`processExit` called `_exit()` immediately, so no listener ran -- and that is
+where a program puts what must happen whatever else it skips. blessed
+restores the terminal there (`screen.js`, `process.on('exit', ...)` ->
+`normalBuffer()`), so quitting a TUI left the alternate screen buffer on.
+
+Flushing is the other half, and it is not specific to `process.exit()`:
+`libjs/setup-stdio.js` gives a TTY a `tty.WriteStream` and a pipe a
+`net.Socket`, both libuv streams whose writes are **queued** rather than
+synchronous, where Node writes stdio synchronously on POSIX for a TTY or a
+file. So `_exit()` discarded whatever had not reached the fd -- eight
+`console.log` calls before `process.exit()` printed **one line** -- and
+anything an `'exit'` handler wrote was lost on *both* exit paths, since
+step 14's `uv_run` finished before those writes existed. `flushPendingWrites`
+(`lib/process/node_process.cpp`) runs the loop `UV_RUN_NOWAIT`, bounded, on
+both paths. The caveat is written where it is implemented: running the loop
+can also fire an already-expired timer after `'exit'`, which Node does not
+do. Draining the stdio write queues specifically would be the better fix and
+needs the `uv_stream_t` behind each JS stream; losing a program's output is
+the worse of the two divergences. Pinned by
+`test/test-process-exit-event.js`, seven cases, each checked against Node.
+
 The one remaining divergence: assigning a **non-numeric** value is ignored
 here, where Node throws `ERR_INVALID_ARG_TYPE` at the assignment (so
 `process.exitCode = "oops"` exits 1 there and 0 here). Matching it needs a

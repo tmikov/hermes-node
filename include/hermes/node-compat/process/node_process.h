@@ -9,6 +9,7 @@
 #define HERMES_NODE_COMPAT_NODE_PROCESS_H
 
 #include <node_api_types.h>
+#include <uv.h>
 
 #include <string>
 #include <vector>
@@ -68,6 +69,27 @@ class NodeProcess {
   napi_ref processRef_ = nullptr;
   uint64_t startTime_ = 0; // nanoseconds, for uptime()
 };
+
+/// Records that an exit is under way, so the 'exit' event fires exactly
+/// once however the process ends. The runtime's own end-of-life path emits
+/// that event itself; calling this first stops process.exit(), reached from
+/// an 'exit' handler, from emitting it a second time. Node fires it once,
+/// and code that restores a terminal there is wrong if it runs twice.
+void markProcessExiting();
+
+/// Hands the process binding the event loop, so process.exit() can flush
+/// queued stdio writes before it goes. stdout on a TTY or a pipe is a libuv
+/// stream and its writes are queued, not synchronous, so _exit() discards
+/// whatever has not reached the fd -- which is most of it. Without this,
+/// eight console.log calls followed by process.exit() printed one line, and
+/// a terminal UI restoring the screen from an 'exit' handler got a fraction
+/// of the escape sequence out.
+void setProcessExitLoop(uv_loop_t *loop);
+
+/// Runs the loop until the queued writes are gone, bounded. Called on both
+/// exit paths; see the note in node_process.cpp about what else this can
+/// run.
+void flushPendingWrites(uv_loop_t *loop);
 
 } // namespace node_compat
 } // namespace hermes

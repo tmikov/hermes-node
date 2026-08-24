@@ -698,6 +698,10 @@ int runHermesNode(const HermesNodeConfig &config) {
     return 1;
   }
 
+  // process.exit() bypasses everything below and calls _exit(), which
+  // discards queued stdio writes. Give it the loop so it can flush first.
+  setProcessExitLoop(eventLoop.getLoop());
+
   // 3. Create napi_env with host integration.
   eventLoop.getHost()->fatal_exception = onFatalException;
 
@@ -1539,6 +1543,12 @@ int runHermesNode(const HermesNodeConfig &config) {
     napi_value processObj;
     napi_get_named_property(env, global, "process", &processObj);
 
+    // Claim the exit before emitting, so a handler that calls
+    // process.exit() does not emit 'exit' a second time on its way out.
+    // Node fires it once; blessed and anything else that restores a
+    // terminal there is wrong if it runs twice.
+    markProcessExiting();
+
     const std::optional<int> before = readProcessExitCode(env, processObj);
     if (exitCode == 0 && before.has_value())
       exitCode = *before;
@@ -1563,6 +1573,12 @@ int runHermesNode(const HermesNodeConfig &config) {
     const std::optional<int> after = readProcessExitCode(env, processObj);
     if (after != before && after.has_value())
       exitCode = *after;
+
+    // An 'exit' handler that printed -- or restored a terminal -- queued
+    // those writes on a libuv stream, and step 14's uv_run finished before
+    // they existed. Nothing else will run the loop, so flush here or they
+    // are lost.
+    flushPendingWrites(eventLoop.getLoop());
   }
 
   // 16. Cleanup (reverse order of creation).

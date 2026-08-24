@@ -520,11 +520,52 @@ static napi_value processUptime(napi_env env, napi_callback_info info) {
   return result;
 }
 
+/// True once an exit is under way, by either route: this function, or the
+/// runtime's own end-of-life path (see markProcessExiting). It exists to
+/// make the 'exit' event fire exactly once. Node guarantees that, and
+/// programs rely on it -- a terminal UI restores the screen there, and
+/// restoring twice is as wrong as not at all.
+static bool processExiting = false;
+
+void markProcessExiting() {
+  processExiting = true;
+}
+
+/// The loop, for flushPendingWrites. Set once at startup by the runtime;
+/// null in a unit test that never built one, which is why every use is
+/// guarded.
+static uv_loop_t *exitLoop = nullptr;
+
+void setProcessExitLoop(uv_loop_t *loop) {
+  exitLoop = loop;
+}
+
+void flushPendingWrites(uv_loop_t *loop) {
+  if (loop == nullptr)
+    return;
+  // UV_RUN_NOWAIT rather than UV_RUN_ONCE: never block. A write that cannot
+  // complete -- a full pipe nobody is reading -- must not hang the exit, so
+  // this gives up rather than waiting, and the iteration cap bounds even a
+  // pathological loop that keeps finding work.
+  //
+  // The honest caveat: this runs the loop, so an already-expired timer or a
+  // ready I/O callback can fire here, after 'exit'. Node runs no further
+  // callbacks at that point. The alternative is draining the stdio write
+  // queues specifically, which needs the uv_stream_t behind each JS stream
+  // and is the better fix; this is the one that stops output being lost
+  // today. Losing a program's output is the worse of the two divergences.
+  for (int i = 0; i < 64; ++i) {
+    if (uv_run(loop, UV_RUN_NOWAIT) == 0)
+      break;
+  }
+}
+
 /// process.exit([code])
 static napi_value processExit(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1];
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  napi_value thisArg = nullptr;
+  napi_get_cb_info(env, info, &argc, argv, &thisArg, nullptr);
 
   // An explicit argument wins. Without one, Node falls back to
   // process.exitCode, so `process.exitCode = 3; process.exit();` exits 3 --
@@ -532,21 +573,73 @@ static napi_value processExit(napi_env env, napi_callback_info info) {
   // a program that has already said what it means should not have that
   // answer replaced with 0 by the call that ends it.
   int32_t code = 0;
+  bool haveCode = false;
   if (argc >= 1) {
-    napi_get_value_int32(env, argv[0], &code);
-  } else {
-    napi_value thisArg;
-    if (napi_get_cb_info(env, info, nullptr, nullptr, &thisArg, nullptr) ==
-        napi_ok) {
-      napi_value value;
-      napi_valuetype type;
-      if (napi_get_named_property(env, thisArg, "exitCode", &value) ==
-              napi_ok &&
-          napi_typeof(env, value, &type) == napi_ok && type == napi_number) {
-        napi_get_value_int32(env, value, &code);
-      }
+    napi_valuetype argType;
+    if (napi_typeof(env, argv[0], &argType) == napi_ok &&
+        argType == napi_number) {
+      haveCode = napi_get_value_int32(env, argv[0], &code) == napi_ok;
     }
   }
+  if (!haveCode && thisArg != nullptr) {
+    napi_value value;
+    napi_valuetype type;
+    if (napi_get_named_property(env, thisArg, "exitCode", &value) == napi_ok &&
+        napi_typeof(env, value, &type) == napi_ok && type == napi_number) {
+      napi_get_value_int32(env, value, &code);
+    }
+  }
+
+  // Emit 'exit' before going, because that is where a program does the work
+  // that has to happen whatever else it skipped. blessed restores the
+  // terminal there (screen.js, `process.on('exit', ...)` -> normalBuffer()),
+  // so a TUI quit with process.exit() used to leave the alternate screen
+  // buffer on and the user looking at the dashboard it had drawn.
+  //
+  // Once only, and not re-entrantly: a handler that calls process.exit()
+  // again must not re-run every handler. Node behaves the same way -- the
+  // nested call's code wins and the handlers run once.
+  if (!processExiting && thisArg != nullptr) {
+    processExiting = true;
+
+    // Publish the code first so a handler reads the value it is about to
+    // exit with, then read it back: Node lets a handler overrule it by
+    // assigning process.exitCode, and programs use that to turn a clean
+    // exit into a failure after inspecting something.
+    napi_value codeVal;
+    if (napi_create_int32(env, code, &codeVal) == napi_ok)
+      napi_set_named_property(env, thisArg, "exitCode", codeVal);
+
+    napi_value emitFn;
+    napi_valuetype emitType;
+    if (napi_get_named_property(env, thisArg, "emit", &emitFn) == napi_ok &&
+        napi_typeof(env, emitFn, &emitType) == napi_ok &&
+        emitType == napi_function) {
+      napi_value exitStr;
+      napi_create_string_utf8(env, "exit", NAPI_AUTO_LENGTH, &exitStr);
+      napi_value args[2] = {exitStr, codeVal};
+      napi_value result;
+      napi_call_function(env, thisArg, emitFn, 2, args, &result);
+      bool pending = false;
+      // A throwing exit handler must not stop the exit, and there is no
+      // longer anyone to report it to but stderr.
+      if (napi_is_exception_pending(env, &pending) == napi_ok && pending)
+        napi_get_and_clear_last_exception(env, &result);
+    }
+
+    napi_value after;
+    napi_valuetype afterType;
+    if (napi_get_named_property(env, thisArg, "exitCode", &after) == napi_ok &&
+        napi_typeof(env, after, &afterType) == napi_ok &&
+        afterType == napi_number) {
+      napi_get_value_int32(env, after, &code);
+    }
+  }
+
+  // Everything above may have written: the 'exit' handlers, and whatever
+  // the program printed before calling exit. Those writes are queued on a
+  // libuv stream, and _exit() below does not care. Flush first.
+  flushPendingWrites(exitLoop);
 
   // Use _exit() to skip atexit handlers (including ASAN leak detection).
   // The Hermes runtime is a stack variable in runBootstrap() and won't be
