@@ -457,7 +457,7 @@
     // difference is observable -- `require.cache[f] instanceof Module` is
     // false and `module.constructor.name` is 'Object', where Node and a
     // disk load both say Module. Recorded as a known limitation in
-    // history/plans/progress-aot-bundle.md rather than fixed: constructing
+    // docs/superpowers/plans/progress-aot-bundle.md rather than fixed: constructing
     // real Module instances would run Node's constructor, which does its own
     // updateChildren() and paths setup, and the fields would have to be
     // overwritten straight afterwards.

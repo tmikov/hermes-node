@@ -4,7 +4,7 @@
 // LICENSE file in the root directory of this source tree.
 //
 // Every row of the flag-surface table in
-// history/plans/2026-08-15-bundle-tooling-design.md, plus the two
+// docs/superpowers/specs/2026-08-15-bundle-tooling-design.md, plus the two
 // malformed-value cases. Each case asserts the specific diagnostic rather
 // than the presence of the word "error": a check that matches any message
 // passes when the binary fails for a reason that has nothing to do with the

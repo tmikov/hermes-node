@@ -9,7 +9,7 @@ Node.js API compatibility layer for Hermes. Ports Node's native bindings to Node
 - Hermes (submodule): `hermes/` — n-api branch, not yet merged to Hermes main
 - Hermes Node-API source (separate checkout): `/home/tmikov/work/hermes-n-api`
 - Node.js source (separate checkout): `/home/tmikov/3rd/node` — v24.13.0
-- Plans and history: `history/`
+- Documentation: `docs/` -- specs and plans under `docs/superpowers/`, everything else under `docs/notes/`. See `docs/README.md`.
 
 ## Conventions
 
@@ -62,7 +62,7 @@ skips the check for anyone who means it.
   something this layer can shim. It breaks any emscripten/asm.js output
   that builds its shims with direct `eval` -- nbind does, which is why
   `yoga-layout-prebuilt`, and therefore Ink 3, does not load. See
-  `history/plans/2026-08-24-ink-findings.md`; it fails identically from
+  `docs/notes/2026-08-24-ink-findings.md`; it fails identically from
   disk, a bundle and an executable, being underneath all three.
 
 ## Bootstrap Sequence
@@ -201,7 +201,7 @@ on by default. Built-in JS is unaffected (already embedded as bytecode).
   compile-cache consults, ~1506 distinct files): warm runs were consistently
   36-48% faster than cold, depending on OS file-cache state, with the cache
   landing at ~16 MB / ~1506 entries. See
-  `history/plans/progress-compile-cache.md` for the full numbers.
+  `docs/superpowers/plans/progress-compile-cache.md` for the full numbers.
 
 ## AOT Bundles
 
@@ -209,18 +209,18 @@ on by default. Built-in JS is unaffected (already embedded as bytecode).
 JavaScript file to bytecode, and writes one container. `--bundle=<file>`
 runs it, with no compilation and no source tree needed at run time.
 
-- Design `history/plans/2026-08-15-aot-bundle-design.md`, plan
-  `history/plans/2026-08-15-aot-bundle-plan.md`, progress
-  `history/plans/progress-aot-bundle.md`. The closed-world round (2026-08-19,
+- Design `docs/superpowers/specs/2026-08-15-aot-bundle-design.md`, plan
+  `docs/superpowers/plans/2026-08-15-aot-bundle-plan.md`, progress
+  `docs/superpowers/plans/progress-aot-bundle.md`. The closed-world round (2026-08-19,
   format v2) supersedes that design's fallback rows: design
-  `history/plans/2026-08-19-closed-world-bundle-design.md`, plan
-  `history/plans/2026-08-19-closed-world-bundle-plan.md`. The preload round
+  `docs/superpowers/specs/2026-08-19-closed-world-bundle-design.md`, plan
+  `docs/superpowers/plans/2026-08-19-closed-world-bundle-plan.md`. The preload round
   (2026-08-20, format v3) adds `--preload`: design
-  `history/plans/2026-08-20-bundle-preload-design.md`, plan
-  `history/plans/2026-08-20-bundle-preload-plan.md`. The native-addon round
+  `docs/superpowers/specs/2026-08-20-bundle-preload-design.md`, plan
+  `docs/superpowers/plans/2026-08-20-bundle-preload-plan.md`. The native-addon round
   (2026-08-21, format v4) makes a `.node` addon packageable: design
-  `history/plans/2026-08-21-bundle-natives-design.md`, plan
-  `history/plans/2026-08-21-bundle-natives-plan.md`.
+  `docs/superpowers/specs/2026-08-21-bundle-natives-design.md`, plan
+  `docs/superpowers/plans/2026-08-21-bundle-natives-plan.md`.
 - Implementation: `lib/bundle/` (format, writer, reader, generation tag,
   `require()` scanner, resolver, producer, run layer) plus
   `libjs/bundle-loader.js`, which wraps `Module._load`. `hermesNodeBundleRun`
@@ -418,7 +418,7 @@ runs it, with no compilation and no source tree needed at run time.
   code all lives in `lib/`) is kept AND widens the root to cover itself,
   which is what lets a run-time `require.resolve('foo', {paths})` find it
   by name. The reverse order was tried and reverted -- see
-  `history/plans/progress-aot-bundle.md`. A version mismatch is fatal in
+  `docs/superpowers/plans/progress-aot-bundle.md`. A version mismatch is fatal in
   `open()` and reported (not enforced) in `openForInspection`.
 - The scanner (`lib/bundle/require_scanner.cpp`) wraps each source in the
   CommonJS module wrapper before parsing, then runs `sema::resolveAST` and
@@ -521,9 +521,9 @@ runs it, with no compilation and no source tree needed at run time.
 ### Bundle tooling
 
 Five diagnostic flags, none of them on the run path. Design
-`history/plans/2026-08-15-bundle-tooling-design.md`, plan
-`history/plans/2026-08-15-bundle-tooling-plan.md`, progress
-`history/plans/progress-bundle-tooling.md`.
+`docs/superpowers/specs/2026-08-15-bundle-tooling-design.md`, plan
+`docs/superpowers/plans/2026-08-15-bundle-tooling-plan.md`, progress
+`docs/superpowers/plans/progress-bundle-tooling.md`.
 
 - `--build-bundle=<f> --verbose` narrates configuration (entry, absolute
   output path, generation tag with the version/arch/bytecode-version/
@@ -613,9 +613,9 @@ Five diagnostic flags, none of them on the run path. Design
 ## Single-File Executables
 
 `--build-exe=<out> <bundle.hbb>` turns an AOT container into a standalone
-executable. Design `history/plans/2026-08-23-single-executable-design.md`,
-plan `history/plans/2026-08-23-single-executable-plan.md`, progress
-`history/plans/progress-single-executable.md`.
+executable. Design `docs/superpowers/specs/2026-08-23-single-executable-design.md`,
+plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
+`docs/superpowers/plans/progress-single-executable.md`.
 
 - It takes **a container, not an entry script**, deliberately: `--build-bundle`
   already produces containers, and the container going in can be inspected

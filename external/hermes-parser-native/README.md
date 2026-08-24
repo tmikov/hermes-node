@@ -270,6 +270,6 @@ change and build nothing until the end -- step 7 is that build.
    - `examples/hermes-parser-ast/README.md`, if the example survives step 8:
      it names `external/hermes-parser-native/package/dist/HermesParserAddon.js`
      as the loader whose computed requires motivate `--include`;
-   - `history/plans/2026-08-12-flow-bundler-example-design.md`, its plan, and
-     `history/plans/2026-08-21-bundle-natives-{design,plan}.md` are
-     historical records; leave them.
+   - `docs/superpowers/specs/2026-08-12-flow-bundler-example-design.md`, its plan, and
+     `docs/superpowers/specs/2026-08-21-bundle-natives-design.md` with its
+     plan in `docs/superpowers/plans/`, are historical records; leave them.

@@ -1357,7 +1357,7 @@ int runHermesNode(const HermesNodeConfig &config) {
   // header with a different caller than the check that currently protects
   // it: a bundle's preloads are the container's own (config.preloadModules,
   // run from inside runBundle), and a disk -r must not run in front of
-  // them -- see history/plans/2026-08-20-bundle-preload-design.md. An
+  // them -- see docs/superpowers/specs/2026-08-20-bundle-preload-design.md. An
   // embedded bundle is the same situation reached by a different route, and
   // is guarded here for the same reason: bundle_main.cpp parses no flags, so
   // it cannot set requireModules, but the guard belongs to the mode rather

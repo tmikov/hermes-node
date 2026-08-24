@@ -1177,7 +1177,7 @@ int buildBundle(
   // its copy goes. Flat, rather than mirroring the identity's own subtree:
   // the whole point of shipping a bundle is a small countable set of files,
   // and "bundle plus tree" is not a better distribution unit than a tree
-  // (see history/plans/2026-08-21-bundle-natives-design.md). One
+  // (see docs/superpowers/specs/2026-08-21-bundle-natives-design.md). One
   // consequence worth knowing: every native lands in one directory, so an
   // addon whose RPATH is $ORIGIN-relative finds a sibling .so the user
   // drops beside the bundle.

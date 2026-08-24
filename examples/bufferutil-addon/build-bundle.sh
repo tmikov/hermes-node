@@ -24,7 +24,7 @@
 #   The addon is ALSO copied to its identity path under the output
 #   directory, so node-gyp-build's readdirSync() has something to find.
 #   This is the escape hatch the native-addon design calls out by name
-#   (history/plans/2026-08-21-bundle-natives-design.md, "The escape hatch,
+#   (docs/superpowers/specs/2026-08-21-bundle-natives-design.md, "The escape hatch,
 #   which costs no code"): place the real file at its identity path and the
 #   stat succeeds, after which the require() is answered from the
 #   container. That copy is the difference between "the native addon runs"
