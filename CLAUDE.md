@@ -405,7 +405,21 @@ runs it, with no compilation and no source tree needed at run time.
   `BuiltinModule.normalizeRequirableId` (NOT `Module.isBuiltin`, which also
   answers for vendored packages such as `ws`), so a bundle can never shadow
   an embedded builtin. The producer's `isBuiltinSpecifier`
-  (`lib/bundle/bundle_resolve.cpp`) mirrors the same 43-name list.
+  (`lib/bundle/bundle_resolve.cpp`) mirrors the same 44-name list. **Nothing
+  forces those two lists to agree with each other, or either of them to agree
+  with what is actually compiled in** (`lib/embedded-modules/
+  embedded-modules.txt`), and they have drifted in both directions. `zlib`
+  was compiled in and requirable from a script while absent from both
+  classifier lists, so a bundle routed it into the closed world and threw
+  `MODULE_NOT_FOUND` -- a break visible only after bundling, and only to a
+  program that used zlib. Seven names drift the other way and are classified
+  but not compiled in (`assert/strict`, `dns/promises`, `path/posix`,
+  `path/win32`, `stream/consumers`, `stream/web`, `timers/promises`); those
+  fail identically bundled and unbundled, so they are a coverage gap rather
+  than a bundling defect. `test/bundle-builtins.js` is the forcing function
+  for the first kind: it runs one file plain and bundled and diffs the two
+  outputs, so a name requirable one way and not the other fails there instead
+  of in somebody's program.
 - Vendored packages (`ws`) are not builtins: an installed `node_modules` copy
   is packaged and wins, and when there is none the producer warns
   (`warning: not packaging '<id>' ...` via `isVendoredSpecifier`) and the

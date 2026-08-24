@@ -16,6 +16,13 @@ var builtinIds = [
   'stream', 'stream/consumers', 'stream/promises', 'stream/web',
   'string_decoder', 'timers', 'timers/promises', 'tls', 'tty', 'url', 'util',
   'util/types', 'vm',
+  // zlib is compiled in (lib/embedded-modules/embedded-modules.txt) and a
+  // plain script has always been able to require it. Leaving it out of this
+  // list meant only that nothing *classified* it as a builtin -- which is
+  // invisible until a bundle, where the classification is what routes a
+  // request to the embedded copy instead of into the closed world. Without
+  // it, require('zlib') worked unbundled and threw MODULE_NOT_FOUND bundled.
+  'zlib',
 ];
 
 var builtinSet = new Set(builtinIds);

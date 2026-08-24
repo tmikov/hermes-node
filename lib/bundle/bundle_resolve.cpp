@@ -296,6 +296,11 @@ const std::unordered_set<std::string_view> &builtinIds() {
       "util",
       "util/types",
       "vm",
+      // See the note beside the same name in
+      // libjs/shims/internal/bootstrap/realm.js: zlib is embedded, and
+      // omitting it here made the producer treat it as a package to
+      // package rather than a builtin to forward.
+      "zlib",
   };
   return ids;
 }
