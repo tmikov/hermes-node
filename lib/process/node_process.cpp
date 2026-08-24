@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <cassert>
 #include <cerrno>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
@@ -572,13 +573,59 @@ static napi_value processExit(napi_env env, napi_callback_info info) {
   // the same property the natural-exit path honours, and the same reason:
   // a program that has already said what it means should not have that
   // answer replaced with 0 by the call that ends it.
+  //
+  // The argument is validated the way Node validates it, because a program
+  // that passes a string is not making a mistake: `process.exit(
+  // process.argv[2])` is ordinary, and taking 0 for '23' turns a failing
+  // child into a passing one. Node's rule lives in the process.exitCode
+  // setter (lib/internal/bootstrap/node.js): a non-empty string goes
+  // through Number(), and if that is NaN the *original* value is kept so
+  // the integer check reports a type error rather than a range one. Hence
+  // '0x10' and ' 23 ' work, while '' and '23abc' do not -- Number('') is 0
+  // in JavaScript, and the empty-string guard is the only reason it is
+  // rejected.
   int32_t code = 0;
   bool haveCode = false;
   if (argc >= 1) {
     napi_valuetype argType;
-    if (napi_typeof(env, argv[0], &argType) == napi_ok &&
-        argType == napi_number) {
-      haveCode = napi_get_value_int32(env, argv[0], &code) == napi_ok;
+    napi_typeof(env, argv[0], &argType);
+    if (argType != napi_undefined && argType != napi_null) {
+      // Number() the strings, except "", which stays a string and fails the
+      // type check below exactly as it does in Node.
+      napi_value candidate = argv[0];
+      bool isNumeric = argType == napi_number;
+      if (argType == napi_string) {
+        size_t len = 0;
+        napi_get_value_string_utf8(env, argv[0], nullptr, 0, &len);
+        napi_value coerced;
+        double probe = 0;
+        if (len != 0 &&
+            napi_coerce_to_number(env, argv[0], &coerced) == napi_ok &&
+            napi_get_value_double(env, coerced, &probe) == napi_ok &&
+            !std::isnan(probe)) {
+          candidate = coerced;
+          isNumeric = true;
+        }
+      }
+
+      double value = 0;
+      if (!isNumeric ||
+          napi_get_value_double(env, candidate, &value) != napi_ok) {
+        napi_throw_type_error(
+            env,
+            "ERR_INVALID_ARG_TYPE",
+            "The \"code\" argument must be of type number or an integer string");
+        return nullptr;
+      }
+      if (!std::isfinite(value) || value != std::trunc(value)) {
+        napi_throw_range_error(
+            env,
+            "ERR_OUT_OF_RANGE",
+            "The \"code\" argument must be an integer");
+        return nullptr;
+      }
+      code = static_cast<int32_t>(value);
+      haveCode = true;
     }
   }
   if (!haveCode && thisArg != nullptr) {
