@@ -79,6 +79,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -617,6 +618,33 @@ int runOpenBundle(napi_env env, ModuleLoader &loader) {
 /// if it cannot be mapped, does not validate, or was built by a different
 /// hermes-node, silently recompiling from a source tree that may not even
 /// be present is worse than refusing to start.
+/// Reads `process.exitCode`, or nullopt when the program never set one.
+/// Node's default is `undefined`, and a program that assigns null is saying
+/// the same thing, so both mean "no opinion" rather than zero -- a
+/// distinction the caller needs, because it compares the value before and
+/// after the 'exit' handlers run.
+///
+/// A non-numeric value reads as nullopt rather than being coerced. Node
+/// instead throws ERR_INVALID_ARG_TYPE at the assignment; matching that
+/// needs a validating setter on the process object, which this does not
+/// have. Ignoring is the safer of the two available answers: guessing what
+/// `process.exitCode = "oops"` meant would turn a typo into a status a
+/// shell script branches on.
+static std::optional<int> readProcessExitCode(
+    napi_env env,
+    napi_value processObj) {
+  napi_value value;
+  if (napi_get_named_property(env, processObj, "exitCode", &value) != napi_ok)
+    return std::nullopt;
+  napi_valuetype type;
+  if (napi_typeof(env, value, &type) != napi_ok || type != napi_number)
+    return std::nullopt;
+  int32_t code = 0;
+  if (napi_get_value_int32(env, value, &code) != napi_ok)
+    return std::nullopt;
+  return static_cast<int>(code);
+}
+
 int runBundle(napi_env env, ModuleLoader &loader, const std::string &path) {
   std::string error;
   if (!openBundle(path, &error)) {
@@ -1488,10 +1516,33 @@ int runHermesNode(const HermesNodeConfig &config) {
     } while (uv_loop_alive(eventLoop.getLoop()));
   }
 
-  // 15. Emit 'exit' event on process object.
+  // 15. Settle the exit status, then emit 'exit' on the process object.
+  //
+  // Node keeps one variable where we keep two. `exitCode` above is native:
+  // it is 1 when something we ran failed -- an uncaught exception, a module
+  // that would not load. `process.exitCode` is a plain JavaScript property
+  // the program assigns, and until this point nothing ever read it, so a
+  // test runner that set it to 1 and let its report finish printing exited
+  // 0 -- the wrong answer to the only question a shell asks.
+  //
+  // Reconcile them in the order Node's single variable would have ended up
+  // in. A native failure outranks whatever the program assigned earlier: it
+  // means something did not run at all, and a throw exits 1 in Node however
+  // the property was set beforehand. But an assignment made *during* an
+  // 'exit' handler is the last word even over that, because in Node the
+  // handler is simply overwriting the variable the exception wrote to.
+  //
+  // Hence the read before and the read after, compared rather than merely
+  // re-read: a handler that changed the property wins, and one that left it
+  // alone must not silently undo the reconciliation.
   {
     napi_value processObj;
     napi_get_named_property(env, global, "process", &processObj);
+
+    const std::optional<int> before = readProcessExitCode(env, processObj);
+    if (exitCode == 0 && before.has_value())
+      exitCode = *before;
+
     napi_value emitFn;
     napi_get_named_property(env, processObj, "emit", &emitFn);
     napi_valuetype emitType;
@@ -1508,6 +1559,10 @@ int runHermesNode(const HermesNodeConfig &config) {
       if (pending)
         printAndClearException(env);
     }
+
+    const std::optional<int> after = readProcessExitCode(env, processObj);
+    if (after != before && after.has_value())
+      exitCode = *after;
   }
 
   // 16. Cleanup (reverse order of creation).

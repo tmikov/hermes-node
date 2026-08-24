@@ -52,13 +52,34 @@ cmake --build cmake-build-asan --target check-hermes-node
 `hermes-node` binary in `tools/hermes-node/hermes-node.cpp`. Boot order:
 runtime -> event loop -> napi_env -> console -> bindings -> primordials -> process -> module loader -> timers globals -> `globalThis.Buffer` -> debuglog -> user script -> drainJobs -> uv_run -> emit 'exit' -> cleanup
 
-**Known divergence: `process.exitCode` is ignored.** `runHermesNode()` in
-`lib/runtime/hermes_node_runtime.cpp` computes a local exit code and never
-reads the property, so `process.exitCode = 3` exits 0 (node v24.13.1 exits 3)
-and the `'exit'` event handler receives 0. True in every mode -- a plain
-script, `--bundle`, and a `--build-exe` executable alike -- so it is
-pre-existing and mode-independent, not a defect of the bundle or
-single-executable work. Use `process.exit(code)` meanwhile.
+**`process.exitCode` is honoured**, in every mode -- a plain script,
+`--bundle`, and a `--build-exe` executable alike. It was ignored until
+2026-08-24: `runHermesNode()` kept a native exit code that nothing in
+JavaScript could reach, so a test runner that set `process.exitCode = 1` and
+let its report finish printing exited 0, and a failing run looked green.
+
+Node keeps one variable where we keep two, so step 15 of the bootstrap
+reconciles them in the order Node's single variable would have ended up in.
+A **native** failure (an uncaught exception, a module that would not load)
+outranks whatever the program assigned earlier -- a throw exits 1 in Node
+however the property was set beforehand. But an assignment made *during* an
+`'exit'` handler is the last word even over that, because in Node the handler
+is simply overwriting the variable the exception wrote to. That is why the
+property is read before and after the emit and the two are **compared**: a
+handler that changed it wins, one that left it alone does not undo the
+reconciliation. A bare `process.exit()` falls back to the property too
+(`processExit` in `lib/process/node_process.cpp`); an explicit argument still
+wins.
+
+Pinned by `test/test-process-exit-code.js`, whose fourteen cases were each
+checked against the status the same program produces under node v24.13.1.
+
+The one remaining divergence: assigning a **non-numeric** value is ignored
+here, where Node throws `ERR_INVALID_ARG_TYPE` at the assignment (so
+`process.exitCode = "oops"` exits 1 there and 0 here). Matching it needs a
+validating accessor with backing storage on the `process` object; ignoring is
+the safer of the two answers available without one, since guessing what the
+program meant would turn a typo into a status a shell script branches on.
 
 ## Module Loader
 

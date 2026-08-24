@@ -526,9 +526,26 @@ static napi_value processExit(napi_env env, napi_callback_info info) {
   napi_value argv[1];
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
+  // An explicit argument wins. Without one, Node falls back to
+  // process.exitCode, so `process.exitCode = 3; process.exit();` exits 3 --
+  // the same property the natural-exit path honours, and the same reason:
+  // a program that has already said what it means should not have that
+  // answer replaced with 0 by the call that ends it.
   int32_t code = 0;
   if (argc >= 1) {
     napi_get_value_int32(env, argv[0], &code);
+  } else {
+    napi_value thisArg;
+    if (napi_get_cb_info(env, info, nullptr, nullptr, &thisArg, nullptr) ==
+        napi_ok) {
+      napi_value value;
+      napi_valuetype type;
+      if (napi_get_named_property(env, thisArg, "exitCode", &value) ==
+              napi_ok &&
+          napi_typeof(env, value, &type) == napi_ok && type == napi_number) {
+        napi_get_value_int32(env, value, &code);
+      }
+    }
   }
 
   // Use _exit() to skip atexit handlers (including ASAN leak detection).
