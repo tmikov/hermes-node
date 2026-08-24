@@ -159,6 +159,17 @@ Recorded because each is a trap that would otherwise be rediscovered:
   `resolveKitDir()` looks beside the running binary, which is right for a
   release layout and wrong for `bin/hermes-node` next to `kit/`. Developers
   pass `--kit=<build dir>/kit`.
+- **An extra non-flag positional after the container is silently ignored.**
+  `hermes-node --build-exe=out app.hbb second.hbb` builds from `app.hbb` and
+  exits 0 without mentioning `second.hbb`. A flag typed after the container
+  is refused by name; a second *path* is not. This is the same convention
+  every other verb has -- `--dump --bundle=x extra` ignores `extra` too --
+  so it is consistency rather than a new hole, and the whole-branch review
+  judged it non-blocking on those grounds. Recorded because the reasoning
+  is not obvious from the code: the parse loop breaks at the first
+  positional, and `--build-exe` is the only verb whose input *is* a
+  positional, so it is the only one where a second one could plausibly have
+  been meant.
 - **`test/build-exe-natives.js` asserts the missing-sidecar message, not
   `err.code`.** A regression that changed only `code = 'MODULE_NOT_FOUND'` --
   the value an optional-dependency probe branches on -- would slip past. The
