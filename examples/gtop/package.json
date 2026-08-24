@@ -1,0 +1,11 @@
+{
+  "name": "hermes-node-example-gtop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A third-party system monitor TUI, bundled and linked into one executable.",
+  "type": "commonjs",
+  "license": "MIT",
+  "dependencies": {
+    "gtop": "^1.1.5"
+  }
+}

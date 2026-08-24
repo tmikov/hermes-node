@@ -54,6 +54,16 @@ skips the check for anyone who means it.
 - Async generators: require `-Xasync-generators` flag (enabled in hermes-node)
 - Async generator prototype chain is flat (Hermes bug)
 - Hermes warns about undeclared globals in strict mode IIFEs -- use `var X = globalThis.X`
+- No `WebAssembly` (`typeof WebAssembly === 'undefined'`); in progress upstream
+- **`eval` does not capture local scope** -- it behaves as *indirect* eval,
+  seeing globals only, so `function f(){var x=1; return eval("x")}` throws
+  where Node returns 1. (`new Function` is correct: the spec gives it the
+  global scope, and it gets it.) This is an engine restriction, not
+  something this layer can shim. It breaks any emscripten/asm.js output
+  that builds its shims with direct `eval` -- nbind does, which is why
+  `yoga-layout-prebuilt`, and therefore Ink 3, does not load. See
+  `history/plans/2026-08-24-ink-findings.md`; it fails identically from
+  disk, a bundle and an executable, being underneath all three.
 
 ## Bootstrap Sequence
 
@@ -802,6 +812,24 @@ plan `history/plans/2026-08-23-single-executable-plan.md`, progress
   a macOS one needs only OS-provided libraries.
   `HERMES_USE_STATIC_ICU=ON` would fix the ICU half, at the cost of a static
   system ICU at build time; its own round.
+- **Two worked cases, chosen as a matched pair.** `examples/tetris` and
+  `examples/gtop` each wrap a third-party npm package in a one-line entry and
+  build it to a binary; both `run.sh` scripts check the executable with
+  `node_modules` moved out of the way, which proves the artifact rather than
+  asserting it. They differ in what bundling costs. tetris-cli is entirely
+  CommonJS with no computed requires and no addons, so the producer emits no
+  warnings at all -- its `run.sh` asserts that, since it is the reason that
+  example is trivial. gtop is the opposite on both counts: blessed loads
+  every widget through `require('./widgets/' + name)`, so each needs
+  `--include` (derived from the directory, so a blessed upgrade cannot
+  silently drop one), and blessed ships its own terminfo as **data files**,
+  which the producer does not package and which therefore travel beside the
+  artifact at `node_modules/blessed/usr` -- the path the bundled module still
+  resolves, because its `__dirname` keeps its build-time identity. gtop is
+  also what surfaced the `zlib` classification bug (see the builtins bullet
+  under AOT Bundles). Checking either from a script needs a real terminal,
+  which is what `examples/pty-run.py` is for: `setRawMode` does not exist on a
+  pipe, and blessed will not lay out without a window size.
 - Tests: `test/build-exe{,-errors,-tool-errors,-natives,-escapes}.js` plus
   `BuildExeTest`. Three of the five -- `build-exe.js`, `build-exe-natives.js`
   and `build-exe-escapes.js` -- carry `REQUIRES: linker-available`, the lit
