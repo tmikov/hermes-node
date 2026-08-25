@@ -13,6 +13,7 @@ var {
 
 var { Transform } = require('stream');
 var { Buffer } = require('buffer');
+var { validateBoolean, validateObject } = require('internal/validators');
 
 // Hash class (extends Transform for .pipe() compatibility).
 function Hash(algorithm, options) {
@@ -192,6 +193,86 @@ function randomInt(min, max, callback) {
   }
 }
 
+// An RFC 4122 version 4 random UUID, ported from Node's
+// lib/internal/crypto/random.js.
+//
+// Entropy is drawn in batches of kBatchSize UUIDs and each call consumes 16
+// bytes of the batch, because one randomFillSync per UUID is the expensive
+// way to do this. Node uses a secureBuffer (zero-filled, kept out of core
+// dumps) for the batch; Buffer.alloc is what this layer has, and the
+// difference is the memory protection, not the randomness.
+var kBatchSize = 128;
+var uuidData;
+var uuidNotBuffered;
+var uuidBatch = 0;
+
+var hexBytesCache;
+function getHexBytes() {
+  if (hexBytesCache === undefined) {
+    hexBytesCache = new Array(256);
+    for (var i = 0; i < hexBytesCache.length; i++)
+      hexBytesCache[i] = i.toString(16).padStart(2, '0');
+  }
+  return hexBytesCache;
+}
+
+function serializeUUID(buf, offset) {
+  var kHexBytes = getHexBytes();
+  if (offset === undefined) offset = 0;
+  // xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx, where M is the version (4) and the
+  // top bits of N are the variant. Those are the only two nibbles the RFC
+  // fixes; everything else is straight from the generator.
+  return kHexBytes[buf[offset]] +
+    kHexBytes[buf[offset + 1]] +
+    kHexBytes[buf[offset + 2]] +
+    kHexBytes[buf[offset + 3]] +
+    '-' +
+    kHexBytes[buf[offset + 4]] +
+    kHexBytes[buf[offset + 5]] +
+    '-' +
+    kHexBytes[(buf[offset + 6] & 0x0f) | 0x40] +
+    kHexBytes[buf[offset + 7]] +
+    '-' +
+    kHexBytes[(buf[offset + 8] & 0x3f) | 0x80] +
+    kHexBytes[buf[offset + 9]] +
+    '-' +
+    kHexBytes[buf[offset + 10]] +
+    kHexBytes[buf[offset + 11]] +
+    kHexBytes[buf[offset + 12]] +
+    kHexBytes[buf[offset + 13]] +
+    kHexBytes[buf[offset + 14]] +
+    kHexBytes[buf[offset + 15]];
+}
+
+function getBufferedUUID() {
+  if (uuidData === undefined)
+    uuidData = Buffer.alloc(16 * kBatchSize);
+  // The refill happens before the counter moves, so the slice handed out when
+  // the counter wraps to 0 is the last one of the batch that is still live,
+  // and the next call is what re-randomizes. Each fill therefore yields
+  // kBatchSize distinct slices and no slice is served twice.
+  if (uuidBatch === 0) randomFillSync(uuidData);
+  uuidBatch = (uuidBatch + 1) % kBatchSize;
+  return serializeUUID(uuidData, uuidBatch * 16);
+}
+
+function getUnbufferedUUID() {
+  if (uuidNotBuffered === undefined)
+    uuidNotBuffered = Buffer.alloc(16);
+  randomFillSync(uuidNotBuffered);
+  return serializeUUID(uuidNotBuffered);
+}
+
+function randomUUID(options) {
+  if (options !== undefined)
+    validateObject(options, 'options');
+  var disableEntropyCache = false;
+  if (options !== undefined && options.disableEntropyCache !== undefined)
+    disableEntropyCache = options.disableEntropyCache;
+  validateBoolean(disableEntropyCache, 'options.disableEntropyCache');
+  return disableEntropyCache ? getUnbufferedUUID() : getBufferedUUID();
+}
+
 module.exports = {
   Hash,
   Hmac,
@@ -203,5 +284,6 @@ module.exports = {
   randomBytes,
   randomFillSync,
   randomInt,
+  randomUUID,
   constants: {},
 };
