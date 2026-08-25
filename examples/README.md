@@ -6,7 +6,7 @@ Run from the project root:
 cmake-build-asan/bin/hermes-node examples/hello-fs.js
 ```
 
-Four of the examples can also produce an AOT bundle you can keep, with a
+Six of the examples can also produce an AOT bundle you can keep, with a
 `build-bundle.sh` beside their `package.json`:
 
 ```sh
@@ -98,3 +98,21 @@ tree. The tree is discovered entirely by literal `require()`, so
 `run.sh` -- `test/bundle-yargs.js` covers this example in the lit suite,
 gated on the tree being installed. Requires `npm install` in the directory
 first.
+
+## tetris/
+
+A third-party terminal game (`tetris-cli`), unmodified, packaged into one
+executable. Its dependency graph is entirely CommonJS with no computed
+requires and no native addons, so the producer emits no warnings at all and
+no `--include` is needed -- `run.sh` asserts that, since it is the reason
+this example is the short one. Checking a TUI from a script needs a real
+terminal, which is what `../pty-run.py` provides. Requires `npm install`
+in the directory first; see `tetris/README.md`.
+
+## gtop/
+
+A third-party system monitor, and the opposite of `tetris` on both counts:
+`blessed` loads every widget through `require('./widgets/' + name)`, so each
+needs an `--include`, and it ships its own terminfo as data files, which the
+producer does not package and which therefore travel beside the artifact.
+Requires `npm install` in the directory first; see `gtop/README.md`.
