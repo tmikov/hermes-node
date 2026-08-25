@@ -917,3 +917,54 @@ to be useful as a check).
 ## Progress Tracking
 
 Each plan has its own progress file. The progress file says which plan it tracks. Update it when completing or blocking on steps. Add context notes per the format documented there.
+
+## Issue Tracking
+
+Bugs and tasks that outlive a session live in `dz/`, a
+[ditz2](https://github.com/tmikov/ditz2) project: one markdown file per issue,
+committed alongside the code. Use it for what a progress file cannot hold --
+a defect nobody is working on yet, a limitation recorded rather than fixed, a
+follow-up that would otherwise survive only in a commit message.
+
+**Which `dz` to run.** The bundled ditz2 is the reference: the submodule at
+`examples/ditz2/ditz2`, whose `package.json` names the version this repo is
+pinned to. A `dz` on `PATH` may be used **only** when it is present *and* its
+`dz --version` matches that pinned version to the patch series (`0.1.x` for a
+bundled `0.1.0`). Otherwise run the bundled one. The check is one line:
+
+```bash
+grep -m1 '"version"' examples/ditz2/ditz2/package.json   # the pinned version
+dz --version                                             # the installed one
+```
+
+A mismatch matters because the on-disk issue format is the interchange
+format. An older or newer `dz` writing into `dz/issues/` can produce files
+the pinned version does not round-trip, and the damage is committed before
+anyone notices.
+
+**Running the bundled one.** With **Node**, not `hermes-node` -- this repo is
+frequently mid-change and its runtime may not be in a runnable state, which
+is precisely when you need the tracker most. ditz2 is TypeScript ESM, so it
+needs a build once per checkout:
+
+```bash
+git submodule update --init examples/ditz2/ditz2
+npm --prefix examples/ditz2/ditz2 install
+npm --prefix examples/ditz2/ditz2 run build
+node examples/ditz2/ditz2/dist/cli/main.js list
+```
+
+`dist/` and `node_modules/` are covered by ditz2's own `.gitignore`, so the
+submodule checkout stays clean. (`examples/ditz2/` is a *separate* thing: it
+builds the same source to CJS under `examples/ditz2/dist-cjs/` to exercise
+`hermes-node`. Do not use it to run the tracker -- that is the dependency
+this section exists to avoid.)
+
+**Notes.**
+
+- `dz help agents` is the contract for programmatic use: every command takes
+  `--json`, exit 0 means stdout parses, errors go to stderr as one object.
+- The component list starts empty and `--component` rejects every value until
+  it is populated. Add one when an issue needs it: `dz component add <name>`.
+- `dz/config.local.yaml` (author identity) and `dz/.lock` are gitignored;
+  `dz/config.yaml` and `dz/issues/*.md` are committed.
