@@ -6,7 +6,7 @@ Run from the project root:
 cmake-build-asan/bin/hermes-node examples/hello-fs.js
 ```
 
-Six of the examples can also produce an AOT bundle you can keep, with a
+Seven of the examples can also produce an AOT bundle you can keep, with a
 `build-bundle.sh` beside their `package.json`:
 
 ```sh
@@ -116,3 +116,17 @@ A third-party system monitor, and the opposite of `tetris` on both counts:
 needs an `--include`, and it ships its own terminfo as data files, which the
 producer does not package and which therefore travel beside the artifact.
 Requires `npm install` in the directory first; see `gtop/README.md`.
+
+## ditz2/
+
+A real CLI issue tracker, kept as a **submodule** rather than an npm
+dependency because it is not published to npm. It is also the first example
+written in TypeScript and the first hermes-node cannot run as shipped:
+ditz2 is ESM, and there is no ES module loader yet, so `build-cjs.sh`
+recompiles the submodule's own sources as CommonJS with two tsconfig
+settings changed and nothing patched. Nothing draws a screen here -- this
+one exercises the filesystem and process surface a normal CLI leans on, and
+it is what turned up the `fs.rmSync` `force` and `crypto.randomUUID` gaps.
+`run.sh` drives a real workflow through all three modes. Requires `git
+submodule update --init` and `npm install` in the directory first; see
+`ditz2/README.md`.

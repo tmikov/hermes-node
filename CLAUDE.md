@@ -19,7 +19,7 @@ Node.js API compatibility layer for Hermes. Ports Node's native bindings to Node
 - `external/hermes-parser-native/` is a temporary vendored copy of the Hermes native parser addon, not a submodule-style unmodified dep; it has its own README covering provenance, re-sync steps, and when to delete it
 - Vendored Node JS (will be modified): `libjs-node/`
 - Our JS: `libjs/`
-- Examples: `examples/` — each subdirectory has its own `package.json` + `package-lock.json`; `node_modules/` is gitignored (users run `npm install`)
+- Examples: `examples/` — each subdirectory has its own `package.json` + `package-lock.json`; `node_modules/` is gitignored (users run `npm install`). `examples/ditz2/` is the exception on two counts: its subject is a **submodule** (`examples/ditz2/ditz2`) rather than an npm dependency, because ditz2 is not published to npm, and it needs a build step of its own (`build-cjs.sh`) because it is TypeScript **and ESM**, which this runtime cannot load. Its `package.json` therefore pins ditz2's three runtime dependencies plus TypeScript, and the transpile lands in `examples/ditz2/dist-cjs/` rather than inside the submodule, so the submodule checkout stays clean. Delete that script when the ESM loader lands.
 - Build: CMake + Ninja
 - Tests: GTest (`unittests/`), lit (`test/`)
 - Test target: `check-hermes-node`

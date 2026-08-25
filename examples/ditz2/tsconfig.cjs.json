@@ -1,0 +1,27 @@
+{
+  "//": [
+    "Recompiles the ditz2 submodule's TypeScript as CommonJS, into this",
+    "directory rather than into the submodule, so the submodule checkout stays",
+    "clean (its .gitignore covers dist/, not dist-cjs/).",
+    "",
+    "Only two settings differ from the submodule's own tsconfig.json: module",
+    "and moduleResolution. They move together -- NodeNext resolution is not",
+    "allowed with commonjs emit -- and nothing else about the build changes."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "rootDir": "ditz2/src",
+    "outDir": "dist-cjs",
+    "strict": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "sourceMap": false
+  },
+  "include": ["ditz2/src/**/*.ts"],
+  "exclude": ["ditz2/src/**/*.test.ts"]
+}
