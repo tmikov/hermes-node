@@ -2625,11 +2625,29 @@ static napi_value fsRmSync(napi_env env, napi_callback_info info) {
 
   (void)maxRetries;
 
+  // A path that is not there is not an error here. Node's RmSync
+  // (src/node_file.cc) returns silently when the path does not exist and never
+  // looks at `force` at all: the JS layer has already lstat'ed and thrown
+  // ENOENT itself when `force` was NOT set (validateRmOptionsSync in
+  // internal/fs/utils.js), so a missing path only ever reaches this binding
+  // when the caller asked for it to be tolerated. Without that, the
+  // atomic-write idiom -- write a temporary, rename it over the target, remove
+  // the temporary in a `finally` -- throws on its success path, because the
+  // rename already consumed the temporary.
+  //
+  // Both branches below absorb ENOENT at the syscall they were already making,
+  // rather than sharing one existence check up front. That costs nothing
+  // extra, and a separate check would introduce a window in which a file
+  // removed by someone else in between still threw despite `force`.
+
   if (!recursive) {
     // Just try to remove as file.
     uv_fs_t req;
     int result = uv_fs_unlink(nullptr, &req, path.c_str(), nullptr);
     uv_fs_req_cleanup(&req);
+    if (result == UV_ENOENT) {
+      return nullptr;
+    }
     if (result < 0) {
       return throwUVException(env, result, "unlink", path.c_str());
     }
@@ -2637,8 +2655,16 @@ static napi_value fsRmSync(napi_env env, napi_callback_info info) {
   }
 
   // Recursive remove: use a simple DFS.
+  //
+  // lstat, not stat, and that is load-bearing beyond this early return: a
+  // dangling symlink is absent to stat() and present to lstat(), and node
+  // v24.13.1 removes it rather than skipping it.
   uv_fs_t statReq;
   int statResult = uv_fs_lstat(nullptr, &statReq, path.c_str(), nullptr);
+  if (statResult == UV_ENOENT) {
+    uv_fs_req_cleanup(&statReq);
+    return nullptr;
+  }
   if (statResult < 0) {
     uv_fs_req_cleanup(&statReq);
     return throwUVException(env, statResult, "stat", path.c_str());
