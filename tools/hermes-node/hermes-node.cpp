@@ -68,6 +68,13 @@ struct ToolOptions {
   /// --kit=<dir>: where to find the kit. std::nullopt means "beside this
   /// binary", resolved at use.
   std::optional<std::string> kitDir;
+  /// --cc=<compiler>: the toolchain driver to assemble and link with,
+  /// overriding every candidate --build-exe would otherwise try. Empty
+  /// means "not given"; an empty VALUE ("--cc=") is rejected by
+  /// checkToolOptions(), since a driver with no name cannot be run and
+  /// naming the flag is more useful than a spawn failure with nothing in
+  /// it.
+  std::optional<std::string> cc;
 };
 
 /// Resolves the kit directory for --build-exe. std::nullopt (no --kit)
@@ -158,6 +165,7 @@ static bool runToolVerb(
         containerPath,
         *tools.buildExe,
         resolveKitDir(tools.kitDir),
+        tools.cc.value_or(std::string()),
         config.verbose,
         std::cout,
         std::cerr);
@@ -336,6 +344,13 @@ static bool checkToolOptions(
     return false;
   }
 
+  // --cc names the compiler the link runs, so like --kit it has no consumer
+  // anywhere else. Every other verb reads a file and runs no toolchain.
+  if (tools.cc.has_value() && !tools.buildExe.has_value()) {
+    std::fprintf(stderr, "Error: --cc requires --build-exe.\n");
+    return false;
+  }
+
   // --out is never inferred from the identity and never serves anything
   // else: writing a file the user did not name is how a tool overwrites
   // something it should not.
@@ -426,6 +441,10 @@ static bool checkToolOptions(
     std::fprintf(stderr, "Error: --kit requires a directory path.\n");
     return false;
   }
+  if (tools.cc.has_value() && tools.cc->empty()) {
+    std::fprintf(stderr, "Error: --cc requires a compiler name or path.\n");
+    return false;
+  }
 
   return true;
 }
@@ -481,6 +500,10 @@ static void printUsage(const char *argv0) {
       "  --kit=<dir>                    With --build-exe, the link kit "
       "directory\n"
       "                                 (default: beside this binary)\n"
+      "  --cc=<compiler>                With --build-exe, the C++ driver to "
+      "assemble\n"
+      "                                 and link with (default: the kit's, "
+      "else c++)\n"
       "  --optimize=<default|on|off>    Optimize compiled code. default is on\n"
       "                                 with the cache, off without it\n"
       "  --inspect-open                 Open the DevTools URL in the system browser\n"
@@ -614,6 +637,8 @@ int main(int argc, char **argv) {
       tools.verifyNatives = true;
     } else if (std::strncmp(argv[i], "--build-exe=", 12) == 0) {
       tools.buildExe = argv[i] + 12;
+    } else if (std::strncmp(argv[i], "--cc=", 5) == 0) {
+      tools.cc = argv[i] + 5;
     } else if (std::strncmp(argv[i], "--kit=", 6) == 0) {
       tools.kitDir = argv[i] + 6;
     } else if (std::strncmp(argv[i], "--optimize=", 11) == 0) {

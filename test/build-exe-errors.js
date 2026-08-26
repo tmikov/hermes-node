@@ -140,14 +140,25 @@
 // RUN: %not %hermes-node --build-exe=%t.d/nosuchdir/app.exe --kit=%t.d/fakekit %t.d/app.hbb 2>&1 | %FileCheck --check-prefix=NODIR %s
 // NODIR: error: cannot write {{.*}}nosuchdir/app.exe.hnexe.
 
-// A compiler driver that is not there. posix_spawnp's own errno, with the
-// command printed so it can be rerun by hand.
+// A compiler driver named by --cc that is not there. An override is the
+// only candidate ever tried, so this is a hard failure: substituting a
+// different compiler for the one the user named, silently, would be worse
+// than not building at all. The message lists what it tried and says that
+// nothing is substituted.
 // RUN: mkdir -p %t.d/nocckit
 // RUN: echo "version: $(%hermes-node --version | cut -d' ' -f2)" > %t.d/nocckit/kit.manifest
 // RUN: echo "cc: %t.d/no-such-compiler" >> %t.d/nocckit/kit.manifest
-// RUN: %not %hermes-node --build-exe=%t.d/app.exe --kit=%t.d/nocckit %t.d/app.hbb 2>&1 | %FileCheck --check-prefix=NOCCBIN %s
-// NOCCBIN: error: cannot run {{.*}}no-such-compiler: No such file or directory
-// NOCCBIN-NEXT: command: {{.*}}no-such-compiler -Qunused-arguments -c {{.*}}.s -o {{.*}}.o
+// RUN: %not %hermes-node --build-exe=%t.d/app.exe --kit=%t.d/nocckit --cc=%t.d/no-such-compiler %t.d/app.hbb 2>&1 | %FileCheck --check-prefix=NOCCBIN %s
+// NOCCBIN: error: no usable C++ driver found. Tried, in order:
+// NOCCBIN-NEXT: {{.*}}no-such-compiler (--cc)
+// NOCCBIN-NEXT: note: --cc names the only driver tried
+
+// The same absent compiler recorded in the KIT is not fatal: the recorded
+// cc: is where the kit was cut, which says nothing about this machine, so
+// resolution moves on and reports that it did. (The link then fails, since
+// this fake kit has no archives -- what is under test here is the note.)
+// RUN: %not %hermes-node --build-exe=%t.d/app.exe --kit=%t.d/nocckit --verbose %t.d/app.hbb 2>&1 | %FileCheck --check-prefix=CCFALLBACK %s
+// CCFALLBACK: note: the kit recorded {{.*}}no-such-compiler, which was not usable here.
 
 // A driver that runs and fails. `false` is the smallest honest stand-in for
 // a compiler that rejects what it was handed; the exit status and the
@@ -156,8 +167,11 @@
 // /usr/bin/false on macOS, so the CHECK lines cannot name a fixed directory
 // either.
 // RUN: %not %hermes-node --build-exe=%t.d/app.exe --kit=%t.d/fakekit %t.d/app.hbb 2>&1 | %FileCheck --check-prefix=CCFAILS %s
+// No -Qunused-arguments here: `false` is not Clang, and that flag is a
+// Clang spelling that GCC rejects outright, so it is added only for a
+// driver whose --version says clang.
 // CCFAILS: error: {{.*}}false failed with exit status 1
-// CCFAILS-NEXT: command: {{.*}}false -Qunused-arguments -c {{.*}}.s -o {{.*}}.o
+// CCFAILS-NEXT: command: {{.*}}false -c {{.*}}.s -o {{.*}}.o
 // RUN: %not ls %t.d/app.exe.hnexe.*
 // RUN: %not ls %t.d/app.exe
 
@@ -174,6 +188,6 @@
 // RUN: printf 'cc: %false\ndriverflag: -arch\ndriverflag: hnexe-fake-arch\ndriverflag: -rdynamic\n' >> %t.d/archkit/kit.manifest
 // RUN: %not %hermes-node --build-exe=%t.d/app.exe --kit=%t.d/archkit %t.d/app.hbb 2>&1 | %FileCheck --check-prefix=ARCHFLAGS %s
 // ARCHFLAGS: error: {{.*}}false failed with exit status 1
-// ARCHFLAGS-NEXT: command: {{.*}}false -Qunused-arguments -arch hnexe-fake-arch -rdynamic -c {{.*}}.s -o {{.*}}.o
+// ARCHFLAGS-NEXT: command: {{.*}}false -arch hnexe-fake-arch -rdynamic -c {{.*}}.s -o {{.*}}.o
 
 // This file is a lit driver only; the RUN lines above are the test.

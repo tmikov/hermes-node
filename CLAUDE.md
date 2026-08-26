@@ -633,9 +633,16 @@ plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
   out `flags=0x20002(adhoc,linker-signed)` and passes `codesign --verify`,
   with no signing step of our own, payload-carrying builds included. So there
   is no fuse, no sentinel, no self-mmap, no `/proc/self/exe` and no backwards
-  scan for a magic -- the payload is a symbol. The price is a linker on the
-  build machine (and the Xcode command line tools on macOS), which Static
-  Hermes native compilation needs anyway.
+  scan for a magic -- the payload is a symbol. The price is a C++ driver on
+  the build machine (and the Xcode command line tools on macOS), which
+  Static Hermes native compilation needs anyway. **Any** driver: the link
+  needs one for the crt objects, the default library set and the sysroot
+  -- measured, `clang++ -###` expands a trivial link to five crt objects,
+  eight `-L` paths and `-lstdc++ -lm -lgcc_s -lgcc -lc`, with `crtbeginS.o`
+  under a gcc-version-stamped directory. Recording that expansion and
+  calling `ld` directly was tried by hand and rejected: it works, and it
+  trades "needs a C++ driver" for "needs an identical filesystem layout
+  down to the GCC major version". Late binding is the point.
 - **The kit** is what an app links against: `libhermes-node-kit.a` (every
   archive in the closure, merged), `libhermesNapi.a` kept separate,
   `hermes-node-bundle-main.o`, and `kit.manifest`. It is cut by
@@ -649,6 +656,39 @@ plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
   removes. Grammar is four keys -- `version`, `cc`, `driverflag`, `linkarg`
   -- with `{kit}` substituted for the kit directory; `readKitManifest()` in
   `lib/build-exe/kit_manifest.cpp` parses them.
+- **The recorded `cc:` is a hint, not a requirement, and any C++ driver
+  will do.** `cc:` is `CMAKE_CXX_COMPILER`, so it is an absolute path
+  belonging to the machine that cut the kit; treating it as the answer made
+  a kit unusable anywhere else, and made the whole feature need Clang
+  specifically. `driverCandidates()` (`lib/build-exe/build_exe.cpp`) turns
+  it into an ordered list -- `--cc=<x>`, else the recorded path if it still
+  exists, else its basename on `PATH`, else plain `c++` -- and
+  `resolveDriver()` takes the first that runs. The recorded compiler is
+  preferred rather than `c++`-first because the kit's archives and driver
+  flags came from it: a kit cut with `-stdlib=libc++`, with LTO bitcode, or
+  in an ASAN configuration will not link under a different driver, and that
+  failure is loud. **`--cc` replaces the list rather than heading it**: a
+  named compiler that cannot be run is a hard error, because linking with a
+  substitute and saying nothing is worse than not building. `$CXX` is
+  deliberately not consulted -- one exported for an unrelated build must
+  not silently decide what links your executable. `--verbose` names the
+  driver and why it was chosen, and says so when the recorded one was
+  tried and rejected.
+- **`-Qunused-arguments` is added only for Clang.** The whole `driverflag`
+  list is forwarded to the assemble step on purpose (some of it selects a
+  target), and the price is link-only flags reaching a compile that warns
+  about each one. That suppression flag is a Clang spelling which GCC
+  rejects outright, so it was what confined this feature to Clang. It
+  cannot be recorded in the manifest, since `--cc` can change the driver
+  afterwards, so `captureDriverVersion()` runs `<driver> --version` once
+  and `versionOutputIsClang()` decides. That probe doubles as the "can this
+  be run at all" test, so it costs one subprocess, not two. Its usability
+  rule is deliberately **not** "exited 0" -- `--version`'s status answers
+  neither question, and demanding success would fall back off a working
+  compiler that merely reports itself oddly. Only exec failure counts,
+  which is `posix_spawnp`'s error on glibc and exit 127 elsewhere.
+  Verified end to end: a container linked with `--cc=c++` (g++ 13 here)
+  produces a working executable.
 - **A merged archive, not one `ld -r` object.** The `-r` object is smaller
   (14.1 MB against 28 MB) and it is one file, but it drops
   `MH_SUBSECTIONS_VIA_SYMBOLS`. Mach-O has no per-function sections; that flag
@@ -763,10 +803,10 @@ plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
   container and runs the toolchain: no parser, compiler, event loop or
   `napi_env`. `checkToolOptions()` gains its rows, each naming both flags:
   `--build-exe` against `--bundle`, `--build-bundle`, `-e`/`--eval`, each of
-  the four verbs, and `--inspect`/`--inspect-brk`; `--kit` without
-  `--build-exe`; `--build-exe` with no positional container; and an empty
-  `--build-exe=` or `--kit=`, which name the flag rather than reporting a
-  missing file with no filename in it. Separately, and just after that
+  the four verbs, and `--inspect`/`--inspect-brk`; `--kit` or `--cc`
+  without `--build-exe`; `--build-exe` with no positional container; and an
+  empty `--build-exe=`, `--kit=` or `--cc=`, which name the flag rather than
+  reporting a missing file with no filename in it. Separately, and just after that
   block: an argument beginning with `-` that appears **after** the
   container is refused by name. The parse loop stops at the first
   positional, as everywhere else, and `--build-exe` is the only verb whose

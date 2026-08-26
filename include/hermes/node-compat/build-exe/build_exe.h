@@ -10,12 +10,95 @@
 
 #include <hermes/node-compat/build-exe/kit_manifest.h>
 
+#include <functional>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <vector>
 
 namespace hermes {
 namespace node_compat {
+
+/// Where a chosen toolchain driver came from. Reported by --verbose and
+/// named in the failure message, because "which compiler did it actually
+/// run" is the first question when a link goes wrong on a machine that is
+/// not the one that cut the kit.
+enum class DriverSource {
+  /// --cc=<x> on the command line.
+  Override,
+  /// The manifest's `cc:` line, verbatim -- the absolute path recorded when
+  /// the kit was cut.
+  ManifestPath,
+  /// The basename of that path, found on PATH: the same compiler on a
+  /// different machine.
+  ManifestName,
+  /// Plain `c++`, the POSIX-conventional driver name.
+  Fallback,
+};
+
+struct DriverCandidate {
+  std::string driver;
+  DriverSource source;
+};
+
+/// The drivers to try, best first, without touching the filesystem.
+///
+/// The kit records an absolute path to the compiler that cut it, which is
+/// a fact about that machine. Treating it as a requirement makes a kit
+/// unusable anywhere else; treating it as merely a hint would ignore that
+/// the kit's archives and driver flags came from that specific compiler --
+/// a kit cut with -stdlib=libc++, with LTO bitcode in its archives, or in
+/// an ASAN configuration will not link under a different driver. So the
+/// recorded compiler is preferred and `c++` is the graceful degradation.
+///
+/// A candidate equal to one already in the list is dropped, so the list
+/// never suggests the same thing twice: a manifest recording a bare
+/// `clang++` yields no separate basename candidate, and one recording
+/// `c++` collapses to a single entry.
+///
+/// Exposed separately from resolveDriver() because this list is what the
+/// "no usable driver" error has to print, and because the ORDER is the
+/// design decision here -- checkable with no filesystem and no toolchain.
+std::vector<DriverCandidate> driverCandidates(
+    const std::string &ccOverride,
+    const std::string &manifestCc);
+
+/// The first of driverCandidates() that \p usable accepts, or nullopt if
+/// none does.
+///
+/// \p usable is injected rather than hardcoded so the ordering can be
+/// tested without a filesystem; buildExecutable() passes one that asks
+/// whether the candidate names an executable file (for an absolute path)
+/// or is findable on PATH (for a bare name).
+std::optional<DriverCandidate> resolveDriver(
+    const std::string &ccOverride,
+    const std::string &manifestCc,
+    const std::function<bool(const DriverCandidate &)> &usable);
+
+/// Whether \p versionOutput -- what `<driver> --version` printed -- came
+/// from Clang, which decides whether the assemble step may use
+/// -Qunused-arguments (see buildAssembleCommand()).
+///
+/// Asking the driver is the only option available. The flag cannot be
+/// recorded in the manifest, because --cc can replace the driver long after
+/// the kit was cut; and it cannot be dropped, because the whole driver-flag
+/// list is forwarded to the assemble on purpose and something has to
+/// silence the resulting noise.
+///
+/// A driver that says nothing recognizable is NOT treated as Clang:
+/// guessing yes would hand an unknown driver a flag it may reject, turning
+/// it into a hard failure on first use, where guessing no costs only some
+/// warnings.
+bool versionOutputIsClang(const std::string &versionOutput);
+
+/// Whether choosing \p source means the kit's recorded compiler was tried
+/// and found unusable -- which is worth telling the user, since it is the
+/// difference between using a kit as intended and linking with a
+/// substitute.
+///
+/// False for --cc, which skips the recorded compiler without judging it:
+/// reporting it "not usable" there would be untrue.
+bool recordedDriverWasRejected(DriverSource source);
 
 /// Builds a standalone executable from an already-built container.
 ///
@@ -48,10 +131,14 @@ namespace node_compat {
 /// toolchain, and re-serializing them through a C++ stream would lose all
 /// three for the sake of a caller that does not exist -- the one caller
 /// passes std::cerr.
+/// \p ccOverride is --cc=<x>, or empty for none. It is the first driver
+/// candidate; see driverCandidates() for the rest and why they are ordered
+/// as they are.
 int buildExecutable(
     const std::string &bundlePath,
     const std::string &outPath,
     const std::string &kitDir,
+    const std::string &ccOverride,
     bool verbose,
     std::ostream &out,
     std::ostream &err);
@@ -73,6 +160,7 @@ int buildExecutable(
 /// would be one more chance for the two to disagree.
 std::vector<std::string> buildLinkCommand(
     const KitManifest &manifest,
+    const std::string &driver,
     const std::string &blobObject,
     const std::string &outPath);
 
@@ -106,6 +194,8 @@ std::vector<std::string> buildLinkCommand(
 /// architecture case cannot be checked on this host at all.
 std::vector<std::string> buildAssembleCommand(
     const KitManifest &manifest,
+    const std::string &driver,
+    bool driverIsClang,
     const std::string &asmPath,
     const std::string &objPath);
 

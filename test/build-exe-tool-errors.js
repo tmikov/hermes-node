@@ -85,6 +85,20 @@
 // RUN: %not %hermes-node --kit= --build-exe=%t.exe %t.hbb 2>&1 | %FileCheck --check-prefix=EMPTYKIT %s
 // EMPTYKIT: Error: --kit requires a directory path.
 
+// --cc names the driver the assemble and link run, so like --kit it has no
+// consumer outside --build-exe: every other verb reads a file and runs no
+// toolchain. Both orders, and once alone.
+// RUN: %not %hermes-node --cc=c++ %s 2>&1 | %FileCheck --check-prefix=CCALONE %s
+// RUN: %not %hermes-node --cc=c++ --bundle=%t.hbb 2>&1 | %FileCheck --check-prefix=CCALONE %s
+// RUN: %not %hermes-node --bundle=%t.hbb --cc=c++ 2>&1 | %FileCheck --check-prefix=CCALONE %s
+// CCALONE: Error: --cc requires --build-exe.
+
+// An empty --cc is a driver with no name. Refused by the flag's own name,
+// rather than as a spawn failure with nothing in it to act on.
+// RUN: %not %hermes-node --build-exe=%t.exe --cc= %t.hbb 2>&1 | %FileCheck --check-prefix=EMPTYCC %s
+// RUN: %not %hermes-node --cc= --build-exe=%t.exe %t.hbb 2>&1 | %FileCheck --check-prefix=EMPTYCC %s
+// EMPTYCC: Error: --cc requires a compiler name or path.
+
 // --verbose has five consumers now, and --build-exe is the fifth: the
 // message has to list it, or the flag it accepts is one it does not admit to.
 // RUN: %not %hermes-node --verbose %s 2>&1 | %FileCheck --check-prefix=VERBOSE %s

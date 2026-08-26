@@ -50,6 +50,13 @@ namespace {
 /// referenced it.
 constexpr const char *kEntryObjectName = "hermes-node-bundle-main.o";
 
+/// The last driver candidate: the POSIX-conventional name for "the C++
+/// compiler on this system". A Debian-ish Linux points it at g++ through
+/// the alternatives system; macOS points it at clang++. Both were measured
+/// to assemble the generated payload and link the result correctly, which
+/// is what makes this a usable fallback rather than a guess.
+constexpr const char *kPortableDriverName = "c++";
+
 /// The command line as the user would have to retype it. Not shell-quoted:
 /// nothing here goes through a shell (see runCommand), and quoting it as
 /// if it did would misrepresent what ran. It is the failing command's
@@ -78,6 +85,103 @@ std::string joinArgv(const std::vector<std::string> &argv) {
 /// checkIncbinPath() exists to close -- with the shell's own metacharacter
 /// set on top of the assembler's. An argv never has that problem, because
 /// nothing re-parses it.
+/// Why a candidate was offered, in the words the user needs to act on it.
+/// Printed for every candidate when none works, and for the winner under
+/// --verbose, because "which compiler did it actually run" is the first
+/// question when a link fails on a machine that did not cut the kit.
+const char *driverSourceName(const DriverCandidate &candidate) {
+  switch (candidate.source) {
+    case DriverSource::Override:
+      return "--cc";
+    case DriverSource::ManifestPath:
+      return "recorded in the kit";
+    case DriverSource::ManifestName:
+      return "the kit's compiler, from PATH";
+    case DriverSource::Fallback:
+      return "portable fallback";
+  }
+  return "unknown";
+}
+
+/// Runs `<driver> --version` and returns what it printed, or nullopt if it
+/// could not be run to a clean exit.
+///
+/// This is the single probe behind both questions asked of a candidate
+/// driver: whether it can be executed at all (which is what "usable" means
+/// -- an absolute path that no longer exists, or a name not on PATH, fails
+/// to spawn) and whether it is Clang. One subprocess answers both, and in
+/// the ordinary case the first candidate answers them immediately.
+///
+/// The child's output is captured rather than inherited, unlike
+/// runCommand's: this is a probe, and a candidate that is merely absent
+/// must not print anything. Real diagnostics still reach the user, from
+/// the assemble and link that follow.
+std::optional<std::string> captureDriverVersion(const std::string &driver) {
+  int fds[2];
+  if (pipe(fds) != 0)
+    return std::nullopt;
+
+  posix_spawn_file_actions_t actions;
+  if (posix_spawn_file_actions_init(&actions) != 0) {
+    close(fds[0]);
+    close(fds[1]);
+    return std::nullopt;
+  }
+  // Both streams into the pipe: a driver is free to print its banner on
+  // either, and for a substring test the interleaving does not matter.
+  posix_spawn_file_actions_addclose(&actions, fds[0]);
+  posix_spawn_file_actions_adddup2(&actions, fds[1], STDOUT_FILENO);
+  posix_spawn_file_actions_adddup2(&actions, fds[1], STDERR_FILENO);
+  posix_spawn_file_actions_addclose(&actions, fds[1]);
+
+  std::string versionFlag = "--version";
+  char *raw[] = {
+      const_cast<char *>(driver.c_str()),
+      const_cast<char *>(versionFlag.c_str()),
+      nullptr};
+
+  pid_t pid = 0;
+  int rc = posix_spawnp(&pid, raw[0], &actions, nullptr, raw, environ);
+  posix_spawn_file_actions_destroy(&actions);
+  close(fds[1]);
+  if (rc != 0) {
+    close(fds[0]);
+    return std::nullopt;
+  }
+
+  // Drain before waiting: a driver whose banner outgrows the pipe buffer
+  // would otherwise block forever writing while we block waiting.
+  std::string output;
+  char buf[4096];
+  for (;;) {
+    ssize_t n = read(fds[0], buf, sizeof(buf));
+    if (n > 0) {
+      output.append(buf, static_cast<size_t>(n));
+      continue;
+    }
+    if (n == 0 || errno != EINTR)
+      break;
+  }
+  close(fds[0]);
+
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0) {
+    if (errno != EINTR)
+      return std::nullopt;
+  }
+  // Deliberately NOT "exited 0". The question here is whether the driver
+  // can be run at all, and --version's exit status does not answer it:
+  // requiring success would reject a working compiler that happens to
+  // report its version oddly, and fall back to a different one behind the
+  // user's back. What does mean "not runnable" is 127, the conventional
+  // command-not-found status, which is how exec failure reaches us on
+  // platforms where posix_spawnp reports it through the child rather than
+  // through its own return value (glibc returns ENOENT above instead).
+  if (WIFEXITED(status) && WEXITSTATUS(status) == 127)
+    return std::nullopt;
+  return output;
+}
+
 bool runCommand(const std::vector<std::string> &argv, std::ostream &err) {
   std::vector<char *> raw;
   raw.reserve(argv.size() + 1);
@@ -200,18 +304,72 @@ std::string payloadAssembly(
   return os.str();
 }
 
+std::vector<DriverCandidate> driverCandidates(
+    const std::string &ccOverride,
+    const std::string &manifestCc) {
+  std::vector<DriverCandidate> candidates;
+  auto add = [&candidates](std::string driver, DriverSource source) {
+    if (driver.empty())
+      return;
+    for (const DriverCandidate &existing : candidates)
+      if (existing.driver == driver)
+        return;
+    candidates.push_back({std::move(driver), source});
+  };
+  // An explicit --cc replaces the list rather than heading it. If the
+  // compiler the user named cannot be run, linking with a different one
+  // and saying nothing would be the worst outcome available: the
+  // executable gets built, by something else, silently.
+  if (!ccOverride.empty()) {
+    add(ccOverride, DriverSource::Override);
+    return candidates;
+  }
+  add(manifestCc, DriverSource::ManifestPath);
+  if (!manifestCc.empty())
+    add(fs::path(manifestCc).filename().string(), DriverSource::ManifestName);
+  add(kPortableDriverName, DriverSource::Fallback);
+  return candidates;
+}
+
+std::optional<DriverCandidate> resolveDriver(
+    const std::string &ccOverride,
+    const std::string &manifestCc,
+    const std::function<bool(const DriverCandidate &)> &usable) {
+  for (const DriverCandidate &candidate :
+       driverCandidates(ccOverride, manifestCc))
+    if (usable(candidate))
+      return candidate;
+  return std::nullopt;
+}
+
+bool versionOutputIsClang(const std::string &versionOutput) {
+  return versionOutput.find("clang") != std::string::npos;
+}
+
+bool recordedDriverWasRejected(DriverSource source) {
+  return source == DriverSource::ManifestName ||
+      source == DriverSource::Fallback;
+}
+
 std::vector<std::string> buildAssembleCommand(
     const KitManifest &manifest,
+    const std::string &driver,
+    bool driverIsClang,
     const std::string &asmPath,
     const std::string &objPath) {
   std::vector<std::string> cmd;
-  cmd.push_back(manifest.cc);
+  cmd.push_back(driver);
   // Forwarding the link's driver flags to a compile means forwarding flags
   // a compile has no use for, and clang says so once per flag. Suppress
   // exactly that, and nothing else: a real assembler diagnostic about the
   // file we generated still has to be visible. See the header for why the
   // whole list is forwarded rather than a target-selecting subset.
-  cmd.push_back("-Qunused-arguments");
+  //
+  // Only for Clang: the flag is a Clang spelling, and g++ rejects an
+  // unrecognized option outright rather than ignoring it, so adding it
+  // unconditionally is what confined this feature to Clang.
+  if (driverIsClang)
+    cmd.push_back("-Qunused-arguments");
   for (const std::string &flag : manifest.driverFlags)
     cmd.push_back(flag);
   cmd.push_back("-c");
@@ -223,10 +381,11 @@ std::vector<std::string> buildAssembleCommand(
 
 std::vector<std::string> buildLinkCommand(
     const KitManifest &manifest,
+    const std::string &driver,
     const std::string &blobObject,
     const std::string &outPath) {
   std::vector<std::string> cmd;
-  cmd.push_back(manifest.cc);
+  cmd.push_back(driver);
   // The driver's own flags first: some of them (a target triple, a
   // sysroot, an -arch) decide how everything after them is interpreted.
   for (const std::string &flag : manifest.driverFlags)
@@ -249,6 +408,7 @@ int buildExecutable(
     const std::string &bundlePath,
     const std::string &outPath,
     const std::string &kitDir,
+    const std::string &ccOverride,
     bool verbose,
     std::ostream &out,
     std::ostream &err) {
@@ -329,10 +489,44 @@ int buildExecutable(
     return 1;
   }
 
+  // 4b. Which compiler to run. The manifest's cc: is an absolute path
+  // recorded on the machine that cut the kit, so it is the first candidate
+  // rather than the answer -- see driverCandidates().
+  std::string versionOutput;
+  auto usable = [&versionOutput](const DriverCandidate &candidate) {
+    std::optional<std::string> banner = captureDriverVersion(candidate.driver);
+    if (!banner)
+      return false;
+    versionOutput = *banner;
+    return true;
+  };
+  std::optional<DriverCandidate> driver =
+      resolveDriver(ccOverride, manifest->cc, usable);
+  if (!driver) {
+    err << "error: no usable C++ driver found. Tried, in order:\n";
+    for (const DriverCandidate &candidate :
+         driverCandidates(ccOverride, manifest->cc))
+      err << "  " << candidate.driver << " (" << driverSourceName(candidate)
+          << ")\n";
+    // Telling someone who just passed --cc to pass --cc is noise; what
+    // they need to know is that the name they gave is what failed.
+    if (ccOverride.empty())
+      err << "note: pass --cc=<compiler> to name one.\n";
+    else
+      err << "note: --cc names the only driver tried; nothing is "
+             "substituted for it.\n";
+    return 1;
+  }
+  bool driverIsClang = versionOutputIsClang(versionOutput);
+
   if (verbose) {
     err << "kit: " << manifest->kitDir << " (hermes-node " << manifest->version
         << ")\n";
-    err << "cc: " << manifest->cc << "\n";
+    err << "cc: " << driver->driver << " (" << driverSourceName(*driver)
+        << (driverIsClang ? ", clang" : ", not clang") << ")\n";
+    if (recordedDriverWasRejected(driver->source))
+      err << "note: the kit recorded " << manifest->cc
+          << ", which was not usable here.\n";
     err << "bundle: " << absBundleStr << " (" << file->size() << " bytes, "
         << reader->moduleCount()
         << (reader->moduleCount() == 1 ? " module)\n" : " modules)\n");
@@ -378,8 +572,8 @@ int buildExecutable(
   // macOS with CMAKE_OSX_ARCHITECTURES="x86_64;arm64" and then runs
   // check-hermes-node, which depends on the kit target, so the two-slice
   // kit is cut in the one pipeline whose failure blocks shipping.
-  std::vector<std::string> assembleCmd =
-      buildAssembleCommand(*manifest, asmPath, objPath);
+  std::vector<std::string> assembleCmd = buildAssembleCommand(
+      *manifest, driver->driver, driverIsClang, asmPath, objPath);
   if (verbose)
     err << "assemble: " << joinArgv(assembleCmd) << "\n";
   if (!runCommand(assembleCmd, err))
@@ -387,7 +581,7 @@ int buildExecutable(
 
   // 6. The link.
   std::vector<std::string> linkCmd =
-      buildLinkCommand(*manifest, objPath, outPath);
+      buildLinkCommand(*manifest, driver->driver, objPath, outPath);
   if (verbose)
     err << "link: " << joinArgv(linkCmd) << "\n";
   if (!runCommand(linkCmd, err))
