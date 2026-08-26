@@ -22,6 +22,7 @@ using hermes::node_compat::buildLinkCommand;
 using hermes::node_compat::DriverCandidate;
 using hermes::node_compat::driverCandidates;
 using hermes::node_compat::DriverSource;
+using hermes::node_compat::formatCommandLine;
 using hermes::node_compat::KitManifest;
 using hermes::node_compat::payloadAssembly;
 using hermes::node_compat::readKitManifest;
@@ -328,6 +329,39 @@ TEST(BuildExeTest, DriverCandidatesAreOrderedAndDeduplicated) {
   // One recording c++ itself collapses to a single candidate.
   EXPECT_EQ(
       named(driverCandidates("", "c++")), (std::vector<std::string>{"c++"}));
+}
+
+// --- The failing command line -------------------------------------------
+//
+// When the assemble or the link fails, the whole command is printed so the
+// user can edit it and run it themselves. That is only true if what is
+// printed can be pasted into a shell, so arguments that a shell would
+// re-split have to be quoted -- a kit under a path with a space, or an
+// `-isysroot /Some SDK`, otherwise prints as two arguments.
+
+TEST(BuildExeTest, PlainArgumentsAreNotQuoted) {
+  // Quoting everything would be safe and unreadable. A command line made of
+  // ordinary paths and flags must come out looking like one.
+  EXPECT_EQ(
+      formatCommandLine(
+          {"/usr/bin/clang++", "-O3", "-o", "/tmp/app", "/tmp/p.o"}),
+      "/usr/bin/clang++ -O3 -o /tmp/app /tmp/p.o");
+}
+
+TEST(BuildExeTest, ArgumentsAShellWouldResplitAreQuoted) {
+  EXPECT_EQ(
+      formatCommandLine({"cc", "-isysroot", "/Some SDK", "-o", "a b"}),
+      "cc -isysroot '/Some SDK' -o 'a b'");
+  // An empty argument is a real argument and vanishes without quotes.
+  EXPECT_EQ(formatCommandLine({"cc", ""}), "cc ''");
+}
+
+TEST(BuildExeTest, SingleQuotesInAnArgumentSurviveQuoting) {
+  // The one case naive single-quoting gets wrong. Pasting the result must
+  // reproduce the argument exactly, apostrophe included.
+  EXPECT_EQ(
+      formatCommandLine({"cc", "/tmp/it's here/x.o"}),
+      "cc '/tmp/it'\\''s here/x.o'");
 }
 
 // --- Driver identification ----------------------------------------------

@@ -57,34 +57,23 @@ constexpr const char *kEntryObjectName = "hermes-node-bundle-main.o";
 /// is what makes this a usable fallback rather than a guess.
 constexpr const char *kPortableDriverName = "c++";
 
-/// The command line as the user would have to retype it. Not shell-quoted:
-/// nothing here goes through a shell (see runCommand), and quoting it as
-/// if it did would misrepresent what ran. It is the failing command's
-/// identity, printed so a link error can be reproduced by hand.
-std::string joinArgv(const std::vector<std::string> &argv) {
-  std::string joined;
-  for (const std::string &arg : argv) {
-    if (!joined.empty())
-      joined += ' ';
-    joined += arg;
+/// Characters a POSIX shell leaves alone, so an argument made only of these
+/// can be printed bare. Everything else -- spaces above all, but also the
+/// globbing, redirection and expansion characters -- gets quoted.
+bool needsShellQuoting(const std::string &arg) {
+  if (arg.empty())
+    return true; // an empty argument disappears if it is not quoted
+  for (char c : arg) {
+    bool safe = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+        (c >= '0' && c <= '9') || c == '_' || c == '@' || c == '%' ||
+        c == '+' || c == '=' || c == ':' || c == ',' || c == '.' || c == '/' ||
+        c == '-';
+    if (!safe)
+      return true;
   }
-  return joined;
+  return false;
 }
 
-/// Runs \p argv to completion, reporting anything but a clean exit 0 on
-/// \p err together with the command itself.
-///
-/// The child inherits this process's stdout and stderr, so the compiler's
-/// and the linker's own diagnostics go to fd 2 and NOT to \p err -- see
-/// the note on buildExecutable() in the header for why that is deliberate.
-/// What goes to \p err is the summary line and the argv to rerun.
-///
-/// posix_spawnp rather than system(): the container's path is interpolated
-/// into a quoted assembler string in the file this hands the assembler,
-/// and a shell in the middle would re-open exactly the quoting question
-/// checkIncbinPath() exists to close -- with the shell's own metacharacter
-/// set on top of the assembler's. An argv never has that problem, because
-/// nothing re-parses it.
 /// Why a candidate was offered, in the words the user needs to act on it.
 /// Printed for every candidate when none works, and for the winner under
 /// --verbose, because "which compiler did it actually run" is the first
@@ -182,6 +171,21 @@ std::optional<std::string> captureDriverVersion(const std::string &driver) {
   return output;
 }
 
+/// Runs \p argv to completion, reporting anything but a clean exit 0 on
+/// \p err together with the command itself.
+///
+/// The child inherits this process's stdout and stderr, so the compiler's
+/// and the linker's own diagnostics go to fd 2 and NOT to \p err -- see
+/// the note on buildExecutable() in the header for why that is deliberate.
+/// What goes to \p err is the summary line and the command to rerun, which
+/// formatCommandLine() renders so it can be pasted into a shell.
+///
+/// posix_spawnp rather than system(): the container's path is interpolated
+/// into a quoted assembler string in the file this hands the assembler,
+/// and a shell in the middle would re-open exactly the quoting question
+/// checkIncbinPath() exists to close -- with the shell's own metacharacter
+/// set on top of the assembler's. An argv never has that problem, because
+/// nothing re-parses it.
 bool runCommand(const std::vector<std::string> &argv, std::ostream &err) {
   std::vector<char *> raw;
   raw.reserve(argv.size() + 1);
@@ -193,7 +197,7 @@ bool runCommand(const std::vector<std::string> &argv, std::ostream &err) {
   int rc = posix_spawnp(&pid, raw[0], nullptr, nullptr, raw.data(), environ);
   if (rc != 0) {
     err << "error: cannot run " << argv[0] << ": " << std::strerror(rc) << "\n";
-    err << "  command: " << joinArgv(argv) << "\n";
+    err << "  command: " << formatCommandLine(argv) << "\n";
     return false;
   }
 
@@ -202,7 +206,7 @@ bool runCommand(const std::vector<std::string> &argv, std::ostream &err) {
     if (errno != EINTR) {
       err << "error: waiting for " << argv[0] << ": " << std::strerror(errno)
           << "\n";
-      err << "  command: " << joinArgv(argv) << "\n";
+      err << "  command: " << formatCommandLine(argv) << "\n";
       return false;
     }
   }
@@ -216,7 +220,7 @@ bool runCommand(const std::vector<std::string> &argv, std::ostream &err) {
   else
     err << "error: " << argv[0] << " failed with exit status "
         << WEXITSTATUS(status) << "\n";
-  err << "  command: " << joinArgv(argv) << "\n";
+  err << "  command: " << formatCommandLine(argv) << "\n";
   return false;
 }
 
@@ -340,6 +344,30 @@ std::optional<DriverCandidate> resolveDriver(
     if (usable(candidate))
       return candidate;
   return std::nullopt;
+}
+
+std::string formatCommandLine(const std::vector<std::string> &argv) {
+  std::string joined;
+  for (const std::string &arg : argv) {
+    if (!joined.empty())
+      joined += ' ';
+    if (!needsShellQuoting(arg)) {
+      joined += arg;
+      continue;
+    }
+    // Single quotes, because inside them a shell expands nothing at all.
+    // The one character they cannot carry is a single quote, which is
+    // closed, escaped and reopened in the usual way.
+    joined += '\'';
+    for (char c : arg) {
+      if (c == '\'')
+        joined += "'\\''";
+      else
+        joined += c;
+    }
+    joined += '\'';
+  }
+  return joined;
 }
 
 bool versionOutputIsClang(const std::string &versionOutput) {
@@ -575,7 +603,7 @@ int buildExecutable(
   std::vector<std::string> assembleCmd = buildAssembleCommand(
       *manifest, driver->driver, driverIsClang, asmPath, objPath);
   if (verbose)
-    err << "assemble: " << joinArgv(assembleCmd) << "\n";
+    err << "assemble: " << formatCommandLine(assembleCmd) << "\n";
   if (!runCommand(assembleCmd, err))
     return 1;
 
@@ -583,7 +611,7 @@ int buildExecutable(
   std::vector<std::string> linkCmd =
       buildLinkCommand(*manifest, driver->driver, objPath, outPath);
   if (verbose)
-    err << "link: " << joinArgv(linkCmd) << "\n";
+    err << "link: " << formatCommandLine(linkCmd) << "\n";
   if (!runCommand(linkCmd, err))
     return 1;
 

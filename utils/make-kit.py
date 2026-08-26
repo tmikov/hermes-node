@@ -48,6 +48,41 @@ KIT_MANIFEST_NAME = "kit.manifest"
 # so that a directory component cannot decide the answer.
 SHARED_LIB_RE = re.compile(r"\.(so|dylib|tbd)(\.\d+)*$")
 
+# A shared-library basename that can be spelled -l<name> instead: lib<name>
+# followed by one extension and nothing after it.
+#
+# A versioned soname deliberately does NOT match. `libfoo.so.5` would become
+# -lfoo, which the linker resolves through the libfoo.so development
+# symlink -- and a machine carrying only the runtime package does not have
+# that symlink, so -lfoo would fail where the absolute path succeeded.
+# Those stay absolute, and the manifest stays host-specific for them.
+LINKABLE_LIB_RE = re.compile(r"^lib(.+)\.(so|dylib|tbd)$")
+
+
+def as_link_flags(arg):
+    """("-L<dir>", "-l<name>") for an absolute shared library, else None.
+
+    An absolute path records where the library sat on the machine that cut
+    the kit, which says nothing about the machine that will use it: the link
+    then fails there naming a directory its user never chose. `-l<name>`
+    asks the linker to find it wherever libraries live on the machine doing
+    the link.
+
+    The directory is kept as a `-L` rather than dropped, and it costs
+    nothing to keep. Measured: a `-L` naming a directory that does not exist
+    is ignored silently, exit 0 and no warning, so the flag helps on a
+    machine laid out like the build machine -- including one whose ICU was
+    under a custom prefix, the one case where the absolute path carried real
+    information -- and is inert everywhere else, where plain `-l` finds the
+    system copy through the linker's default search path.
+    """
+    if not os.path.isabs(arg):
+        return None
+    match = LINKABLE_LIB_RE.match(os.path.basename(arg))
+    if not match:
+        return None
+    return ("-L" + os.path.dirname(arg), "-l" + match.group(1))
+
 # What GNU ar's MRI parser accepts in a filename (binutils arlex.l).  It has
 # no quoting -- verified: `create "/tmp/a b/out.a"` is a syntax error, the
 # quotes are taken literally -- and whitespace, '#', '*', ';', ',', '&' and
@@ -236,7 +271,21 @@ def parse_link_line(rest):
             # must end up AFTER every archive, or lazy resolution finds
             # nothing and the final link fails with undefined symbols that
             # look like a broken kit.
-            syslibs.append(a)
+            #
+            # An absolute shared library is rewritten to -L<dir> -l<name>
+            # here (see as_link_flags); one -L per directory, emitted before
+            # the first library that needs it, since a -L only applies to
+            # the -l flags after it. Repeats are preserved: ICU is listed
+            # twice on purpose, for the static interdependency, and
+            # collapsing that would break the link it exists to make work.
+            flags = as_link_flags(a)
+            if flags:
+                dir_flag, lib_flag = flags
+                if dir_flag not in syslibs:
+                    syslibs.append(dir_flag)
+                syslibs.append(lib_flag)
+            else:
+                syslibs.append(a)
             if a == "-framework":
                 if i + 1 >= len(rest):
                     sys.exit("make-kit: -framework with no name after it")

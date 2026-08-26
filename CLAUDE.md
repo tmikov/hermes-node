@@ -653,6 +653,30 @@ plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
   removes. Grammar is four keys -- `version`, `cc`, `driverflag`, `linkarg`
   -- with `{kit}` substituted for the kit directory; `readKitManifest()` in
   `lib/build-exe/kit_manifest.cpp` parses them.
+- **An absolute shared library is recorded as `-L<dir> -l<name>`, never as
+  the path CMake used.** `as_link_flags()` in `make-kit.py` does it, one
+  `-L` per directory ahead of the first library needing it, since a `-L`
+  applies only to the `-l` flags after it. The absolute path says where the
+  library sat on the machine that cut the kit, so recording it verbatim
+  failed the link anywhere else, naming a directory the user never chose.
+  The directory is kept as a `-L` rather than dropped because that costs
+  nothing: a `-L` naming a directory that does not exist is ignored
+  silently, so it helps where the layout matches -- a custom ICU prefix
+  included -- and is inert elsewhere, where `-l` finds the system copy. A
+  **versioned** soname (`libfoo.so.5`) is deliberately left absolute: `-lfoo`
+  resolves through the `libfoo.so` development symlink, which a machine with
+  only the runtime package does not have. `test/make-kit-classify.js` covers
+  the classification, and is the only test `make-kit.py` has.
+- **A failing assemble or link prints the whole command, shell-quoted.**
+  `formatCommandLine()` renders it so it can be pasted into a shell, edited
+  and rerun, which is the point of printing it at all: reproducing the
+  failure by hand is how anyone diagnoses a link. Nothing here goes through
+  a shell -- `runCommand()` spawns an argv -- so an earlier version printed
+  the arguments bare, as an exact record of what ran. That was accurate and
+  useless: a kit under a path with a space, or an `-isysroot /Some SDK`,
+  printed as two arguments and pasted back as two arguments. Only arguments
+  a shell would re-split are quoted, so an ordinary command still reads as
+  one.
 - **The recorded `cc:` is a hint, not a requirement, and any C++ driver
   will do.** `cc:` is `CMAKE_CXX_COMPILER`, so it is an absolute path
   belonging to the machine that cut the kit; treating it as the answer made

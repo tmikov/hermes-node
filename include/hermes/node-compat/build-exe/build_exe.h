@@ -91,6 +91,22 @@ std::optional<DriverCandidate> resolveDriver(
 /// warnings.
 bool versionOutputIsClang(const std::string &versionOutput);
 
+/// \p argv rendered as a command line the user can paste into a shell,
+/// edit, and run.
+///
+/// That is the whole requirement, and it is why this quotes where an
+/// earlier version deliberately did not. Nothing here goes through a shell
+/// -- runCommand() spawns an argv directly -- so printing the arguments
+/// bare was an accurate record of what ran. But it was not a command
+/// anyone could re-run: a kit under a path with a space, or an
+/// `-isysroot /Some SDK`, printed as two arguments and pasted back as two
+/// arguments. Reproducing the failing link by hand is the reason the
+/// command is printed at all, so being pasteable wins.
+///
+/// Only arguments a shell would touch are quoted, so an ordinary command
+/// line still reads as one.
+std::string formatCommandLine(const std::vector<std::string> &argv);
+
 /// Whether choosing \p source means the kit's recorded compiler was tried
 /// and found unusable -- which is worth telling the user, since it is the
 /// difference between using a kit as intended and linking with a
