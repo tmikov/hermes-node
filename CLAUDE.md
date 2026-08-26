@@ -635,14 +635,11 @@ plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
   is no fuse, no sentinel, no self-mmap, no `/proc/self/exe` and no backwards
   scan for a magic -- the payload is a symbol. The price is a C++ driver on
   the build machine (and the Xcode command line tools on macOS), which
-  Static Hermes native compilation needs anyway. **Any** driver: the link
-  needs one for the crt objects, the default library set and the sysroot
-  -- measured, `clang++ -###` expands a trivial link to five crt objects,
-  eight `-L` paths and `-lstdc++ -lm -lgcc_s -lgcc -lc`, with `crtbeginS.o`
-  under a gcc-version-stamped directory. Recording that expansion and
-  calling `ld` directly was tried by hand and rejected: it works, and it
-  trades "needs a C++ driver" for "needs an identical filesystem layout
-  down to the GCC major version". Late binding is the point.
+  Static Hermes native compilation needs anyway. **Any** driver, not a
+  specific one: the link needs it for the crt objects, the default library
+  set and the sysroot, all of which the driver computes on the machine
+  doing the link. That late binding is what makes a kit portable, so
+  nothing here may pre-compute those paths.
 - **The kit** is what an app links against: `libhermes-node-kit.a` (every
   archive in the closure, merged), `libhermesNapi.a` kept separate,
   `hermes-node-bundle-main.o`, and `kit.manifest`. It is cut by
@@ -678,17 +675,14 @@ plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
   list is forwarded to the assemble step on purpose (some of it selects a
   target), and the price is link-only flags reaching a compile that warns
   about each one. That suppression flag is a Clang spelling which GCC
-  rejects outright, so it was what confined this feature to Clang. It
-  cannot be recorded in the manifest, since `--cc` can change the driver
-  afterwards, so `captureDriverVersion()` runs `<driver> --version` once
-  and `versionOutputIsClang()` decides. That probe doubles as the "can this
-  be run at all" test, so it costs one subprocess, not two. Its usability
-  rule is deliberately **not** "exited 0" -- `--version`'s status answers
-  neither question, and demanding success would fall back off a working
-  compiler that merely reports itself oddly. Only exec failure counts,
-  which is `posix_spawnp`'s error on glibc and exit 127 elsewhere.
-  Verified end to end: a container linked with `--cc=c++` (g++ 13 here)
-  produces a working executable.
+  rejects outright. It cannot be recorded in the manifest, since `--cc` can
+  change the driver afterwards, so `captureDriverVersion()` runs
+  `<driver> --version` once and `versionOutputIsClang()` decides. That probe
+  doubles as the "can this be run at all" test, so it costs one subprocess,
+  not two. Its usability rule is deliberately **not** "exited 0" --
+  `--version`'s status answers neither question, and demanding success would
+  fall back off a working compiler that merely reports itself oddly. Only
+  exec failure counts: `posix_spawnp`'s error on glibc, exit 127 elsewhere.
 - **A merged archive, not one `ld -r` object.** The `-r` object is smaller
   (14.1 MB against 28 MB) and it is one file, but it drops
   `MH_SUBSECTIONS_VIA_SYMBOLS`. Mach-O has no per-function sections; that flag
@@ -791,11 +785,8 @@ plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
   is where a release layout WOULD put one, and is not this repo's build
   tree, where the binary is in `bin/` and the kit in `kit/`: pass
   `--kit=<build dir>/kit` when running `--build-exe` by hand. **No release
-  ships a kit today.** `.github/workflows/release.yml` stages the binary
-  alone and there is no `install()` rule for the kit, so `--build-exe` on a
-  released `hermes-node` fails with the missing-manifest error. Packaging
-  one is a product decision (a Release kit is ~40 MB, several times the
-  binary) and is deliberately not made here.
+  ships a kit today**, so `--build-exe` on a released `hermes-node` fails
+  with the missing-manifest error; see the open issues (`dz list`).
 - `--build-exe` is dispatched by `runToolVerb()` **before `runHermesNode`**,
   alongside the four read-only verbs. It writes files, so it is not read-only
   -- but the criterion for that dispatch point was never read-only-ness, it is
@@ -847,11 +838,12 @@ plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
   executed anywhere either; the macOS spike predates the script.) The
   payload object at least reaches that link built for the right targets:
   `buildAssembleCommand()` forwards the manifest's whole `driverflag` list,
-  `-arch` included. And a produced **Linux** executable is not
-  self-contained: it needs ICU 74, `libstdc++.so.6` and `libgcc_s.so.1`, where
-  a macOS one needs only OS-provided libraries.
-  `HERMES_USE_STATIC_ICU=ON` would fix the ICU half, at the cost of a static
-  system ICU at build time; its own round.
+  `-arch` included. And a produced **Linux** executable inherits the build
+  machine's glibc and ICU versions, so it runs on distributions carrying
+  those and not on others, where a macOS one needs only OS-provided
+  libraries; a platform-independent Linux binary is out of scope for now.
+  What causes it, what each remedy costs and what was already measured and
+  rejected are in the tracker -- see the open issues (`dz list`).
 - **Two worked cases, chosen as a matched pair.** `examples/tetris` and
   `examples/gtop` each wrap a third-party npm package in a one-line entry and
   build it to a binary; both `run.sh` scripts check the executable with
@@ -965,6 +957,13 @@ Bugs and tasks that outlive a session live in `dz/`, a
 committed alongside the code. Use it for what a progress file cannot hold --
 a defect nobody is working on yet, a limitation recorded rather than fixed, a
 follow-up that would otherwise survive only in a commit message.
+
+**Read the open issues (`dz list`) before assuming a rough edge is unknown.**
+The tracker, not this file, is where known defects and unfixed limitations
+live, with the measurements behind them. Do not copy an issue's content here:
+two records of the same thing drift, and the issue is the one that gets
+updated when the situation changes. This file describes how the system works
+now; the tracker describes what is wrong with it.
 
 **Which `dz` to run.** The bundled ditz2 is the reference: the submodule at
 `examples/ditz2/ditz2`, whose `package.json` names the version this repo is
