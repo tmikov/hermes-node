@@ -1,2 +1,3 @@
 name: hermes-node
-components: []
+components:
+  - build-exe
