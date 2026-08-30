@@ -1,7 +1,7 @@
 [submodule "hermes"]
 	path = hermes
 	url = https://github.com/tmikov/hermes.git
-	branch = n-api
+	branch = hermes-node
 [submodule "examples/ditz2/ditz2"]
 	path = examples/ditz2/ditz2
 	url = https://github.com/tmikov/ditz2.git
