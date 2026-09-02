@@ -688,6 +688,34 @@ static napi_value processExit(napi_env env, napi_callback_info info) {
   // libuv stream, and _exit() below does not care. Flush first.
   flushPendingWrites(exitLoop);
 
+  // Put the terminal back the way the program found it. A program that calls
+  // stdin.setRawMode(true) is under no obligation to clear it -- tetris-cli
+  // sets it on its fifth line and quits with process.exit(0), and that works
+  // under node -- because raw mode is the runtime's to undo. Leaving it set
+  // clears ECHO and ICANON for the shell the user returns to: they type and
+  // nothing appears, with nothing on screen saying why.
+  //
+  // Node restores in ResetStdio(), registered with atexit(). That is not
+  // available here, for the same reason the next line gives: this path ends
+  // in _exit(), which runs no atexit handler. So the restore is explicit,
+  // and every path that calls _exit() needs its own -- see
+  // triggerUncaughtException() in node_errors.cpp for the other one.
+  //
+  // After the flush, not before: the queued writes can be escape sequences an
+  // 'exit' handler emitted to restore a screen, and they should go out under
+  // the output settings they were written for. This is where node's atexit
+  // handler sits relative to them too.
+  //
+  // uv_tty_reset_mode() restores what libuv saved on the first
+  // uv_tty_set_mode() to a non-normal mode, and is a no-op returning 0 when
+  // no tty was ever put into one -- so this costs nothing for a program that
+  // never touched the terminal, and needs no guard of its own.
+  //
+  // process.abort() deliberately does not get this treatment: it calls
+  // abort(), which runs no atexit handler in node either, so a terminal left
+  // raw by an aborting program is what node does as well.
+  uv_tty_reset_mode();
+
   // Use _exit() to skip atexit handlers (including ASAN leak detection).
   // The Hermes runtime is a stack variable in runBootstrap() and won't be
   // destructed by exit(), causing ASAN to report massive false-positive

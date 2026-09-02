@@ -114,6 +114,34 @@ needs the `uv_stream_t` behind each JS stream; losing a program's output is
 the worse of the two divergences. Pinned by
 `test/test-process-exit-event.js`, seven cases, each checked against Node.
 
+**Every `_exit()` path restores the terminal.** `stdin.setRawMode(true)`
+reaches `uv_tty_set_mode()`, which saves the original termios in a libuv
+global; raw mode clears `ECHO` and `ICANON`, so a program that leaves it set
+hands the user back a shell that no longer echoes what they type, with
+nothing on screen saying why. The program is not the one that has to undo it
+-- tetris-cli sets raw mode on its fifth line and quits with
+`process.exit(0)`, never clearing it, and that works under Node, because Node
+restores in `ResetStdio()`, registered with `atexit()`. We cannot use
+`atexit`: both exit paths call `_exit()` on purpose, to keep ASAN from
+reporting the live Hermes runtime as thousands of leaks. So each calls
+`uv_tty_reset_mode()` itself, **after** its flush -- queued escape sequences
+from an `'exit'` handler should go out under the settings they were written
+for, which is also where Node's `atexit` handler sits relative to them.
+
+Falling off the end of the program was never affected: step 16 closes the
+stdio handles and libuv's `uv__tty_close` restores termios on the way past.
+That is why the fix is two lines in the two `_exit()` callers
+(`processExit`, and `triggerUncaughtException` in `lib/bindings/
+node_errors.cpp`) rather than one call somewhere central -- adding a third
+call on the natural path would work, and would also stop
+`test-tty-restore.js`'s `natural` case from noticing if that cleanup ever
+broke. `process.abort()` deliberately gets no restore, since `abort()` runs
+no `atexit` handler under Node either. Pinned by `test/test-tty-restore.js`,
+four cases; it needs a real terminal, so it runs through
+`test/fixtures/tty/run-on-pty.py`, which reads the flags back **inside** the
+pty session -- on macOS the slave fd is revoked once the session leader
+exits, so a parent holding it gets `ENOTTY`.
+
 The one remaining divergence: assigning a **non-numeric** value is ignored
 here, where Node throws `ERR_INVALID_ARG_TYPE` at the assignment (so
 `process.exitCode = "oops"` exits 1 there and 0 here). Matching it needs a

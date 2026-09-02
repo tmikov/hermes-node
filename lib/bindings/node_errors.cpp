@@ -8,6 +8,7 @@
 #include <hermes/node-compat/bindings/node_errors.h>
 
 #include <node_api.h>
+#include <uv.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -102,6 +103,13 @@ bool triggerUncaughtException(napi_env env, napi_value error) {
   // something; flush before leaving, or the explanation goes missing along
   // with the program.
   std::fflush(nullptr);
+  // And put the terminal back, for the reason processExit() gives: this is
+  // the other path that ends in _exit(), so it is the other one that has to
+  // restore explicitly. A program that died inside a timer callback with the
+  // terminal in raw mode is exactly the case that needs it -- it never got to
+  // clean up after itself, and the error it is about to print is unreadable
+  // in a shell that has stopped echoing.
+  uv_tty_reset_mode();
   // _exit and not std::exit, for the reason processExit() gives: the Hermes
   // runtime is a stack variable in the bootstrap frame and exit() does not
   // unwind to it, so ASAN's leak check runs against a live runtime, reports
