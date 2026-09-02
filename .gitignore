@@ -8,3 +8,7 @@ __pycache__/
 
 # Scratch notes kept in the working tree, deliberately not shared.
 TODO.md
+
+# Subagent-driven-development scratch: ledgers, briefs, review packages.
+# Per-plan workspaces, recreated on demand; the git history is the record.
+.superpowers/
