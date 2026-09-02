@@ -422,7 +422,7 @@ Native addons still ship beside the executable rather than inside it --
 directory: sidecars sit beside the produced binary, not beside the container,
 and `--build-exe` says so when it packages one.
 
-A produced Linux executable still needs the system's ICU, `libstdc++` and
+A produced Linux executable still needs the system's `libstdc++` and
 `libgcc_s`; a macOS one needs only what the OS ships. Windows is not supported.
 
 ## Command-line options

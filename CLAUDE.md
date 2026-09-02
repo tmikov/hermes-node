@@ -6,7 +6,7 @@ Node.js API compatibility layer for Hermes. Ports Node's native bindings to Node
 
 ## Key Paths
 
-- Hermes (submodule): `hermes/` — n-api branch, not yet merged to Hermes main
+- Hermes (submodule): `hermes/` — `hermes-node` branch of `github.com/tmikov/hermes`, not yet merged to Hermes main
 - Hermes Node-API source (separate checkout): `/home/tmikov/work/hermes-n-api`
 - Node.js source (separate checkout): `/home/tmikov/3rd/node` — v24.13.0
 - Documentation: `docs/` -- specs and plans under `docs/superpowers/`, everything else under `docs/notes/`. See `docs/README.md`.
@@ -890,7 +890,7 @@ plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
   failed the link anywhere else, naming a directory the user never chose.
   The directory is kept as a `-L` rather than dropped because that costs
   nothing: a `-L` naming a directory that does not exist is ignored
-  silently, so it helps where the layout matches -- a custom ICU prefix
+  silently, so it helps where the layout matches -- a custom library prefix
   included -- and is inert elsewhere, where `-l` finds the system copy. A
   **versioned** soname (`libfoo.so.5`) is deliberately left absolute: `-lfoo`
   resolves through the `libfoo.so` development symlink, which a machine with
@@ -1092,9 +1092,9 @@ plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
   payload object at least reaches that link built for the right targets:
   `buildAssembleCommand()` forwards the manifest's whole `driverflag` list,
   `-arch` included. And a produced **Linux** executable inherits the build
-  machine's glibc and ICU versions, so it runs on distributions carrying
-  those and not on others, where a macOS one needs only OS-provided
-  libraries; a platform-independent Linux binary is out of scope for now.
+  machine's glibc version, so it runs on distributions carrying that and not
+  on others, where a macOS one needs only OS-provided libraries; a
+  platform-independent Linux binary is out of scope for now.
   What causes it, what each remedy costs and what was already measured and
   rejected are in the tracker -- see the open issues (`dz list`).
 - **Two worked cases, chosen as a matched pair.** `examples/tetris` and
