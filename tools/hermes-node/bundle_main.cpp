@@ -14,12 +14,21 @@
 /// by the object --build-exe generates, so a binary that links this file
 /// always has a bundle and a binary that does not never sees these symbols.
 
+#include <hermes/node-compat/bundle/bundle_run.h>
 #include <hermes/node-compat/runtime/hermes_node_runtime.h>
+#include <hermes/node-compat/vm-options/vm_options.h>
 
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <vector>
 
+using hermes::node_compat::BundleVmOptions;
 using hermes::node_compat::HermesNodeConfig;
+using hermes::node_compat::readEmbeddedBundleVmOptions;
 using hermes::node_compat::runHermesNode;
+using hermes::node_compat::splitVmOptionsEnv;
 
 extern "C" {
 /// Defined by the generated payload object. Arrays rather than pointers:
@@ -35,6 +44,37 @@ int main(int argc, char **argv) {
   config.embeddedBundleData = hermesNodeBundleStart;
   config.embeddedBundleSize =
       static_cast<size_t>(hermesNodeBundleEnd - hermesNodeBundleStart);
+
+  // The container's options, then HERMES_NODE_VM_OPTIONS if the container
+  // allows it. There is no --vm= here: every argument this binary receives
+  // belongs to the program, which is what makes process.argv.slice(2) mean
+  // the same thing it means under --bundle=<f> arg.
+  BundleVmOptions bundleVm;
+  std::string vmError;
+  if (!readEmbeddedBundleVmOptions(
+          config.embeddedBundleData,
+          config.embeddedBundleSize,
+          &bundleVm,
+          &vmError)) {
+    std::fprintf(stderr, "error: %s\n", vmError.c_str());
+    return 1;
+  }
+  std::vector<std::string> envVm =
+      splitVmOptionsEnv(std::getenv("HERMES_NODE_VM_OPTIONS"));
+  if (!bundleVm.allowOverride && !envVm.empty()) {
+    std::fprintf(
+        stderr,
+        "Error: this executable's VM options are locked and cannot be "
+        "overridden.\n"
+        "       HERMES_NODE_VM_OPTIONS is set in the environment.\n"
+        "       Rebuild the container with: --build-bundle "
+        "--allow-vm-options-override\n"
+        "       then link it again with: --build-exe\n");
+    return 1;
+  }
+  config.process.vmOptions = std::move(bundleVm.options);
+  config.process.vmOptions.insert(
+      config.process.vmOptions.end(), envVm.begin(), envVm.end());
 
   // process.argv is [exePath, exePath, ...userArgs]: the executable's own
   // path occupies the slot a script path occupies everywhere else, so user

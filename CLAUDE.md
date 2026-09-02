@@ -231,6 +231,200 @@ on by default. Built-in JS is unaffected (already embedded as bytecode).
   landing at ~16 MB / ~1506 entries. See
   `docs/superpowers/plans/progress-compile-cache.md` for the full numbers.
 
+## Hermes VM Options
+
+`--vm=<flag>` configures the Hermes VM underneath hermes-node the way the
+`hermes` binary's own flags configure it. Design
+`docs/superpowers/specs/2026-09-02-vm-options-design.md`, plan
+`docs/superpowers/plans/2026-09-02-vm-options-plan.md`, progress
+`docs/superpowers/plans/progress-vm-options.md`.
+
+- Repeatable, **one Hermes flag per occurrence, never split on whitespace**:
+  a value can contain a space, and `-Xperf-prof-dir=<dir>` is proof that
+  such a value exists inside this very flag set. `HERMES_NODE_VM_OPTIONS` is
+  whitespace-split, because an environment variable has no other shape --
+  that limitation is the variable's, not the feature's. It is honoured for
+  a plain script, `-e` and the REPL as well as for a container run, with the
+  same precedence in both: the environment first, `--vm=` after it, so an
+  explicit flag wins. It was container-only until 2026-09-02, which made
+  `HERMES_NODE_VM_OPTIONS=-gc-max-heap=4g hermes-node app.js` do nothing and
+  say nothing -- a silent no-op on a VM setting, which is the failure shape
+  this whole feature refuses rather than ignores. `--build-bundle` is the
+  one mode it stays out of, and for a different reason: there `--vm=` is
+  *recorded* into the container rather than applied, so folding the
+  environment in would bake a build machine's ambient variable into a
+  shipped artifact.
+- **Hermes parses the flags, not us.** `hermes::cli::RuntimeFlags` is
+  instantiated over a synthesized argv built from the `--vm=` values alone,
+  so spellings, `cl::desc` text, defaults and value parsers (`1g`, `512m`,
+  the `on|force|off` enum behind `-Xjit`) come from Hermes and cannot drift
+  from the binary they are supposed to match. `--vm-help` reads the same
+  registry, so the help cannot drift from what is accepted either. Nothing
+  but `--vm=` values is ever handed to `llvh::cl`: hermes-node's own parse
+  loop stays hand-written, so an unknown `--buidl-bundle` is still our error
+  with our message.
+- **A standing constraint falls out of that: hermes-node must not link
+  `hermesCompilerDriver`.** `CompilerDriver.cpp` defines the
+  `hermes::cl::compilerRuntimeFlags` global, which registers the same option
+  names our `RuntimeFlags` instance does, and `llvh::cl` keeps its registry
+  in process globals -- both present is a duplicate-registration abort at
+  static-initialisation time, before `main`. hermes-node compiles JavaScript
+  through the Hermes runtime API rather than through `CompilerDriver`, which
+  is what makes the delegation possible at all.
+- **25 flags are honoured, 13 are refused by name** (`kHonoured` and
+  `kConsoleHostOnly` in `lib/vm-options/vm_options.cpp`). The dividing line
+  is not editorial: it is whether hermes-node can actually deliver the
+  flag's effect, which for most of the refused set means whether the
+  `hermes` binary implements it by putting a value into `RuntimeConfig` or
+  by calling a method on a live `vm::Runtime` through `ConsoleHost` -- which
+  this codebase deliberately never touches, for the reason recorded beside
+  `hermes_napi_create_env` in `lib/runtime/hermes_node_runtime.cpp`: those
+  headers' struct layout depends on private compile defines that Hermes's
+  CMake leaks only within its own subdirectory scope, so including them
+  would silently miscompute field offsets. Refusing rather than ignoring is
+  the point. An accepted flag that does nothing is the swallow-and-continue
+  pattern this codebase has spent several rounds removing, and the allowlist
+  has a second job besides: it keeps `--vm=-help` from reaching `llvh::cl`'s
+  help printer, which would dump the whole registry, LLVM's internal options
+  included, and exit.
+- **Three refused flags do set a real config bit**, and are refused anyway:
+  `-sample-profiling`, `-gc-print-stats` and `-track-io`. Each parses and
+  configures cleanly -- and each costs real work whose only reader is
+  `ConsoleHost`, so the effect is never reported. `-sample-profiling`'s
+  writer half is `ConsoleHost.cpp:1094-1112`; `-gc-print-stats` makes
+  `GCBase` record statistics that only `Runtime::printHeapStats` prints;
+  `-track-io` makes `Runtime` attach a page-access tracker that only
+  `Runtime::getIOTrackingInfoJSON` reports. (Both of the latter two are also
+  reachable through `jsi::Instrumentation`, which this runtime does not use
+  either.) `-gc-print-stats` is the sharpest of the three, since its name
+  promises printed output. Supporting any of them means deciding where that
+  output goes, which is a feature in its own right.
+- **`hermes::cli::buildRuntimeConfig()` is deliberately not called.** It
+  omits `ES6BlockScoping`, `EnableAsyncGenerators`, `Test262` and every JIT
+  field, and the `hermes` binary does not call it either -- it builds its
+  config inline at `hermes/tools/hermes/hermes.cpp:110-141`, which is the
+  complete mapping. Ours mirrors that inline mapping in the same order, for
+  the sole purpose of being diffable against it when Hermes moves.
+- **Two `llvh::cl` facts the design got wrong, both found in
+  implementation.** A plain `cl::opt` is `cl::Optional` and *rejects* a
+  repeated flag ("may only occur zero or one times!") rather than taking the
+  last, so `buildVmRuntimeConfig` deduplicates the option list by flag name
+  before parsing -- merge logic of ours, where the design claimed there
+  would be none, and load-bearing because the whole override story is a
+  chain of repeated flags in which the last must win. And passing an `Errs`
+  stream to `ParseCommandLineOptions` buys exactly one thing: the function
+  returns instead of calling `exit()`. It does not capture per-option
+  errors, because `Option::error()` defaults its stream to `llvh::errs()`
+  and every internal call site takes that default -- so a bad value prints
+  llvh's precise message to real stderr and then ours as well.
+- **The invariant that cost four bugs: a field is applied if and only if the
+  caller actually named that flag** (`getNumOccurrences()`), never
+  unconditionally and never gated by comparing the flag's value against an
+  expected default. With no `--vm=` options nothing is written at all, every
+  field keeps the Builder's own compiled-in default, and the result is *by
+  construction* identical to the hardcoded three-call
+  `RuntimeConfig::Builder()` this replaced -- rather than identical by an
+  audit of which of Hermes's ~25 `cl::init(...)` values currently happen to
+  agree with `RuntimeConfig`'s and `GCConfig`'s. That audit was tried first
+  and four fields diverged: `GCSanitizeRate` and `GCSanitizeRandomSeed`
+  (0.01 in a handle-sanitizer build against `GCSanitizeConfig`'s bare 0.0,
+  which silently turned on 1% random handle sanitization for every plain run
+  under ASAN and broke two unrelated tests that assert exact process
+  output), `AsyncBreakCheckInEval` (`cl::init` false against
+  `RuntimeConfig`'s true, so it flipped in every build) and `VerifyEvalIR`.
+  `-gc-init-heap` and `-gc-max-heap` need the gating for a second reason:
+  their `MemorySize` type has no `OptionValue` specialization, so
+  `setDefault()` is a silent no-op and the gating is the *only* thing
+  standing between an earlier call's parsed value and this call's output.
+  `VmOptionsTest.EmptyOptionsMatchHardcodedBuilderFieldByField` pins the
+  whole property, and all four divergences would have failed it. What the
+  rule really guards against is a future Hermes `cl::init` change silently
+  adding a fifth, without this code needing to change at all. The same rule
+  settles a field `hermes.cpp` *does* set and no flag names:
+  `ShouldReleaseUnused` is left at `GCConfig::Builder`'s own default
+  (`kReleaseUnusedOld`) rather than copied from `hermes.cpp`'s
+  `kReleaseUnusedNone`. Copying it once made every plain hermes-node run
+  stop returning old-generation memory to the OS with nothing on the
+  command line asking for it -- the mapping's job is to honour flags the
+  caller passed, not to import constants the `hermes` binary picks for
+  itself, and the identity above holds with no exception because of it.
+- **Three fields are hermes-node's own defaults**, applied unconditionally
+  and then overridden when the caller names the flag: `ES6BlockScoping`,
+  `EnableAsyncGenerators` and `MicrotaskQueue`, all true. Hermes defaults
+  the first two to **false**, so losing this removes async generators and
+  block scoping from every program, with no flag passed and no message
+  printed -- which is why it is the case `test/vm-options.js` asserts first.
+- The parse runs once per process under `std::call_once`, its result cached,
+  because `llvh::cl`'s registry is global and hermes-node starts *two*
+  runtimes under `--inspect`: the inspector runtime is configured from the
+  identical `RuntimeConfig` rather than from a second parse, since a
+  debugger attached to a differently-configured VM misleads in a way that is
+  hard to notice. The option *strings* rather than a built config live on
+  `HermesNodeProcessConfig`, whose whole contract is that a field there is
+  inherited by every runtime in the process, and strings keep the public
+  header free of Hermes VM headers.
+- **Format v5** adds a VM-options section -- an offset and count into the
+  existing string table, the shape the preload and native tables already use
+  -- plus `kBundleFlagAllowVmOptionsOverride`, the first bit in the header's
+  container-flags word. `--build-bundle --vm=` **records** rather than
+  applies: the producer compiles rather than runs, a build machine's VM
+  tuning is not the artifact's business, and applying it would let an
+  ordinary flag like `-Xes6-proxy=false` break the build itself, since
+  `libjs/primordials.js` runs on the producer's own runtime.
+  `--allow-vm-options-override` (which requires `--build-bundle`, and says
+  so) sets the bit. `--dump` prints a `VM_OPTIONS` section with the lock
+  state, so an artifact's VM configuration can be audited before it ships in
+  the same spirit as `--verify-natives`. It prints whenever the container
+  records options **or** has the bit set -- not options alone, which is
+  nearly the `NATIVES` rule but not quite: the most open artifact there is,
+  built with `--allow-vm-options-override` and no `--vm=`, honours
+  `HERMES_NODE_VM_OPTIONS` unconditionally and used to be the one container
+  `--dump` said nothing about.
+- Options are applied in the order **baked, then `HERMES_NODE_VM_OPTIONS`,
+  then `--vm=`** -- no merge logic at the call site, just the order the lists
+  are appended in, with the dedupe above making the last occurrence win.
+  **Locked is the default**, and an override attempt on a locked container
+  is an **error** naming which source tried it, not a silent no-op. Locked,
+  because the honoured set includes `-enable-eval` and
+  `-Xhermes-internal-test-methods`, which are not tuning knobs: an artifact
+  that always honours its environment lets whoever controls the environment
+  turn those back on. Ignoring the environment variable when locked was
+  considered and rejected -- it is quieter for someone who has the variable
+  exported for a development hermes-node and then runs a locked executable,
+  and that is a real cost, but it is a silent no-op on a VM setting, and the
+  escape hatch is a build-time flag the person shipping the artifact
+  controls.
+- **A produced executable has no `--vm=`**, because every argument belongs to
+  the program -- that is what keeps `process.argv.slice(2)` meaning what it
+  means under `--bundle=<f> arg`. Its container's options travel inside the
+  container's bytes, so `--build-exe` gains no flag of its own and the
+  generated payload object gains no symbol; the environment variable is the
+  only run-time override path an executable has, and the locked message
+  there names both steps, since unlocking is rebuilding the container and
+  then linking it again. The container is read for its options *before* any
+  runtime exists, by `readBundleVmOptions` / `readEmbeddedBundleVmOptions`,
+  which open for inspection and close -- one extra map-and-validate of a
+  file about to be mapped again, which is cheaper than restructuring a run
+  path that opens the container only after the `napi_env` is built.
+- **Some honoured flags cannot be applied to a hermes-node runtime at all,
+  and this cost three separate tasks time.** `-Xes6-proxy=false` is the
+  worked example: Hermes gates the global `Reflect` on the same
+  `hasES6Proxy()` check as `Proxy`, and `libjs/primordials.js` destructures
+  `Reflect` during bootstrap, so a container that genuinely applies that
+  flag can never finish booting. It fails loudly -- a clear message and exit
+  1, which is the acceptable half -- but anyone writing a test that has to
+  *run* a container should use `-enable-eval=false` instead: honoured,
+  defaulting to true, and observable as `new Function` throwing with no
+  other coupling. Separately, `-Xasync-generators` reaches only `eval` and
+  `new Function`; a top-level async generator in a script file is compiled
+  through a NAPI path that hardcodes the feature on, so a test that checks
+  that flag through a script file concludes, wrongly, that the flag does
+  nothing.
+- Tests: `test/vm-options.js`, `test/vm-options-errors.js`,
+  `test/bundle-vm-options.js`, `test/build-exe-vm-options.js` (`REQUIRES:
+  linker-available`, like the other `build-exe` tests), plus
+  `unittests/VmOptionsTest.cpp` and the v5 cases in `BundleFormatTest`.
+
 ## AOT Bundles
 
 `--build-bundle=<file>` walks a script's `require()` graph, compiles every
@@ -248,7 +442,12 @@ runs it, with no compilation and no source tree needed at run time.
   `docs/superpowers/plans/2026-08-20-bundle-preload-plan.md`. The native-addon round
   (2026-08-21, format v4) makes a `.node` addon packageable: design
   `docs/superpowers/specs/2026-08-21-bundle-natives-design.md`, plan
-  `docs/superpowers/plans/2026-08-21-bundle-natives-plan.md`.
+  `docs/superpowers/plans/2026-08-21-bundle-natives-plan.md`. The VM-options
+  round (2026-09-02, format v5) lets a container carry Hermes VM options and
+  an override bit: design
+  `docs/superpowers/specs/2026-09-02-vm-options-design.md`, plan
+  `docs/superpowers/plans/2026-09-02-vm-options-plan.md` -- see the Hermes VM
+  Options section above for the whole feature.
 - Implementation: `lib/bundle/` (format, writer, reader, generation tag,
   `require()` scanner, resolver, producer, run layer) plus
   `libjs/bundle-loader.js`, which wraps `Module._load`. `hermesNodeBundleRun`
@@ -565,9 +764,11 @@ Five diagnostic flags, none of them on the run path. Design
   serialized bytes, so it and a later `--dump` cannot disagree.
 - `--bundle=<f> --dump` prints the header, module table, edge table,
   `NATIVES` section (identity, sidecar name, byte length, truncated
-  SHA-256, printed only when the container records one) and section sizes
-  (including a `natives` row) to stdout. `--verbose` adds per-module in/out
-  edge counts.
+  SHA-256, printed only when the container records one), `VM_OPTIONS`
+  section (the lock state, then each baked option; printed when the
+  container records options **or** has the override bit set -- see the
+  Hermes VM Options section) and section sizes (including `natives` and
+  `vmopts` rows) to stdout. `--verbose` adds per-module in/out edge counts.
 - `--bundle=<f> --extract-module=<identity> --out=<file>` writes one
   module's payload verbatim (bytecode for a JS module, the original bytes
   for a JSON one). A native is refused, naming its sidecar: its bytes are

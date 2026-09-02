@@ -145,6 +145,13 @@ add_library(hermesNodeBundleMain OBJECT bundle_main.cpp)
 target_include_directories(hermesNodeBundleMain PRIVATE
   ${PROJECT_SOURCE_DIR}/include
   ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi)
+# Not actually linked -- this is an OBJECT library whose members reach the
+# final binary only through the kit archive -- but target_link_libraries is
+# also how CMake propagates a dependency's usage requirements, and this file
+# reads a container's VM options, which needs hermesNodeVmOptions's public
+# include directories (hermes/Public/RuntimeConfig.h, reached transitively
+# through hermesvm_a).
+target_link_libraries(hermesNodeBundleMain PRIVATE hermesNodeVmOptions)
 # Copied into the kit as a rule with a real OUTPUT rather than as a
 # POST_BUILD step on hermes-node-kit. A POST_BUILD runs only when that
 # target's link rule runs, and the kit's link is the stamp -- which does not
