@@ -2,3 +2,4 @@ name: hermes-node
 components:
   - build-exe
   - hermes
+  - vm-options
