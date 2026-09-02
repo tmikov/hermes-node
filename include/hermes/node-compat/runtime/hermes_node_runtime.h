@@ -64,6 +64,18 @@ struct HermesNodeProcessConfig {
 
   /// Whether compiled JavaScript is run through the optimization pipeline.
   OptimizeMode optimize = OptimizeMode::kDefault;
+
+  /// Hermes VM options, in the order they take effect: a container's baked
+  /// options first, then HERMES_NODE_VM_OPTIONS, then --vm= from the
+  /// command line. Later occurrences of the same flag win, which is
+  /// last-wins; buildVmRuntimeConfig deduplicates to make that hold.
+  ///
+  /// Strings rather than a built vm::RuntimeConfig so this header stays
+  /// free of Hermes VM headers. lib/runtime parses them once and caches
+  /// the result; the inspector runtime receives a copy of this config and
+  /// so is configured identically, which is the point of the field being
+  /// here rather than on HermesNodeConfig.
+  std::vector<std::string> vmOptions;
 };
 
 /// Configuration for a hermes-node runtime instance.

@@ -71,6 +71,7 @@
 #include <hermes/node-compat/process/node_process.h>
 #include <hermes/node-compat/runtime/runtime_state.h>
 #include <hermes/node-compat/version.h>
+#include <hermes/node-compat/vm-options/vm_options.h>
 
 #include <hermes/BCGen/HBC/BytecodeVersion.h>
 #include <uv.h>
@@ -79,6 +80,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -687,13 +689,44 @@ int runEmbeddedBundle(
 } // namespace
 
 int runHermesNode(const HermesNodeConfig &config) {
-  // 1. Create Hermes runtime with microtask queue enabled.
-  auto rtConfig = hermes::vm::RuntimeConfig::Builder()
-                      .withMicrotaskQueue(true)
-                      .withEnableAsyncGenerators(true)
-                      .withES6BlockScoping(true)
-                      .build();
-  auto hermesRT = facebook::hermes::makeHermesRuntime(rtConfig);
+  // 1. Create the Hermes runtime. The configuration comes from
+  //    --vm= / a container's baked options / HERMES_NODE_VM_OPTIONS,
+  //    already resolved into one ordered list by the caller. With no
+  //    options at all this produces exactly what the hardcoded
+  //    Builder() call it replaced produced: microtask queue, async
+  //    generators and ES6 block scoping on.
+  //
+  //    Parsed under call_once so that the inspector runtime -- a second
+  //    runHermesNode() call in the same process -- is configured from the
+  //    identical result rather than from a second parse of the same list.
+  //    A debugger attached to a differently-configured VM would mislead in
+  //    a way that is hard to notice, and re-deriving a config that cannot
+  //    differ is work with only a downside. (buildVmRuntimeConfig is
+  //    itself safe to call twice; this is about agreement, not safety.)
+  //
+  //    In bundle producer mode (config.buildBundlePath), --vm= is recorded
+  //    into the container below rather than applied here: the producer
+  //    compiles rather than runs, and a build machine's VM tuning is not
+  //    the artifact's business. Applying it to this runtime as well would
+  //    make an ordinary tuning flag like -Xes6-proxy=false break the build
+  //    itself, since libjs/primordials.js runs on this same runtime before
+  //    step 13 ever reaches buildBundle().
+  static std::once_flag vmConfigOnce;
+  static hermes::vm::RuntimeConfig vmRuntimeConfig;
+  static std::string vmConfigError;
+  std::call_once(vmConfigOnce, [&config]() {
+    if (!buildVmRuntimeConfig(
+            config.process.vmOptions, &vmRuntimeConfig, &vmConfigError))
+      // Neutral prefix, not "--vm:": the options may have come from a
+      // container's baked list or from HERMES_NODE_VM_OPTIONS, and in a
+      // --build-exe artifact there is no --vm flag at all to point at.
+      vmConfigError = "Error: VM options: " + vmConfigError;
+  });
+  if (!vmConfigError.empty()) {
+    std::fprintf(stderr, "%s\n", vmConfigError.c_str());
+    return 1;
+  }
+  auto hermesRT = facebook::hermes::makeHermesRuntime(vmRuntimeConfig);
 
   // 2. Create libuv event loop adapter.
   UvEventLoop eventLoop;

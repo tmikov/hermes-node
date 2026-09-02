@@ -7,10 +7,12 @@
 
 #include <hermes/node-compat/build-exe/build_exe.h>
 #include <hermes/node-compat/bundle/bundle_generation.h>
+#include <hermes/node-compat/bundle/bundle_run.h>
 #include <hermes/node-compat/bundle/bundle_tools.h>
 #include <hermes/node-compat/bytecode-dump/bytecode_dump.h>
 #include <hermes/node-compat/runtime/hermes_node_runtime.h>
 #include <hermes/node-compat/version.h>
+#include <hermes/node-compat/vm-options/vm_options.h>
 
 #include <uv.h>
 
@@ -21,6 +23,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <vector>
 
 using hermes::node_compat::HermesNodeConfig;
 using hermes::node_compat::runHermesNode;
@@ -269,6 +272,14 @@ static bool checkToolOptions(
   else if (tools.buildExe.has_value())
     verb = "--build-exe";
 
+  // --vm configures a runtime. None of the read-only verbs creates one,
+  // and --build-exe's options belong to the container it reads, not to
+  // the command line that links it.
+  if (!config.process.vmOptions.empty() && verb != nullptr) {
+    std::fprintf(stderr, "Error: --vm cannot be combined with %s.\n", verb);
+    return false;
+  }
+
   // --dump-bytecode names its own file. A container is neither an input nor
   // an output of it, so naming one alongside describes two jobs.
   if (tools.dumpBytecode.has_value() && !config.bundlePath.empty()) {
@@ -445,6 +456,18 @@ static bool checkToolOptions(
     std::fprintf(stderr, "Error: --cc requires a compiler name or path.\n");
     return false;
   }
+  // --vm takes a flag name rather than a path, but empty is the same
+  // mistake and belongs in the same place: checked here, both spellings
+  // ("--vm=" and "--vm ''") reach one message, where the parse loop could
+  // only see the first. Letting an empty value through instead would
+  // report "unknown VM option ''", which names neither the flag nor what
+  // is wrong with it.
+  for (const std::string &opt : config.process.vmOptions) {
+    if (opt.empty()) {
+      std::fprintf(stderr, "Error: --vm requires a value\n");
+      return false;
+    }
+  }
 
   return true;
 }
@@ -471,6 +494,11 @@ static void printUsage(const char *argv0) {
       "                                 record it to run before the entry "
       "point\n"
       "                                 (repeatable)\n"
+      "  --vm=<flag>, --vm <flag>       Hermes VM option (repeatable); with\n"
+      "                                 --build-bundle, record it in the "
+      "container\n"
+      "                                 instead of applying it to this run\n"
+      "  --vm-help                      List the supported VM options\n"
       "  --verbose                      With --build-bundle, narrate the "
       "walk to stderr;\n"
       "                                 with --dump, add per-module edge "
@@ -565,6 +593,14 @@ static bool parseInspectHostPort(const char *value, HermesNodeConfig &config) {
   return true;
 }
 
+/// HERMES_NODE_VM_OPTIONS, split the same way bundle_main.cpp splits it for
+/// a linked executable -- see splitVmOptionsEnv()'s doc comment for why the
+/// splitter is shared rather than reimplemented in each translation unit.
+static std::vector<std::string> envVmOptions() {
+  return hermes::node_compat::splitVmOptionsEnv(
+      std::getenv("HERMES_NODE_VM_OPTIONS"));
+}
+
 int main(int argc, char **argv) {
   HermesNodeConfig config;
   ToolOptions tools;
@@ -621,6 +657,24 @@ int main(int argc, char **argv) {
       config.includeModules.push_back(argv[i] + 10);
     } else if (std::strncmp(argv[i], "--preload=", 10) == 0) {
       config.preloadModules.push_back(argv[i] + 10);
+    } else if (std::strncmp(argv[i], "--vm=", 5) == 0) {
+      // Never split on whitespace: -Xperf-prof-dir=<dir> proves a value
+      // can legitimately contain a space. One flag per occurrence. An
+      // empty value is caught by checkToolOptions(), where every other
+      // empty-value flag is caught, so that "--vm=" and "--vm ''" give
+      // the same message rather than two different ones.
+      config.process.vmOptions.push_back(argv[i] + 5);
+    } else if (std::strcmp(argv[i], "--vm") == 0) {
+      if (i + 1 >= argc) {
+        std::fprintf(stderr, "Error: --vm requires a value\n");
+        return 1;
+      }
+      config.process.vmOptions.push_back(argv[++i]);
+    } else if (std::strcmp(argv[i], "--vm-help") == 0) {
+      std::printf(
+          "Hermes VM options, passed one per --vm=<flag>:\n\n%s",
+          hermes::node_compat::vmOptionsHelpText().c_str());
+      return 0;
     } else if (std::strcmp(argv[i], "--verbose") == 0) {
       config.verbose = true;
     } else if (std::strncmp(argv[i], "--bundle=", 9) == 0) {
@@ -784,6 +838,25 @@ int main(int argc, char **argv) {
   int toolExitCode = 0;
   if (runToolVerb(config, tools, containerPath, toolExitCode))
     return toolExitCode;
+
+  // HERMES_NODE_VM_OPTIONS is applied before --vm= from this command
+  // line, so an explicit flag still wins: later occurrences of a repeated
+  // flag win (buildVmRuntimeConfig dedupes, keeping the last), which makes
+  // appending order the precedence rule and leaves no merge logic here.
+  //
+  // --build-bundle is deliberately left out: there --vm= is *recorded*
+  // into the container rather than applied, so folding the environment in
+  // would bake a build machine's ambient variable into a shipped artifact.
+  if (config.buildBundlePath.empty()) {
+    std::vector<std::string> merged = envVmOptions();
+    if (!merged.empty()) {
+      merged.insert(
+          merged.end(),
+          config.process.vmOptions.begin(),
+          config.process.vmOptions.end());
+      config.process.vmOptions = std::move(merged);
+    }
+  }
 
   // Build process.argv: [binary, script-or-arg1, ...].
   config.argv.push_back(argv[0]);
