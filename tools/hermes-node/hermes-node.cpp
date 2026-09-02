@@ -279,6 +279,13 @@ static bool checkToolOptions(
     std::fprintf(stderr, "Error: --vm cannot be combined with %s.\n", verb);
     return false;
   }
+  if (config.allowVmOptionsOverride && config.buildBundlePath.empty()) {
+    std::fprintf(
+        stderr,
+        "Error: --allow-vm-options-override requires --build-bundle.\n"
+        "It records a bit in a container; this run is not building one.\n");
+    return false;
+  }
 
   // --dump-bytecode names its own file. A container is neither an input nor
   // an output of it, so naming one alongside describes two jobs.
@@ -498,6 +505,9 @@ static void printUsage(const char *argv0) {
       "                                 --build-bundle, record it in the "
       "container\n"
       "                                 instead of applying it to this run\n"
+      "  --allow-vm-options-override    With --build-bundle, let the "
+      "container's\n"
+      "                                 VM options be overridden at run time\n"
       "  --vm-help                      List the supported VM options\n"
       "  --verbose                      With --build-bundle, narrate the "
       "walk to stderr;\n"
@@ -675,6 +685,8 @@ int main(int argc, char **argv) {
           "Hermes VM options, passed one per --vm=<flag>:\n\n%s",
           hermes::node_compat::vmOptionsHelpText().c_str());
       return 0;
+    } else if (std::strcmp(argv[i], "--allow-vm-options-override") == 0) {
+      config.allowVmOptionsOverride = true;
     } else if (std::strcmp(argv[i], "--verbose") == 0) {
       config.verbose = true;
     } else if (std::strncmp(argv[i], "--bundle=", 9) == 0) {
@@ -839,15 +851,64 @@ int main(int argc, char **argv) {
   if (runToolVerb(config, tools, containerPath, toolExitCode))
     return toolExitCode;
 
-  // HERMES_NODE_VM_OPTIONS is applied before --vm= from this command
-  // line, so an explicit flag still wins: later occurrences of a repeated
-  // flag win (buildVmRuntimeConfig dedupes, keeping the last), which makes
-  // appending order the precedence rule and leaves no merge logic here.
+  // A container's baked options decide how the runtime is built, but the
+  // run path opens the container only after the runtime exists (runBundle
+  // takes a napi_env), so this reads the container a second time, purely
+  // for its VM options, before anything is built. The final list is the
+  // container's options first, then HERMES_NODE_VM_OPTIONS, then --vm=
+  // from this command line -- later occurrences of a repeated flag win
+  // (buildVmRuntimeConfig dedupes, keeping the last), so appending in this
+  // order is precedence: no merge logic here, just the order things are
+  // appended in.
   //
-  // --build-bundle is deliberately left out: there --vm= is *recorded*
-  // into the container rather than applied, so folding the environment in
-  // would bake a build machine's ambient variable into a shipped artifact.
-  if (config.buildBundlePath.empty()) {
+  // The same order applies with no container in play, minus the first
+  // step: HERMES_NODE_VM_OPTIONS, then --vm=. It applied to a --bundle run
+  // only until 2026-09-02, on the argument that a plain script already has
+  // --vm= on its own command line -- which made
+  // `HERMES_NODE_VM_OPTIONS=... hermes-node app.js` a silent no-op on a VM
+  // setting, exactly the failure shape the comments in this file invoke
+  // three times over as the reason for refusing rather than ignoring.
+  //
+  // --build-bundle is deliberately not included: there, --vm= is *recorded*
+  // into the container rather than applied (buildBundle() reads
+  // config.process.vmOptions), so folding the environment in would bake a
+  // build machine's ambient variable into a shipped artifact.
+  if (!config.bundlePath.empty()) {
+    hermes::node_compat::BundleVmOptions bundleVm;
+    std::string error;
+    if (!hermes::node_compat::readBundleVmOptions(
+            config.bundlePath, &bundleVm, &error)) {
+      std::fprintf(stderr, "error: %s\n", error.c_str());
+      return 1;
+    }
+    std::vector<std::string> runtimeVm = envVmOptions();
+    const bool hasCliVm = !config.process.vmOptions.empty();
+    // Locked is the default: an override attempt is refused outright
+    // rather than quietly doing nothing, naming which source tried it, so
+    // this never becomes the swallow-and-continue pattern the rest of this
+    // codebase has spent several rounds removing.
+    if (!bundleVm.allowOverride && (hasCliVm || !runtimeVm.empty())) {
+      std::fprintf(
+          stderr,
+          "Error: this bundle's VM options are locked and cannot be "
+          "overridden.\n"
+          "       %s\n"
+          "       Rebuild with: --build-bundle --allow-vm-options-override\n",
+          hasCliVm ? "--vm was given on the command line."
+                   : "HERMES_NODE_VM_OPTIONS is set in the environment.");
+      return 1;
+    }
+    std::vector<std::string> merged = bundleVm.options;
+    merged.insert(merged.end(), runtimeVm.begin(), runtimeVm.end());
+    merged.insert(
+        merged.end(),
+        config.process.vmOptions.begin(),
+        config.process.vmOptions.end());
+    config.process.vmOptions = std::move(merged);
+  } else if (config.buildBundlePath.empty()) {
+    // A plain script, -e, or the REPL. The environment is applied first so
+    // that an explicit --vm= on the command line still wins, which is the
+    // same precedence a container run gives the two.
     std::vector<std::string> merged = envVmOptions();
     if (!merged.empty()) {
       merged.insert(

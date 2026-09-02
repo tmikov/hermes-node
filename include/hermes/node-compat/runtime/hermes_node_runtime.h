@@ -116,6 +116,12 @@ struct HermesNodeConfig {
   /// bundle producer mode.
   std::vector<std::string> preloadModules;
 
+  /// --allow-vm-options-override: record in the container being built that
+  /// process.vmOptions may be overridden at run time by a later --vm= or
+  /// HERMES_NODE_VM_OPTIONS. False -- the default -- locks them. No effect
+  /// outside bundle producer mode.
+  bool allowVmOptionsOverride = false;
+
   /// When non-empty, run in AOT bundle consumer mode: map the container at
   /// this path (see hermes/node-compat/bundle/bundle_run.h), install the
   /// bundle-aware Module._load wrapper, and execute the bundle's entry

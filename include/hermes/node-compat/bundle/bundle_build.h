@@ -108,6 +108,17 @@ namespace node_compat {
 /// once, same as any module reached two ways, and still recorded once as a
 /// preload.
 ///
+/// \p vmOptions are Hermes VM options recorded in the container's
+/// VM-options table, in the order given, for the consumer to apply before
+/// it creates its runtime. They are recorded, not applied: this run
+/// compiles rather than executes, and a build machine's VM tuning is not
+/// the artifact's business.
+///
+/// \p allowVmOptionsOverride records whether those options may be
+/// overridden at run time. False -- the default -- locks them, because the
+/// honoured flag set includes -enable-eval and
+/// -Xhermes-internal-test-methods, which are not tuning knobs.
+///
 /// \return 0 on success, non-zero on any error.
 int buildBundle(
     napi_env env,
@@ -115,7 +126,9 @@ int buildBundle(
     const std::string &outPath,
     bool verbose,
     const std::vector<std::string> &includes,
-    const std::vector<std::string> &preloads);
+    const std::vector<std::string> &preloads,
+    const std::vector<std::string> &vmOptions,
+    bool allowVmOptionsOverride);
 
 } // namespace node_compat
 } // namespace hermes

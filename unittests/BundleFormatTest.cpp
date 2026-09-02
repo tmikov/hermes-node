@@ -58,7 +58,7 @@ TEST(BundleFormatTest, RoundTripsModuleFlags) {
   ASSERT_TRUE(r.has_value()) << error;
   EXPECT_TRUE(r->isRequirable(a));
   EXPECT_FALSE(r->isRequirable(b));
-  EXPECT_EQ(r->formatVersion(), 4u);
+  EXPECT_EQ(r->formatVersion(), 5u);
 }
 
 TEST(BundleFormatTest, EdgeLookupHitAndMiss) {
@@ -210,6 +210,29 @@ TEST(BundleFormatTest, RejectsUnknownFlags) {
   std::memcpy(
       bytes.data() + header.moduleTableOffset +
           offsetof(BundleModuleRecord, flags),
+      &bogus,
+      sizeof(bogus));
+
+  std::string error;
+  auto r = BundleReader::open(bytes.data(), bytes.size(), kGen, &error);
+  EXPECT_FALSE(r.has_value());
+  EXPECT_NE(error.find("unknown flags"), std::string::npos) << error;
+}
+
+// The container-wide flags word gets the same treatment as the per-module
+// one above, for the same reason: the format version is an exact match, so
+// a bit this reader does not recognize means a corrupt or hostile file, not
+// a future feature to ignore.
+TEST(BundleFormatTest, RejectsUnknownContainerFlags) {
+  BundleWriter w;
+  w.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "A");
+  w.setEntry(0);
+  std::vector<uint8_t> bytes = w.serialize(kGen);
+  BundleHeader header;
+  std::memcpy(&header, bytes.data(), sizeof(header));
+  uint32_t bogus = kBundleFlagAllowVmOptionsOverride | (1u << 31);
+  std::memcpy(
+      bytes.data() + offsetof(BundleHeader, containerFlags),
       &bogus,
       sizeof(bogus));
 
@@ -519,7 +542,7 @@ TEST(BundleFormatTest, RoundTripsPreloads) {
   auto r = BundleReader::open(
       bytes.data(), bytes.size(), bundleGenerationTag(), &error);
   ASSERT_TRUE(r.has_value()) << error;
-  EXPECT_EQ(r->formatVersion(), 4u);
+  EXPECT_EQ(r->formatVersion(), 5u);
   ASSERT_EQ(r->preloadCount(), 1u);
   EXPECT_EQ(r->preload(0), setup);
 }
@@ -596,7 +619,7 @@ TEST(BundleFormatTest, NativeRecordRoundTrips) {
   std::string error;
   auto reader = BundleReader::open(bytes.data(), bytes.size(), 7, &error);
   ASSERT_TRUE(reader.has_value()) << error;
-  EXPECT_EQ(reader->formatVersion(), 4u);
+  EXPECT_EQ(reader->formatVersion(), 5u);
   EXPECT_EQ(reader->kind(addon), ModuleKind::kNative);
   EXPECT_EQ(reader->payload(addon).size(), 0u);
 
@@ -746,6 +769,96 @@ TEST(BundleFormatTest, NoNativesCostsNothing) {
   auto reader = BundleReader::open(bytes.data(), bytes.size(), 7, &error);
   ASSERT_TRUE(reader.has_value()) << error;
   EXPECT_EQ(reader->nativeCount(), 0u);
+}
+
+TEST(BundleFormatTest, VmOptionsRoundTrip) {
+  BundleWriter writer;
+  uint32_t m =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(m);
+  writer.addVmOption("-gc-max-heap=2g");
+  writer.addVmOption("-Xjit=on");
+  std::vector<uint8_t> bytes = writer.serialize(0);
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 0, &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+  EXPECT_EQ(reader->formatVersion(), 5u);
+  ASSERT_EQ(reader->vmOptionCount(), 2u);
+  EXPECT_EQ(reader->vmOption(0), "-gc-max-heap=2g");
+  EXPECT_EQ(reader->vmOption(1), "-Xjit=on");
+  // Order is the point: these are applied left to right and later wins.
+  EXPECT_GT(reader->vmOptionsTableSize(), 0u);
+}
+
+TEST(BundleFormatTest, VmOptionsDefaultToLocked) {
+  BundleWriter writer;
+  uint32_t m =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(m);
+  writer.addVmOption("-Xjit=on");
+  std::vector<uint8_t> bytes = writer.serialize(0);
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 0, &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+  EXPECT_FALSE(reader->allowsVmOptionsOverride());
+}
+
+TEST(BundleFormatTest, VmOptionsOverrideBitRoundTrips) {
+  BundleWriter writer;
+  uint32_t m =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(m);
+  writer.addVmOption("-Xjit=on");
+  writer.setAllowVmOptionsOverride(true);
+  std::vector<uint8_t> bytes = writer.serialize(0);
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 0, &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+  EXPECT_TRUE(reader->allowsVmOptionsOverride());
+}
+
+TEST(BundleFormatTest, NoVmOptionsIsAnEmptySection) {
+  BundleWriter writer;
+  uint32_t m =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(m);
+  std::vector<uint8_t> bytes = writer.serialize(0);
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 0, &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+  EXPECT_EQ(reader->vmOptionCount(), 0u);
+  EXPECT_EQ(reader->vmOptionsTableSize(), 0u);
+  EXPECT_FALSE(reader->allowsVmOptionsOverride());
+}
+
+// The one check the four tests above cannot exercise, since a writer built
+// through BundleWriter::addVmOption() never produces a bad string index: an
+// adversarial or corrupted container could still claim one, and the reader
+// must catch it before vmOption() ever dereferences it.
+TEST(BundleFormatTest, RejectsVmOptionStringIndexOutOfRange) {
+  BundleWriter writer;
+  uint32_t m =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(m);
+  writer.addVmOption("-Xjit=on");
+  std::vector<uint8_t> bytes = writer.serialize(0);
+
+  BundleHeader header;
+  std::memcpy(&header, bytes.data(), sizeof(header));
+  ASSERT_EQ(header.vmOptionsCount, 1u);
+  uint32_t bogus = header.stringsSize + 1000; // well past the string table
+  std::memcpy(
+      bytes.data() + header.vmOptionsTableOffset, &bogus, sizeof(bogus));
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 0, &error);
+  EXPECT_FALSE(reader.has_value());
+  EXPECT_NE(error.find("VM-option string out of range"), std::string::npos)
+      << error;
 }
 
 TEST(BundleGenerationTest, IsStableWithinOneBuild) {

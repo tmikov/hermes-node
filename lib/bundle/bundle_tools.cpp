@@ -336,19 +336,39 @@ int dumpBundle(
     }
   }
 
+  // Nearly the same rule as PRELOADS and NATIVES above -- a container with
+  // no VM configuration at all must dump exactly as it did before this
+  // section existed -- with one addition those two have no equivalent of:
+  // the override bit is VM configuration even when no options accompany
+  // it. A container built with --allow-vm-options-override and no --vm=
+  // honours HERMES_NODE_VM_OPTIONS unconditionally, -enable-eval=true and
+  // -Xhermes-internal-test-methods=true included, which is the single most
+  // important thing an audit before shipping should surface. Printing only
+  // on vmOptionCount > 0 said nothing at all about exactly that artifact.
+  const uint32_t vmOptionCount = reader->vmOptionCount();
+  if (vmOptionCount > 0 || reader->allowsVmOptionsOverride()) {
+    out << "\nVM_OPTIONS (" << vmOptionCount << ")\n";
+    out << "  overrides: "
+        << (reader->allowsVmOptionsOverride() ? "allowed" : "locked") << "\n";
+    for (uint32_t i = 0; i < vmOptionCount; ++i)
+      out << "  " << reader->vmOption(i) << "\n";
+  }
+
   const uint32_t strings = reader->stringsSize();
   const uint32_t modules = reader->moduleTableSize();
   const uint32_t edges = reader->edgeTableSize();
   const uint32_t preloads = reader->preloadTableSize();
   const uint32_t natives = reader->nativeTableSize();
   const uint32_t payload = reader->payloadSize();
+  const uint32_t vmopts = reader->vmOptionsTableSize();
   size_t sectionWidth = std::max(
       {widthOf(strings),
        widthOf(modules),
        widthOf(edges),
        widthOf(preloads),
        widthOf(natives),
-       widthOf(payload)});
+       widthOf(payload),
+       widthOf(vmopts)});
 
   out << "\nSECTIONS\n";
   out << "  strings  " << std::right << std::setw(sectionWidth) << strings
@@ -357,7 +377,10 @@ int dumpBundle(
       << std::setw(sectionWidth) << payload << " B\n";
   out << "  natives  " << std::setw(sectionWidth) << natives
       << " B    preloads " << std::setw(sectionWidth) << preloads << " B\n";
-  // The size of the file, which is larger than the six sections add up to:
+  // Unconditional, like natives and preloads above: a VM-options table is
+  // just as real a section as either of them even when its count is zero.
+  out << "  vmopts   " << std::setw(sectionWidth) << vmopts << " B\n";
+  // The size of the file, which is larger than the seven sections add up to:
   // the header, and the padding that puts each payload on its alignment
   // boundary, belong to neither. Unconditional, like the natives row above
   // it: a preload table is just as real a section as a native table even

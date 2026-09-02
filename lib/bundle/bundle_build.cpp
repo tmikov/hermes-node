@@ -410,6 +410,28 @@ class BuildReporter {
     std::fprintf(stderr, "preload [%u] %s\n", index, path.c_str());
   }
 
+  /// One VM option recorded in the container's VM-options table. Reported
+  /// as data going into the container, not as a runtime setting taking
+  /// effect -- buildBundle's own runtime is never reconfigured by these
+  /// (see its \p vmOptions doc comment).
+  void vmOptionRecorded(const std::string &option) {
+    if (!enabled_)
+      return;
+    std::fprintf(stderr, "vm-opt  %s\n", option.c_str());
+  }
+
+  /// Whether the recorded VM options may be overridden at run time.
+  /// Printed unconditionally under --verbose, even with zero options
+  /// recorded, because it is a true fact about the container either way.
+  void vmOptionsLock(bool allowOverride) {
+    if (!enabled_)
+      return;
+    std::fprintf(
+        stderr,
+        "vm-opts lock: %s\n",
+        allowOverride ? "override allowed" : "locked");
+  }
+
   void resolved(const std::string &specifier, const std::string &target) {
     if (!enabled_)
       return;
@@ -654,7 +676,9 @@ int buildBundle(
     const std::string &outPath,
     bool verbose,
     const std::vector<std::string> &includes,
-    const std::vector<std::string> &preloads) {
+    const std::vector<std::string> &preloads,
+    const std::vector<std::string> &vmOptions,
+    bool allowVmOptionsOverride) {
   BuildReporter reporter(verbose);
   uint32_t generation = bundleGenerationTag();
 
@@ -1479,6 +1503,15 @@ int buildBundle(
     reporter.preloaded(idx, p);
   }
   summary.preloads = static_cast<uint32_t>(preloadPaths.size());
+  // Recorded for the consumer to apply, never for this run: buildBundle
+  // compiles rather than executes, and a build machine's VM tuning is not
+  // the artifact's business (see the doc comment on \p vmOptions).
+  for (const std::string &opt : vmOptions) {
+    writer.addVmOption(opt);
+    reporter.vmOptionRecorded(opt);
+  }
+  writer.setAllowVmOptionsOverride(allowVmOptionsOverride);
+  reporter.vmOptionsLock(allowVmOptionsOverride);
   // The native table, keyed by the same discovery-order module indices the
   // preload table above uses -- which is why it is filled in here, once
   // every module has one. A kNative module without a row is a container the

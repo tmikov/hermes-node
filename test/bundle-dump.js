@@ -10,7 +10,7 @@
 // RUN: %hermes-node --build-bundle=%t.tree/app.hbb %t.tree/cli.js
 
 // RUN: %hermes-node --bundle=%t.tree/app.hbb --dump | %FileCheck %s
-// CHECK: bundle: {{.*}}app.hbb   format v4  generation 0x{{[0-9a-f]+}}
+// CHECK: bundle: {{.*}}app.hbb   format v5  generation 0x{{[0-9a-f]+}}
 // CHECK: entry:  [0] cli.js
 // CHECK: MODULES (3)
 // CHECK-DAG: js {{.*}} cli.js

@@ -106,7 +106,7 @@ TEST(BundleToolsTest, DumpPrintsHeaderTablesAndTotals) {
   const std::string text = out.str();
 
   EXPECT_TRUE(
-      contains(text, "bundle: " + path + "   format v4  generation 0xabcd1234"))
+      contains(text, "bundle: " + path + "   format v5  generation 0xabcd1234"))
       << text;
   EXPECT_TRUE(contains(text, "\nentry:  [0] cli.js\n")) << text;
 

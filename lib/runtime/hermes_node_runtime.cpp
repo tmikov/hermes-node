@@ -715,8 +715,12 @@ int runHermesNode(const HermesNodeConfig &config) {
   static hermes::vm::RuntimeConfig vmRuntimeConfig;
   static std::string vmConfigError;
   std::call_once(vmConfigOnce, [&config]() {
+    static const std::vector<std::string> kNoVmOptions;
+    const std::vector<std::string> &effectiveVmOptions =
+        config.buildBundlePath.empty() ? config.process.vmOptions
+                                       : kNoVmOptions;
     if (!buildVmRuntimeConfig(
-            config.process.vmOptions, &vmRuntimeConfig, &vmConfigError))
+            effectiveVmOptions, &vmRuntimeConfig, &vmConfigError))
       // Neutral prefix, not "--vm:": the options may have come from a
       // container's baked list or from HERMES_NODE_VM_OPTIONS, and in a
       // --build-exe artifact there is no --vm flag at all to point at.
@@ -1460,7 +1464,9 @@ int runHermesNode(const HermesNodeConfig &config) {
             config.buildBundlePath,
             config.verbose,
             config.includeModules,
-            config.preloadModules);
+            config.preloadModules,
+            config.process.vmOptions,
+            config.allowVmOptionsOverride);
       }
     } else if (!config.scriptPath.empty()) {
       napi_value loadUserScriptFn;

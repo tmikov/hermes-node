@@ -73,3 +73,7 @@
 
 // RUN: %not %hermes-node --vm=-Xjit=on --bundle=%t.hbb --extract-module=x --out=%t.o 2>&1 | %FileCheck --check-prefix=EXTRACT %s
 // EXTRACT: --vm cannot be combined with --extract-module
+
+// --allow-vm-options-override only means something while building.
+// RUN: %not %hermes-node --allow-vm-options-override %t.js 2>&1 | %FileCheck --check-prefix=ALLOW %s
+// ALLOW: --allow-vm-options-override requires --build-bundle

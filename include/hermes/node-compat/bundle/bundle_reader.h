@@ -127,6 +127,17 @@ class BundleReader {
   /// is not a kNative. Binary search: the table is sorted by module index.
   std::optional<NativeView> nativeFor(uint32_t moduleIndex) const;
 
+  /// How many VM options the container records, in application order.
+  uint32_t vmOptionCount() const;
+
+  /// VM option \p i. Only valid for \p i below vmOptionCount(), exactly
+  /// like edge() above. The view points into the mapped string table.
+  std::string_view vmOption(uint32_t i) const;
+
+  /// True when kBundleFlagAllowVmOptionsOverride is set -- the container
+  /// permits its VM options to be overridden at run time.
+  bool allowsVmOptionsOverride() const;
+
   /// Section sizes, straight from the header, for a dump that reports them.
   /// stringsSize() and payloadSize() are byte counts, same as the header
   /// fields they return. moduleTableSize(), edgeTableSize(),
@@ -138,6 +149,9 @@ class BundleReader {
   uint32_t edgeTableSize() const;
   uint32_t preloadTableSize() const;
   uint32_t nativeTableSize() const;
+  /// Byte count, like the other ...Size() accessors: option count times
+  /// sizeof(uint32_t), NOT an element count.
+  uint32_t vmOptionsTableSize() const;
   uint32_t payloadSize() const;
 
  private:
@@ -162,6 +176,7 @@ class BundleReader {
   const BundleEdgeRecord *edges_ = nullptr;
   const uint32_t *preloads_ = nullptr;
   const BundleNativeRecord *natives_ = nullptr;
+  const uint32_t *vmOptions_ = nullptr;
 };
 
 } // namespace node_compat

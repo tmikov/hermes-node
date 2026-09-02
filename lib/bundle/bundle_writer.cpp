@@ -79,6 +79,14 @@ void BundleWriter::addNative(
       moduleIndex, std::string(sidecar), byteLength, std::string(rawDigest)});
 }
 
+void BundleWriter::addVmOption(std::string_view option) {
+  vmOptions_.emplace_back(option);
+}
+
+void BundleWriter::setAllowVmOptionsOverride(bool allow) {
+  allowVmOptionsOverride_ = allow;
+}
+
 size_t BundleWriter::stringCount() const {
   return internTable_.size();
 }
@@ -131,9 +139,16 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
     nativeDigestStrings[i] = internString(natives_[i].digest);
   }
 
+  // Interned in call order -- see addVmOption()'s documentation for why
+  // that order matters.
+  std::vector<uint32_t> vmOptionStrings(vmOptions_.size());
+  for (size_t i = 0; i < vmOptions_.size(); ++i)
+    vmOptionStrings[i] = internString(vmOptions_[i]);
+
   // Layout: header, strings, module table, edge table, preload table,
-  // native table, payload. Each section is computed before any bytes are
-  // emitted so offsets in the header are known up front.
+  // native table, VM-options table, payload. Each section is computed
+  // before any bytes are emitted so offsets in the header are known up
+  // front.
   //
   // String entries are packed with no padding (length header immediately
   // followed by bytes, back to back), so the string table's raw size is
@@ -154,8 +169,10 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
   size_t preloadTableSize = preloads_.size() * sizeof(uint32_t);
   size_t nativeTableOffset = preloadTableOffset + preloadTableSize;
   size_t nativeTableSize = natives_.size() * sizeof(BundleNativeRecord);
+  size_t vmOptionsTableOffset = nativeTableOffset + nativeTableSize;
+  size_t vmOptionsTableSize = vmOptions_.size() * sizeof(uint32_t);
   size_t payloadOffset =
-      alignUp(nativeTableOffset + nativeTableSize, kBundlePayloadAlign);
+      alignUp(vmOptionsTableOffset + vmOptionsTableSize, kBundlePayloadAlign);
 
   // Each payload's offset (relative to payloadOffset) and the total,
   // aligned payload size.
@@ -186,6 +203,10 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
   header.preloadCount = static_cast<uint32_t>(preloads_.size());
   header.nativeTableOffset = static_cast<uint32_t>(nativeTableOffset);
   header.nativeCount = static_cast<uint32_t>(natives_.size());
+  header.vmOptionsTableOffset = static_cast<uint32_t>(vmOptionsTableOffset);
+  header.vmOptionsCount = static_cast<uint32_t>(vmOptions_.size());
+  header.containerFlags =
+      allowVmOptionsOverride_ ? kBundleFlagAllowVmOptionsOverride : 0;
   header.payloadOffset = static_cast<uint32_t>(payloadOffset);
   header.payloadSize = static_cast<uint32_t>(payloadSize);
   appendPod(out, header);
@@ -224,6 +245,9 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
     record.hashString = nativeDigestStrings[i];
     appendPod(out, record);
   }
+
+  for (uint32_t stringOffset : vmOptionStrings)
+    appendPod(out, stringOffset);
 
   appendPadding(out, payloadOffset - out.size());
 

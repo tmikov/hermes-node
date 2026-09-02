@@ -53,6 +53,15 @@ class BundleWriter {
       uint32_t byteLength,
       std::string_view rawDigest);
 
+  /// Records a Hermes VM option. Call order is application order: later
+  /// occurrences of the same flag win, so this is a list rather than a set
+  /// and duplicates are kept.
+  void addVmOption(std::string_view option);
+
+  /// Records whether the container's VM options may be overridden at run
+  /// time. False -- the default -- means locked.
+  void setAllowVmOptionsOverride(bool allow);
+
   void setEntry(uint32_t moduleIndex);
 
   /// Returns the serialized container. Sorts the edge table by
@@ -101,10 +110,12 @@ class BundleWriter {
   std::vector<PendingEdge> edges_;
   std::vector<uint32_t> preloads_;
   std::vector<PendingNative> natives_;
+  std::vector<std::string> vmOptions_;
   std::map<std::string, uint32_t, std::less<>> internTable_;
   std::string stringBytes_;
   uint32_t entry_ = 0;
   bool hasEntry_ = false;
+  bool allowVmOptionsOverride_ = false;
 };
 
 } // namespace node_compat

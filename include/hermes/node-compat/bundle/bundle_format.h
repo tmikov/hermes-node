@@ -19,7 +19,7 @@ constexpr char kBundleMagic[8] = {'H', 'N', 'B', 'U', 'N', 'D', 'L', 'E'};
 
 /// Bumped whenever the layout below changes in a way older readers cannot
 /// interpret. A mismatch is a hard error; there is no forward compatibility.
-constexpr uint32_t kBundleFormatVersion = 4;
+constexpr uint32_t kBundleFormatVersion = 5;
 
 /// Every payload entry starts at a multiple of this. Hermes bytecode is
 /// executed in place from the mapping and requires alignment.
@@ -50,6 +50,14 @@ constexpr uint32_t kRequirable = 1u << 0;
 /// `flags` reads as a deliberate choice, not a leftover zero.
 constexpr uint32_t kResolveOnly = 0;
 
+/// Set on a container whose recorded VM options may be overridden at run
+/// time, by --vm= on a --bundle= command line or by HERMES_NODE_VM_OPTIONS
+/// for a linked executable. Clear -- the default -- means the options are
+/// a property of the artifact and an attempt to override them is an error,
+/// because the honoured flag set includes -enable-eval and
+/// -Xhermes-internal-test-methods, which are not tuning knobs.
+constexpr uint32_t kBundleFlagAllowVmOptionsOverride = 1u << 0;
+
 /// Fixed-width. Offsets are byte offsets from the start of the file.
 struct BundleHeader {
   char magic[8];
@@ -77,6 +85,17 @@ struct BundleHeader {
   // preload table's reasoning above.
   uint32_t nativeTableOffset;
   uint32_t nativeCount;
+  // The VM-options table: an array of uint32_t string indices, one per
+  // recorded Hermes VM option, in the order they are applied -- later
+  // wins, which is llvh::cl's own rule. A section of its own for the same
+  // reason the preload table is one: order is the whole content, and a
+  // flag bit on a module record could not express it. String indices
+  // rather than inline text so the existing string table does the storage.
+  uint32_t vmOptionsTableOffset;
+  uint32_t vmOptionsCount;
+  // Container-wide flags: currently only kBundleFlagAllowVmOptionsOverride.
+  // Distinct from BundleModuleRecord::flags, which is per module.
+  uint32_t containerFlags;
   uint32_t payloadOffset;
   uint32_t payloadSize;
 };

@@ -478,6 +478,17 @@ std::string rootDirectoryFor(const std::string &path) {
             : canonical.parent_path().string();
 }
 
+/// Copies \p reader's VM option table and override bit into \p out. Shared
+/// by readBundleVmOptions() and readEmbeddedBundleVmOptions(), which differ
+/// only in how they get a BundleReader to read.
+void copyVmOptions(const BundleReader &reader, BundleVmOptions *out) {
+  out->options.clear();
+  out->options.reserve(reader.vmOptionCount());
+  for (uint32_t i = 0, n = reader.vmOptionCount(); i < n; ++i)
+    out->options.emplace_back(reader.vmOption(i));
+  out->allowOverride = reader.allowsVmOptionsOverride();
+}
+
 } // namespace
 
 bool openBundle(const std::string &path, std::string *error) {
@@ -510,6 +521,42 @@ bool openBundle(const std::string &path, std::string *error) {
 
   publishBundle(state, std::move(*reader), rootDirectoryFor(path));
 
+  return true;
+}
+
+bool readBundleVmOptions(
+    const std::string &path,
+    BundleVmOptions *out,
+    std::string *error) {
+  // `file` and `reader` are local: this is a read for inspection only, not
+  // the process-wide OpenBundle state (openBundleState() above), so nothing
+  // about this call outlives it. Both unmap/release when this function
+  // returns; openBundle() maps the same file again, for real, right after
+  // the caller decides what to do with these options.
+  std::optional<MappedFile> file = MappedFile::open(path, error);
+  if (!file)
+    return false;
+
+  std::optional<BundleReader> reader =
+      BundleReader::openForInspection(file->data(), file->size(), error);
+  if (!reader)
+    return false;
+
+  copyVmOptions(*reader, out);
+  return true;
+}
+
+bool readEmbeddedBundleVmOptions(
+    const uint8_t *data,
+    size_t size,
+    BundleVmOptions *out,
+    std::string *error) {
+  std::optional<BundleReader> reader =
+      BundleReader::openForInspection(data, size, error);
+  if (!reader)
+    return false;
+
+  copyVmOptions(*reader, out);
   return true;
 }
 

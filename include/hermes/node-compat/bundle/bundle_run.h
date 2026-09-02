@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace hermes {
 namespace node_compat {
@@ -51,6 +52,56 @@ bool openEmbeddedBundle(
     const uint8_t *data,
     size_t size,
     const std::string &exePath,
+    std::string *error);
+
+/// What a container records about its VM configuration.
+struct BundleVmOptions {
+  /// The recorded options, in application order.
+  std::vector<std::string> options;
+  /// Whether they may be overridden at run time.
+  bool allowOverride = false;
+};
+
+/// Reads a container's VM options without opening it for execution.
+///
+/// The options decide how the runtime is built, but the run path opens a
+/// container only after the runtime already exists -- runBundle() takes a
+/// napi_env, so by the time it runs there is nothing left to configure.
+/// Rather than restructure that ordering, this maps and validates the file
+/// a second time, reads the two things it needs, and closes: one extra
+/// map-and-validate of a file that is about to be mapped again by
+/// openBundle(), in exchange for not threading VM configuration through
+/// the run path's plumbing.
+///
+/// Uses BundleReader::openForInspection(), not open(): this is not an
+/// execution path, and a container whose generation tag does not match
+/// this binary must still be able to say what its options are (so that,
+/// for instance, a caller can report the mismatch before deciding what
+/// else to do). The subsequent openBundle() call still enforces the tag,
+/// so nothing mismatched ever actually runs.
+///
+/// Unlike openBundle(), this touches none of the process-wide state that
+/// tracks the one open bundle (OpenBundle in bundle_run.cpp): the mapping
+/// and reader it builds are local to the call and go away when it
+/// returns, so calling it does not count against -- and does not
+/// interfere with -- openBundle()'s "only one bundle can be open at a
+/// time" rule, whether called before or after that call.
+///
+/// Returns false and sets \p error on any failure to map or validate the
+/// file -- the same failures openBundle() reports, in the same words.
+bool readBundleVmOptions(
+    const std::string &path,
+    BundleVmOptions *out,
+    std::string *error);
+
+/// The same, for a container linked into this executable rather than
+/// mapped from a file. \p data and \p size name the payload object's
+/// contents, exactly as openEmbeddedBundle() takes them. Touches none of
+/// the process-wide open-bundle state either, for the same reason.
+bool readEmbeddedBundleVmOptions(
+    const uint8_t *data,
+    size_t size,
+    BundleVmOptions *out,
     std::string *error);
 
 /// Defines six functions on globalThis -- called "bundle natives" here in

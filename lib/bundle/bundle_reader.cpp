@@ -139,6 +139,13 @@ std::optional<BundleReader> BundleReader::openImpl(
         "(generation mismatch)");
   }
 
+  // Same reasoning as the per-module flags check below: an unrecognized bit
+  // here is a container claiming something this reader has no definition
+  // for, and the format version is already an exact match, so it can only
+  // mean a corrupt or hand-edited file.
+  if ((header->containerFlags & ~kBundleFlagAllowVmOptionsOverride) != 0)
+    return fail("hermes-node bundle: container has unknown flags");
+
   // Every (offset, size) pair the header claims must land inside the
   // buffer, with no overflow.
   if (!inRange(size, header->stringsOffset, header->stringsSize))
@@ -168,6 +175,13 @@ std::optional<BundleReader> BundleReader::openImpl(
           header->nativeCount,
           sizeof(BundleNativeRecord)))
     return fail("hermes-node bundle: native table out of range");
+  // The VM-options table sits between the native table and the payload.
+  if (!tableInRange(
+          size,
+          header->vmOptionsTableOffset,
+          header->vmOptionsCount,
+          sizeof(uint32_t)))
+    return fail("hermes-node bundle: VM-options table out of range");
   if (!inRange(size, header->payloadOffset, header->payloadSize))
     return fail("hermes-node bundle: payload out of range");
 
@@ -179,7 +193,8 @@ std::optional<BundleReader> BundleReader::openImpl(
   if (header->moduleTableOffset % alignof(BundleModuleRecord) != 0 ||
       header->edgeTableOffset % alignof(BundleEdgeRecord) != 0 ||
       header->preloadTableOffset % alignof(uint32_t) != 0 ||
-      header->nativeTableOffset % alignof(BundleNativeRecord) != 0)
+      header->nativeTableOffset % alignof(BundleNativeRecord) != 0 ||
+      header->vmOptionsTableOffset % alignof(uint32_t) != 0)
     return fail("hermes-node bundle: table offset is misaligned");
 
   if (header->moduleCount == 0)
@@ -311,6 +326,13 @@ std::optional<BundleReader> BundleReader::openImpl(
           "hermes-node bundle: native module has no native table entry");
   }
 
+  const auto *vmOptions =
+      reinterpret_cast<const uint32_t *>(data + header->vmOptionsTableOffset);
+  for (uint32_t i = 0; i < header->vmOptionsCount; ++i) {
+    if (!validateStringIndex(stringsBase, header->stringsSize, vmOptions[i]))
+      return fail("hermes-node bundle: VM-option string out of range");
+  }
+
   BundleReader reader;
   reader.data_ = data;
   reader.header_ = header;
@@ -318,6 +340,7 @@ std::optional<BundleReader> BundleReader::openImpl(
   reader.edges_ = edges;
   reader.preloads_ = preloads;
   reader.natives_ = natives;
+  reader.vmOptions_ = vmOptions;
   return reader;
 }
 
@@ -459,6 +482,18 @@ std::optional<BundleReader::NativeView> BundleReader::nativeFor(
   return std::nullopt;
 }
 
+uint32_t BundleReader::vmOptionCount() const {
+  return header_->vmOptionsCount;
+}
+
+std::string_view BundleReader::vmOption(uint32_t i) const {
+  return stringAt(vmOptions_[i]);
+}
+
+bool BundleReader::allowsVmOptionsOverride() const {
+  return (header_->containerFlags & kBundleFlagAllowVmOptionsOverride) != 0;
+}
+
 uint32_t BundleReader::stringsSize() const {
   return header_->stringsSize;
 }
@@ -484,6 +519,11 @@ uint32_t BundleReader::preloadTableSize() const {
 uint32_t BundleReader::nativeTableSize() const {
   return static_cast<uint32_t>(
       static_cast<uint64_t>(header_->nativeCount) * sizeof(BundleNativeRecord));
+}
+
+uint32_t BundleReader::vmOptionsTableSize() const {
+  return static_cast<uint32_t>(
+      static_cast<uint64_t>(header_->vmOptionsCount) * sizeof(uint32_t));
 }
 
 uint32_t BundleReader::payloadSize() const {
