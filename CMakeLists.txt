@@ -17,6 +17,28 @@ set(HERMES_ENABLE_DEBUGGER ON CACHE BOOL "Enable Hermes debugger/CDP" FORCE)
 # Pull in Hermes (includes cmake modules, gtest, NAPI, etc.)
 add_subdirectory(hermes)
 
+# hermesNapi calls dlopen/dlsym/dlerror/dlclose to load native addons, but does
+# not declare the dependency, so every consumer has to supply it. glibc merged
+# libdl into libc at 2.34, which is why nothing noticed: on a modern host these
+# resolve with no -ldl anywhere and the omission is invisible. Building against
+# glibc 2.28 turns it into undefined references at the link of anything that
+# pulls hermesNapi in -- our unit tests and Hermes's own `hermes` CLI included,
+# though not hermes-node itself, which happens to get -ldl by another route.
+#
+# Attaching it to the producing target rather than to each consumer means a
+# target added later cannot forget it. This belongs upstream in
+# hermes/API/napi/CMakeLists.txt; it is done here so the submodule stays
+# untouched. Delete this block when that lands -- see dz 01a067ba-6571, which
+# records what broke and why a build-only check does not catch it.
+# CMAKE_DL_LIBS is empty on platforms that need nothing.
+#
+# The plain signature is required, not a style choice: Hermes.cmake:141 already
+# links this target plainly, and CMake refuses to mix plain and keyword forms
+# on one target. Plain also propagates to consumers, which is what we want.
+if (CMAKE_DL_LIBS)
+  target_link_libraries(hermesNapi ${CMAKE_DL_LIBS})
+endif()
+
 # Use Hermes cmake modules (Hermes.cmake, Lit.cmake, etc.)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/hermes/cmake/modules/")
 include(Hermes)
