@@ -113,6 +113,11 @@ cd hermes-node-*-linux-x64
 ./hermes-node --version
 ```
 
+Requires **glibc 2.28 or newer** -- RHEL 8, Debian 10, Ubuntu 20.04 and
+anything later. That is the same floor Node's own Linux x64 builds carry. The
+release is built against an old glibc deliberately; a binary built on a
+current distribution would refuse to start on those.
+
 ### macOS
 
 The macOS binary is a universal binary (runs natively on both Intel and
@@ -426,6 +431,31 @@ and `--build-exe` says so when it packages one.
 
 A produced Linux executable still needs the system's `libstdc++` and
 `libgcc_s`; a macOS one needs only what the OS ships. Windows is not supported.
+
+### Building a distributable binary yourself
+
+An ordinary local build inherits your machine's glibc, and so does every
+executable you produce with it: symbol versions bind against your `libc.so`
+at link time, glibc's headers redirect to newer entry points, and CMake's
+feature checks find whatever your system has. None of that is a build option,
+so there is no flag that makes a local build portable -- the fix is to build
+somewhere older.
+
+`utils/build-portable.sh` does that, in a container, mirroring what the
+release workflow does:
+
+```sh
+./utils/build-portable.sh              # needs podman or docker
+```
+
+It writes `cmake-build-portable/dist/`, laid out exactly as a release tarball
+is -- `hermes-node` with `kit/` beside it -- and fails the build if the glibc
+floor comes out above 2.28. Use `--image`, `--out`, `--version`, `--jobs` or
+`--engine` to vary it; `--help` lists them.
+
+It does not run the test suite, because the container mounts the source
+read-only and the ported Node tests write temp directories into the tree. Test
+with an ordinary local build.
 
 ## Command-line options
 

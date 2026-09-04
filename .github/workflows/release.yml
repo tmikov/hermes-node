@@ -15,6 +15,23 @@ on:
           binary is otherwise verified.
         type: boolean
         default: false
+      dry_run:
+        description: >-
+          Build, test and verify everything, then stop without publishing.
+          For exercising this workflow itself. Artifacts are still uploaded
+          to the run, so the tarball can be downloaded and inspected.
+          The tag name has to satisfy two things at once, so use something
+          shaped like "0.0.2-dry1": it must NOT start with "v", or pushing
+          it fires the push trigger and publishes before you can dispatch;
+          and it must start with a MAJOR.MINOR.PATCH number, because the tag
+          becomes the stamped version and test-cli-version.js requires that
+          shape. Push the tag, then dispatch it here with
+          `gh workflow run release.yml --ref <tag> -f tag=<tag>
+          -f dry_run=true` -- --ref matters, since without it gh dispatches
+          the default branch's copy of this file, which may not know about
+          these inputs at all.
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ inputs.tag || github.ref }}
@@ -365,6 +382,10 @@ jobs:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
     needs: [build-linux, verify-kit-linux, build-macos-universal]
+    # The only outward-facing step in this workflow, and the only one a dry
+    # run skips: everything above still builds, tests and verifies. `inputs`
+    # is empty on a tag push, so `!= true` leaves the normal path unguarded.
+    if: ${{ inputs.dry_run != true }}
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
