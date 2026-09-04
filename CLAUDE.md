@@ -1035,11 +1035,20 @@ plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
 - **The default kit location is "beside the running binary"**
   (`resolveKitDir()` in `tools/hermes-node/hermes-node.cpp`, via `uv_exepath`
   and `realpath` -- `argv[0]` is whatever the caller chose to exec with). That
-  is where a release layout WOULD put one, and is not this repo's build
+  is the layout the release tarball uses, and is not this repo's build
   tree, where the binary is in `bin/` and the kit in `kit/`: pass
-  `--kit=<build dir>/kit` when running `--build-exe` by hand. **No release
-  ships a kit today**, so `--build-exe` on a released `hermes-node` fails
-  with the missing-manifest error; see the open issues (`dz list`).
+  `--kit=<build dir>/kit` when running `--build-exe` by hand. The **Linux**
+  release workflow stages a kit beside the binary, so `--build-exe` works
+  from a release with no `--kit`. That release build is configured
+  `CMAKE_POSITION_INDEPENDENT_CODE=ON` on purpose: it is cut in an image
+  whose clang defaults to non-PIE, and PIC is what lets the result link on a
+  user's PIE-default distribution. Two jobs check it -- one inside the build
+  image, and `verify-kit-linux` on a bare runner, which is the only one that
+  can catch a kit-versus-host toolchain mismatch, since the other links where
+  the toolchain agrees with itself by construction. **macOS releases still ship none**: the kit there
+  would be universal, and a universal kit is the one configuration nobody has
+  verified end to end -- see the open issues (`dz list`) for why an unverified
+  one is worse than none.
 - `--build-exe` is dispatched by `runToolVerb()` **before `runHermesNode`**,
   alongside the four read-only verbs. It writes files, so it is not read-only
   -- but the criterion for that dispatch point was never read-only-ness, it is
@@ -1093,8 +1102,11 @@ plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
   `buildAssembleCommand()` forwards the manifest's whole `driverflag` list,
   `-arch` included. And a produced **Linux** executable inherits the build
   machine's glibc version, so it runs on distributions carrying that and not
-  on others, where a macOS one needs only OS-provided libraries; a
-  platform-independent Linux binary is out of scope for now.
+  on others, where a macOS one needs only OS-provided libraries. That is why
+  the Linux release job builds inside AlmaLinux 8: measured, the floor lands
+  at glibc 2.28 -- Node's own Tier 1 x64 requirement -- with no source change,
+  and `release.yml` asserts it rather than trusting it. A local build still
+  inherits whatever the developer's machine has.
   What causes it, what each remedy costs and what was already measured and
   rejected are in the tracker -- see the open issues (`dz list`).
 - **Two worked cases, chosen as a matched pair.** `examples/tetris` and

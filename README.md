@@ -412,10 +412,12 @@ on Apple Silicon a signature that does not verify is a SIGKILL rather than a
 warning.
 
 The linker is fed a **kit**: a merged static archive plus a manifest recording
-the real link line, produced by the `hermes-node-kit` build target. **Released
-binaries do not ship one yet**, so today `--build-exe` works from a build tree,
-with `--kit=<build dir>/kit`. The kit is stamped with the version it was cut
-from and the errors name the command to re-cut it.
+the real link line, produced by the `hermes-node-kit` build target. The Linux
+release tarball carries one in `kit/`, beside the binary, which is where
+`--build-exe` looks by default -- so it works straight out of a release. macOS
+releases do not ship a kit yet; there, and in a build tree, pass
+`--kit=<build dir>/kit`. The kit is stamped with the version it was cut from
+and the errors name the command to re-cut it.
 
 Native addons still ship beside the executable rather than inside it --
 `dlopen` takes a path, and that has not changed. What does change is *which*

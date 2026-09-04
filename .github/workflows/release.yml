@@ -32,18 +32,41 @@ jobs:
   build-linux:
     name: Build (linux-x64)
     runs-on: ubuntu-latest
+    # Built inside AlmaLinux 8, not on the runner. Symbol versions bind against
+    # the host libc at link time, and glibc's own headers redirect to newer
+    # entry points on newer systems, so an artifact built on ubuntu-latest
+    # requires glibc 2.39 and refuses to start on anything older. Nothing in
+    # this source needs that: every symbol above 2.34 was a feature check or a
+    # header redirect that resolves the other way here, with no code change.
+    # Measured floor in this image is 2.28, which is also Node's own Tier 1 x64
+    # requirement (its BUILDING.md: Ubuntu 20.04, Debian 10, RHEL 8).
+    #
+    # The image is pinned by tag rather than digest deliberately: 8.x minor
+    # updates never raise the glibc soname, and the floor is asserted below
+    # anyway, so a drifting tag cannot silently regress the artifact.
+    container: docker.io/library/almalinux:8
     steps:
+      # Must precede checkout: actions/checkout shells out to git for
+      # submodules, and this image ships none.
+      # ccache lives in EPEL, so epel-release goes first and separately: dnf
+      # aborts the whole transaction on one unresolvable name, which is how an
+      # earlier version of this step failed on every package at once.
+      #
+      # Deliberately no ninja. It is not in EPEL but in powertools, and the
+      # version there is 1.8.2; Makefiles are what this job was actually
+      # validated against, end to end, including the kit and the two checks
+      # below. Enabling powertools for a faster generator is a fine change to
+      # make later, on the strength of a run rather than a guess.
+      - name: Install toolchain
+        run: |
+          dnf install -y epel-release
+          dnf install -y cmake clang python3 git make ccache binutils
+
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
           submodules: recursive
-
-      - name: Install toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build cmake python3 ccache \
-                                  clang-18 lld-18
 
       - name: Restore ccache
         uses: actions/cache@v4
@@ -53,17 +76,39 @@ jobs:
           restore-keys: |
             ccache-release-linux-
 
+      # EPEL 8 ships ccache 3.7, which defaults its cache to ~/.ccache -- not
+      # the ~/.cache/ccache that 4.x uses and that the restore step above
+      # names. Left implicit, the cache would silently never hit. Setting
+      # CCACHE_DIR pins it for both, and exporting it into GITHUB_ENV carries
+      # it to the build steps.
       - name: Configure ccache
-        run: ccache -M 3G
+        shell: bash
+        run: |
+          export CCACHE_DIR="${HOME}/.cache/ccache"
+          echo "CCACHE_DIR=${CCACHE_DIR}" >> "$GITHUB_ENV"
+          mkdir -p "${CCACHE_DIR}"
+          ccache -M 3G
 
+      # No -G Ninja here, unlike the macOS job: see the toolchain step.
+      #
+      # CMAKE_POSITION_INDEPENDENT_CODE is load-bearing and specific to
+      # building in this image. AlmaLinux 8's clang defaults to non-PIE where
+      # Ubuntu's defaults to PIE, so without it the kit's objects carry
+      # absolute relocations and every --build-exe on a PIE-default
+      # distribution -- Ubuntu 22.04 and 24.04, Debian 12, Fedora -- fails
+      # with "relocation R_X86_64_32S ... can not be used when making a PIE
+      # object". PIC objects link under either default, so the kit stops
+      # caring what the user's toolchain prefers. Shipped broken once, in
+      # v0.0.2-rc2; see dz 01a06842-1313.
       - name: Configure CMake
         shell: bash
         run: |
           VERSION="${RELEASE_TAG#v}"
-          cmake -B build -G Ninja \
+          cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=clang-18 \
-            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DHERMES_NODE_VERSION="${VERSION}"
@@ -75,6 +120,47 @@ jobs:
       - name: Build only (manual override; tests skipped)
         if: ${{ inputs.skip_tests == true }}
         run: cmake --build build --target hermes-node
+
+      # hermes-node-kit is EXCLUDE_FROM_ALL, so neither build above reaches it
+      # on its own. check-hermes-node does DEPEND on it, which makes this a
+      # no-op on the tested path and the only source of a kit on the
+      # skip_tests one. Cheap either way.
+      - name: Build the build-exe kit
+        run: cmake --build build --target hermes-node-kit
+
+      # The reason this job runs in a container at all, asserted rather than
+      # trusted. Catches both a base-image change that raises the floor and a
+      # new dependency that reaches for a newer glibc entry point.
+      - name: Assert the glibc floor
+        shell: bash
+        run: |
+          max=$(objdump -T build/bin/hermes-node \
+                | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "highest glibc symbol version required: ${max}"
+          highest=$(printf '%s\n%s\n' "$max" "GLIBC_2.28" | sort -V | tail -1)
+          if [ "$highest" != "GLIBC_2.28" ]; then
+            echo "glibc floor regressed: needs ${max}, budget is GLIBC_2.28" >&2
+            exit 1
+          fi
+
+      # Shipping a kit that cannot link is worse than shipping none, and the
+      # failure would land in a user's toolchain rather than ours. Build a real
+      # executable with it and run the result.
+      - name: Smoke-test the kit
+        shell: bash
+        run: |
+          echo 'console.log("kit smoke ok");' > "${RUNNER_TEMP}/hello.js"
+          ./build/bin/hermes-node \
+            --build-bundle="${RUNNER_TEMP}/hello.hbb" "${RUNNER_TEMP}/hello.js"
+          ./build/bin/hermes-node \
+            --build-exe="${RUNNER_TEMP}/hello" --kit="${PWD}/build/kit" \
+            "${RUNNER_TEMP}/hello.hbb"
+          out=$("${RUNNER_TEMP}/hello")
+          if [ "$out" != "kit smoke ok" ]; then
+            echo "kit-built executable printed '${out}'" >&2
+            exit 1
+          fi
+          echo "kit OK"
 
       - name: Version sanity check
         shell: bash
@@ -95,9 +181,22 @@ jobs:
         run: |
           VERSION="${RELEASE_TAG#v}"
           NAME="hermes-node-${VERSION}-linux-x64"
-          mkdir -p "staging/${NAME}"
+          mkdir -p "staging/${NAME}/kit"
           cp build/bin/hermes-node "staging/${NAME}/"
           cp LICENSE README.md THIRD_PARTY_LICENSES.md "staging/${NAME}/"
+          # resolveKitDir() defaults to <dir of the realpath'd exe>/kit, so this
+          # layout is what makes --build-exe work with no --kit flag.
+          #
+          # Named individually rather than copied wholesale: kit.stamp is a
+          # build-system artifact that should not ship, and an explicit list
+          # fails loudly if make-kit.py ever renames an output instead of
+          # quietly shipping an incomplete kit. The archives are deliberately
+          # NOT stripped -- they are link inputs.
+          cp build/kit/kit.manifest \
+             build/kit/libhermes-node-kit.a \
+             build/kit/libhermesNapi.a \
+             build/kit/hermes-node-bundle-main.o \
+             "staging/${NAME}/kit/"
           echo "STAGING_NAME=${NAME}" >> "$GITHUB_ENV"
 
       - name: Create tarball
@@ -116,6 +215,56 @@ jobs:
       - name: ccache stats
         if: always()
         run: ccache -s
+
+  # The kit exists to be used on a machine that is not the build machine, and
+  # nothing was testing that. build-linux's own smoke test links inside the
+  # image that cut the kit, where the toolchain agrees with itself by
+  # construction, so it cannot see a kit-versus-host mismatch -- and one
+  # shipped: v0.0.2-rc2's kit was non-PIE and failed to link on every
+  # PIE-default distribution (dz 01a06842-1313).
+  #
+  # This job is that missing half. It runs on a bare ubuntu-latest, which is
+  # PIE-default and therefore exactly the configuration that broke, unpacks
+  # the tarball a user would download, and builds an executable from it with
+  # no --kit flag at all.
+  verify-kit-linux:
+    name: Verify kit on a PIE-default host (linux-x64)
+    runs-on: ubuntu-latest
+    needs: build-linux
+    steps:
+      - name: Download the linux tarball
+        uses: actions/download-artifact@v4
+        with:
+          pattern: hermes-node-*-linux-x64
+          merge-multiple: true
+          path: dist
+
+      - name: Unpack it the way a user would
+        shell: bash
+        run: |
+          mkdir -p rel
+          tar xzf dist/hermes-node-*-linux-x64.tar.gz -C rel
+          find rel -maxdepth 2 -type f | sort
+
+      - name: Build an executable from the shipped kit, with no --kit
+        shell: bash
+        run: |
+          BIN=$(echo rel/*/hermes-node)
+          echo 'console.log("kit works off the build machine");' > hello.js
+          "$BIN" --build-bundle=hello.hbb hello.js
+          "$BIN" --build-exe=hello hello.hbb
+          out=$(./hello)
+          if [ "$out" != "kit works off the build machine" ]; then
+            echo "executable printed '${out}'" >&2
+            exit 1
+          fi
+          # ET_DYN means the link really was PIE, so a pass here cannot be a
+          # vacuous one on a host that happened to link non-PIE.
+          if ! readelf -h hello | grep -q 'DYN'; then
+            echo "linked non-PIE; this check did not exercise the PIE path" >&2
+            exit 1
+          fi
+          echo "kit links and runs on a PIE-default host"
 
   build-macos-universal:
     name: Build (macos-universal)
@@ -215,7 +364,7 @@ jobs:
   publish:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-linux, build-macos-universal]
+    needs: [build-linux, verify-kit-linux, build-macos-universal]
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4

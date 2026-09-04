@@ -26,7 +26,17 @@ pending++;
     });
   });
 }
-// CHECK: async deflate/inflate: PASS
+// The two chains below are independent and run concurrently, so which
+// finishes first is up to the thread pool rather than the program. Ordered
+// CHECK lines encoded an order nothing guarantees: this passed on Linux and
+// failed on the macOS release runner, where the second chain reported first.
+// CHECK-DAG matches the pair in either order.
+//
+// This does not weaken the test. A chain that genuinely fails prints
+// "async gzip: FAIL ..." instead of the line below, which no CHECK-DAG
+// matches, so a real zlib defect still fails here -- only the ordering
+// assumption is gone.
+// CHECK-DAG: async deflate/inflate: PASS
 
 // Async gzip/gunzip
 pending++;
@@ -41,6 +51,6 @@ pending++;
     });
   });
 }
-// CHECK: async gzip/gunzip: PASS
+// CHECK-DAG: async gzip/gunzip: PASS
 
 // CHECK: PASS
