@@ -1,0 +1,4 @@
+# Regeneration toolchain, installed on demand by scripts/regen-dist.sh.
+# dist/ is deliberately NOT ignored here: it is committed, so that building
+# this repository needs no JavaScript toolchain and no emsdk.
+scripts/node_modules/
