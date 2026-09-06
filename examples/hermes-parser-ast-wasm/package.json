@@ -1,0 +1,11 @@
+{
+  "name": "hermes-parser-ast-wasm-example",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dumps a JavaScript AST using the WebAssembly build of the Hermes parser",
+  "type": "commonjs",
+  "dependencies": {
+    "hermes-estree": "0.37.0",
+    "hermes-parser": "file:../../external/hermes-parser-wasm/package"
+  }
+}
