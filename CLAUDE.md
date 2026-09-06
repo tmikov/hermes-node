@@ -54,7 +54,7 @@ skips the check for anyone who means it.
 - Async generators: require `-Xasync-generators` flag (enabled in hermes-node)
 - Async generator prototype chain is flat (Hermes bug)
 - Hermes warns about undeclared globals in strict mode IIFEs -- use `var X = globalThis.X`
-- No `WebAssembly` (`typeof WebAssembly === 'undefined'`); in progress upstream
+- `WebAssembly` **is** available -- see the WebAssembly section below
 - **`eval` does not capture local scope** -- it behaves as *indirect* eval,
   seeing globals only, so `function f(){var x=1; return eval("x")}` throws
   where Node returns 1. (`new Function` is correct: the spec gives it the
@@ -200,6 +200,62 @@ Node-API (N-API) native addons are supported. V8-API addons (`v8.h`, NAN) are no
 - `.node` extension resolved by the CJS loader (`lib/bindings/node_file.cpp`).
 - `os.dlopen` constants defined in `lib/bindings/node_constants.cpp`.
 - Hermes side: `hermes_napi_load_module()` in `hermes/API/napi/hermes_napi.cpp` handles the in-process module registration table.
+
+## WebAssembly
+
+`WebAssembly` is a real global here. **We implement none of it** -- Hermes
+does, and the only thing this repo contributes is turning it on
+(`HERMES_ENABLE_WASM ON` in the top-level `CMakeLists.txt`, which must be set
+before `add_subdirectory(hermes)` because it drives an `add_definitions()` in
+Hermes's own scope). That is precisely why it is worth testing: no code of
+ours sits under it, so nothing else in this repo would notice the option
+going away.
+
+- Hermes compiles a module **ahead of time to Hermes IR** and runs it as
+  ordinary bytecode -- no Wasm interpreter, no Wasm JIT. `WebAssembly.Module`
+  therefore runs the compiler at the point the bytes are handed over, which
+  is what makes the bundle and executable cases below non-obvious.
+- **A bundled program and a `--build-exe` executable can both still compile
+  Wasm at run time**, verified rather than assumed. It cuts against the grain
+  of the container design -- `hermesNodeBundleRun` is deliberately free of the
+  parser and code generator, and `--bundle` is refused with `--inspect`
+  because bundled bytecode carries no debug info -- but the Wasm frontend
+  lives in `hermesvm_a`, which every configuration links.
+  `test/test-wasm-{bundle,build-exe}.js` pin it.
+- The producer does **not** package `.wasm` data files, so a program that
+  reads one with `fs` ships it beside the container, like blessed's terminfo.
+  Carrying the bytes inside a JS module is the shape that just works.
+- **Not free: +1,235,848 bytes** (11,307,264 -> 12,543,112, Linux x86_64,
+  RelWithDebInfo, stripped) for wabt plus the Wasm frontend and IR generator,
+  and that lands in every `--build-exe` artifact too. Measured against a
+  matching Wasm-off build, not estimated. `-DHERMES_ENABLE_WASM=OFF` still
+  works; the `set()` is deliberately not `FORCE`d, unlike the debugger's.
+- **A build directory configured before this default keeps its cached `OFF`**,
+  because a non-`FORCE`d `set(... CACHE ...)` does not overwrite an existing
+  entry -- and Hermes's own `OFF` lands in the cache of any directory
+  configured while the option existed. Symptom: `REQUIRES: wasm` tests report
+  UNSUPPORTED instead of running. Fix with
+  `cmake -B <dir> -DHERMES_ENABLE_WASM=ON`.
+- The `wasm` lit feature (`test/lit.cfg`) is decided by **running the binary
+  under test** (`-e 'typeof WebAssembly'`) rather than by a `--param` from
+  CMake, so it describes the hermes-node lit was actually pointed at.
+- Conformance, measured at the Hermes tip: 62 of 83 spec files, 24,682 of
+  24,802 assertions. That figure comes from a runner that passes
+  `--test262`, which turns on memory bounds checks a normal build does not
+  have -- so under an ordinary `hermes-node` an **out-of-bounds Wasm store is
+  silently dropped** (`--vm=-test262` turns the checks on). Confirmed by
+  measurement, and documented upstream in
+  `hermes/doc/WasmSpecTestStatus.md`. Memory is a JS typed array underneath,
+  so this is spec-noncompliance, not a memory-safety hole.
+- Two Hermes bugs found while enabling this, both filed in the Hermes tracker
+  rather than here: exporting a global of `externref`/`funcref`/`v128` type
+  crashes the compiler and is reachable from script (`01a074ce-ac97`), and
+  traps raise a plain `Error` instead of `WebAssembly.RuntimeError`
+  (`01a074ce-ff7d`). `test-wasm-exec.js` asserts `instanceof Error` for the
+  second on purpose, so that fixing it does not fail the test.
+- Tests: `test/test-wasm-{api,exec,bundle,build-exe}.js`, module bytes in
+  `test/fixtures/wasm/modules.js` (inline, with the WAT beside them, so the
+  suite needs no `wat2wasm`).
 
 ## Compile Cache
 

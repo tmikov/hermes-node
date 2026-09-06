@@ -14,6 +14,22 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Must be set before add_subdirectory(hermes) to override Hermes's default OFF.
 set(HERMES_ENABLE_DEBUGGER ON CACHE BOOL "Enable Hermes debugger/CDP" FORCE)
 
+# Enable WebAssembly. Node programs expect the `WebAssembly` global to exist,
+# and a growing number of packages ship their native half as a .wasm blob
+# rather than an addon, so a runtime without it fails at require() time on
+# code that has no other problem. Hermes defaults this OFF; we override it
+# for the same reason we override the debugger above, and it must likewise be
+# set before add_subdirectory(hermes) -- HERMES_ENABLE_WASM controls an
+# add_definitions() in Hermes's own scope, so it decides how the VM itself is
+# compiled and cannot be flipped afterwards.
+#
+# Not free: measured on Linux x86_64, RelWithDebInfo, stripped, hermes-node
+# grew 11,307,264 -> 12,543,112 bytes (+1,235,848, +10.9%) for wabt plus the
+# Wasm frontend and IR generator. That lands in every --build-exe artifact
+# too. FORCE is deliberately not used, unlike the debugger above, so a build
+# that does not want the size can still configure -DHERMES_ENABLE_WASM=OFF.
+set(HERMES_ENABLE_WASM ON CACHE BOOL "Enable WebAssembly support")
+
 # Pull in Hermes (includes cmake modules, gtest, NAPI, etc.)
 add_subdirectory(hermes)
 
