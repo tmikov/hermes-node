@@ -190,8 +190,32 @@ add_lit_testsuite(check-hermes-node-unit "Running hermes-node unit tests"
 )
 
 # check-hermes-node target: run all tests (unit tests + JS tests)
+#
+# hermes-parser-napi is built but not run here, and it is listed for one
+# source file. HermesParserNativeTest already compiles the vendored addon's
+# HermesParserJSSerializer.cpp and HermesParserDiagHandler.cpp, but not
+# napi/hermes-parser-napi.cpp -- the Node-API entry point, and the only file
+# of the three that includes hermes/include/hermes/napi. Nothing else in this
+# target compiles it, and CI runs exactly this target, so before this line a
+# submodule bump that changed the NAPI headers or the AST API that file uses
+# broke nothing anyone would notice until someone ran the examples by hand.
+# It also gets the MODULE link checked, which is where the deliberately
+# undefined napi_* symbols and the Apple -undefined dynamic_lookup live.
+#
+# Costs about two seconds of compile (3.6s under ASAN, measured from clean
+# objects). check-hermes-node-examples depends on it too, for the different
+# reason that the examples actually load it.
+#
+# One side effect worth knowing: the target's POST_BUILD step stages the
+# addon into the source tree at external/hermes-parser-native/package/
+# prebuilds/<platform>-<arch>/, and every build directory writes that same
+# path. So running this target from an ASAN build and then a Release one
+# leaves whichever ran last, which matters only to something that loads the
+# addon without setting HERMES_PARSER_NATIVE_ADDON. That was already true of
+# a default `cmake --build` -- the target is in ALL -- so this widens an
+# existing hazard rather than introducing one.
 add_custom_target(check-hermes-node
-  DEPENDS check-hermes-node-unit check-hermes-node-js
+  DEPENDS check-hermes-node-unit check-hermes-node-js hermes-parser-napi
   COMMENT "Running hermes-node-compat tests"
 )
 
