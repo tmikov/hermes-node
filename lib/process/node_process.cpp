@@ -10,6 +10,7 @@
 #include <js_native_api.h>
 #include <node_api.h>
 
+#include <openssl/opensslv.h>
 #include <uv.h>
 
 #include <dlfcn.h>
@@ -1039,7 +1040,7 @@ napi_status NodeProcess::create(napi_env env, napi_value *result) {
         setStringProp(env, versions, "uv", uv_version_string()));
     NAPI_RETURN_IF_NOT_OK(
         setStringProp(env, versions, "node", versionNode.c_str()));
-    NAPI_RETURN_IF_NOT_OK(setStringProp(env, versions, "openssl", "picohash"));
+    NAPI_RETURN_IF_NOT_OK(setStringProp(env, versions, "openssl", OPENSSL_VERSION_STR));
     NAPI_RETURN_IF_NOT_OK(setProp(env, process, "versions", versions));
   }
 

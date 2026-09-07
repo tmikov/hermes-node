@@ -520,6 +520,7 @@ functionality:
 - `dns` (`lookup` and `resolve*`)
 - `net` (TCP and Unix domain sockets)
 - `http` (server and client)
+- `https` / `tls` **client** (`https.get`, `tls.connect`, `node-fetch@2` over HTTPS). No server, no session tickets. Links OpenSSL.
 - `child_process` (`spawn`, `spawnSync`, and friends)
 - `tty`, REPL
 - `process.stdin` / `stdout` / `stderr` as proper streams
@@ -528,8 +529,8 @@ Coverage gets thinner past that. Notable things that don't work yet, or only
 partially:
 
 - `worker_threads`, `cluster` (single-threaded only)
-- `crypto`, `tls`, `https` (the latter two are stub modules that throw on
-  any use, since there is no TLS implementation)
+- `crypto` (hashes / HMAC / `randomFillSync` only; no full OpenSSL crypto)
+- `https.Server` / `tls.createServer` (client TLS only)
 - `Atomics`, `AbortSignal` / `AbortController` globals
 - V8-API native addons (those written against `v8.h` / NAN). Node-API
   addons are supported, see [Limitations](#limitations).
@@ -560,7 +561,7 @@ In rough priority order:
 
 - AOT pre-compilation flow for `node_modules` trees, so even the first run
   doesn't have to compile
-- More bindings: `crypto`, `tls`
+- More bindings: full `crypto`, TLS server
 - Filling in gaps in already-supported modules
 
 ## How it works

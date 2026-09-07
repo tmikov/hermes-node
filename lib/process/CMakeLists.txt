@@ -19,6 +19,15 @@ target_include_directories(hermesNodeProcess PUBLIC
   ${PROJECT_SOURCE_DIR}/hermes/include
 )
 
+if(APPLE AND NOT OPENSSL_ROOT_DIR)
+  set(OPENSSL_ROOT_DIR /opt/homebrew/opt/openssl@3)
+endif()
+find_package(OpenSSL REQUIRED)
+
+target_include_directories(hermesNodeProcess PRIVATE
+  ${OPENSSL_INCLUDE_DIR}
+)
+
 target_link_libraries(hermesNodeProcess PUBLIC
   uv_a
 )
