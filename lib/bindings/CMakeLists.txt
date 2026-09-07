@@ -30,6 +30,7 @@ add_hermes_library(hermesNodeBindings STATIC
   node_stdio.cpp
   node_stream_wrap.cpp
   node_tcp_wrap.cpp
+  node_tls_wrap.cpp
   node_udp_wrap.cpp
   node_string_decoder.cpp
   node_symbols.cpp
@@ -44,6 +45,11 @@ add_hermes_library(hermesNodeBindings STATIC
   node_zlib.cpp
 )
 
+if(APPLE AND NOT OPENSSL_ROOT_DIR)
+  set(OPENSSL_ROOT_DIR /opt/homebrew/opt/openssl@3)
+endif()
+find_package(OpenSSL REQUIRED)
+
 target_include_directories(hermesNodeBindings
   PUBLIC
     ${PROJECT_SOURCE_DIR}/include
@@ -51,11 +57,14 @@ target_include_directories(hermesNodeBindings
     ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi
     ${PROJECT_SOURCE_DIR}/hermes/include
     ${PROJECT_SOURCE_DIR}/hermes/API
+    ${OPENSSL_INCLUDE_DIR}
 )
 
 target_link_libraries(hermesNodeBindings
   PUBLIC
     uv_a
+    OpenSSL::SSL
+    OpenSSL::Crypto
   PRIVATE
     hermesNodeCompileCacheRun
     simdutf
