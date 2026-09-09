@@ -17,7 +17,10 @@
 //
 // dd is used rather than head/tail with `stat -c%s`: that spelling of stat
 // is a GNU extension and CI also builds macOS, where it is `stat -f%z`.
-// RUN: for f in $(find %t.cache -type f); do \
+// `-not -name config` keeps the cache's own configuration file out of
+// this: it is not an entry, and zeroing bytes inside it corrupts
+// something this test never meant to touch.
+// RUN: for f in $(find %t.cache -type f -not -name config); do \
 // RUN:   dd if=/dev/zero of="$f" bs=1 seek=24 count=64 conv=notrunc 2>/dev/null; \
 // RUN: done
 // RUN: %hermes-node-cc --compile-cache=%t.cache %s %t.dir/dep.js | %FileCheck %s

@@ -9,6 +9,8 @@
 
 #include <zlib.h>
 
+#include <picohash_wrapper.h>
+
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -21,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -68,6 +71,41 @@ std::string compileCacheGenerationName(
   result.append(arch);
   result += buf;
   return result;
+}
+
+std::string compileCacheWasmDigest(
+    const uint8_t *codegenConfig,
+    size_t codegenConfigSize,
+    const uint8_t *wasm,
+    size_t size) {
+  // The config's length is hashed before the config itself, because the
+  // config is variable-length and simply concatenating the two is ambiguous:
+  // config "ab" with module "c" would hash identically to config "a" with
+  // module "bc", and those are different compiles. A fixed-width config did
+  // not have this problem; a byte string does.
+  uint8_t lenBytes[8];
+  for (size_t i = 0; i < sizeof(lenBytes); ++i)
+    lenBytes[i] = static_cast<uint8_t>(
+        (static_cast<uint64_t>(codegenConfigSize) >> (8 * i)) & 0xff);
+
+  picohash_ctx_t ctx;
+  ph_init_sha256(&ctx);
+  ph_update(&ctx, lenBytes, sizeof(lenBytes));
+  if (codegenConfigSize != 0)
+    ph_update(&ctx, codegenConfig, codegenConfigSize);
+  if (size != 0)
+    ph_update(&ctx, wasm, size);
+  uint8_t digest[PICOHASH_SHA256_DIGEST_LENGTH];
+  ph_final(&ctx, digest);
+
+  static const char kHex[] = "0123456789abcdef";
+  std::string out;
+  out.reserve(sizeof(digest) * 2);
+  for (uint8_t b : digest) {
+    out.push_back(kHex[b >> 4]);
+    out.push_back(kHex[b & 0xf]);
+  }
+  return out;
 }
 
 namespace {
@@ -340,6 +378,7 @@ bool CompileCache::enable(
   }
 
   generationDir_ = generationDir;
+  versionedRoot_ = versionedRoot;
   enabled_ = true;
   return true;
 }
@@ -405,6 +444,190 @@ void CompileCache::invalidate(const CompileCacheEntry &entry) {
     return;
   ::unlink(entry.cacheFilePath.c_str());
   trace("invalidated", entry.cacheFilePath);
+}
+
+bool CompileCache::lookupWasm(
+    CompileCacheEntry &entry,
+    const uint8_t *wasm,
+    size_t size,
+    const uint8_t *codegenConfig,
+    size_t codegenConfigSize) {
+  if (!enabled_)
+    return false;
+
+  std::string digest =
+      compileCacheWasmDigest(codegenConfig, codegenConfigSize, wasm, size);
+  // The digest is the file name; the CRC and size stay as the cheap
+  // truncation guard the header already carries.
+  entry.key = compileCacheCrc32(digest.data(), digest.size());
+  entry.sourceCrc = compileCacheCrc32(wasm, size);
+  entry.sourceSize = static_cast<uint32_t>(size);
+  entry.cacheFilePath =
+      generationDir_ + "/" + digest.substr(0, 2) + "/w" + digest;
+
+  bool hit = compileCacheReadEntry(entry);
+  trace(hit ? "wasm hit" : "wasm miss", digest);
+  return hit;
+}
+
+void CompileCache::saveWasm(
+    const CompileCacheEntry &entry,
+    const uint8_t *hbc,
+    size_t hbcSize) {
+  // save() already creates the fanout directory from entry.cacheFilePath and
+  // writes through the temp-and-rename path, so there is nothing Wasm-
+  // specific about persisting the bytes.
+  save(entry, hbc, hbcSize);
+
+  if (!sweptWasm_) {
+    sweptWasm_ = true;
+    compileCacheEvictWasm(versionedRoot_, config_);
+  }
+}
+
+namespace {
+
+/// True if \p name is exactly "w" followed by 64 lowercase hex digits --
+/// the shape a Wasm entry's file name always has. A leftover temp file from
+/// an interrupted saveWasm() ("w<digest>.<pid>.<n>.tmp") starts with 'w' too
+/// but is longer, so this rejects it.
+bool isWasmEntryName(const char *name) {
+  size_t i = 0;
+  if (name[i++] != 'w')
+    return false;
+  for (; i < 65; ++i) {
+    char c = name[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+      return false;
+  }
+  return name[65] == '\0';
+}
+
+} // namespace
+
+/// True if \p name looks like a temp file an interrupted entry write left
+/// behind: "w<64 hex>.<pid>.<n>.tmp". Deliberately narrow -- it is a licence
+/// to unlink, so it matches the shape compileCacheWriteEntry actually
+/// produces and nothing else.
+static bool isWasmEntryTempName(const char *name) {
+  size_t i = 0;
+  if (name[i++] != 'w')
+    return false;
+  for (; i < 65; ++i) {
+    char c = name[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+      return false;
+  }
+  if (name[i] != '.')
+    return false;
+  size_t len = std::strlen(name);
+  const char kSuffix[] = ".tmp";
+  const size_t suffixLen = sizeof(kSuffix) - 1;
+  return len > i + suffixLen &&
+      std::strcmp(name + len - suffixLen, kSuffix) == 0;
+}
+
+void compileCacheEvictWasm(
+    const std::string &versionedRoot,
+    const CacheConfig &config) {
+  if (versionedRoot.empty())
+    return;
+
+  struct Victim {
+    std::string path;
+    uint64_t size;
+    int64_t stamp;
+  };
+  std::vector<Victim> entries;
+  uint64_t total = 0;
+
+  // Temp files older than this are assumed abandoned. A real write takes
+  // milliseconds; an hour is enormous by comparison, and erring long only
+  // costs disk, where erring short risks unlinking a live writer's file.
+  const time_t kTempReapAgeSeconds = 3600;
+  const time_t now = ::time(nullptr);
+
+  // EVERY generation, not just the current one. The budget names the cache,
+  // and kCompileCacheGenerationsKept older generations are retained beside
+  // the current one, each holding whatever it accumulated while it was
+  // current -- so a sweep confined to one directory leaves real disk use at
+  // a multiple of the configured number.
+  DIR *versioned = ::opendir(versionedRoot.c_str());
+  if (!versioned)
+    return;
+  std::vector<std::string> generationDirs;
+  while (struct dirent *gen = ::readdir(versioned)) {
+    if (gen->d_name[0] == '.')
+      continue;
+    std::string genDir = versionedRoot + "/" + gen->d_name;
+    struct stat st {};
+    if (::lstat(genDir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode))
+      continue;
+    generationDirs.push_back(std::move(genDir));
+  }
+  ::closedir(versioned);
+
+  for (const std::string &generationDir : generationDirs) {
+    DIR *root = ::opendir(generationDir.c_str());
+    if (!root)
+      continue;
+    while (struct dirent *fan = ::readdir(root)) {
+      if (fan->d_name[0] == '.')
+        continue;
+      std::string fanDir = generationDir + "/" + fan->d_name;
+      DIR *sub = ::opendir(fanDir.c_str());
+      if (!sub)
+        continue;
+      while (struct dirent *ent = ::readdir(sub)) {
+        // An abandoned temp file is reaped here rather than counted. Counting
+        // it would let a transient file evict real entries to make room for
+        // something about to be renamed away; reaping is what bounds the
+        // leak, and the age threshold is what keeps a live writer safe.
+        if (isWasmEntryTempName(ent->d_name)) {
+          std::string tmpPath = fanDir + "/" + ent->d_name;
+          struct stat tst {};
+          if (::lstat(tmpPath.c_str(), &tst) == 0 && S_ISREG(tst.st_mode) &&
+              now - tst.st_mtime > kTempReapAgeSeconds)
+            ::unlink(tmpPath.c_str());
+          continue;
+        }
+        // Only Wasm entries. JavaScript entries are keyed by path and
+        // rewritten in place, so they never accumulate the way these do.
+        if (!isWasmEntryName(ent->d_name))
+          continue;
+        std::string path = fanDir + "/" + ent->d_name;
+        struct stat st {};
+        if (::lstat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode))
+          continue;
+        int64_t stamp = config.recency == CacheRecency::kAtime
+            ? static_cast<int64_t>(st.st_atime)
+            : static_cast<int64_t>(st.st_mtime);
+        entries.push_back({path, static_cast<uint64_t>(st.st_size), stamp});
+        total += static_cast<uint64_t>(st.st_size);
+      }
+      ::closedir(sub);
+    }
+    ::closedir(root);
+  }
+
+  if (total <= config.maxWasmBytes)
+    return;
+
+  // Oldest first.
+  std::sort(
+      entries.begin(), entries.end(), [](const Victim &a, const Victim &b) {
+        return a.stamp < b.stamp;
+      });
+
+  for (const Victim &v : entries) {
+    if (total <= config.maxWasmBytes)
+      break;
+    // Best effort: a file another process is still mapping unlinks fine on
+    // POSIX -- the inode survives until the last mapping is dropped, which
+    // is the same property compileCachePruneGenerations relies on.
+    if (::unlink(v.path.c_str()) == 0)
+      total -= v.size;
+  }
 }
 
 } // namespace node_compat

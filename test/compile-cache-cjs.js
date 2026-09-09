@@ -10,7 +10,10 @@
 // RUN: echo 'module.exports = function () { return "first"; };' > %t.dir/dep.js
 // RUN: %hermes-node-cc --compile-cache=%t.cache %s %t.dir/dep.js > %t.cold.txt
 // RUN: %FileCheck --check-prefix=FIRST %s < %t.cold.txt
-// RUN: find %t.cache -type f | wc -l | tr -d ' ' | %FileCheck --check-prefix=POPULATED %s
+// `-not -name config` matters: the cache directory's own configuration
+// file is written on every run whether or not a single entry is, so an
+// unfiltered count is never 0 and this check could no longer fail.
+// RUN: find %t.cache -type f -not -name config | wc -l | tr -d ' ' | %FileCheck --check-prefix=POPULATED %s
 // RUN: %hermes-node-cc --compile-cache=%t.cache %s %t.dir/dep.js > %t.warm.txt
 // RUN: diff %t.cold.txt %t.warm.txt
 // RUN: echo 'module.exports = function () { return "second"; };' > %t.dir/dep.js

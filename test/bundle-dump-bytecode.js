@@ -42,9 +42,14 @@
 // at one gets a disassembly rather than advice about hexdumping past a
 // header. The cache is off suite-wide (see test/lit.cfg), which is why the
 // producing run goes through %hermes-node-cc.
+//
+// `-not -name config` excludes the cache directory's own configuration
+// file, added after this test was written: it sits at the cache root
+// alongside the versioned entry tree, so an unfiltered `find` can return it
+// instead of an entry.
 // RUN: rm -rf %t.cc && echo "console.log('CC');" > %t.cc.js
 // RUN: %hermes-node-cc --compile-cache=%t.cc %t.cc.js
-// RUN: %hermes-node --dump-bytecode=$(find %t.cc -type f | head -n 1) | %FileCheck --check-prefix=CACHE %s
+// RUN: %hermes-node --dump-bytecode=$(find %t.cc -type f -not -name config | head -n 1) | %FileCheck --check-prefix=CACHE %s
 // CACHE: bytecode: {{.*}}compile cache entry
 // CACHE: Bytecode File Information:
 // CACHE: Function count: {{[0-9]+}}
@@ -87,14 +92,14 @@
 // its header version bumped to 2 is the case a user actually meets, when a
 // future binary changes the layout and they point this at an old entry.
 // The dd seek lands on the header's second field.
-// RUN: cp $(find %t.cc -type f | head -n 1) %t.oldver
+// RUN: cp $(find %t.cc -type f -not -name config | head -n 1) %t.oldver
 // RUN: printf '\x02' | dd of=%t.oldver bs=1 seek=4 count=1 conv=notrunc 2>/dev/null
 // RUN: %not %hermes-node --dump-bytecode=%t.oldver 2>&1 | %FileCheck --check-prefix=OLDVER %s
 // OLDVER: error: {{.*}}oldver: compile cache entry rejected: header version 2, this binary reads version 1
 
 // A real entry truncated by one byte: the header is intact and its size
 // field now overruns the file by one.
-// RUN: SZ=$(wc -c < $(find %t.cc -type f | head -n 1)); head -c $(($SZ - 1)) $(find %t.cc -type f | head -n 1) > %t.trunc
+// RUN: SZ=$(wc -c < $(find %t.cc -type f -not -name config | head -n 1)); head -c $(($SZ - 1)) $(find %t.cc -type f -not -name config | head -n 1) > %t.trunc
 // RUN: %not %hermes-node --dump-bytecode=%t.trunc 2>&1 | %FileCheck --check-prefix=TRUNC %s
 // TRUNC: error: {{.*}}trunc: compile cache entry rejected: header claims {{[0-9]+}} bytes of bytecode, but only {{[0-9]+}} bytes follow its header
 

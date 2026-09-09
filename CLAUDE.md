@@ -286,6 +286,206 @@ on by default. Built-in JS is unaffected (already embedded as bytecode).
   36-48% faster than cold, depending on OS file-cache state, with the cache
   landing at ~16 MB / ~1506 entries. See
   `docs/superpowers/plans/progress-compile-cache.md` for the full numbers.
+- **Every failure in here is swallowed on purpose, and that is the contract.**
+  The cache is an optimization: if anything about it goes wrong, the program
+  compiles normally and never finds out. A read-only cache directory, a full
+  disk, an entry another process is rewriting underneath us, a corrupt or
+  truncated file, a directory left by a different build -- each degrades to
+  compiling, none reaches the program, and `save-failed` under
+  `HERMES_NODE_DEBUG_NATIVE=COMPILE_CACHE` is the only trace any of it
+  leaves. Both halves work this way: JavaScript `lookup` returns a miss on
+  any error and `save` gives up quietly, exactly as the Wasm hooks do.
+  This is worth stating because the code looks wrong without it. Ignoring an
+  error is the swallow-and-continue pattern this codebase has spent whole
+  sessions removing elsewhere (see the uncaught-exception and VM-options
+  sections, where an ignored failure is treated as a defect). Here it is
+  correct, and the difference is that a compile cache has a right answer to
+  fall back on. Do not "fix" one of these paths into reporting, and do not
+  copy the pattern out of here into code that has no fallback.
+  The one deliberate hole is documented with the exclusion below; the
+  read-only case is pinned by `test/compile-cache-readonly.js`, so the
+  headline claim cannot quietly stop being true.
+- **The contract excludes allocation failure**, deliberately rather than by
+  oversight. This code is compiled `-fno-exceptions`, so a failing
+  `operator new` calls `std::terminate` -- the cache kills the process, which
+  is the one thing it promises never to do. The token allocation the Wasm
+  hooks add is `new (std::nothrow)` and a null token is treated as a miss,
+  but that reaches only the outer allocation: `lookupWasm` builds a
+  64-character digest `std::string` that heap-allocates, as does essentially
+  every `std::string` in this codebase. Hardening just these callbacks would
+  mean abandoning `std::string` and `std::vector` inside them while
+  everything they call keeps using both, so the guarantee still would not
+  hold end to end -- effort spent on a promise that stays unkeepable.
+  **The tempting justification for that is wrong, and the error is the part
+  worth remembering.** "Out of memory means the process is finished anyway"
+  is false: the cache asks for memory a non-caching run would not, so
+  enabling it can kill a program that would otherwise have survived. The
+  risk is small and the trade was accepted knowingly -- it is not a
+  consequence, it is a choice. (An external review caught exactly that bad
+  argument being made here.) The same reasoning leaves one related tail
+  alone: after a null token, Hermes still serializes, calls the no-op store,
+  and copies and reloads the bytecode, adding allocation pressure precisely
+  when allocation is already failing. Suppressing it needs a "cache
+  unusable" channel the ABI does not have, and ABI surgery for an OOM-only
+  path is not worth it.
+
+### Wasm entries
+
+A WebAssembly module compiles to Hermes bytecode ahead of time (see the
+WebAssembly section above), and that compile is cached too. Design
+`docs/superpowers/specs/2026-09-07-wasm-compile-cache-design.md`, plan
+`docs/superpowers/plans/2026-09-07-wasm-compile-cache.md`, progress
+`docs/superpowers/plans/progress-wasm-compile-cache.md`.
+
+- **This is the largest win the cache has.** Measured on
+  `examples/hermes-parser-ast-wasm` (Release build, one Wasm module whose
+  cached bytecode entry is 2,054,332 bytes):
+  cold 5.03 s, warm **0.07 s**. The isolating measurement is the one worth
+  keeping: delete only the `w` entry from a fully warm cache, leaving every
+  JavaScript entry in place, and the run costs 5.2 s again -- so compiling
+  that single module *is* essentially the whole cold run, and caching it is
+  essentially the whole speedup. On `examples/flow-bundler` with
+  `FLOW_BUNDLER_PARSER=wasm`, whose JavaScript graph is far larger, cold is
+  12.6 s and warm 2.33 s; removing just the Wasm entry from that warm cache
+  costs 7.25 s, so ~4.9 s of the saving is the Wasm module alone.
+- **Wasm entries are keyed by CONTENT, JavaScript entries by path.** The
+  digest is SHA-256 over the codegen configuration's length, that
+  configuration, and then the module bytes, and it *is* the file name:
+  `<generation>/<first two hex digits>/w<64 hex digits>`. Content-keying is
+  not a preference -- Wasm bytes usually arrive without a path (a
+  `Uint8Array` from a JS module, a `fetch`, a base64 blob), so there is
+  nothing else to key on. SHA-256 rather than the CRC-32 the JavaScript
+  kinds use, because the roles differ: there the CRC guards an entry already
+  found by path, here it would be the key itself, and a collision would
+  serve another module's bytecode with nothing left to detect it. The
+  codegen configuration is in the digest for the same reason the generation
+  tag exists: the same module compiled under different rules must not share
+  an entry.
+- **The codegen configuration is an opaque byte string, not a word**, and
+  Hermes composes it: `hermes-wasm;bc=<bytecode version>;cg=<Wasm codegen
+  version>;t262=<0|1>`. Three things follow from that shape. It is a
+  *callback parameter*, so `struct_size` extensibility does not reach it --
+  widening it later would break every embedder's function pointer, which is
+  why it is a blob before anything else consumes the ABI. It is not
+  pre-compressed into 32 bits, because two configurations colliding onto one
+  word would serve bytecode built under the wrong rules, which is the exact
+  weakness SHA-256-over-CRC-32 was chosen to avoid. And its **length is
+  hashed before it**, because a variable-length prefix makes plain
+  concatenation ambiguous -- config `ab` with module `c` would otherwise
+  hash identically to config `a` with module `bc`.
+  `WASM_CODEGEN_VERSION` (`hermes/include/hermes/WasmFrontend/
+  WasmCodegenVersion.h`) is the part that must be **bumped by hand** when
+  the Wasm frontend's output changes, exactly as `BYTECODE_VERSION` is:
+  that constant tracks the bytecode *format*, so a codegen fix emitting
+  different-but-same-format bytecode leaves it untouched and a cache keyed
+  only on it would serve the old, wrong bytecode. `test/test-wasm-cache.js`
+  pins the whole property end to end by running one file plain and again
+  under `--vm=-test262` and requiring four entries rather than two.
+  **Bumping it by hand is load-bearing, and the reason is not obvious.** A
+  Hermes-only change does move the generation tag -- but only ONCE. The tag
+  carries hermes-node's `git describe --dirty`, and a changed submodule
+  dirties the outer tree, so the first edit adds `-dirty` and every edit
+  after it leaves the string identical. Measured in a scratch repo rather
+  than reasoned about:
+
+  ```
+  clean                      v1
+  1st submodule commit       v1-dirty      <- invalidated
+  2nd submodule commit       v1-dirty      <- stale
+  3rd submodule commit       v1-dirty      <- stale
+  commit the gitlink         v1-1-g82958cb <- invalidated
+  ```
+
+  So the normal workflow is safe: bump the submodule, commit the gitlink,
+  and the tag moves (the version is re-derived on every build by
+  `cmake/gen-version.cmake`, so no reconfigure is needed). What is exposed
+  is iterating on Hermes with the gitlink uncommitted -- edit, rebuild,
+  test, edit again -- where the first rebuild invalidates and every one
+  after it serves the first's bytecode. That is precisely the loop a codegen
+  fix happens in, which is why the constant exists and why
+  `--no-compile-cache` is the escape hatch while iterating.
+- Content keys make corruption **self-healing at no cost**: a rejected entry
+  is recompiled and stored, and the store lands on the same file name, so
+  the bad bytes are overwritten rather than accumulating. A hit is still
+  validated by the same header/CRC/length checks a JavaScript entry gets --
+  the bytes are handed to Hermes on its trusted precompiled-bytecode path,
+  so that check is the only thing standing between a corrupt file and the
+  interpreter.
+- **All run modes**, including `--bundle` and a `--build-exe` executable. A
+  container carries compiled *JavaScript*, never compiled Wasm, so a bundled
+  program that instantiates a module recompiles it on every launch without
+  this. That is why the two lit tests cover the bundle and executable cases
+  rather than only a plain script.
+- **The cache directory carries a `config` file** at its root -- above the
+  versioned tree, so generation pruning cannot delete it -- written with the
+  defaults on first use so the knobs are discoverable rather than folklore.
+  Two keys: `recency: atime|mtime` (default `atime`) and `max_wasm_bytes`
+  (default `268435456`). Parsing is deliberately lenient: an unknown key, a
+  malformed line or an unreadable file yields the default, because nothing
+  about this cache may fail the program -- but it is **lenient, not silent**.
+  Each thing it did not understand prints `warning: <path>: line <n>: ...` to
+  stderr naming what it found and what it used instead, **unconditionally**,
+  not behind `HERMES_NODE_DEBUG_NATIVE`. A bad line there is not a transient
+  event to debug: it is a permanent property of a hand-edited file, wrong on
+  every run until someone changes it, and a typo that quietly reverts a knob
+  to its default is the swallow-and-continue this codebase keeps removing.
+  A well-formed file prints nothing, which is what keeps the warnings worth
+  reading. The parser *returns* its complaints rather than printing them
+  (`cacheConfigParse`'s optional out-parameter), so they are assertable in a
+  unit test and the caller decides where they go; a value's invisible
+  characters are escaped in the message, since `\x0b-1` is a complaint a
+  reader can act on where `-1` looks like an objection to nothing. A value
+  carrying a sign is rejected
+  -- `strtoull` accepts a leading `-` and negates the magnitude, so
+  `max_wasm_bytes: -1` would otherwise become 2^64-1 rather than falling
+  back. `0` means evict everything, not "no limit".
+- **The budget bounds Wasm entries only, within the current generation**,
+  and both halves matter. The asymmetry is the point: a
+  JavaScript entry is keyed by path and rewritten in place, so a project's
+  entries converge on a fixed set, while content-keyed entries accumulate one
+  per distinct module ever seen. The sweep deletes least-recently-used
+  entries until the total fits, considers only files named exactly `w` plus
+  64 lowercase hex digits (so a JavaScript entry, the `config` file, and a
+  `w<digest>.<pid>.<n>.tmp` left by an interrupted write are all safe from
+  it), and runs once per process, on the first Wasm save. Ordering is
+  second-granular, because `st_atime`/`st_mtime` are whole seconds -- fine
+  against a budget measured in hundreds of megabytes and a recency signal
+  measured in days, but it is approximate LRU, not exact. The sweep walks
+  the **current generation only**, and three older ones are kept
+  (`kCompileCacheGenerationsKept`), so on-disk Wasm bytes can reach four
+  times `max_wasm_bytes` -- about 1 GB at the default. And it runs on a
+  *store*: lowering the budget on an existing cache reclaims nothing until
+  the next time a new module is compiled.
+- **The Hermes side is an embedder hook, not a format change.**
+  `hermes_set_wasm_cache` (`hermes/API/napi/hermes_napi_wasm_cache.h`)
+  installs `lookup`/`store`/`discard`, consulted in `createModuleFromBytes`
+  -- the one place Wasm bytes become a bytecode provider. `lookup` always
+  sets a store token, on hit and miss alike, and Hermes calls exactly one of
+  `store` or `discard` for it. Returned bytes take the **trusted**
+  precompiled path, so no trust gate moves: `EnableUntrustedBytecodeFromJS`
+  and `EnableWasmBytecodeContentSniffing` stay off, exactly as for any other
+  `.hbc` an embedder ships. hermes-node's adapter is
+  `lib/compile-cache/wasm_cache_hooks.cpp`, installed from
+  `hermes_node_runtime.cpp` and guarded by `#ifdef HERMES_ENABLE_WASM`.
+- **A null cache installs nothing**, which is how `--no-compile-cache` and
+  `--inspect` end up uncached without a second decision: both already make
+  `createCompileCache` return null. Under `--inspect` the inspector's own
+  nested run sets `inspectorBridgeContext`, which forces the same null, so
+  the two-runtime case cannot double-activate a cache.
+- Tests: `test/test-wasm-cache.js` and `test/test-wasm-cache-build-exe.js`
+  (`REQUIRES: wasm`, the second also `linker-available`), plus the
+  `CacheConfigTest` and Wasm cases in `unittests/CompileCacheTest.cpp`. Hit
+  and miss are asserted from `HERMES_NODE_DEBUG_NATIVE=COMPILE_CACHE`
+  tracing, **never from timing** -- the suite runs 16-way parallel and both
+  of its known flaky tests got that way through timing dependencies.
+- **The `config` file hollowed out two existing tests when it landed**, and
+  the shape is worth remembering: `test/compile-cache-cjs.js` asserted a
+  cold run had populated the cache with `find %t.cache -type f | wc -l`
+  against `POPULATED-NOT: {{^0$}}`, and a file written on *every* run
+  whether or not any entry is means that count can never be 0. Measured:
+  delete every real entry after a run and the test still passed. Any new
+  file placed in the cache tree needs the same audit -- the tests that count
+  entries now spell `-not -name config`.
 
 ## Hermes VM Options
 
@@ -1128,11 +1328,16 @@ plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
   The producer is `hermesNodeBuildExe` (`lib/build-exe/`), VM-free like
   `hermesNodeBundleTools`, which is what lets `BuildExeTest` run with no
   runtime.
-- **Every produced executable creates a compile-cache tree it never uses.**
-  Startup makes `~/.cache/hermes-node/compile-cache/v1/<generation>/` (or
-  the `XDG_CACHE_HOME` equivalent) and writes nothing into it, because a
-  bundled program compiles nothing. Identical under `--bundle`, so this is
-  pre-existing rather than something linking introduced -- but a
+- **A produced executable creates a compile-cache tree it uses only for
+  Wasm.** Startup makes `~/.cache/hermes-node/compile-cache/v1/<generation>/`
+  (or the `XDG_CACHE_HOME` equivalent) and writes nothing into it for
+  JavaScript, because a bundled program's JavaScript is already compiled.
+  That was the whole story until Wasm caching landed: a bundled program that
+  instantiates a WebAssembly module *does* compile, so the tree is now
+  genuinely used -- see the Wasm entries subsection under Compile Cache, and
+  `test/test-wasm-cache-build-exe.js`, which exists to pin exactly that.
+  Identical under `--bundle`, so this is pre-existing rather than something
+  linking introduced -- but a
   `--build-exe` artifact is shipped to people who have never heard of
   hermes-node, and they cannot pass `--no-compile-cache`: every argument
   belongs to the program. `HERMES_NODE_DISABLE_COMPILE_CACHE=1` still works,
