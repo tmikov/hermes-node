@@ -5,6 +5,7 @@
 
 add_hermes_library(hermesNodeCompileCache STATIC
   cache_config.cpp
+  cache_tools.cpp
   compile_cache.cpp
 )
 

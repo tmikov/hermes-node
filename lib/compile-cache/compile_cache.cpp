@@ -266,10 +266,8 @@ bool compileCacheReadEntry(CompileCacheEntry &entry) {
   return true;
 }
 
-namespace {
-
 /// Recursively delete \p path. Best effort.
-void removeTree(const std::string &path) {
+void compileCacheRemoveTree(const std::string &path) {
   DIR *d = ::opendir(path.c_str());
   if (d != nullptr) {
     while (struct dirent *e = ::readdir(d)) {
@@ -278,7 +276,7 @@ void removeTree(const std::string &path) {
       std::string child = path + "/" + e->d_name;
       struct stat st {};
       if (::lstat(child.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
-        removeTree(child);
+        compileCacheRemoveTree(child);
       else
         ::unlink(child.c_str());
     }
@@ -286,8 +284,6 @@ void removeTree(const std::string &path) {
   }
   ::rmdir(path.c_str());
 }
-
-} // namespace
 
 std::string compileCacheDefaultRoot() {
   if (const char *xdg = ::getenv("XDG_CACHE_HOME")) {
@@ -347,7 +343,7 @@ void compileCachePruneGenerations(
     return a.first > b.first;
   });
   for (size_t i = keepCount; i < others.size(); ++i)
-    removeTree(others[i].second);
+    compileCacheRemoveTree(others[i].second);
 }
 
 bool CompileCache::enable(
@@ -485,13 +481,11 @@ void CompileCache::saveWasm(
   }
 }
 
-namespace {
-
 /// True if \p name is exactly "w" followed by 64 lowercase hex digits --
 /// the shape a Wasm entry's file name always has. A leftover temp file from
 /// an interrupted saveWasm() ("w<digest>.<pid>.<n>.tmp") starts with 'w' too
 /// but is longer, so this rejects it.
-bool isWasmEntryName(const char *name) {
+bool compileCacheIsWasmEntryName(const char *name) {
   size_t i = 0;
   if (name[i++] != 'w')
     return false;
@@ -503,13 +497,11 @@ bool isWasmEntryName(const char *name) {
   return name[65] == '\0';
 }
 
-} // namespace
-
 /// True if \p name looks like a temp file an interrupted entry write left
 /// behind: "w<64 hex>.<pid>.<n>.tmp". Deliberately narrow -- it is a licence
 /// to unlink, so it matches the shape compileCacheWriteEntry actually
 /// produces and nothing else.
-static bool isWasmEntryTempName(const char *name) {
+bool compileCacheIsWasmEntryTempName(const char *name) {
   size_t i = 0;
   if (name[i++] != 'w')
     return false;
@@ -583,7 +575,7 @@ void compileCacheEvictWasm(
         // it would let a transient file evict real entries to make room for
         // something about to be renamed away; reaping is what bounds the
         // leak, and the age threshold is what keeps a live writer safe.
-        if (isWasmEntryTempName(ent->d_name)) {
+        if (compileCacheIsWasmEntryTempName(ent->d_name)) {
           std::string tmpPath = fanDir + "/" + ent->d_name;
           struct stat tst {};
           if (::lstat(tmpPath.c_str(), &tst) == 0 && S_ISREG(tst.st_mode) &&
@@ -593,7 +585,7 @@ void compileCacheEvictWasm(
         }
         // Only Wasm entries. JavaScript entries are keyed by path and
         // rewritten in place, so they never accumulate the way these do.
-        if (!isWasmEntryName(ent->d_name))
+        if (!compileCacheIsWasmEntryName(ent->d_name))
           continue;
         std::string path = fanDir + "/" + ent->d_name;
         struct stat st {};
