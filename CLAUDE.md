@@ -273,6 +273,36 @@ on by default. Built-in JS is unaffected (already embedded as bytecode).
   `FAILED` and `getCompileCacheDir()` still returns `undefined`, deliberately.
 - `test/lit.cfg` sets `HERMES_NODE_DISABLE_COMPILE_CACHE=1` for the whole
   suite; compile-cache tests opt in with their own directory under `%t`.
+- **`hermes-node cache <action>` manages it**, and is the CLI's only
+  subcommand. `cache info` reports the root, the configuration, and what each
+  generation holds -- JavaScript entries, Wasm entries and abandoned temp
+  files counted apart, since only the middle one is bounded by the budget.
+  `cache prune` drops unreachable generations, applies `max_wasm_bytes` to
+  what remains, and reaps abandoned temp files. `cache clean` deletes the
+  cache; `--generation` limits it to the current one, leaving the others and
+  the config file. The directory is `--compile-cache=<dir>`, else
+  `HERMES_NODE_COMPILE_CACHE`, else the default root -- the same precedence a
+  normal run uses.
+  **`cache` in argv[1] is always the subcommand**, whether or not a file of
+  that name exists; `./cache` runs a script so named. Deliberately not
+  filesystem-dependent: a grammar whose meaning changed with the contents of
+  the working directory would be a worse surprise than the shadowing it
+  avoided. It is dispatched from `main()` **before the ordinary parse loop**
+  and parses its own arguments, which is what leaves that loop's invariant --
+  everything after the first positional belongs to the program being run --
+  exactly as it was. Like the other tool verbs it creates no runtime, event
+  loop or `napi_env`; pointed at a directory that does not exist it does not
+  create one.
+  The generation marked `(current)` is the one this binary would use **with
+  default options**: `--optimize=off` produces a different generation, so a
+  run configured that way is not the one marked. Every generation is listed
+  either way. `compileCacheCurrentGenerationName()` and the runtime share one
+  copy of that computation so the tool and the cache cannot disagree about
+  which directory is live, exactly as `compileCacheIsWasmEntryName` is shared
+  between the sweep that deletes entries and the tooling that counts them.
+  Implementation `lib/compile-cache/cache_tools.cpp`, in the VM-free half of
+  the library so `CacheToolsTest` runs with no runtime; tests
+  `test/cache-subcommand.js`.
 - Implementation: `lib/compile-cache/`, consulted from
   `node_contextify.cpp` (`compileFunctionForCJSLoaderCb`) and
   `module_loader.cpp` (`compileAndRunCallback`).

@@ -10,6 +10,8 @@
 #include <hermes/node-compat/bundle/bundle_run.h>
 #include <hermes/node-compat/bundle/bundle_tools.h>
 #include <hermes/node-compat/bytecode-dump/bytecode_dump.h>
+#include <hermes/node-compat/compile-cache/cache_tools.h>
+#include <hermes/node-compat/compile-cache/compile_cache.h>
 #include <hermes/node-compat/runtime/hermes_node_runtime.h>
 #include <hermes/node-compat/version.h>
 #include <hermes/node-compat/vm-options/vm_options.h>
@@ -489,6 +491,7 @@ static void printUsage(const char *argv0) {
       "  --inspect[=[host:]port]        Enable inspector (default 127.0.0.1:9229)\n"
       "  --inspect-brk[=[host:]port]    Enable inspector, break before user code\n"
       "  --compile-cache=<dir>          Bytecode cache directory\n"
+      "                                 (see `cache` below to manage it)\n"
       "  --no-compile-cache             Disable the bytecode cache\n"
       "  --build-bundle=<file>          Compile the script and its requires "
       "into <file>\n"
@@ -611,7 +614,172 @@ static std::vector<std::string> envVmOptions() {
       std::getenv("HERMES_NODE_VM_OPTIONS"));
 }
 
+/// Usage for the `cache` subcommand, printed by `cache --help` and by any
+/// malformed invocation of it.
+static void printCacheUsage(const char *argv0) {
+  std::printf(
+      "Usage: %s cache <action> [options]\n"
+      "\n"
+      "Inspect and manage the on-disk compile cache.\n"
+      "\n"
+      "Actions:\n"
+      "  info      Show the cache root, its configuration, and what each\n"
+      "            generation holds\n"
+      "  prune     Drop unreachable generations, apply max_wasm_bytes to\n"
+      "            what remains, and reap abandoned temp files\n"
+      "  clean     Delete the cache\n"
+      "\n"
+      "Options:\n"
+      "  --compile-cache=<dir>  Act on this cache instead of the default\n"
+      "  --generation           clean only: delete just the current\n"
+      "                         generation, leaving the others and the\n"
+      "                         configuration file\n"
+      "  --verbose              info only: list generations that hold\n"
+      "                         nothing as well\n"
+      "\n"
+      "The cache directory is --compile-cache=<dir>, else\n"
+      "HERMES_NODE_COMPILE_CACHE, else the default root -- the same order a\n"
+      "normal run uses.\n"
+      "\n"
+      "Note: `%s cache` always means this subcommand. To run a script named\n"
+      "`cache`, write `%s ./cache`.\n",
+      argv0,
+      argv0,
+      argv0);
+}
+
+/// Handles `hermes-node cache <action> [options]`.
+///
+/// Dispatched from main() BEFORE the ordinary parse loop, and parsing its own
+/// arguments rather than sharing that loop. The reason is the invariant the
+/// loop rests on: everything after the first positional belongs to the
+/// program being run, which is what keeps process.argv.slice(2) meaning what
+/// it means under Node. A subcommand is the one thing that has to read the
+/// first positional itself, so it sits beside that grammar instead of inside
+/// it, and the loop is left exactly as it was.
+///
+/// Runs no runtime, event loop or napi_env -- like the other tool verbs, and
+/// for the same reason: a tool that describes a directory must not fail for
+/// reasons belonging to a runtime it never needed.
+static int runCacheSubcommand(int argc, char **argv) {
+  const char *action = nullptr;
+  std::string cacheDir;
+  bool verbose = false;
+  bool generationOnly = false;
+
+  for (int i = 2; i < argc; ++i) {
+    const char *arg = argv[i];
+    if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
+      printCacheUsage(argv[0]);
+      return 0;
+    } else if (std::strncmp(arg, "--compile-cache=", 16) == 0) {
+      cacheDir = arg + 16;
+      if (cacheDir.empty()) {
+        std::fprintf(stderr, "Error: --compile-cache= requires a directory\n");
+        return 1;
+      }
+    } else if (std::strcmp(arg, "--verbose") == 0) {
+      verbose = true;
+    } else if (std::strcmp(arg, "--generation") == 0) {
+      generationOnly = true;
+    } else if (arg[0] == '-') {
+      std::fprintf(stderr, "Error: unknown option '%s' for 'cache'\n", arg);
+      printCacheUsage(argv[0]);
+      return 1;
+    } else if (action == nullptr) {
+      action = arg;
+    } else {
+      std::fprintf(
+          stderr,
+          "Error: 'cache' takes one action, got '%s' and '%s'\n",
+          action,
+          arg);
+      return 1;
+    }
+  }
+
+  if (action == nullptr) {
+    std::fprintf(stderr, "Error: 'cache' requires an action\n");
+    printCacheUsage(argv[0]);
+    return 1;
+  }
+
+  // Same precedence a normal run uses, so the tool and the runtime always
+  // act on the same directory.
+  std::string root = cacheDir;
+  if (root.empty()) {
+    if (const char *fromEnv = ::getenv("HERMES_NODE_COMPILE_CACHE"))
+      root = fromEnv;
+  }
+  if (root.empty())
+    root = hermes::node_compat::compileCacheDefaultRoot();
+  if (root.empty()) {
+    std::fprintf(
+        stderr,
+        "Error: no cache directory: neither --compile-cache, "
+        "HERMES_NODE_COMPILE_CACHE, XDG_CACHE_HOME nor HOME is set\n");
+    return 1;
+  }
+
+  const std::string current =
+      hermes::node_compat::compileCacheCurrentGenerationName();
+
+  if (std::strcmp(action, "info") == 0) {
+    if (generationOnly) {
+      std::fprintf(
+          stderr, "Error: --generation applies to 'cache clean', not 'info'\n");
+      return 1;
+    }
+    hermes::node_compat::cacheToolsPrintInfo(
+        hermes::node_compat::cacheToolsScan(root, current), verbose, std::cout);
+    return 0;
+  }
+  if (std::strcmp(action, "prune") == 0) {
+    if (generationOnly) {
+      std::fprintf(
+          stderr,
+          "Error: --generation applies to 'cache clean', not 'prune'\n");
+      return 1;
+    }
+    hermes::node_compat::CacheInfo info =
+        hermes::node_compat::cacheToolsScan(root, current);
+    std::cout << "compile cache: " << root << "\n";
+    if (!info.exists) {
+      std::cout << "  (does not exist)\n";
+      return 0;
+    }
+    hermes::node_compat::cacheToolsPrintChange(
+        "prune",
+        hermes::node_compat::cacheToolsPrune(root, current, info.config),
+        std::cout);
+    return 0;
+  }
+  if (std::strcmp(action, "clean") == 0) {
+    std::cout << "compile cache: " << root << "\n";
+    hermes::node_compat::CacheCleanScope scope = generationOnly
+        ? hermes::node_compat::CacheCleanScope::kCurrentGeneration
+        : hermes::node_compat::CacheCleanScope::kAll;
+    hermes::node_compat::cacheToolsPrintChange(
+        "clean",
+        hermes::node_compat::cacheToolsClean(root, current, scope),
+        std::cout);
+    return 0;
+  }
+
+  std::fprintf(stderr, "Error: unknown 'cache' action '%s'\n", action);
+  printCacheUsage(argv[0]);
+  return 1;
+}
+
 int main(int argc, char **argv) {
+  // The one subcommand, recognised before anything else parses. Always the
+  // subcommand when it is argv[1], never conditional on whether a file of
+  // that name exists: a grammar that changed meaning with the contents of
+  // the current directory would be a worse surprise than the shadowing it
+  // avoided. `./cache` runs a script of that name.
+  if (argc > 1 && std::strcmp(argv[1], "cache") == 0)
+    return runCacheSubcommand(argc, argv);
+
   HermesNodeConfig config;
   ToolOptions tools;
   int scriptArgIndex = argc; // no script by default

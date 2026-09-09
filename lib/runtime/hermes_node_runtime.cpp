@@ -497,6 +497,25 @@ bool resolveOptimize(const HermesNodeConfig &config, bool cacheActive) {
   return cacheActive;
 }
 
+/// The generation directory name for \p config. One copy, so the runtime
+/// that fills the cache and the tooling that reports on it cannot drift
+/// apart about which directory is live.
+static std::string generationNameFor(const HermesNodeConfig &config) {
+  uint32_t configCrc =
+      compileCacheCrc32(kCJSWrapperPrefix, sizeof(kCJSWrapperPrefix) - 1);
+  // Resolved against cacheActive=true: a generation name is only ever wanted
+  // where a cache is in play, which is exactly the condition kDefault keys
+  // on.
+  const char optimizeByte =
+      resolveOptimize(config, /*cacheActive*/ true) ? 'O' : 'o';
+  configCrc = compileCacheCrc32(&optimizeByte, 1) ^ configCrc;
+  return compileCacheGenerationName(
+      HERMES_NODE_VERSION_STRING,
+      HERMES_NODE_CACHE_ARCH,
+      hermes::hbc::BYTECODE_VERSION,
+      configCrc);
+}
+
 CompileCache *createCompileCache(const HermesNodeConfig &config) {
   // The inspector's own runtime never caches, whatever its config says. It
   // only evaluates require('inspector-server'), which is embedded in the
@@ -533,26 +552,9 @@ CompileCache *createCompileCache(const HermesNodeConfig &config) {
   // changes the bytecode produced from identical source -- so it must be in
   // here. Without it, a run with --optimize=off would serve optimized entries
   // written by an earlier default run, and vice versa, from the same keys.
-  uint32_t configCrc =
-      compileCacheCrc32(kCJSWrapperPrefix, sizeof(kCJSWrapperPrefix) - 1);
-  {
-    // Resolved against cacheActive=true: reaching here means a cache is being
-    // created, which is exactly the condition kDefault keys on.
-    const char optimizeByte =
-        resolveOptimize(config, /*cacheActive*/ true) ? 'O' : 'o';
-    configCrc = compileCacheCrc32(&optimizeByte, 1) ^ configCrc;
-  }
-
   auto cache = std::make_unique<CompileCache>();
-  if (!cache->enable(
-          root,
-          compileCacheGenerationName(
-              HERMES_NODE_VERSION_STRING,
-              HERMES_NODE_CACHE_ARCH,
-              hermes::hbc::BYTECODE_VERSION,
-              configCrc))) {
+  if (!cache->enable(root, generationNameFor(config)))
     return nullptr;
-  }
 
   // Wasm entries are keyed by content, not by generation, so their budget is
   // configured from the cache ROOT rather than baked into the generation
@@ -708,6 +710,10 @@ int runEmbeddedBundle(
 }
 
 } // namespace
+
+std::string compileCacheCurrentGenerationName() {
+  return generationNameFor(HermesNodeConfig{});
+}
 
 int runHermesNode(const HermesNodeConfig &config) {
   // 1. Create the Hermes runtime. The configuration comes from

@@ -183,6 +183,21 @@ void compileCachePruneGenerations(
 /// megabytes, a recency signal measured in days), not a bug to fix.
 ///
 /// Best effort: failures are ignored.
+/// Recursively delete \p path. Best effort: what cannot be removed is left.
+void compileCacheRemoveTree(const std::string &path);
+
+/// True if \p name is exactly "w" followed by 64 lowercase hex digits -- the
+/// shape a Wasm entry's file name always has.
+///
+/// Shared rather than duplicated on purpose: this predicate is the
+/// definition of "is a Wasm entry", and the sweep that deletes them and the
+/// tooling that reports them must not be able to drift apart about it.
+bool compileCacheIsWasmEntryName(const char *name);
+
+/// True if \p name is "w<64 hex>.<pid>.<n>.tmp" -- what an interrupted entry
+/// write leaves behind. Deliberately narrow: it is a licence to unlink.
+bool compileCacheIsWasmEntryTempName(const char *name);
+
 void compileCacheEvictWasm(
     const std::string &versionedRoot,
     const CacheConfig &config);

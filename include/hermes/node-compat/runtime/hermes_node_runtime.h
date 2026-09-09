@@ -175,6 +175,17 @@ struct HermesNodeConfig {
   void *inspectorBridgeContext = nullptr;
 };
 
+/// The compile cache generation directory name this binary would use with
+/// default options -- the same string createCompileCache() builds, from the
+/// same inputs, so that tooling which reports on the cache cannot disagree
+/// with the runtime that fills it about which generation is live.
+///
+/// "With default options" is the caveat: --optimize=off produces a different
+/// generation, so a run configured that way is not the one marked current.
+/// Every generation is still listed, so the picture stays complete either
+/// way.
+std::string compileCacheCurrentGenerationName();
+
 /// Run a complete hermes-node instance. Blocks until the event loop exits.
 /// Thread-safe: can be called from any thread; each invocation is fully
 /// independent (own runtime, event loop, bindings state).
