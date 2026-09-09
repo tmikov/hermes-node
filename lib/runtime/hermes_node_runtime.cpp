@@ -63,7 +63,9 @@
 #include <hermes/node-compat/bindings/node_zlib.h>
 #include <hermes/node-compat/bundle/bundle_build.h>
 #include <hermes/node-compat/bundle/bundle_run.h>
+#include <hermes/node-compat/compile-cache/cache_config.h>
 #include <hermes/node-compat/compile-cache/compile_cache.h>
+#include <hermes/node-compat/compile-cache/wasm_cache_hooks.h>
 #include <hermes/node-compat/embedded-modules/embedded_modules.h>
 #include <hermes/node-compat/event-loop/uv_event_loop.h>
 #include <hermes/node-compat/inspector/inspector_bridge.h>
@@ -552,6 +554,25 @@ CompileCache *createCompileCache(const HermesNodeConfig &config) {
     return nullptr;
   }
 
+  // Wasm entries are keyed by content, not by generation, so their budget is
+  // configured from the cache ROOT rather than baked into the generation
+  // name above.
+  // Complaints about the config file are printed UNCONDITIONALLY, not behind
+  // the tracing flag below. A bad line there is not a transient event to
+  // debug: it is a permanent property of the file, wrong on every run until
+  // someone edits it, and the file exists precisely to be hand-edited. A
+  // typo that silently reverts a knob to its default is exactly the
+  // swallow-and-continue this codebase keeps removing.
+  std::vector<std::string> configComplaints;
+  cache->setConfig(cacheConfigLoadOrCreate(root, &configComplaints));
+  for (const std::string &complaint : configComplaints)
+    std::fprintf(
+        stderr,
+        "warning: %s/%s: %s\n",
+        root.c_str(),
+        kCacheConfigFileName,
+        complaint.c_str());
+
   if (const char *dbg = ::getenv("HERMES_NODE_DEBUG_NATIVE"))
     cache->setTracing(std::strstr(dbg, "COMPILE_CACHE") != nullptr);
 
@@ -787,6 +808,10 @@ int runHermesNode(const HermesNodeConfig &config) {
   }
   runtimeState->inspectorBridgeContext = config.inspectorBridgeContext;
   runtimeState->compileCache = createCompileCache(config);
+  // Hermes consults this before compiling a WebAssembly module. Installed
+  // after the env exists and before any user code runs. A null cache --
+  // --no-compile-cache, or --inspect -- installs nothing.
+  installWasmCacheHooks(env, runtimeState->compileCache);
   runtimeState->optimizeCompiles =
       resolveOptimize(config, runtimeState->compileCache != nullptr);
   // Use a no-op finalizer: RuntimeState must outlive the env because GC

@@ -1,5 +1,6 @@
 name: hermes-node
 components:
   - build-exe
+  - compile-cache
   - hermes
   - vm-options

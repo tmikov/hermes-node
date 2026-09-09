@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <hermes/node-compat/compile-cache/cache_config.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -28,6 +30,10 @@ enum class CompileCacheKind : uint8_t {
   /// compileAndRunCallback with enableTS true. Separate kind because
   /// enableTS changes the compile flags.
   kLoaderWrappedTS = 2,
+  /// A WebAssembly module, cached by the embedder hooks Hermes calls before
+  /// compiling one. Unlike the JavaScript kinds this is keyed by CONTENT,
+  /// because Wasm bytes usually arrive without a path.
+  kWasm = 3,
 };
 
 /// CRC-32 (zlib polynomial), used for both cache keys and source hashes.
@@ -38,6 +44,23 @@ uint32_t compileCacheCrc32(const void *data, size_t size);
 /// filename. Depends only on the path, never on content, so editing a file
 /// rewrites its one entry rather than leaving a new one behind.
 uint32_t compileCacheKey(std::string_view filename, CompileCacheKind kind);
+
+/// Lowercase hex SHA-256 over \p codegenConfig, its length as eight
+/// little-endian bytes, and then the Wasm bytes. The length is in there so
+/// that a config and module cannot be re-split -- without it, a config of
+/// "ab" with module "c" and a config of "a" with module "bc" hash alike. Used
+/// as the entry's file name, which is what lets Wasm entries reuse the existing
+/// on-disk format unchanged.
+///
+/// SHA-256 rather than the CRC-32 the JavaScript kinds use because the roles
+/// differ: there the CRC is a guard behind a path key, here it would be the
+/// key itself, and a collision would serve another module's bytecode with
+/// nothing left to detect it.
+std::string compileCacheWasmDigest(
+    const uint8_t *codegenConfig,
+    size_t codegenConfigSize,
+    const uint8_t *wasm,
+    size_t size);
 
 /// Name of the generation directory, e.g. "0.3.0-x86_64-bc99-3f9c21ab".
 /// Readable on purpose: the active generation should be answerable by
@@ -139,6 +162,31 @@ void compileCachePruneGenerations(
     const std::string &keepName,
     size_t keepCount);
 
+/// Delete Wasm entries under \p generationDir, oldest first by the timestamp
+/// \p config selects, until their total size is within
+/// \p config.maxWasmBytes, across EVERY generation under \p versionedRoot
+/// rather than one of them, since retained older generations hold Wasm bytes
+/// too. Abandoned "w<digest>.<pid>.<n>.tmp" files left by an interrupted
+/// write are reaped here as well, once they are old enough that no live
+/// writer could still own one.
+///
+/// Only files whose name is exactly "w" followed by 64 lowercase hex digits
+/// count toward the budget: JavaScript entries -- which are keyed by path
+/// and rewritten in place, and so never accumulate the way content-keyed
+/// entries do -- are untouched. A temp file is not counted either, because
+/// counting a transient would let it evict real entries to make room for
+/// something about to be renamed away; it is reaped on age instead.
+///
+/// The ordering is approximate: st_atime/st_mtime are whole seconds, so
+/// entries written within the same second sort arbitrarily among
+/// themselves. That is acceptable at this budget's scale (hundreds of
+/// megabytes, a recency signal measured in days), not a bug to fix.
+///
+/// Best effort: failures are ignored.
+void compileCacheEvictWasm(
+    const std::string &versionedRoot,
+    const CacheConfig &config);
+
 /// Number of old generations kept when a new one is created. Three rather
 /// than one because version strings come from git tags, so two checkouts at
 /// different commits produce different generations; keeping only the current
@@ -169,10 +217,21 @@ class CompileCache {
     return generationDir_;
   }
 
+  /// The parent of every generation. What the Wasm sweep works from: the
+  /// budget bounds the cache, not the current generation alone.
+  const std::string &versionedRoot() const {
+    return versionedRoot_;
+  }
   /// Emit hit/miss tracing to stderr. Driven by
   /// HERMES_NODE_DEBUG_NATIVE=COMPILE_CACHE.
   void setTracing(bool on) {
     tracing_ = on;
+  }
+
+  /// Configuration read from the cache directory. Must be set before the
+  /// first saveWasm() for the budget to be honoured.
+  void setConfig(const CacheConfig &config) {
+    config_ = config;
   }
 
   /// Fill \p entry's identity from (\p source, \p filename, \p kind) and try
@@ -192,6 +251,21 @@ class CompileCache {
       const uint8_t *bytecode,
       size_t bytecodeSize);
 
+  /// Fill \p entry's identity from the module's content and try to load it.
+  /// Returns true on a hit, in which case the caller owns entry.mapping.
+  bool lookupWasm(
+      CompileCacheEntry &entry,
+      const uint8_t *wasm,
+      size_t size,
+      const uint8_t *codegenConfig,
+      size_t codegenConfigSize);
+
+  /// Persist freshly compiled Wasm bytecode. Because the key is derived from
+  /// content, this overwrites in place, which is what makes a rejected hit
+  /// self-healing.
+  void
+  saveWasm(const CompileCacheEntry &entry, const uint8_t *hbc, size_t hbcSize);
+
   /// Delete an entry whose bytecode failed to run.
   void invalidate(const CompileCacheEntry &entry);
 
@@ -201,6 +275,16 @@ class CompileCache {
   bool enabled_ = false;
   bool tracing_ = false;
   std::string generationDir_;
+  /// The parent of every generation, current and retained. The Wasm sweep
+  /// works from here rather than from generationDir_, because the budget
+  /// bounds the cache and not one directory inside it.
+  std::string versionedRoot_;
+  CacheConfig config_{};
+  /// The sweep runs at most once per process, on the first Wasm save. A save
+  /// only happens on a miss, which is already paying a full compile, so a
+  /// directory walk is free by comparison -- and a process that only ever
+  /// hits does no extra work.
+  bool sweptWasm_ = false;
 };
 
 } // namespace node_compat
