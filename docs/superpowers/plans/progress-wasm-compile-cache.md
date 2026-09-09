@@ -5,22 +5,66 @@ Tracks `docs/superpowers/plans/2026-09-07-wasm-compile-cache.md`
 
 ## Status
 
-All nine tasks complete.
+Complete, plus a round of follow-on work the plan did not contain. The
+history has since been squashed twice and the Hermes side rebased, so this
+records what the work *is* rather than the commits it passed through: every
+SHA the first version of this file named is now unreachable, which is the
+reason none appear below.
 
-| Task | What | Where |
-| --- | --- | --- |
-| 1 | Serialize a Wasm-compiled module | hermes, `b89d5dc2e` (+ `01bceee39`) |
-| 2 | Embedder cache hooks and the NAPI entry point | hermes, `2f81dc915` (+ `683eb9bb6`) |
-| 3 | Verify the Hermes half end to end | no commits |
-| 4 | Cache directory configuration | `3e91d54`, `884f6d1` |
-| 5 | Content-keyed Wasm entries | `a44d24f` |
-| 6 | Bounding Wasm entries | `90d1fb5`, `7a46d3e` |
-| 7 | Install the hooks | `d1522e5`, `91a1d23` |
-| 8 | End-to-end tests | `875012c`, `9d6011a`, `b1cd40f` |
-| 9 | Documentation and measurement | this file, plus `CLAUDE.md` |
+**hermes-node-compat**, on `work-wasm-cache` above `origin/work`:
 
-The four `hermes` commits are on branch `wasm-compile-cache`; the gitlink in
-hermes-node-compat is deliberately unstaged, awaiting the user's direction.
+| Commit | What |
+| --- | --- |
+| `Point the hermes submodule at the Wasm cache branch` | gitlink; a stopgap, see below |
+| `Cache compiled WebAssembly modules on disk` | the feature, its fixes, its documentation |
+| `Add a cache subcommand: info, prune and clean` | `hermes-node cache ...` |
+| `dz: close the non-discriminating NAPI test issue` | a closure whose fix is in the submodule |
+
+**hermes**, on `wasm-compile-cache` above `96f7a4103`:
+
+| Commit | What |
+| --- | --- |
+| `Declare hermesBackend's dependency on hermesInst` | pre-existing build fix, kept separate |
+| `Let a Wasm compile hand back serialized bytecode` | the WasmFrontend half |
+| `Let an embedder cache compiled Wasm modules` | the hooks, the ABI, the call site |
+
+**Outstanding:** the Hermes commits are to be grafted onto `wasm-new` and
+merged into `hermes-node`, after which the gitlink should move to the
+resulting public commit. Until then the gitlink pins a local, unpushed
+commit, so a fresh clone cannot resolve it and nothing in CI or a release
+can use it. The commit that moves it says so, but names a pre-rebase SHA in
+its message.
+
+## Follow-on work, after the plan
+
+None of this was in the nine tasks. It came from an external review and from
+reading the finished feature again.
+
+- **The codegen configuration became an opaque byte string**, having been a
+  `uint32_t` carrying one bit. It is a parameter of the `lookup` callback,
+  not a field of the struct, so `struct_size` extensibility does not reach
+  it and the type had to be right before anything else consumed the ABI.
+  Hermes composes it -- `hermes-wasm;bc=...;cg=...;t262=...` -- so an
+  embedder need not know what belongs in it, and its length is hashed before
+  it, because a variable-length prefix makes plain concatenation ambiguous.
+  `WASM_CODEGEN_VERSION` came with it, which is what makes a Hermes-only
+  codegen change invalidate.
+- **Config parse failures are reported.** They were silent, and the design
+  had promised tracing; unconditional warnings were chosen instead, because
+  a bad line in a hand-edited file is wrong on every run until someone
+  changes it, and a diagnostic behind a debug flag would never reach whoever
+  made the typo.
+- **The budget bounds the whole cache.** The sweep walked one generation
+  while three retained ones held their own, so real disk use could reach
+  four times the configured number.
+- **Abandoned temp files are reaped.** An interrupted write left a
+  full-size entry that nothing collected and the budget could not see.
+- **`hermes-node cache info|prune|clean`** exists, which is what makes the
+  budget reachable on demand without putting a directory walk on every
+  startup.
+- **The best-effort contract is written down**, along with the one thing it
+  excludes -- allocation failure -- and pinned by a test that makes every
+  cache write fail at once.
 
 ## Measurements
 
@@ -107,3 +151,22 @@ it is essentially the entire speedup -- 74x. On flow-bundler it isolates
   after the dereferences it guards. Each was caught by the implementer or
   the reviewer rather than by the plan; the plan text was corrected where it
   would mislead a later reader.
+- **A test written for a fix could not catch it.** The `struct_size` test
+  handed over a fully allocated struct that merely claimed to be small, so
+  reading a callback field out of it was harmless either way -- it passed
+  with and without the fix. Catching the real defect needs a genuinely
+  truncated allocation, where an early read is an out-of-bounds ASAN fails
+  on. Verified in both directions before and after.
+- **A partial write of the default config file is not the defaults.** A
+  prefix of that text ending `max_wasm_bytes: 2` is well-formed and yields a
+  two-byte budget, and a short write followed by failure would have left
+  exactly that permanently, since `O_CREAT|O_EXCL` guarantees nothing
+  replaces it. The file is now published with `link()` after a complete
+  write, never `rename()`, which would let a race's loser clobber the
+  winner.
+- **A Hermes-only change does invalidate the cache -- once.** The generation
+  tag carries `git describe --dirty`, and a changed submodule dirties the
+  outer tree, so the first edit adds `-dirty` and every edit after leaves the
+  string identical. The exposure is iterating with the gitlink uncommitted,
+  which is exactly the loop a codegen fix happens in. Recorded in CLAUDE.md
+  with the measurement.
