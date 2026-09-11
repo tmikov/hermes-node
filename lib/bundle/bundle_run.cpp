@@ -13,10 +13,18 @@
 #include <hermes/node-compat/bundle/bundle_resolve.h>
 #include <hermes/node-compat/bundle/file_source.h>
 #include <hermes/node-compat/bundle/mapped_file.h>
+#include <hermes/node-compat/process/node_process.h>
+
+// Header-only, for MAGIC and BytecodeFileHeader. Costs no link dependency,
+// the same way bundle_generation.cpp includes BytecodeVersion.h for
+// BYTECODE_VERSION -- this target still links neither the parser nor the
+// compiler.
+#include <hermes/BCGen/HBC/BytecodeFileFormat.h>
 
 #include <napi/hermes_napi.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -49,6 +57,11 @@ struct OpenBundle {
   /// Directory holding the bundle file, with symlinks resolved. Module
   /// identities are relative to it, so it is what __filename is built from.
   std::string root;
+  /// The container itself: the .hbb for --bundle, the executable for an
+  /// embedded one. Kept only so a message about a damaged container can name
+  /// the file to rebuild -- `root` is its directory and does not identify
+  /// it, and neither does a module identity.
+  std::string containerPath;
   /// The FileSource bundleResolveCallback answers a require() the edge
   /// table has no row for from, and identityFor() converts a resolved path
   /// back to an identity. Built once here rather than per call: it holds
@@ -231,6 +244,33 @@ napi_value bundleResolveCallback(napi_env env, napi_callback_info info) {
   return result;
 }
 
+/// Report a bundled module whose bytecode this runtime will not load, and
+/// leave.
+///
+/// It terminates rather than throwing, which is a change from the original
+/// behaviour and the point of this function. The closed world deliberately
+/// supports `try { require(x) } catch {}` for an optional dependency -- a
+/// module that is not in the container throws MODULE_NOT_FOUND so that probe
+/// keeps working. Throwing here too made a CORRUPT module indistinguishable
+/// from an absent one: the probe caught it, the program carried on with its
+/// fallback, and nothing said the artifact was damaged. A broken artifact
+/// must not be catchable. BundleReader::open() already treats a
+/// structurally invalid container as fatal; this is the same fault, found
+/// later only because open() validates structure and never reads a payload.
+[[noreturn]] void fatalBadPayload(
+    const OpenBundle &state,
+    std::string_view identity) {
+  std::fprintf(
+      stderr,
+      "error: %.*s: bundled bytecode failed to load\n"
+      "       in container: %s\n"
+      "       This container is damaged. Rebuild it with --build-bundle.\n",
+      static_cast<int>(identity.size()),
+      identity.data(),
+      state.containerPath.c_str());
+  fatalExit(1);
+}
+
 /// __bundleLoad(identity) -> function | string.
 ///
 /// A JavaScript module's payload is bytecode for the CommonJS wrapper
@@ -316,6 +356,32 @@ napi_value bundleLoadCallback(napi_env env, napi_callback_info info) {
   // path that means nothing here.
   std::string sourceUrl = state.root + "/" + identity;
 
+  // Is this Hermes bytecode at all? open() validated the container's
+  // structure -- offsets, lengths, alignment -- and deliberately never
+  // looked inside a payload, so nothing has read these bytes until now.
+  //
+  // Asked here rather than after the fact because hermes_run_bytecode()
+  // cannot be asked. It reports a bytecode that will not load by raising a
+  // SyntaxError and returning napi_pending_exception -- the same status and
+  // the same shape as a module whose own top level threw
+  // (hermes/API/napi/hermes_napi.cpp:751-754), so the two are
+  // indistinguishable to a caller, and they must not be treated alike: one
+  // is a damaged artifact and the other is the program's own error.
+  //
+  // The check is the same one Hermes makes first
+  // (BCProviderFromBuffer::isBytecodeStream), open-coded over the two
+  // constants rather than reached through BCProvider.h, which would pull in
+  // llvh for two lines. It catches damage to the start of a payload and
+  // nothing subtler: a payload with an intact magic but a broken interior
+  // still reaches hermes_run_bytecode and still throws. Closing that gap
+  // needs a status this API does not return -- see the tracker.
+  const auto *bcHeader =
+      reinterpret_cast<const hermes::hbc::BytecodeFileHeader *>(payload.data());
+  if (payload.size() < sizeof(hermes::hbc::BytecodeFileHeader) ||
+      bcHeader->magic != hermes::hbc::MAGIC) {
+    fatalBadPayload(state, identity);
+  }
+
   napi_value result;
   napi_status status = hermes_run_bytecode(
       env,
@@ -327,18 +393,15 @@ napi_value bundleLoadCallback(napi_env env, napi_callback_info info) {
       &flags,
       &result);
   if (status != napi_ok) {
-    // Bytecode that passed BundleReader::open's structural checks but that
-    // Hermes will not load. There is no source to recompile from, so this
-    // is terminal for this module: leave the pending exception (or raise
-    // one if the failure was a validation error rather than a JS throw) and
-    // let it propagate through require().
+    // Past the magic check above, a failure is the module's own: its top
+    // level threw, and that propagates through require() exactly as it would
+    // unbundled. A failure with nothing pending is neither, and there is no
+    // source to recompile from, so it is treated as the damaged container it
+    // most likely is.
     bool pending = false;
     napi_is_exception_pending(env, &pending);
-    if (!pending) {
-      std::string message =
-          "failed to load bundled bytecode for module: " + identity;
-      napi_throw_error(env, nullptr, message.c_str());
-    }
+    if (!pending)
+      fatalBadPayload(state, identity);
     return nullptr;
   }
   return result;
@@ -450,9 +513,14 @@ napi_status defineNative(
 /// Shared by both open paths: everything below this point is identical
 /// whether the bytes came from a mapping or from the executable's own
 /// __const/.rodata, which is the point.
-void publishBundle(OpenBundle &state, BundleReader reader, std::string root) {
+void publishBundle(
+    OpenBundle &state,
+    BundleReader reader,
+    std::string root,
+    std::string containerPath) {
   state.reader = std::move(reader);
   state.root = std::move(root);
+  state.containerPath = std::move(containerPath);
   state.byIdentity.reserve(state.reader->moduleCount());
   for (uint32_t i = 0; i < state.reader->moduleCount(); ++i)
     state.byIdentity.emplace(state.reader->identity(i), i);
@@ -519,7 +587,7 @@ bool openBundle(const std::string &path, std::string *error) {
   // one caller that releases; a tool's mapping dies with the call.
   file->release();
 
-  publishBundle(state, std::move(*reader), rootDirectoryFor(path));
+  publishBundle(state, std::move(*reader), rootDirectoryFor(path), path);
 
   return true;
 }
@@ -595,7 +663,7 @@ bool openEmbeddedBundle(
 
   // No mapping to release: the payload is a read-only section of this
   // executable, mapped by the loader and live for as long as the process.
-  publishBundle(state, std::move(*reader), rootDirectoryFor(exePath));
+  publishBundle(state, std::move(*reader), rootDirectoryFor(exePath), exePath);
 
   return true;
 }

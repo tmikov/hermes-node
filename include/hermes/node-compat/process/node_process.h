@@ -91,6 +91,21 @@ void setProcessExitLoop(uv_loop_t *loop);
 /// run.
 void flushPendingWrites(uv_loop_t *loop);
 
+/// Leave the process immediately with \p code, having flushed the queued
+/// stdio writes and put the terminal back.
+///
+/// The tail every _exit() path here needs, in one place. A caller that has
+/// something to say prints it first: this adds no message of its own, so
+/// that what the user sees is decided where the failure is understood.
+///
+/// Named for what it is for. Reaching this means the process cannot
+/// sensibly continue -- a damaged artifact, not a program error, which
+/// belongs to triggerUncaughtException() instead. That function has its own
+/// copy of this sequence rather than calling here, because it lives in
+/// hermesNodeBindings, which does not link this library, and it flushes with
+/// fflush() alone.
+[[noreturn]] void fatalExit(int code);
+
 } // namespace node_compat
 } // namespace hermes
 
