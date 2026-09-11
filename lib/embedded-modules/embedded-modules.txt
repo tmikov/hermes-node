@@ -101,6 +101,7 @@ internal/worker/js_transferable
 net
 os
 path
+perf_hooks
 process
 querystring
 stream

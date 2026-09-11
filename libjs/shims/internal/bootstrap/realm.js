@@ -9,7 +9,7 @@ var builtinIds = [
   'assert', 'assert/strict', 'async_hooks', 'buffer', 'child_process',
   'cluster', 'console', 'constants', 'dgram', 'diagnostics_channel',
   'dns', 'dns/promises', 'domain', 'events', 'fs', 'fs/promises', 'http', 'https',
-  'net', 'os', 'path', 'path/posix', 'path/win32', 'process',
+  'net', 'os', 'path', 'path/posix', 'path/win32', 'perf_hooks', 'process',
   'querystring', 'readline', 'readline/promises', 'repl',
   'module',
   'crypto',

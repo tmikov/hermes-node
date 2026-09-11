@@ -35,11 +35,11 @@ var names = [
   'cluster', 'console', 'constants', 'crypto', 'dgram',
   'diagnostics_channel', 'dns', 'dns/promises', 'domain', 'events',
   'fs', 'fs/promises', 'http', 'https', 'module', 'net', 'os',
-  'path', 'path/posix', 'path/win32', 'process', 'querystring',
-  'readline', 'readline/promises', 'repl', 'stream', 'stream/consumers',
-  'stream/promises', 'stream/web', 'string_decoder', 'timers',
-  'timers/promises', 'tls', 'tty', 'url', 'util', 'util/types', 'vm',
-  'zlib',
+  'path', 'path/posix', 'path/win32', 'perf_hooks', 'process',
+  'querystring', 'readline', 'readline/promises', 'repl', 'stream',
+  'stream/consumers', 'stream/promises', 'stream/web', 'string_decoder',
+  'timers', 'timers/promises', 'tls', 'tty', 'url', 'util', 'util/types',
+  'vm', 'zlib',
 ];
 
 var ok = [];
@@ -53,7 +53,10 @@ for (var i = 0; i < names.length; i++) {
 }
 console.log('requirable: ' + ok.join(' '));
 
-// zlib is named explicitly because it is the regression this test exists
-// for: a comparison alone would still pass if zlib broke in *both* modes.
+// zlib and perf_hooks are named explicitly because they are the regressions
+// this test exists for: a comparison alone would still pass if either broke
+// in *both* modes. zlib was compiled in but missing from both classifiers;
+// perf_hooks is the newer builtin added by the same three-list convention.
 // CHECK: requirable:
+// CHECK-SAME: perf_hooks
 // CHECK-SAME: zlib
