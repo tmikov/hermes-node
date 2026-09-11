@@ -1,0 +1,15 @@
+{
+  "name": "hermes-node-example-ink",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ink (React for terminal UIs), transpiled to CommonJS and run under hermes-node.",
+  "type": "commonjs",
+  "license": "MIT",
+  "dependencies": {
+    "ink": "6.4.0",
+    "react": "^19.3.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

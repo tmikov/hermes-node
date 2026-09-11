@@ -1,12 +1,86 @@
 # Note: Ink does not run, and the more interesting reason why
 
-**Status:** findings, 2026-08-24. Nothing here proposes work. Written after
-asking whether Ink -- React for terminal UIs -- could be a `--build-exe`
-demo. It cannot, on either of its two branches, for unrelated reasons, and
-one of those reasons is worth more than the question was.
+**Status:** findings, 2026-08-24. **Partly superseded 2026-09-11 -- see
+"Update" below: Ink 5 now renders.** Nothing here proposes work. Written
+after asking whether Ink -- React for terminal UIs -- could be a
+`--build-exe` demo. It cannot, on either of its two branches, for unrelated
+reasons, and one of those reasons is worth more than the question was.
 
 Measured on Linux x86_64 against `hermes-node` at `26e2dc1`, with
 node v24.13.1 as the control.
+
+## Update, 2026-09-11: Ink runs, up to 6.4.0
+
+The second half of the prediction below came true. WebAssembly landed, and
+with it `yoga-layout@3.2.1` runs here -- its wasm produces layout identical
+to node's. Transpiled to CommonJS, **Ink renders under hermes-node,
+byte-identical to the same program under node.**
+
+**The newest version that runs is `ink@6.4.0`.** The wall is not Ink itself
+but a dependency bump:
+
+| ink | string-width | here |
+| --- | --- | --- |
+| 5.2.1 | ^7.2.0 | runs |
+| 6.0.0 - 6.4.0 | ^7.2.0 | runs |
+| 6.5.0 - 6.8.0 | ^8.1.x | **no** |
+| 7.0.0 - 7.1.1 (latest) | ^8.2.0 | **no** |
+
+`string-width@8` matches graphemes with the ES2024 `v` regex flag, and one
+of its patterns is `/^\p{RGI_Emoji}$/v`. `RGI_Emoji` is a *property of
+strings*, which only `v` can express -- so unlike the other four `/v`
+regexes in that bundle it cannot be rewritten to `/u`. Hermes does not
+implement `v`, and because this is a parse error the whole bundle fails to
+compile before anything runs:
+
+    SyntaxError: Invalid regular expression: Invalid flags
+
+So Ink 6.5 and later are blocked on a regex flag, not on anything about
+terminals, React or WebAssembly.
+
+What that took, none of it an engine limitation:
+
+- **ESM -> CJS** with esbuild (`--bundle --platform=node --format=cjs`), the
+  same shape `examples/ditz2/build-cjs.sh` already uses.
+- **`yoga-layout`'s top-level await.** Its default entry is
+  `const Yoga = wrapAssembly(await loadYoga())`, which CJS cannot express.
+  The package also exports `yoga-layout/load`, the same object behind an
+  async function, so aliasing the import to a small shim that initialises
+  once and hands back a lazy proxy is enough. Ink only touches Yoga inside
+  functions, never at module scope, which is what makes the proxy viable.
+- **Ink's own top-level await**, `await import('./devtools.js')` in
+  `reconciler.js`, under `if (process.env['DEV'] === 'true')`. Dead in
+  production; dropping the `await` is a one-line build-time patch, and
+  `react-devtools-core` goes external.
+
+**Two globals are missing, and both are cheap to stub.** `Intl` first: This build is
+`HERMES_ENABLE_INTL=OFF`, and `string-width` does `new Intl.Segmenter()` at
+module scope purely to walk graphemes, so Ink dies on import with
+`ReferenceError: Property 'Intl' doesn't exist`. A ten-line
+code-point-granular stub was enough to get through it, and **nothing else
+was behind it** -- the render succeeded immediately after. A real
+integration needs either a proper `Intl.Segmenter` polyfill or an Intl-
+enabled build; whether Hermes can be built with Intl on Linux was not
+investigated.
+
+And `performance`, which node exposes as a global and this runtime does not,
+along with `perf_hooks`. Ink 5 does not touch it; Ink 6.4 compiles, starts,
+and dies at its first render inside its own `onRender` timing.
+`performance.now = () => Date.now()` was enough. Filed as `01a08e1d-d4e5`,
+because a missing global that stops a library at its first frame is worth
+more than its size suggests.
+
+Ink 6.5+ and 7.x carry two more top-level awaits than 5 does -- a
+`loadPackageJson()` and one inside `devtools.js` -- but both sit in the same
+dead `process.env['DEV'] === 'true'` branch and patch out the same way. They
+are not what blocks those versions; `string-width@8` is.
+
+Ink 3's verdict below is unchanged and still correct: do not chase it.
+
+Measured on Linux x86_64 with a Release `hermes-node` at `0ad2400`, node
+v24.13.1 as the control, esbuild 0.28.2, against `ink@5.2.1` + `react@18.3.1`
+and `ink@6.4.0` + `react@19.3.0`, both on `yoga-layout@3.2.1`. `ink@6.8.0`
+and `ink@7.1.1` were built and failed to compile, as above.
 
 ## Short answer
 
@@ -118,6 +192,8 @@ node       -e 'require("yoga-layout-prebuilt").Node.create()'    # fine
 ```
 
 ## What has no demo, as a result
+
+*(As of 2026-08-24. See the update at the top: Ink 5 renders now.)*
 
 There is no React-for-the-terminal option: Ink is effectively the category,
 and every version of it is blocked. A TUI demo has to use `blessed` or
