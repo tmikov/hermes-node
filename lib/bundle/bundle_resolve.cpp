@@ -276,6 +276,7 @@ const std::unordered_set<std::string_view> &builtinIds() {
       "path",
       "path/posix",
       "path/win32",
+      "perf_hooks",
       "process",
       "querystring",
       "readline",

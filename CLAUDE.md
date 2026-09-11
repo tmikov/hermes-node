@@ -51,6 +51,11 @@ skips the check for anyone who means it.
 ## Hermes JS Limitations
 
 - No `Atomics`, no `AbortSignal`/`AbortController` globals (`FinalizationRegistry` is supported natively)
+- `perf_hooks` exports only `performance` (`now()` and `timeOrigin`). No
+  `PerformanceObserver`, `monitorEventLoopDelay` or histograms: Node's real
+  tree needs `internalBinding('performance')`, which does not exist here, and
+  an inert stub would tell a library observation works while recording
+  nothing. Absent is detectable; present-but-inert is not.
 - Async generators: require `-Xasync-generators` flag (enabled in hermes-node)
 - Async generator prototype chain is flat (Hermes bug)
 - Hermes warns about undeclared globals in strict mode IIFEs -- use `var X = globalThis.X`

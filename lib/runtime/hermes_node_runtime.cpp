@@ -1304,6 +1304,23 @@ int runHermesNode(const HermesNodeConfig &config) {
     }
   }
 
+  // 11a4. Set globalThis.performance. Implemented in JavaScript
+  // (libjs/shims/perf_hooks.js) rather than as a native binding: it needs
+  // nothing C++ doesn't already expose to JS (process.hrtime.bigint(),
+  // process.uptime()), and installing it here -- the same way Buffer, URL
+  // and URLSearchParams are installed above -- keeps that logic in one
+  // place: perf_hooks's own module load, so `require('perf_hooks').
+  // performance === globalThis.performance` holds for free.
+  if (exitCode == 0) {
+    napi_value perfHooksModule;
+    if (loader.require(env, "perf_hooks", &perfHooksModule) == napi_ok) {
+      napi_value performanceObj;
+      napi_get_named_property(
+          env, perfHooksModule, "performance", &performanceObj);
+      napi_set_named_property(env, global, "performance", performanceObj);
+    }
+  }
+
   // 11b. Initialize debuglog.
   if (exitCode == 0) {
     napi_value debuglogModule;
