@@ -117,6 +117,18 @@ needs an `--include`, and it ships its own terminfo as data files, which the
 producer does not package and which therefore travel beside the artifact.
 Requires `npm install` in the directory first; see `gtop/README.md`.
 
+## ink/
+
+[Ink](https://github.com/vadimdemedes/ink) -- React for terminal UIs --
+with a small demo TUI built for this example. Ink is ESM and two of its
+transitive dependencies use a top-level await, so `build-cjs.sh` bundles it
+to CommonJS with esbuild, rewriting both awaits in memory (never on
+`node_modules`, which `npm install` wipes). Pinned to exactly `ink@6.4.0`:
+`6.5.0` bumped `string-width` to a version that uses the `v` regex flag,
+which Hermes does not implement, and the failure is a parse error before
+any of this example's code runs. Plain example only, no AOT bundle.
+Requires `npm install` in the directory first; see `ink/README.md`.
+
 ## ditz2/
 
 A real CLI issue tracker, kept as a **submodule** rather than an npm

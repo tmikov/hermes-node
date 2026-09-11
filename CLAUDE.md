@@ -66,6 +66,12 @@ skips the check for anyone who means it.
   else on `Intl` (`NumberFormat`, `DateTimeFormat`, `Collator`, etc.) is
   genuinely absent, not stubbed. See `docs/INTL.md` and
   `docs/notes/2026-08-24-ink-findings.md`.
+- **No `v` regex flag** (ES2024 `unicodeSets`). This is a *parse* error, so a
+  single `/v` literal anywhere fails the whole file before it runs. Not
+  always rewritable to `/u` either: `/v` alone supports properties of
+  strings, so `/^\p{RGI_Emoji}$/v` has no `/u` equivalent. `string-width@8`
+  uses exactly that, which is what stops `ink` past 6.4.0 -- see the same
+  note.
 - Async generators: require `-Xasync-generators` flag (enabled in hermes-node)
 - Async generator prototype chain is flat (Hermes bug)
 - Hermes warns about undeclared globals in strict mode IIFEs -- use `var X = globalThis.X`
