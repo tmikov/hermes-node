@@ -56,6 +56,16 @@ skips the check for anyone who means it.
   tree needs `internalBinding('performance')`, which does not exist here, and
   an inert stub would tell a library observation works while recording
   nothing. Absent is detectable; present-but-inert is not.
+- **`Intl` exists, with exactly one member.** Hermes is built here with
+  `HERMES_ENABLE_INTL=OFF`, so there is no native `Intl` -- but
+  `Intl.Segmenter` (grapheme granularity only) is installed as a shim,
+  backed by vendored `unicode-segmenter`, because `string-width` constructs
+  `new Intl.Segmenter()` at module scope to walk graphemes, so without it
+  anything depending on it died on import rather than when formatting
+  something. `word`/`sentence` granularity throw `TypeError`; everything
+  else on `Intl` (`NumberFormat`, `DateTimeFormat`, `Collator`, etc.) is
+  genuinely absent, not stubbed. See `docs/INTL.md` and
+  `docs/notes/2026-08-24-ink-findings.md`.
 - Async generators: require `-Xasync-generators` flag (enabled in hermes-node)
 - Async generator prototype chain is flat (Hermes bug)
 - Hermes warns about undeclared globals in strict mode IIFEs -- use `var X = globalThis.X`
