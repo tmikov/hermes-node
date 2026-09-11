@@ -10,6 +10,7 @@
 #include <hermes/node-compat/bundle/atomic_write.h>
 #include <hermes/node-compat/bundle/bundle_reader.h>
 #include <hermes/node-compat/bundle/native_digest.h>
+#include <hermes/node-compat/bundle/wasm_record.h>
 
 #include <algorithm>
 #include <cstring>
@@ -354,6 +355,25 @@ int dumpBundle(
       out << "  " << reader->vmOption(i) << "\n";
   }
 
+  // Same rule as PRELOADS and NATIVES above: a container with no baked
+  // WebAssembly at all -- still the overwhelming majority -- must dump
+  // exactly as it did before this section existed.
+  const uint32_t wasmCount = reader->wasmCount();
+  if (wasmCount > 0) {
+    out << "\nWASM (" << wasmCount << ")\n";
+    for (uint32_t i = 0; i < wasmCount; ++i) {
+      BundleReader::WasmView wasm = reader->wasm(i);
+      // Same truncation rule as NATIVES above: the full 64 hex characters
+      // under --verbose, otherwise the first 16 (8 bytes), enough to tell
+      // two entries apart at a glance without the row wrapping.
+      std::string digestHex = nativeDigestToHex(wasm.digest);
+      if (!verbose)
+        digestHex.resize(16);
+      out << "  [" << i << "] " << wasm.bytecode.size()
+          << " bytes  sha256:" << digestHex << "\n";
+    }
+  }
+
   const uint32_t strings = reader->stringsSize();
   const uint32_t modules = reader->moduleTableSize();
   const uint32_t edges = reader->edgeTableSize();
@@ -361,6 +381,7 @@ int dumpBundle(
   const uint32_t natives = reader->nativeTableSize();
   const uint32_t payload = reader->payloadSize();
   const uint32_t vmopts = reader->vmOptionsTableSize();
+  const uint32_t wasm = reader->wasmTableSize();
   size_t sectionWidth = std::max(
       {widthOf(strings),
        widthOf(modules),
@@ -368,7 +389,8 @@ int dumpBundle(
        widthOf(preloads),
        widthOf(natives),
        widthOf(payload),
-       widthOf(vmopts)});
+       widthOf(vmopts),
+       widthOf(wasm)});
 
   out << "\nSECTIONS\n";
   out << "  strings  " << std::right << std::setw(sectionWidth) << strings
@@ -377,10 +399,12 @@ int dumpBundle(
       << std::setw(sectionWidth) << payload << " B\n";
   out << "  natives  " << std::setw(sectionWidth) << natives
       << " B    preloads " << std::setw(sectionWidth) << preloads << " B\n";
-  // Unconditional, like natives and preloads above: a VM-options table is
-  // just as real a section as either of them even when its count is zero.
-  out << "  vmopts   " << std::setw(sectionWidth) << vmopts << " B\n";
-  // The size of the file, which is larger than the seven sections add up to:
+  // Unconditional, like natives and preloads above: a VM-options table (and
+  // the Wasm table beside it) is just as real a section as either of them
+  // even when its count is zero.
+  out << "  vmopts   " << std::setw(sectionWidth) << vmopts << " B    wasm     "
+      << std::setw(sectionWidth) << wasm << " B\n";
+  // The size of the file, which is larger than the eight sections add up to:
   // the header, and the padding that puts each payload on its alignment
   // boundary, belong to neither. Unconditional, like the natives row above
   // it: a preload table is just as real a section as a native table even
@@ -571,6 +595,57 @@ int verifyNatives(
         << (nativeCount == 1 ? "" : "s") << " failed verification\n";
     return 1;
   }
+  return 0;
+}
+
+int dumpWasmRecord(
+    const std::string &recordPath,
+    const std::string &runningBuildVersion,
+    bool verbose,
+    std::ostream &out,
+    std::ostream &err) {
+  std::string error;
+  std::optional<MappedFile> file = MappedFile::open(recordPath, &error);
+  if (!file) {
+    err << "error: " << error << "\n";
+    return 1;
+  }
+
+  std::optional<WasmRecordReader> reader =
+      WasmRecordReader::open(file->data(), file->size(), &error);
+  if (!reader) {
+    reportContainerError(err, recordPath, error);
+    return 1;
+  }
+
+  // The format version is not printed as a number read back out of the
+  // file: WasmRecordReader::open() above already refused anything but
+  // kWasmRecordFormatVersion, so a successfully opened reader can only ever
+  // be that one version.
+  out << "record: " << recordPath << "   format v" << kWasmRecordFormatVersion
+      << "\n";
+  out << "build version: " << reader->buildVersion();
+  if (reader->buildVersion() == runningBuildVersion) {
+    out << "  MATCH\n";
+  } else {
+    // Reported, not enforced: refusing to bake a record file from a
+    // different build is the bake step's decision, and this verb only
+    // describes the file that is there.
+    out << "  MISMATCH (this binary is " << runningBuildVersion << ")\n";
+  }
+
+  const uint32_t count = reader->count();
+  out << "\nWASM (" << count << ")\n";
+  for (uint32_t i = 0; i < count; ++i) {
+    // Same truncation rule as the WASM section in dumpBundle() above: the
+    // full 64 hex characters under --verbose, otherwise the first 16.
+    std::string digestHex = nativeDigestToHex(reader->digest(i));
+    if (!verbose)
+      digestHex.resize(16);
+    out << "  [" << i << "] " << reader->payload(i).size()
+        << " bytes  sha256:" << digestHex << "\n";
+  }
+
   return 0;
 }
 

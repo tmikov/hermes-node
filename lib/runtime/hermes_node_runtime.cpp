@@ -63,6 +63,7 @@
 #include <hermes/node-compat/bindings/node_zlib.h>
 #include <hermes/node-compat/bundle/bundle_build.h>
 #include <hermes/node-compat/bundle/bundle_run.h>
+#include <hermes/node-compat/bundle/wasm_record.h>
 #include <hermes/node-compat/compile-cache/cache_config.h>
 #include <hermes/node-compat/compile-cache/compile_cache.h>
 #include <hermes/node-compat/compile-cache/wasm_cache_hooks.h>
@@ -516,6 +517,16 @@ static std::string generationNameFor(const HermesNodeConfig &config) {
       configCrc);
 }
 
+/// HERMES_NODE_DEBUG_NATIVE=COMPILE_CACHE. Two things read it -- the disk
+/// cache's own tracing, and the Wasm hooks', which trace the container tier
+/// even in a run that has no disk cache at all -- so it is one function
+/// rather than two getenv sites that could come to disagree about the
+/// spelling.
+bool compileCacheTracingRequested() {
+  const char *dbg = ::getenv("HERMES_NODE_DEBUG_NATIVE");
+  return dbg != nullptr && std::strstr(dbg, "COMPILE_CACHE") != nullptr;
+}
+
 CompileCache *createCompileCache(const HermesNodeConfig &config) {
   // The inspector's own runtime never caches, whatever its config says. It
   // only evaluates require('inspector-server'), which is embedded in the
@@ -575,8 +586,7 @@ CompileCache *createCompileCache(const HermesNodeConfig &config) {
         kCacheConfigFileName,
         complaint.c_str());
 
-  if (const char *dbg = ::getenv("HERMES_NODE_DEBUG_NATIVE"))
-    cache->setTracing(std::strstr(dbg, "COMPILE_CACHE") != nullptr);
+  cache->setTracing(compileCacheTracingRequested());
 
   return cache.release();
 }
@@ -757,6 +767,41 @@ int runHermesNode(const HermesNodeConfig &config) {
     std::fprintf(stderr, "%s\n", vmConfigError.c_str());
     return 1;
   }
+  // --record-wasm: everything the Wasm cache hooks can reach. Declared here,
+  // ahead of the runtime, for two reasons. It has to outlive the env the
+  // hooks are installed on, and destruction runs in reverse declaration
+  // order. And the record file is written ONCE, now, before anything else
+  // exists: a --record-wasm path that cannot be written must fail before the
+  // program runs, where the message cannot be mistaken for the program's own
+  // output, rather than after a Wasm module has already been compiled and
+  // lost.
+  //
+  // Not at flag-parse time either, even though that is earlier still:
+  // checkToolOptions() runs after the parse loop and holds the refusal to
+  // record over a file this run is also reading, so a writer created during
+  // parsing would already have destroyed its own input.
+  WasmCacheContext wasmCacheContext;
+  std::unique_ptr<WasmRecordWriter> wasmRecorder;
+  if (!config.recordWasmPath.empty()) {
+    wasmRecorder = std::make_unique<WasmRecordWriter>(
+        config.recordWasmPath, HERMES_NODE_VERSION_STRING);
+    if (!wasmRecorder->flush()) {
+      // Loud, where everything else about these caches is silent. The
+      // compile cache swallows every failure because it has a right answer
+      // to fall back on; a recording has none, and one that silently did not
+      // happen produces a container that silently compiles at every launch.
+      std::fprintf(
+          stderr,
+          "Error: --record-wasm=%s: cannot be written\n",
+          config.recordWasmPath.c_str());
+      // The writer's own line follows, naming the temp file and the errno
+      // text: it says WHY, which is the half a person can act on.
+      std::fputs(wasmRecorder->lastError().c_str(), stderr);
+      return 1;
+    }
+    wasmCacheContext.recorder = wasmRecorder.get();
+  }
+
   auto hermesRT = facebook::hermes::makeHermesRuntime(vmRuntimeConfig);
 
   // 2. Create libuv event loop adapter.
@@ -814,10 +859,19 @@ int runHermesNode(const HermesNodeConfig &config) {
   }
   runtimeState->inspectorBridgeContext = config.inspectorBridgeContext;
   runtimeState->compileCache = createCompileCache(config);
-  // Hermes consults this before compiling a WebAssembly module. Installed
-  // after the env exists and before any user code runs. A null cache --
-  // --no-compile-cache, or --inspect -- installs nothing.
-  installWasmCacheHooks(env, runtimeState->compileCache);
+  // Hermes consults these before compiling a WebAssembly module, and reports
+  // the result afterwards. Installed after the env exists and before any
+  // user code runs. Whether they are installed at all depends on every tier,
+  // not only the disk cache: a container's baked bytecode has to stay
+  // reachable in a run with no cache (--no-compile-cache, or a machine with
+  // no writable cache root), which is exactly the shipped-artifact case.
+  wasmCacheContext.cache = runtimeState->compileCache;
+  wasmCacheContext.tracing = compileCacheTracingRequested();
+  installWasmCacheHooks(
+      env,
+      &wasmCacheContext,
+      /*bundleMode*/ !config.bundlePath.empty() ||
+          config.embeddedBundleData != nullptr);
   runtimeState->optimizeCompiles =
       resolveOptimize(config, runtimeState->compileCache != nullptr);
   // Use a no-op finalizer: RuntimeState must outlive the env because GC
@@ -1496,6 +1550,7 @@ int runHermesNode(const HermesNodeConfig &config) {
             config.verbose,
             config.includeModules,
             config.preloadModules,
+            config.bakeWasmPaths,
             config.process.vmOptions,
             config.allowVmOptionsOverride);
       }
@@ -1662,6 +1717,19 @@ int runHermesNode(const HermesNodeConfig &config) {
     // are lost.
     flushPendingWrites(eventLoop.getLoop());
   }
+
+  // A --record-wasm write that failed mid-run has already printed its reason
+  // (recordWasm() in wasm_cache_hooks.cpp, once per run). This is the other
+  // half: a recording run whose file is wrong must not exit 0.
+  //
+  // Only the status is best effort, and deliberately so. process.exit()
+  // never reaches this line -- it flushes and _exit()s -- so a program that
+  // ends that way exits with the status it chose, exactly as it does with
+  // process.exitCode. The stderr line is the half that is guaranteed, and
+  // the one that matters. Applied only over a zero status, so a real failure
+  // keeps the code it earned.
+  if (wasmCacheContext.recordingFailed && exitCode == 0)
+    exitCode = 1;
 
   // 16. Cleanup (reverse order of creation).
   {

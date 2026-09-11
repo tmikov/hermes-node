@@ -44,12 +44,24 @@ JavaScript it is; for Wasm it is not.
 The bytes a program hands to `WebAssembly.Module` reach it in one of two
 ways, and they are not equally tractable.
 
-1. **The bytes are already inside a packaged JavaScript module** -- a base64
-   string or a typed-array literal. `examples/hermes-parser-ast-wasm` is
-   exactly this: a 665 KB module base64-encoded inside `HermesParserWASM.js`,
-   which the producer packages as ordinary JavaScript with no `--include` and
-   nothing staged beside the container. The bytes arrive at run time for
-   free.
+1. **The bytes are already inside a packaged JavaScript module** -- an inline
+   byte string, a base64 string, a typed-array literal; the encoding does not
+   matter. `examples/hermes-parser-ast-wasm` is exactly this, and its actual
+   shape is worth knowing because it is easy to guess wrong: emscripten emits
+   the module as a **raw binary string literal** inside
+   `HermesParserWASM.js`, decoded by a `charCodeAt` loop
+   (`findWasmBinary()` -> `binaryDecode()`), and `getBinarySync()` is the
+   identity function because the "file" already is the bytes. Not base64 --
+   the file contains NUL bytes and `file(1)` calls it `data`, which is also
+   why `grep` silently refuses to match in it without `-a`. The bytes are
+   UTF-8-encoded in the source, so 846,106 bytes of literal decode to
+   **768,303** characters, each 0-255 -- confirmed by intercepting
+   `WebAssembly.Module`, which sees the same 768,303 under both node and
+   hermes-node. (Reading the file as latin1 and `eval`ing the literal gives
+   831,577 and is wrong; both engines parse the source as UTF-8.)
+   The producer packages it as ordinary JavaScript with no
+   `--include` and nothing staged beside the container, so the bytes arrive
+   at run time for free.
 2. **The bytes come from a standalone `.wasm` file read with `fs`.** The
    producer does not package data files, so today that file must ship beside
    the container for the program to work at all.
@@ -59,7 +71,7 @@ packaging the bytes.** The distinction matters and the first draft of this
 document got it wrong. The cache callback receives bytes and a codegen
 configuration and nothing about their origin (`hermes_napi.h:309`), and the
 digest is over content with no path in it, so a `.wasm` file shipped beside
-the container is recorded and baked exactly like a base64 blob inside a JS
+the container is recorded and baked exactly like a blob inside a JS
 module -- the `fs` read still happens at run time, and the compile that
 follows it hits the container. Case 1 is the one that needs nothing else;
 case 2 works too, but the `.wasm` file must still travel beside the artifact,
@@ -80,13 +92,61 @@ Neither is designed here. Nothing below forecloses them: the container
 section this adds is keyed by content, so bytes that arrive by a future route
 hit the same entries.
 
+### The module ends up in the container twice
+
+This falls out of case 1 and is the feature's real cost, so it belongs here
+rather than in a footnote. A baked container carries the module's **source
+bytes** -- inside the compiled JavaScript that holds them -- and its
+**compiled bytecode**, and both are load-bearing. The source copy cannot be
+dropped: content keying means the digest is computed over the bytes the
+program hands to `WebAssembly.Module`, so the program has to produce them
+before the container can answer. The bytecode copy is the point of the
+feature.
+
+Measured on `examples/hermes-parser-ast-wasm` (Release):
+
+| | bytes |
+| --- | --- |
+| the Wasm module, raw | 768,303 |
+| `HermesParserWASM.js` compiled to bytecode, which holds it as a string | 1,620,013 |
+| the baked bytecode entry | 2,054,308 |
+| whole baked container | 3,912,872 |
+
+So about 94% of that container is the same module twice, and the first copy
+costs roughly **twice** the raw bytes, because a string literal containing
+any character above U+007F is stored as UTF-16. Measured directly rather than
+inferred: 100,000 ASCII characters compile to a 100,560-byte container,
+100,000 characters drawn from 0x00-0xFF to 200,552. 768,303 characters at two
+bytes each is 1,536,606, and the module compiles to 1,620,013 -- the
+difference being the emscripten runtime around it.
+
+**Decoding that string is now a visible share of startup.** `binaryDecode` is
+a `charCodeAt` loop over every byte, and with the compile gone it is what
+remains: measured on the real literal, 38 ms under hermes-node against 1 ms
+under node. The baked run of this example is 60 ms in total.
+
+The gap is interpretation against compiled code -- `hermes/lib/VM/JIT/` has
+an `arm64` backend and no x86-64 one, so there is no JIT on this machine to
+enable, and `--vm=-Xjit=on` measures nothing here. Nor would a JIT
+necessarily close it: one compiles hot functions, and this is a single pass
+over a large loop.
+
+Nothing in this feature can fix it either -- the loop belongs to the
+program -- but it is the reason a baked container does not go to zero, and it
+is what step 3 would remove, since a token needs no decoding.
+
+Removing the first copy is step 3 of the scope above -- carry only bytecode
+and leave a token where the bytes were -- and it is not designed here. It is
+also the step with the sharpest trade: a program that inspects its own Wasm
+bytes, validates them, or hashes them would see the token instead.
+
 ## The decision
 
 1. **A run records what it compiled; a build bakes that recording in.**
    `--record-wasm=<file>` writes a record file naming every Wasm module the
    run compiled or looked up. `--build-bundle --bake-wasm=<file>`
    (repeatable) copies those entries into the container.
-2. **The producer never executes the program.** It cannot see a base64 string
+2. **The producer never executes the program.** It cannot see a byte string
    decoded, so it cannot obtain the bytes; only a run can. Keeping the two
    apart preserves the invariant that makes `--vm=` recorded rather than
    applied at build time, and it means the recording run can be anything --
@@ -613,6 +673,7 @@ in a program's way; it is a diagnostic the user asked for by name.
 | Record file with zero entries | warning at bake time, build proceeds |
 | `--record-wasm` with the cache off | works; every module with no baked entry compiles and is recorded |
 | `--record-wasm` path unwritable | error before the program runs |
+| `--record-wasm` run against a container Hermes refuses | the refused bytes are recorded, then the run terminates fatally; the record file must be overwritten by a working run before it is baked again |
 | Program calls `process.exit()` mid-run | record file already written |
 | Recording run that compiles no Wasm | well-formed empty record file |
 | Container with no Wasm entries | runs as before; dump gains no WASM section, but reports v6 and a new size |

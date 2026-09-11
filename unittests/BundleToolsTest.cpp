@@ -11,6 +11,7 @@
 #include <hermes/node-compat/bundle/bundle_generation.h>
 #include <hermes/node-compat/bundle/bundle_writer.h>
 #include <hermes/node-compat/bundle/native_digest.h>
+#include <hermes/node-compat/bundle/wasm_record.h>
 
 #include "TempTree.h"
 
@@ -106,7 +107,7 @@ TEST(BundleToolsTest, DumpPrintsHeaderTablesAndTotals) {
   const std::string text = out.str();
 
   EXPECT_TRUE(
-      contains(text, "bundle: " + path + "   format v5  generation 0xabcd1234"))
+      contains(text, "bundle: " + path + "   format v6  generation 0xabcd1234"))
       << text;
   EXPECT_TRUE(contains(text, "\nentry:  [0] cli.js\n")) << text;
 
@@ -759,6 +760,197 @@ TEST(BundleToolsTest, ExtractModuleRefusesANative) {
   EXPECT_NE(err.str().find("native addon"), std::string::npos) << err.str();
   EXPECT_NE(err.str().find("alongside"), std::string::npos) << err.str();
   EXPECT_FALSE(std::filesystem::exists(tree.path("out.bin")));
+}
+
+/// A kNativeDigestBytes-byte digest whose every byte is \p fill, distinct
+/// enough for tests that need two or more digests to compare unequal and to
+/// produce a recognizable hex prefix ("cdcdcdcd...") rather than an opaque
+/// one.
+std::string makeWasmDigest(uint8_t fill) {
+  return std::string(kNativeDigestBytes, static_cast<char>(fill));
+}
+
+// The WASM section is dumpBundle()'s inventory of the container's baked
+// WebAssembly entries, following the NATIVES section exactly: printed only
+// when the container has at least one, digest truncated to 16 hex
+// characters without --verbose. bundleGenerationTag() rather than kGen,
+// matching the natives fixtures above -- dumpBundle() opens through
+// openForInspection() regardless of which tag the container carries.
+TEST(BundleToolsTest, DumpPrintsWasmSection) {
+  TempTree tree;
+  BundleWriter writer;
+  uint32_t entry =
+      writer.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(entry);
+  std::string digest = makeWasmDigest(0xcd);
+  writer.addWasm(
+      reinterpret_cast<const uint8_t *>(digest.data()), "WASM-BYTECODE!!!");
+  tree.writeBytes("app.hbb", writer.serialize(bundleGenerationTag()));
+
+  std::ostringstream out, err;
+  ASSERT_EQ(
+      dumpBundle(tree.path("app.hbb"), bundleGenerationTag(), false, out, err),
+      0)
+      << err.str();
+  std::string text = out.str();
+  EXPECT_NE(text.find("WASM (1)"), std::string::npos) << text;
+  // Exact line, anchored on both ends: the length ("16 bytes", the size of
+  // "WASM-BYTECODE!!!") and the digest truncated to 16 hex characters (8 of
+  // the 32 raw bytes) with nothing trailing it on the line -- an unanchored
+  // 16-character prefix would also match the leading half of the full
+  // 64-character digest.
+  EXPECT_NE(
+      text.find("  [0] 16 bytes  sha256:cdcdcdcdcdcdcdcd\n"), std::string::npos)
+      << text;
+}
+
+TEST(BundleToolsTest, DumpWasmSectionShowsFullDigestUnderVerbose) {
+  TempTree tree;
+  BundleWriter writer;
+  uint32_t entry =
+      writer.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(entry);
+  std::string digest = makeWasmDigest(0xcd);
+  writer.addWasm(reinterpret_cast<const uint8_t *>(digest.data()), "BC");
+  tree.writeBytes("app.hbb", writer.serialize(bundleGenerationTag()));
+
+  std::ostringstream out, err;
+  ASSERT_EQ(
+      dumpBundle(tree.path("app.hbb"), bundleGenerationTag(), true, out, err),
+      0)
+      << err.str();
+  std::string text = out.str();
+  std::string full(64, 'c');
+  for (size_t i = 1; i < full.size(); i += 2)
+    full[i] = 'd';
+  EXPECT_NE(text.find("sha256:" + full + "\n"), std::string::npos) << text;
+}
+
+// A container with no Wasm entries prints no WASM section at all -- still
+// the overwhelming majority of containers -- while SECTIONS still gains its
+// "wasm" row, unconditionally, exactly like the "vmopts" row beside it.
+TEST(BundleToolsTest, DumpOmitsWasmSectionAndReportsZeroInSectionsWhenEmpty) {
+  TempTree dir;
+  std::string path = dir.path() + "/app.hbb";
+  writeFile(path, makeBundle());
+
+  std::ostringstream out;
+  std::ostringstream err;
+  ASSERT_EQ(dumpBundle(path, kGen, /*verbose*/ false, out, err), 0);
+  const std::string text = out.str();
+
+  EXPECT_EQ(text.find("WASM ("), std::string::npos) << text;
+
+  // Found by locating the "vmopts" row and slicing out its own line, rather
+  // than matching a literal string with the section-width padding baked
+  // in -- see DumpPrintsPreloadsInSections above for the same reasoning.
+  size_t vmoptsLine = text.find("\n  vmopts");
+  ASSERT_NE(vmoptsLine, std::string::npos) << text;
+  size_t lineEnd = text.find('\n', vmoptsLine + 1);
+  std::string line = text.substr(vmoptsLine, lineEnd - vmoptsLine);
+  EXPECT_NE(line.find("wasm"), std::string::npos) << line;
+  EXPECT_NE(line.find("0 B"), std::string::npos) << line;
+}
+
+// The same row with one real entry: the table is sizeof(BundleWasmRecord)
+// (32-byte digest plus two uint32_t offsets) times the entry count, exactly
+// as the NATIVES and PRELOADS tables are sized by their own record types.
+TEST(BundleToolsTest, DumpPrintsWasmTableSizeInSections) {
+  EXPECT_EQ(sizeof(BundleWasmRecord), 40u);
+
+  TempTree tree;
+  BundleWriter writer;
+  uint32_t entry =
+      writer.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(entry);
+  std::string digest = makeWasmDigest(0xcd);
+  writer.addWasm(reinterpret_cast<const uint8_t *>(digest.data()), "BC");
+  tree.writeBytes("app.hbb", writer.serialize(bundleGenerationTag()));
+
+  std::ostringstream out, err;
+  ASSERT_EQ(
+      dumpBundle(tree.path("app.hbb"), bundleGenerationTag(), false, out, err),
+      0)
+      << err.str();
+  std::string text = out.str();
+  size_t vmoptsLine = text.find("\n  vmopts");
+  ASSERT_NE(vmoptsLine, std::string::npos) << text;
+  size_t lineEnd = text.find('\n', vmoptsLine + 1);
+  std::string line = text.substr(vmoptsLine, lineEnd - vmoptsLine);
+  EXPECT_NE(line.find("wasm"), std::string::npos) << line;
+  EXPECT_NE(line.find("40 B"), std::string::npos) << line;
+}
+
+// dumpWasmRecord() is the --dump-wasm verb's implementation (Task 6 wires up
+// the flag): it describes a standalone --record-wasm file, not a container.
+TEST(BundleToolsTest, DumpWasmRecordPrintsVersionAndEntries) {
+  TempTree tree;
+  std::string path = tree.path("app.wrec");
+  WasmRecordWriter w(path, "hermes-node 9.9.9");
+  std::string digestA = makeWasmDigest(0xaa);
+  std::string digestB = makeWasmDigest(0xbb);
+  ASSERT_TRUE(w.record(
+      reinterpret_cast<const uint8_t *>(digestA.data()),
+      reinterpret_cast<const uint8_t *>("ALPHA-BYTES"),
+      11));
+  ASSERT_TRUE(w.record(
+      reinterpret_cast<const uint8_t *>(digestB.data()),
+      reinterpret_cast<const uint8_t *>("BETA-BYTES-LONGER!"),
+      19));
+
+  std::ostringstream out, err;
+  EXPECT_EQ(dumpWasmRecord(path, "hermes-node 9.9.9", false, out, err), 0)
+      << err.str();
+  EXPECT_EQ(err.str(), "");
+  std::string text = out.str();
+  EXPECT_NE(text.find("hermes-node 9.9.9"), std::string::npos) << text;
+  EXPECT_EQ(text.find("MISMATCH"), std::string::npos) << text;
+  EXPECT_NE(text.find("WASM (2)"), std::string::npos) << text;
+  EXPECT_NE(text.find("11 bytes"), std::string::npos) << text;
+  EXPECT_NE(text.find("19 bytes"), std::string::npos) << text;
+  EXPECT_NE(text.find("sha256:aaaaaaaaaaaaaaaa"), std::string::npos) << text;
+  EXPECT_NE(text.find("sha256:bbbbbbbbbbbbbbbb"), std::string::npos) << text;
+}
+
+// A build version that does not match this binary's is reported, not
+// enforced: baking a record file from a different build is Task 4's
+// decision, and this verb only describes the file.
+TEST(BundleToolsTest, DumpWasmRecordReportsVersionMismatch) {
+  TempTree tree;
+  std::string path = tree.path("app.wrec");
+  WasmRecordWriter w(path, "hermes-node 1.0.0");
+  ASSERT_TRUE(w.flush());
+
+  std::ostringstream out, err;
+  EXPECT_EQ(dumpWasmRecord(path, "hermes-node 2.0.0", false, out, err), 0);
+  std::string text = out.str();
+  EXPECT_NE(text.find("MISMATCH"), std::string::npos) << text;
+  EXPECT_NE(text.find("hermes-node 1.0.0"), std::string::npos) << text;
+  EXPECT_NE(text.find("hermes-node 2.0.0"), std::string::npos) << text;
+  EXPECT_NE(text.find("WASM (0)"), std::string::npos) << text;
+}
+
+TEST(BundleToolsTest, DumpWasmRecordFailsOnAMissingFile) {
+  TempTree tree;
+  std::ostringstream out, err;
+  EXPECT_NE(dumpWasmRecord(tree.path("nope.wrec"), "v1", false, out, err), 0);
+  EXPECT_EQ(out.str(), "");
+  EXPECT_TRUE(contains(err.str(), "nope.wrec")) << err.str();
+}
+
+// Same shape as DumpFailsOnAFileThatIsNotAContainer: the reader's own
+// diagnosis, prefixed with the file it is about rather than a second
+// vocabulary invented in this tool.
+TEST(BundleToolsTest, DumpWasmRecordFailsOnACorruptFile) {
+  TempTree dir;
+  std::string path = dir.path() + "/notarecord";
+  writeFile(path, std::vector<uint8_t>(256, 'x'));
+
+  std::ostringstream out, err;
+  EXPECT_NE(dumpWasmRecord(path, "v1", false, out, err), 0);
+  EXPECT_EQ(out.str(), "");
+  EXPECT_TRUE(contains(err.str(), "bad magic")) << err.str();
+  EXPECT_TRUE(contains(err.str(), "error: " + path + ": ")) << err.str();
 }
 
 } // namespace

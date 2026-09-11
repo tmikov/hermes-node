@@ -13,8 +13,11 @@
 #include <hermes/node-compat/bundle/bundle_resolve.h>
 #include <hermes/node-compat/bundle/bundle_writer.h>
 #include <hermes/node-compat/bundle/cjs_wrapper.h>
+#include <hermes/node-compat/bundle/mapped_file.h>
 #include <hermes/node-compat/bundle/native_digest.h>
 #include <hermes/node-compat/bundle/require_scanner.h>
+#include <hermes/node-compat/bundle/wasm_record.h>
+#include <hermes/node-compat/version.h>
 
 #include <napi/hermes_napi_compile.h>
 
@@ -432,6 +435,55 @@ class BuildReporter {
         allowOverride ? "override allowed" : "locked");
   }
 
+  /// One WebAssembly module baked into the container's Wasm table from a
+  /// `--record-wasm` file. \p digestHex16 is the first 16 hex characters of
+  /// the module's digest -- enough to tell two entries apart at a glance,
+  /// matching the truncation --dump uses for the same table.
+  void wasmBaked(
+      const std::string &digestHex16,
+      size_t bytes,
+      const std::string &recordFile) {
+    if (!enabled_)
+      return;
+    std::fprintf(
+        stderr,
+        "wasm: %s %zu bytes (from %s)\n",
+        digestHex16.c_str(),
+        bytes,
+        recordFile.c_str());
+  }
+
+  /// A record file's entry whose digest an earlier `--bake-wasm` file
+  /// already contributed. The first file to name a digest wins; this is
+  /// only ever a no-op, reported so a rebuild does not leave someone
+  /// wondering why a record file's module count and the container's did not
+  /// match.
+  void wasmSkippedDuplicate(
+      const std::string &digestHex16,
+      const std::string &recordFile) {
+    if (!enabled_)
+      return;
+    std::fprintf(
+        stderr,
+        "wasm: %s already baked; skipping (from %s)\n",
+        digestHex16.c_str(),
+        recordFile.c_str());
+  }
+
+  /// Totals across every `--bake-wasm` file, printed once after the bake
+  /// loop. Printed whenever `--bake-wasm` was named, including when the
+  /// count is zero -- see the call site.
+  void wasmBakeSummary(uint32_t count, uint64_t bytes) {
+    if (!enabled_)
+      return;
+    std::fprintf(
+        stderr,
+        "wasm: %u module%s baked, %llu bytes\n",
+        count,
+        count == 1 ? "" : "s",
+        static_cast<unsigned long long>(bytes));
+  }
+
   void resolved(const std::string &specifier, const std::string &target) {
     if (!enabled_)
       return;
@@ -677,6 +729,7 @@ int buildBundle(
     bool verbose,
     const std::vector<std::string> &includes,
     const std::vector<std::string> &preloads,
+    const std::vector<std::string> &bakeWasmPaths,
     const std::vector<std::string> &vmOptions,
     bool allowVmOptionsOverride) {
   BuildReporter reporter(verbose);
@@ -1607,6 +1660,84 @@ int buildBundle(
         nativeCopies.size(),
         nativeCopies.size() == 1 ? "" : "s");
   }
+
+  // Step 5c: bake every --bake-wasm record file's entries into the
+  // container's Wasm table, in flag order. Placed here, after compilation
+  // and beside the native copies above, because both are the same kind of
+  // step: bytes that did not come out of this build's own compile loop
+  // joining the container from outside it. Unlike a native addon's bytes,
+  // baked Wasm bytecode goes into the container itself rather than beside
+  // it, so there is no destination to compute and nothing to copy -- only
+  // BundleWriter::addWasm() calls, which is why this loop runs directly
+  // against `writer` rather than building up a placement list first.
+  //
+  // A digest two files both want to bake is not a conflict: the first file
+  // to name it wins and the rest are skipped, the same way a module reached
+  // by two require() edges is packaged once. That is why the running
+  // moduleIndex-style map here is a set of digests already added, not a
+  // reason to fail the build.
+  std::set<std::string> bakedWasmDigests; // raw kNativeDigestBytes bytes
+  uint32_t wasmBakedCount = 0;
+  uint64_t wasmBakedBytes = 0;
+  for (const std::string &recordPath : bakeWasmPaths) {
+    std::string mapError;
+    std::optional<MappedFile> file = MappedFile::open(recordPath, &mapError);
+    if (!file) {
+      std::fprintf(stderr, "error: %s\n", mapError.c_str());
+      return 1;
+    }
+    std::string recordError;
+    std::optional<WasmRecordReader> record =
+        WasmRecordReader::open(file->data(), file->size(), &recordError);
+    if (!record) {
+      std::fprintf(
+          stderr, "error: %s: %s\n", recordPath.c_str(), recordError.c_str());
+      return 1;
+    }
+    // A recording made by a different build of hermes-node is not
+    // trustworthy bytecode for this one -- the Wasm codegen or the
+    // bytecode format may have moved between the two -- so this is a hard
+    // build error rather than a warning, exactly like kit.manifest's
+    // version check for --build-exe.
+    if (record->buildVersion() != HERMES_NODE_VERSION_STRING) {
+      std::fprintf(
+          stderr,
+          "error: %s was recorded by hermes-node %.*s, but this is "
+          "hermes-node %s\n",
+          recordPath.c_str(),
+          static_cast<int>(record->buildVersion().size()),
+          record->buildVersion().data(),
+          HERMES_NODE_VERSION_STRING);
+      return 1;
+    }
+    if (record->count() == 0) {
+      std::fprintf(
+          stderr,
+          "warning: %s records no WebAssembly modules\n",
+          recordPath.c_str());
+      continue;
+    }
+    for (uint32_t i = 0; i < record->count(); ++i) {
+      std::string_view digest = record->digest(i);
+      std::string digestHex16 = nativeDigestToHex(digest).substr(0, 16);
+      if (!bakedWasmDigests.insert(std::string(digest)).second) {
+        reporter.wasmSkippedDuplicate(digestHex16, recordPath);
+        continue;
+      }
+      std::string_view bytecode = record->payload(i);
+      writer.addWasm(
+          reinterpret_cast<const uint8_t *>(digest.data()), bytecode);
+      reporter.wasmBaked(digestHex16, bytecode.size(), recordPath);
+      ++wasmBakedCount;
+      wasmBakedBytes += bytecode.size();
+    }
+  }
+  // Gated on bakeWasmPaths rather than wasmBakedCount: a build that named a
+  // --bake-wasm file gets a line even when every entry in it was a
+  // duplicate or the file was empty (both already warned about above), so
+  // --verbose always closes the loop on a flag the caller actually used.
+  if (!bakeWasmPaths.empty())
+    reporter.wasmBakeSummary(wasmBakedCount, wasmBakedBytes);
 
   // Step 6: serialize and write via a temp file + rename, so a build that
   // fails partway through never leaves a partial bundle at outPath.

@@ -7,6 +7,7 @@
 
 #include <hermes/node-compat/bundle/bundle_reader.h>
 
+#include <algorithm>
 #include <cstring>
 #include <unordered_set>
 
@@ -175,26 +176,35 @@ std::optional<BundleReader> BundleReader::openImpl(
           header->nativeCount,
           sizeof(BundleNativeRecord)))
     return fail("hermes-node bundle: native table out of range");
-  // The VM-options table sits between the native table and the payload.
+  // The VM-options table sits between the native table and the Wasm table.
   if (!tableInRange(
           size,
           header->vmOptionsTableOffset,
           header->vmOptionsCount,
           sizeof(uint32_t)))
     return fail("hermes-node bundle: VM-options table out of range");
+  // The Wasm table sits between the VM-options table and the payload.
+  if (!tableInRange(
+          size,
+          header->wasmTableOffset,
+          header->wasmCount,
+          sizeof(BundleWasmRecord)))
+    return fail("hermes-node bundle: wasm table out of range");
   if (!inRange(size, header->payloadOffset, header->payloadSize))
     return fail("hermes-node bundle: payload out of range");
 
-  // The module, edge and native tables are read through pointer casts
-  // straight onto the buffer (records are all-uint32_t), which is undefined
-  // behavior at a misaligned address even where the target CPU tolerates
-  // it. The writer always emits every table 4-byte aligned; a corrupt or
-  // adversarial file might not.
+  // The module, edge, native and Wasm tables are read through pointer
+  // casts straight onto the buffer (records are all-uint32_t, or a
+  // uint8_t[32] followed by uint32_t fields for BundleWasmRecord), which is
+  // undefined behavior at a misaligned address even where the target CPU
+  // tolerates it. The writer always emits every table 4-byte aligned; a
+  // corrupt or adversarial file might not.
   if (header->moduleTableOffset % alignof(BundleModuleRecord) != 0 ||
       header->edgeTableOffset % alignof(BundleEdgeRecord) != 0 ||
       header->preloadTableOffset % alignof(uint32_t) != 0 ||
       header->nativeTableOffset % alignof(BundleNativeRecord) != 0 ||
-      header->vmOptionsTableOffset % alignof(uint32_t) != 0)
+      header->vmOptionsTableOffset % alignof(uint32_t) != 0 ||
+      header->wasmTableOffset % alignof(BundleWasmRecord) != 0)
     return fail("hermes-node bundle: table offset is misaligned");
 
   if (header->moduleCount == 0)
@@ -333,6 +343,14 @@ std::optional<BundleReader> BundleReader::openImpl(
       return fail("hermes-node bundle: VM-option string out of range");
   }
 
+  const auto *wasm = reinterpret_cast<const BundleWasmRecord *>(
+      data + header->wasmTableOffset);
+  for (uint32_t i = 0; i < header->wasmCount; ++i) {
+    if (!inRange(
+            header->payloadSize, wasm[i].payloadOffset, wasm[i].payloadSize))
+      return fail("hermes-node bundle: wasm payload out of range");
+  }
+
   BundleReader reader;
   reader.data_ = data;
   reader.header_ = header;
@@ -341,6 +359,7 @@ std::optional<BundleReader> BundleReader::openImpl(
   reader.preloads_ = preloads;
   reader.natives_ = natives;
   reader.vmOptions_ = vmOptions;
+  reader.wasm_ = wasm;
   return reader;
 }
 
@@ -494,6 +513,42 @@ bool BundleReader::allowsVmOptionsOverride() const {
   return (header_->containerFlags & kBundleFlagAllowVmOptionsOverride) != 0;
 }
 
+uint32_t BundleReader::wasmCount() const {
+  return header_->wasmCount;
+}
+
+BundleReader::WasmView BundleReader::wasm(uint32_t i) const {
+  const BundleWasmRecord &record = wasm_[i];
+  return WasmView{
+      std::string_view(
+          reinterpret_cast<const char *>(record.digest), kNativeDigestBytes),
+      std::string_view(
+          reinterpret_cast<const char *>(
+              data_ + header_->payloadOffset + record.payloadOffset),
+          record.payloadSize)};
+}
+
+std::optional<BundleReader::WasmView> BundleReader::wasmFor(
+    std::string_view rawDigest) const {
+  // A digest of the wrong length cannot be in the table (every stored
+  // digest is exactly kNativeDigestBytes), and it must not reach the
+  // memcmp below: that call reads kNativeDigestBytes from rawDigest.data()
+  // unconditionally, which would be a buffer over-read for a shorter view.
+  if (rawDigest.size() != kNativeDigestBytes)
+    return std::nullopt;
+
+  const BundleWasmRecord *begin = wasm_;
+  const BundleWasmRecord *end = wasm_ + header_->wasmCount;
+  const BundleWasmRecord *it = std::lower_bound(
+      begin, end, rawDigest, [](const BundleWasmRecord &r, std::string_view d) {
+        return std::memcmp(r.digest, d.data(), kNativeDigestBytes) < 0;
+      });
+  if (it != end &&
+      std::memcmp(it->digest, rawDigest.data(), kNativeDigestBytes) == 0)
+    return wasm(static_cast<uint32_t>(it - wasm_));
+  return std::nullopt;
+}
+
 uint32_t BundleReader::stringsSize() const {
   return header_->stringsSize;
 }
@@ -524,6 +579,11 @@ uint32_t BundleReader::nativeTableSize() const {
 uint32_t BundleReader::vmOptionsTableSize() const {
   return static_cast<uint32_t>(
       static_cast<uint64_t>(header_->vmOptionsCount) * sizeof(uint32_t));
+}
+
+uint32_t BundleReader::wasmTableSize() const {
+  return static_cast<uint32_t>(
+      static_cast<uint64_t>(header_->wasmCount) * sizeof(BundleWasmRecord));
 }
 
 uint32_t BundleReader::payloadSize() const {

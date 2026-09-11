@@ -74,6 +74,11 @@ target_link_libraries(BundleResolveTest hermesNodeBundle)
 add_node_compat_unittest(BundleFileSourceTest BundleFileSourceTest.cpp)
 target_link_libraries(BundleFileSourceTest hermesNodeBundle)
 
+# No VM, exactly like BundleFormatTest: the --record-wasm file format needs
+# only atomic_write.h and mapped_file.h, both already in the VM-free layer.
+add_node_compat_unittest(WasmRecordTest WasmRecordTest.cpp)
+target_link_libraries(WasmRecordTest hermesNodeBundle)
+
 add_node_compat_unittest(BuildExeTest BuildExeTest.cpp)
 target_link_libraries(BuildExeTest hermesNodeBuildExe)
 

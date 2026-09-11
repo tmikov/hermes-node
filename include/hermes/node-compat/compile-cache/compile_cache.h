@@ -266,14 +266,22 @@ class CompileCache {
       const uint8_t *bytecode,
       size_t bytecodeSize);
 
-  /// Fill \p entry's identity from the module's content and try to load it.
-  /// Returns true on a hit, in which case the caller owns entry.mapping.
+  /// Fill \p entry's identity from \p digest -- compileCacheWasmDigest()'s
+  /// 64 lowercase hex characters over the codegen configuration and the
+  /// module bytes -- and try to load it. \p wasm and \p size are the module
+  /// itself, for the CRC and length the entry header carries as its
+  /// truncation guard. Returns true on a hit, in which case the caller owns
+  /// entry.mapping.
+  ///
+  /// The digest is passed in rather than derived here because the caller
+  /// keys more than one tier on it -- a container's baked Wasm table and the
+  /// --record-wasm file both take the same identity -- and two derivations
+  /// from the same inputs can drift.
   bool lookupWasm(
       CompileCacheEntry &entry,
+      const std::string &digest,
       const uint8_t *wasm,
-      size_t size,
-      const uint8_t *codegenConfig,
-      size_t codegenConfigSize);
+      size_t size);
 
   /// Persist freshly compiled Wasm bytecode. Because the key is derived from
   /// content, this overwrites in place, which is what makes a rejected hit

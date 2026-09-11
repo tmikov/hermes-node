@@ -24,6 +24,13 @@ namespace {
 
 constexpr uint32_t kGen = 0xABCD1234;
 
+/// BundleWriter::addWasm() takes a bare kNativeDigestBytes-byte pointer
+/// (see its doc comment for why); tests build digests as std::string for
+/// convenience, so this is the one place that bridges the two.
+const uint8_t *rawDigest(const std::string &digest) {
+  return reinterpret_cast<const uint8_t *>(digest.data());
+}
+
 TEST(BundleFormatTest, RoundTripSingleModule) {
   BundleWriter w;
   uint32_t m =
@@ -58,7 +65,7 @@ TEST(BundleFormatTest, RoundTripsModuleFlags) {
   ASSERT_TRUE(r.has_value()) << error;
   EXPECT_TRUE(r->isRequirable(a));
   EXPECT_FALSE(r->isRequirable(b));
-  EXPECT_EQ(r->formatVersion(), 5u);
+  EXPECT_EQ(r->formatVersion(), 6u);
 }
 
 TEST(BundleFormatTest, EdgeLookupHitAndMiss) {
@@ -542,7 +549,7 @@ TEST(BundleFormatTest, RoundTripsPreloads) {
   auto r = BundleReader::open(
       bytes.data(), bytes.size(), bundleGenerationTag(), &error);
   ASSERT_TRUE(r.has_value()) << error;
-  EXPECT_EQ(r->formatVersion(), 5u);
+  EXPECT_EQ(r->formatVersion(), 6u);
   ASSERT_EQ(r->preloadCount(), 1u);
   EXPECT_EQ(r->preload(0), setup);
 }
@@ -619,7 +626,7 @@ TEST(BundleFormatTest, NativeRecordRoundTrips) {
   std::string error;
   auto reader = BundleReader::open(bytes.data(), bytes.size(), 7, &error);
   ASSERT_TRUE(reader.has_value()) << error;
-  EXPECT_EQ(reader->formatVersion(), 5u);
+  EXPECT_EQ(reader->formatVersion(), 6u);
   EXPECT_EQ(reader->kind(addon), ModuleKind::kNative);
   EXPECT_EQ(reader->payload(addon).size(), 0u);
 
@@ -783,7 +790,7 @@ TEST(BundleFormatTest, VmOptionsRoundTrip) {
   std::string error;
   auto reader = BundleReader::open(bytes.data(), bytes.size(), 0, &error);
   ASSERT_TRUE(reader.has_value()) << error;
-  EXPECT_EQ(reader->formatVersion(), 5u);
+  EXPECT_EQ(reader->formatVersion(), 6u);
   ASSERT_EQ(reader->vmOptionCount(), 2u);
   EXPECT_EQ(reader->vmOption(0), "-gc-max-heap=2g");
   EXPECT_EQ(reader->vmOption(1), "-Xjit=on");
@@ -859,6 +866,156 @@ TEST(BundleFormatTest, RejectsVmOptionStringIndexOutOfRange) {
   EXPECT_FALSE(reader.has_value());
   EXPECT_NE(error.find("VM-option string out of range"), std::string::npos)
       << error;
+}
+
+TEST(BundleFormatTest, WasmRecordsRoundTrip) {
+  BundleWriter writer;
+  uint32_t m =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(m);
+  // 32-byte digests, added out of sorted order on purpose -- serialize()
+  // must sort the table itself, the same way it sorts the native table by
+  // module index.
+  std::string digestB(32, '\x02');
+  std::string digestA(32, '\x01');
+  writer.addWasm(rawDigest(digestB), "WASM-BYTECODE-B");
+  writer.addWasm(rawDigest(digestA), "WASM-BYTECODE-A");
+  std::vector<uint8_t> bytes = writer.serialize(0);
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 0, &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+  ASSERT_EQ(reader->wasmCount(), 2u);
+  // Sorted by digest, so index 0 is the smaller of the two.
+  EXPECT_EQ(reader->wasm(0).digest, digestA);
+  EXPECT_EQ(reader->wasm(0).bytecode, "WASM-BYTECODE-A");
+  EXPECT_EQ(reader->wasm(1).digest, digestB);
+  EXPECT_EQ(reader->wasm(1).bytecode, "WASM-BYTECODE-B");
+  EXPECT_GT(reader->wasmTableSize(), 0u);
+}
+
+TEST(BundleFormatTest, WasmForFindsEachAndMissesUnknownDigest) {
+  BundleWriter writer;
+  uint32_t m =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(m);
+  std::string digestA(32, '\x01');
+  std::string digestB(32, '\x02');
+  writer.addWasm(rawDigest(digestA), "WASM-A");
+  writer.addWasm(rawDigest(digestB), "WASM-B");
+  std::vector<uint8_t> bytes = writer.serialize(0);
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 0, &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+
+  auto foundA = reader->wasmFor(digestA);
+  ASSERT_TRUE(foundA.has_value());
+  EXPECT_EQ(foundA->bytecode, "WASM-A");
+
+  auto foundB = reader->wasmFor(digestB);
+  ASSERT_TRUE(foundB.has_value());
+  EXPECT_EQ(foundB->bytecode, "WASM-B");
+
+  std::string digestMissing(32, '\x03');
+  EXPECT_FALSE(reader->wasmFor(digestMissing).has_value());
+}
+
+TEST(BundleFormatTest, NoWasmEntriesCostsNothing) {
+  BundleWriter writer;
+  uint32_t m =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(m);
+  std::vector<uint8_t> bytes = writer.serialize(0);
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 0, &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+  EXPECT_EQ(reader->wasmCount(), 0u);
+  EXPECT_EQ(reader->wasmTableSize(), 0u);
+  EXPECT_FALSE(reader->wasmFor(std::string(32, '\x01')).has_value());
+}
+
+// The version bump to 6 (for the Wasm table) makes a v5 container refused
+// by both entry points -- open() already refuses a format mismatch, but the
+// inspecting entry point must too: bytecode from a container laid out
+// without a Wasm table must never be read through the new header shape.
+TEST(BundleFormatTest, RejectsV5ContainerOnBothEntryPoints) {
+  BundleWriter writer;
+  uint32_t m =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(m);
+  std::vector<uint8_t> bytes = writer.serialize(0);
+  reinterpret_cast<BundleHeader *>(bytes.data())->formatVersion = 5;
+
+  std::string error;
+  EXPECT_FALSE(
+      BundleReader::open(bytes.data(), bytes.size(), 0, &error).has_value());
+  EXPECT_NE(error.find("format version"), std::string::npos) << error;
+
+  error.clear();
+  EXPECT_FALSE(
+      BundleReader::openForInspection(bytes.data(), bytes.size(), &error)
+          .has_value());
+  EXPECT_NE(error.find("format version"), std::string::npos) << error;
+}
+
+// Same technique as RejectsMisalignedModuleTableOffset /
+// RejectsMisalignedEdgeTableOffset above: physically relocate the real
+// table bytes to a misaligned file offset, keeping every other field
+// byte-for-byte valid, so the alignment check is the only thing standing
+// between this input and acceptance.
+TEST(BundleFormatTest, RejectsMisalignedWasmTableOffset) {
+  BundleWriter writer;
+  uint32_t m =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(m);
+  writer.addWasm(rawDigest(std::string(32, '\x01')), "WASM-A");
+  std::vector<uint8_t> good = writer.serialize(0);
+
+  BundleHeader header;
+  std::memcpy(&header, good.data(), sizeof(header));
+  size_t wasmTableSize = header.wasmCount * sizeof(BundleWasmRecord);
+
+  for (uint32_t delta = 1; delta <= 3; ++delta) {
+    std::vector<uint8_t> bytes = good;
+    bytes.insert(bytes.begin() + header.wasmTableOffset, delta, 0);
+    bytes.insert(
+        bytes.begin() + header.wasmTableOffset + delta + wasmTableSize,
+        4 - delta,
+        0);
+
+    BundleHeader patched = header;
+    patched.wasmTableOffset += delta;
+    patched.payloadOffset += 4;
+    std::memcpy(bytes.data(), &patched, sizeof(patched));
+
+    std::string error;
+    auto r = BundleReader::open(bytes.data(), bytes.size(), 0, &error);
+    EXPECT_FALSE(r.has_value())
+        << "accepted wasmTableOffset misaligned by " << delta;
+    EXPECT_FALSE(error.empty()) << "no error message for delta " << delta;
+  }
+}
+
+TEST(BundleFormatTest, RejectsWasmPayloadOutOfRange) {
+  BundleWriter writer;
+  uint32_t m =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(m);
+  writer.addWasm(rawDigest(std::string(32, '\x01')), "WASM-A");
+  std::vector<uint8_t> bytes = writer.serialize(0);
+
+  auto *header = reinterpret_cast<BundleHeader *>(bytes.data());
+  auto *record = reinterpret_cast<BundleWasmRecord *>(
+      bytes.data() + header->wasmTableOffset);
+  // Push the payload range past the end of the payload section entirely.
+  record->payloadOffset = header->payloadSize + 1000;
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), 0, &error);
+  EXPECT_FALSE(reader.has_value());
+  EXPECT_NE(error.find("wasm"), std::string::npos) << error;
 }
 
 TEST(BundleGenerationTest, IsStableWithinOneBuild) {
