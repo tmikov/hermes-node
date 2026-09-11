@@ -151,11 +151,23 @@ target_include_directories(hermesNodeBundleRun
   PRIVATE
     ${PROJECT_SOURCE_DIR}/hermes/include
     ${PROJECT_SOURCE_DIR}/hermes/API
+    # BytecodeFileFormat.h, for MAGIC and BytecodeFileHeader, includes llvh
+    # headers -- unlike BytecodeVersion.h, which bundle_generation.cpp gets
+    # away with including bare. Include paths only: this target still links
+    # neither llvh nor the compiler.
+    ${PROJECT_SOURCE_DIR}/hermes/external/llvh/include
+    ${PROJECT_SOURCE_DIR}/hermes/external/llvh/gen/include
+    ${CMAKE_BINARY_DIR}/hermes/external/llvh/include
 )
 
 target_link_libraries(hermesNodeBundleRun
   PUBLIC
     hermesNodeBundle
+    # fatalExit(), for a container whose bytecode Hermes will not load. That
+    # path has to flush the queued stdio writes and put the terminal back
+    # before _exit(), and this is the one copy of that sequence. No cycle:
+    # hermesNodeProcess links uv_a and nothing else.
+    hermesNodeProcess
     # hermes_run_bytecode, used only inside bundle_run.cpp. PUBLIC so the
     # dependency stays visible on this target's link interface, matching
     # hermesNodeCompileCacheRun's choice for hermesNapiCompile.
