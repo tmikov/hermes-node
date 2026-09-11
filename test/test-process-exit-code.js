@@ -42,6 +42,17 @@ var cases = [
    'process.on("exit",function(){process.exitCode=2})', 2],
   ['the handler receives the settled code',
    'process.on("exit",function(c){if(c!==3)process.exitCode=99});process.exitCode=3', 3],
+  // The exit that started is the one that happens. process.exit() flushes by
+  // running the event loop, so a queued immediate or timer fires INSIDE it
+  // and its own process.exit() re-enters. Before fatalExit() guarded that,
+  // the nested call reached _exit() first and the outer status was lost:
+  // both of these exited 0 and 0 rather than 1 and 2. The same path could
+  // swallow a fatal exit, which is why it is pinned here.
+  ['a queued exit does not override the one in progress',
+   'setImmediate(function(){process.exit(0)});process.exit(1)', 1],
+  ['nor does a queued timer',
+   'setImmediate(function(){process.exit(3)});' +
+   'setTimeout(function(){process.exit(4)},0);process.exit(2)', 2],
 ];
 
 var failed = 0;

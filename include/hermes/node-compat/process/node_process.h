@@ -91,19 +91,27 @@ void setProcessExitLoop(uv_loop_t *loop);
 /// run.
 void flushPendingWrites(uv_loop_t *loop);
 
-/// Leave the process immediately with \p code, having flushed the queued
-/// stdio writes and put the terminal back.
+/// Leave the process immediately with \p code, having flushed stdio and put
+/// the terminal back.
 ///
-/// The tail every _exit() path here needs, in one place. A caller that has
-/// something to say prints it first: this adds no message of its own, so
-/// that what the user sees is decided where the failure is understood.
+/// For a failure the process cannot sensibly continue past -- a damaged
+/// artifact, not a program error, which belongs to
+/// triggerUncaughtException() instead. A caller that has something to say
+/// prints it first: this adds no message of its own, so what the user sees
+/// is decided where the failure is understood.
 ///
-/// Named for what it is for. Reaching this means the process cannot
-/// sensibly continue -- a damaged artifact, not a program error, which
-/// belongs to triggerUncaughtException() instead. That function has its own
-/// copy of this sequence rather than calling here, because it lives in
-/// hermesNodeBindings, which does not link this library, and it flushes with
-/// fflush() alone.
+/// Two properties this has and process.exit() does not, both because it is
+/// fatal. It does not run the event loop, so no further JavaScript executes
+/// and no callback can hang the exit; the price is that writes still queued
+/// on a libuv stream are lost, the same trade triggerUncaughtException()
+/// makes. And it OUTRANKS a requested exit already in progress, which is
+/// reachable: process.exit() flushes by running the loop, so a queued
+/// callback can reach a fatal error from inside it, and without the
+/// precedence the clean exit's status would stand.
+///
+/// triggerUncaughtException() has its own copy of the tail rather than
+/// calling here: it lives in hermesNodeBindings, which does not link this
+/// library.
 [[noreturn]] void fatalExit(int code);
 
 } // namespace node_compat
