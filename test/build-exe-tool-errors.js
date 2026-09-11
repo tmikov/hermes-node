@@ -99,10 +99,10 @@
 // RUN: %not %hermes-node --cc= --build-exe=%t.exe %t.hbb 2>&1 | %FileCheck --check-prefix=EMPTYCC %s
 // EMPTYCC: Error: --cc requires a compiler name or path.
 
-// --verbose has five consumers now, and --build-exe is the fifth: the
+// --verbose has six consumers now, and --build-exe is one of them: the
 // message has to list it, or the flag it accepts is one it does not admit to.
 // RUN: %not %hermes-node --verbose %s 2>&1 | %FileCheck --check-prefix=VERBOSE %s
-// VERBOSE: Error: --verbose requires --build-bundle, --dump, --verify-natives, --dump-bytecode or --build-exe.
+// VERBOSE: Error: --verbose requires --build-bundle, --dump, --verify-natives, --dump-bytecode, --build-exe or --dump-wasm.
 
 // A flag typed AFTER the container. The parse loop stops at the first
 // positional -- everything past it belongs to the program being run -- and

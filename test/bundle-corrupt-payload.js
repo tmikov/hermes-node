@@ -59,8 +59,8 @@ const U32 = 4;
 // struct rather than hardcoded blind, and checked below, so a format change
 // that moves them fails here instead of quietly zeroing something harmless.
 //
-// Format v6 inserts wasmTableOffset and wasmCount before containerFlags --
-// when that lands, every index at or after CONTAINER_FLAGS moves up by two.
+// Format v6 inserted wasmTableOffset and wasmCount before containerFlags --
+// every index at or after CONTAINER_FLAGS moved up by two from v5.
 const F = {
   FORMAT_VERSION: 0,
   GENERATION_TAG: 1,
@@ -69,9 +69,9 @@ const F = {
   STRINGS_SIZE: 4,
   MODULE_TABLE_OFFSET: 5,
   MODULE_COUNT: 6,
-  CONTAINER_FLAGS: 15,
-  PAYLOAD_OFFSET: 16,
-  PAYLOAD_SIZE: 17,
+  CONTAINER_FLAGS: 17,
+  PAYLOAD_OFFSET: 18,
+  PAYLOAD_SIZE: 19,
 };
 
 // BundleModuleRecord: identityString, kind, flags, payloadOffset, payloadSize.

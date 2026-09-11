@@ -83,6 +83,15 @@ void BundleWriter::addVmOption(std::string_view option) {
   vmOptions_.emplace_back(option);
 }
 
+void BundleWriter::addWasm(
+    const uint8_t *rawDigest,
+    std::string_view bytecode) {
+  wasm_.push_back(PendingWasm{
+      std::string(
+          reinterpret_cast<const char *>(rawDigest), kNativeDigestBytes),
+      std::string(bytecode)});
+}
+
 void BundleWriter::setAllowVmOptionsOverride(bool allow) {
   allowVmOptionsOverride_ = allow;
 }
@@ -145,10 +154,21 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
   for (size_t i = 0; i < vmOptions_.size(); ++i)
     vmOptionStrings[i] = internString(vmOptions_[i]);
 
+  // Sort by digest: that is what BundleReader::wasmFor() binary-searches
+  // with memcmp. The digest lives inline in BundleWasmRecord rather than in
+  // the string table (see bundle_format.h), so there is no string to
+  // intern here.
+  std::sort(
+      wasm_.begin(),
+      wasm_.end(),
+      [](const PendingWasm &a, const PendingWasm &b) {
+        return a.digest < b.digest;
+      });
+
   // Layout: header, strings, module table, edge table, preload table,
-  // native table, VM-options table, payload. Each section is computed
-  // before any bytes are emitted so offsets in the header are known up
-  // front.
+  // native table, VM-options table, Wasm table, payload. Each section is
+  // computed before any bytes are emitted so offsets in the header are
+  // known up front.
   //
   // String entries are packed with no padding (length header immediately
   // followed by bytes, back to back), so the string table's raw size is
@@ -171,16 +191,28 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
   size_t nativeTableSize = natives_.size() * sizeof(BundleNativeRecord);
   size_t vmOptionsTableOffset = nativeTableOffset + nativeTableSize;
   size_t vmOptionsTableSize = vmOptions_.size() * sizeof(uint32_t);
+  size_t wasmTableOffset =
+      alignUp(vmOptionsTableOffset + vmOptionsTableSize, kTableAlign);
+  size_t wasmTableSize = wasm_.size() * sizeof(BundleWasmRecord);
   size_t payloadOffset =
-      alignUp(vmOptionsTableOffset + vmOptionsTableSize, kBundlePayloadAlign);
+      alignUp(wasmTableOffset + wasmTableSize, kBundlePayloadAlign);
 
   // Each payload's offset (relative to payloadOffset) and the total,
-  // aligned payload size.
+  // aligned payload size. A baked Wasm entry shares this same cursor,
+  // continuing right after the module payloads, so its bytecode is
+  // relocated into the container rather than copied into a section of its
+  // own.
   std::vector<uint32_t> payloadOffsets(modules_.size());
   size_t payloadCursor = 0;
   for (size_t i = 0; i < modules_.size(); ++i) {
     payloadOffsets[i] = static_cast<uint32_t>(payloadCursor);
     payloadCursor += modules_[i].payload.size();
+    payloadCursor = alignUp(payloadCursor, kBundlePayloadAlign);
+  }
+  std::vector<uint32_t> wasmPayloadOffsets(wasm_.size());
+  for (size_t i = 0; i < wasm_.size(); ++i) {
+    wasmPayloadOffsets[i] = static_cast<uint32_t>(payloadCursor);
+    payloadCursor += wasm_[i].bytecode.size();
     payloadCursor = alignUp(payloadCursor, kBundlePayloadAlign);
   }
   size_t payloadSize = payloadCursor;
@@ -205,6 +237,8 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
   header.nativeCount = static_cast<uint32_t>(natives_.size());
   header.vmOptionsTableOffset = static_cast<uint32_t>(vmOptionsTableOffset);
   header.vmOptionsCount = static_cast<uint32_t>(vmOptions_.size());
+  header.wasmTableOffset = static_cast<uint32_t>(wasmTableOffset);
+  header.wasmCount = static_cast<uint32_t>(wasm_.size());
   header.containerFlags =
       allowVmOptionsOverride_ ? kBundleFlagAllowVmOptionsOverride : 0;
   header.payloadOffset = static_cast<uint32_t>(payloadOffset);
@@ -249,6 +283,16 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
   for (uint32_t stringOffset : vmOptionStrings)
     appendPod(out, stringOffset);
 
+  appendPadding(out, wasmTableOffset - out.size());
+
+  for (size_t i = 0; i < wasm_.size(); ++i) {
+    BundleWasmRecord record{};
+    std::memcpy(record.digest, wasm_[i].digest.data(), kNativeDigestBytes);
+    record.payloadOffset = wasmPayloadOffsets[i];
+    record.payloadSize = static_cast<uint32_t>(wasm_[i].bytecode.size());
+    appendPod(out, record);
+  }
+
   appendPadding(out, payloadOffset - out.size());
 
   for (size_t i = 0; i < modules_.size(); ++i) {
@@ -256,6 +300,13 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
     out.insert(out.end(), m.payload.begin(), m.payload.end());
     size_t nextAligned = alignUp(m.payload.size(), kBundlePayloadAlign);
     appendPadding(out, nextAligned - m.payload.size());
+  }
+
+  for (size_t i = 0; i < wasm_.size(); ++i) {
+    const PendingWasm &w = wasm_[i];
+    out.insert(out.end(), w.bytecode.begin(), w.bytecode.end());
+    size_t nextAligned = alignUp(w.bytecode.size(), kBundlePayloadAlign);
+    appendPadding(out, nextAligned - w.bytecode.size());
   }
 
   return out;

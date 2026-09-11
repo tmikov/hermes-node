@@ -116,6 +116,24 @@ struct HermesNodeConfig {
   /// bundle producer mode.
   std::vector<std::string> preloadModules;
 
+  /// --bake-wasm=<path>, repeatable. Each names a `--record-wasm` file (see
+  /// wasm_record.h) whose entries are copied into the container's Wasm
+  /// table, in the order given, so a program that instantiates one of these
+  /// modules at run time gets its bytecode from the container instead of
+  /// recompiling. No effect outside bundle producer mode.
+  std::vector<std::string> bakeWasmPaths;
+
+  /// --record-wasm=<path>. When non-empty, every WebAssembly module this run
+  /// compiles (or reads back from either cache tier) is written to a record
+  /// file at this path, in the format WasmRecordWriter defines, ready to be
+  /// handed to a later --build-bundle --bake-wasm.
+  ///
+  /// Deliberately here rather than in HermesNodeProcessConfig: a field there
+  /// is inherited by every runtime in the process, and the inspector's second
+  /// runtime would then open a second writer over the same file. This one
+  /// belongs to the run that executes the user's program.
+  std::string recordWasmPath;
+
   /// --allow-vm-options-override: record in the container being built that
   /// process.vmOptions may be overridden at run time by a later --vm= or
   /// HERMES_NODE_VM_OPTIONS. False -- the default -- locks them. No effect

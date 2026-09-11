@@ -34,6 +34,13 @@
 # cost this target its VM-free property. It lives here rather than in the
 # build or tools layer because both need it: the producer records a digest
 # and --verify-natives checks one, and the two must compute it identically.
+# wasm_record.cpp (WasmRecordWriter/WasmRecordReader, the --record-wasm file
+# format) needs only atomic_write.h and mapped_file.h, both already here, and
+# the standard library -- no Hermes headers and no new link dependency -- so
+# it stays in this VM-free target too. It lives beside the container format
+# rather than in a library of its own because the two share BundleWasmRecord
+# (bundle_format.h) and the bake step that copies one format's entries into
+# the other needs both readers linked together anyway.
 add_hermes_library(hermesNodeBundle STATIC
   bundle_writer.cpp
   bundle_reader.cpp
@@ -44,6 +51,7 @@ add_hermes_library(hermesNodeBundle STATIC
   bundle_file_source.cpp
   bundle_resolve.cpp
   native_digest.cpp
+  wasm_record.cpp
 )
 
 target_include_directories(hermesNodeBundle
@@ -92,7 +100,15 @@ target_include_directories(hermesNodeBundleBuild
   PRIVATE
     ${PROJECT_SOURCE_DIR}/hermes/include
     ${PROJECT_SOURCE_DIR}/hermes/API
+    # The generated version.h: bundle_build.cpp compares a --record-wasm
+    # file's recorded build version against this binary's at bake time,
+    # matching hermesNodeBuildExe's identical need for the same header.
+    ${CMAKE_BINARY_DIR}/generated
 )
+
+# version.h is re-derived on every build (see cmake/version.cmake); this
+# orders that ahead of the compile that includes it.
+add_dependencies(hermesNodeBundleBuild hermes-node-version)
 
 target_link_libraries(hermesNodeBundleBuild
   PUBLIC

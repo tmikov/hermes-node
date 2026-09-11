@@ -138,6 +138,27 @@ class BundleReader {
   /// permits its VM options to be overridden at run time.
   bool allowsVmOptionsOverride() const;
 
+  /// One entry of the Wasm table -- see BundleWasmRecord in
+  /// bundle_format.h. `digest` and `bytecode` are views into the mapped
+  /// container: `digest` is the raw 32-byte SHA-256 (may contain NUL
+  /// bytes), `bytecode` is the compiled module payload itself, in the same
+  /// payload region a module's own bytecode lives in.
+  struct WasmView {
+    std::string_view digest;
+    std::string_view bytecode;
+  };
+
+  /// How many baked WebAssembly modules the container carries.
+  uint32_t wasmCount() const;
+
+  /// Only valid for \p i below wasmCount(), exactly like edge() above.
+  WasmView wasm(uint32_t i) const;
+
+  /// The Wasm table entry whose digest is \p rawDigest (raw 32 bytes, not
+  /// hex), or nullopt when no entry matches. Binary search with memcmp: the
+  /// table is sorted by digest.
+  std::optional<WasmView> wasmFor(std::string_view rawDigest) const;
+
   /// Section sizes, straight from the header, for a dump that reports them.
   /// stringsSize() and payloadSize() are byte counts, same as the header
   /// fields they return. moduleTableSize(), edgeTableSize(),
@@ -152,6 +173,9 @@ class BundleReader {
   /// Byte count, like the other ...Size() accessors: option count times
   /// sizeof(uint32_t), NOT an element count.
   uint32_t vmOptionsTableSize() const;
+  /// Byte count, like the other ...Size() accessors: wasmCount() times
+  /// sizeof(BundleWasmRecord), NOT an element count.
+  uint32_t wasmTableSize() const;
   uint32_t payloadSize() const;
 
  private:
@@ -177,6 +201,7 @@ class BundleReader {
   const uint32_t *preloads_ = nullptr;
   const BundleNativeRecord *natives_ = nullptr;
   const uint32_t *vmOptions_ = nullptr;
+  const BundleWasmRecord *wasm_ = nullptr;
 };
 
 } // namespace node_compat

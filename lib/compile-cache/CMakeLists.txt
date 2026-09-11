@@ -63,6 +63,16 @@ target_link_libraries(hermesNodeCompileCacheRun
     # hermes_set_wasm_cache, used only inside wasm_cache_hooks.cpp. Kept
     # PUBLIC for the same reason as hermesNapiCompile above.
     hermesNapi
+    # bundleWasmLookup() / bundleFatalWasmRefused(), for the container tier
+    # that sits in front of the disk cache when a bundle is running. This is
+    # the compile cache knowing about containers, which it otherwise has no
+    # business doing -- but the Wasm hook callback is the one place both
+    # tiers meet: Hermes asks a single question, and the answer may come
+    # from either. Splitting it would mean two lookups where the ABI has one.
+    # hermesNodeBundleRun is VM-free below the napi layer and pulls in
+    # hermesNodeBundle (nativeDigestToHex, and the WasmRecordWriter the
+    # recorder writes through), so this costs no new dependency class.
+    hermesNodeBundleRun
 )
 
 # HERMES_ENABLE_WASM only reaches Hermes's own add_definitions() scope (see

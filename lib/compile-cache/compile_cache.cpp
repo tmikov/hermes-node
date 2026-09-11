@@ -444,15 +444,12 @@ void CompileCache::invalidate(const CompileCacheEntry &entry) {
 
 bool CompileCache::lookupWasm(
     CompileCacheEntry &entry,
+    const std::string &digest,
     const uint8_t *wasm,
-    size_t size,
-    const uint8_t *codegenConfig,
-    size_t codegenConfigSize) {
+    size_t size) {
   if (!enabled_)
     return false;
 
-  std::string digest =
-      compileCacheWasmDigest(codegenConfig, codegenConfigSize, wasm, size);
   // The digest is the file name; the CRC and size stay as the cheap
   // truncation guard the header already carries.
   entry.key = compileCacheCrc32(digest.data(), digest.size());

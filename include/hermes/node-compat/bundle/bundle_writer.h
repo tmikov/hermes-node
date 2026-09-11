@@ -58,6 +58,24 @@ class BundleWriter {
   /// and duplicates are kept.
   void addVmOption(std::string_view option);
 
+  /// Records one compiled WebAssembly module's bytecode, keyed by \p
+  /// rawDigest (the raw, 32-byte SHA-256 the compile cache computes over
+  /// the codegen configuration and the module bytes -- not hex). Call
+  /// order does not matter: serialize() sorts the table by digest, which is
+  /// what BundleReader::wasmFor() binary-searches with memcmp.
+  ///
+  /// \p rawDigest is a bare pointer, exactly kNativeDigestBytes long, on
+  /// purpose -- matching WasmRecordWriter::record() (wasm_record.h) rather
+  /// than addNative()'s std::string_view below. That record() reads its
+  /// digest the same fixed-32-bytes way this one does (a memcpy at
+  /// serialize time with no length carried alongside it), so a bare
+  /// pointer states the exactly-32-bytes contract in the type instead of
+  /// leaving a std::string_view of the wrong length to be memcpy'd past
+  /// its own end. addNative() keeps std::string_view because its digest
+  /// goes into the string table (validated on read by its own explicit
+  /// length check), not into a fixed-width struct field.
+  void addWasm(const uint8_t *rawDigest, std::string_view bytecode);
+
   /// Records whether the container's VM options may be overridden at run
   /// time. False -- the default -- means locked.
   void setAllowVmOptionsOverride(bool allow);
@@ -105,12 +123,17 @@ class BundleWriter {
     uint32_t byteLength;
     std::string digest;
   };
+  struct PendingWasm {
+    std::string digest; // kNativeDigestBytes raw bytes
+    std::string bytecode;
+  };
 
   std::vector<PendingModule> modules_;
   std::vector<PendingEdge> edges_;
   std::vector<uint32_t> preloads_;
   std::vector<PendingNative> natives_;
   std::vector<std::string> vmOptions_;
+  std::vector<PendingWasm> wasm_;
   std::map<std::string, uint32_t, std::less<>> internTable_;
   std::string stringBytes_;
   uint32_t entry_ = 0;

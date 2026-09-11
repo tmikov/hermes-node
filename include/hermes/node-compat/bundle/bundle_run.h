@@ -104,6 +104,34 @@ bool readEmbeddedBundleVmOptions(
     BundleVmOptions *out,
     std::string *error);
 
+/// Find a baked Wasm entry in the container this process is running, if any.
+/// \p rawDigest is the raw SHA-256 (kNativeDigestBytes long, not hex) the
+/// compile cache computes over the codegen configuration and the module
+/// bytes. Returns false when no container is open or the digest is not
+/// baked.
+///
+/// The payload is NOT verified: a container payload is unchecked here as it
+/// is everywhere else. On success the bytes point into the container's
+/// mapping, which outlives the run -- so the caller hands them to Hermes
+/// with a NULL finalizer.
+///
+/// Reads the open-container state on every call. It must not be captured:
+/// the Wasm cache hooks are installed while the runtime is being created,
+/// and openBundle() runs later still, from the run path.
+bool bundleWasmLookup(
+    const uint8_t *rawDigest,
+    const uint8_t **bytes,
+    size_t *size);
+
+/// Report a baked Wasm entry this runtime refused, and leave. \p rawDigest
+/// is raw, kNativeDigestBytes long.
+///
+/// Here rather than in the caller because the message names the container,
+/// which only this file knows -- the same reason fatalBadPayload() lives
+/// there for a JavaScript module. Keeping both messages in one place is also
+/// what stops them drifting into two different accounts of the same fault.
+[[noreturn]] void bundleFatalWasmRefused(const uint8_t *rawDigest);
+
 /// Defines six functions on globalThis -- called "bundle natives" here in
 /// the Node-API sense (native code exposed to JavaScript), not to be
 /// confused with the native *addons* (.node files) this module also

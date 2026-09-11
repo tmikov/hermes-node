@@ -19,7 +19,7 @@ constexpr char kBundleMagic[8] = {'H', 'N', 'B', 'U', 'N', 'D', 'L', 'E'};
 
 /// Bumped whenever the layout below changes in a way older readers cannot
 /// interpret. A mismatch is a hard error; there is no forward compatibility.
-constexpr uint32_t kBundleFormatVersion = 5;
+constexpr uint32_t kBundleFormatVersion = 6;
 
 /// Every payload entry starts at a multiple of this. Hermes bytecode is
 /// executed in place from the mapping and requires alignment.
@@ -93,6 +93,12 @@ struct BundleHeader {
   // rather than inline text so the existing string table does the storage.
   uint32_t vmOptionsTableOffset;
   uint32_t vmOptionsCount;
+  // The Wasm table: BundleWasmRecord[wasmCount], sorted by digest so a
+  // lookup binary-searches it with memcmp. A section of its own for the
+  // reason the preload and native tables are ones -- a real container has
+  // ~1500 modules and one or two Wasm entries.
+  uint32_t wasmTableOffset;
+  uint32_t wasmCount;
   // Container-wide flags: currently only kBundleFlagAllowVmOptionsOverride.
   // Distinct from BundleModuleRecord::flags, which is per module.
   uint32_t containerFlags;
@@ -153,6 +159,34 @@ struct BundleNativeRecord {
 struct BundleStringHeader {
   uint32_t length;
 };
+
+/// One compiled WebAssembly module, in a container's Wasm table or in a
+/// --record-wasm file. The two formats share this record so that baking is
+/// an append with relocated offsets rather than a translation.
+///
+/// `digest` is the raw SHA-256 the compile cache computes over the codegen
+/// configuration and the module bytes -- the same value that names a disk
+/// cache entry -- so it is a key, not metadata, and lives inline rather
+/// than in the string table: every lookup binary-searches on it, and an
+/// index would put a string-table dereference inside each step.
+///
+/// No checksum, in either file. Both are validated structurally -- magic,
+/// version, and every offset, length and range -- and neither verifies the
+/// bytes inside a payload. Do not add one: on the run path it would cost
+/// every launch, and in the record file it would guard a file that travels
+/// from a run to a build on one machine. Leaving them out ACCEPTS undetected
+/// corruption rather than deferring a diagnostic -- damage bad enough for
+/// Hermes to refuse the bytecode terminates the run, but damage that leaves
+/// the header valid executes. That is the trade the container already makes
+/// for every payload it holds (bundle_reader.h).
+struct BundleWasmRecord {
+  uint8_t digest[kNativeDigestBytes];
+  uint32_t payloadOffset;
+  uint32_t payloadSize;
+};
+static_assert(
+    sizeof(BundleWasmRecord) == kNativeDigestBytes + 8,
+    "BundleWasmRecord must have no padding: it is written to disk verbatim");
 
 } // namespace node_compat
 } // namespace hermes

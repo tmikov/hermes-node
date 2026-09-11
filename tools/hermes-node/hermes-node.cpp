@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/build-exe/build_exe.h>
+#include <hermes/node-compat/bundle/atomic_write.h>
 #include <hermes/node-compat/bundle/bundle_generation.h>
 #include <hermes/node-compat/bundle/bundle_run.h>
 #include <hermes/node-compat/bundle/bundle_tools.h>
@@ -80,6 +81,14 @@ struct ToolOptions {
   /// naming the flag is more useful than a spawn failure with nothing in
   /// it.
   std::optional<std::string> cc;
+  /// --dump-wasm=<file>: print a standalone --record-wasm file's entries.
+  /// std::nullopt when the verb was not requested, for the same reason
+  /// dumpBytecode is optional: "--dump-wasm=" is a request naming an empty
+  /// path, which fails as a path, and that is not the same thing as never
+  /// having named the verb. Like --dump-bytecode and unlike --dump, this
+  /// names its own file rather than reading --bundle: a --record-wasm file
+  /// is not a container.
+  std::optional<std::string> dumpWasm;
 };
 
 /// Resolves the kit directory for --build-exe. std::nullopt (no --kit)
@@ -176,6 +185,15 @@ static bool runToolVerb(
         std::cerr);
     return true;
   }
+  if (tools.dumpWasm.has_value()) {
+    exitCode = hermes::node_compat::dumpWasmRecord(
+        *tools.dumpWasm,
+        HERMES_NODE_VERSION_STRING,
+        config.verbose,
+        std::cout,
+        std::cerr);
+    return true;
+  }
   return false;
 }
 
@@ -194,6 +212,7 @@ static bool checkToolOptions(
     const HermesNodeConfig &config,
     const ToolOptions &tools,
     bool hasEvalCode,
+    bool recordWasmGiven,
     const std::string &containerPath) {
   const bool inspecting = config.inspect || config.inspectBrk;
 
@@ -260,6 +279,37 @@ static bool checkToolOptions(
     return false;
   }
 
+  // --dump-wasm is a sixth verb, checked against each of the other five the
+  // same way: two jobs on two files, with no sensible winner to pick.
+  if (tools.dumpWasm.has_value() && tools.dump) {
+    std::fprintf(
+        stderr, "Error: --dump-wasm cannot be combined with --dump.\n");
+    return false;
+  }
+  if (tools.dumpWasm.has_value() && tools.extractModule.has_value()) {
+    std::fprintf(
+        stderr,
+        "Error: --dump-wasm cannot be combined with --extract-module.\n");
+    return false;
+  }
+  if (tools.dumpWasm.has_value() && tools.dumpBytecode.has_value()) {
+    std::fprintf(
+        stderr,
+        "Error: --dump-wasm cannot be combined with --dump-bytecode.\n");
+    return false;
+  }
+  if (tools.dumpWasm.has_value() && tools.verifyNatives) {
+    std::fprintf(
+        stderr,
+        "Error: --dump-wasm cannot be combined with --verify-natives.\n");
+    return false;
+  }
+  if (tools.dumpWasm.has_value() && tools.buildExe.has_value()) {
+    std::fprintf(
+        stderr, "Error: --dump-wasm cannot be combined with --build-exe.\n");
+    return false;
+  }
+
   // At most one verb survives the checks above, so the name of the verb in
   // play is well defined from here on.
   const char *verb = nullptr;
@@ -273,12 +323,22 @@ static bool checkToolOptions(
     verb = "--verify-natives";
   else if (tools.buildExe.has_value())
     verb = "--build-exe";
+  else if (tools.dumpWasm.has_value())
+    verb = "--dump-wasm";
 
   // --vm configures a runtime. None of the read-only verbs creates one,
   // and --build-exe's options belong to the container it reads, not to
   // the command line that links it.
   if (!config.process.vmOptions.empty() && verb != nullptr) {
     std::fprintf(stderr, "Error: --vm cannot be combined with %s.\n", verb);
+    return false;
+  }
+  // --record-wasm asks the run that is about to happen to write a file as it
+  // executes. None of the read-only verbs runs anything, so there is nothing
+  // for it to record.
+  if (!config.recordWasmPath.empty() && verb != nullptr) {
+    std::fprintf(
+        stderr, "Error: --record-wasm cannot be combined with %s.\n", verb);
     return false;
   }
   if (config.allowVmOptionsOverride && config.buildBundlePath.empty()) {
@@ -303,6 +363,23 @@ static bool checkToolOptions(
     std::fprintf(
         stderr,
         "Error: --dump-bytecode cannot be combined with --build-bundle.\n");
+    return false;
+  }
+
+  // --dump-wasm names its own standalone --record-wasm file, the same way
+  // --dump-bytecode names its own bytecode file: a container is neither an
+  // input nor an output of it.
+  if (tools.dumpWasm.has_value() && !config.bundlePath.empty()) {
+    std::fprintf(
+        stderr,
+        "Error: --dump-wasm cannot be combined with --bundle.\n"
+        "--dump-wasm reads a standalone --record-wasm file; a container's "
+        "own Wasm table is shown by --bundle=<file> --dump.\n");
+    return false;
+  }
+  if (tools.dumpWasm.has_value() && !config.buildBundlePath.empty()) {
+    std::fprintf(
+        stderr, "Error: --dump-wasm cannot be combined with --build-bundle.\n");
     return false;
   }
 
@@ -387,15 +464,17 @@ static bool checkToolOptions(
     return false;
   }
 
-  // --verbose has exactly five consumers. Anywhere else it promises output
-  // that will never appear, which is worse than a refusal.
+  // --verbose has exactly six consumers -- dumpWasmRecord() prints the full
+  // 64-character digest under it instead of the truncated 16, the same way
+  // dumpBundle() and verifyNatives() add detail under it. Anywhere else it
+  // promises output that will never appear, which is worse than a refusal.
   if (config.verbose && config.buildBundlePath.empty() && !tools.dump &&
       !tools.verifyNatives && !tools.dumpBytecode.has_value() &&
-      !tools.buildExe.has_value()) {
+      !tools.buildExe.has_value() && !tools.dumpWasm.has_value()) {
     std::fprintf(
         stderr,
         "Error: --verbose requires --build-bundle, --dump, --verify-natives, "
-        "--dump-bytecode or --build-exe.\n");
+        "--dump-bytecode, --build-exe or --dump-wasm.\n");
     return false;
   }
 
@@ -412,6 +491,56 @@ static bool checkToolOptions(
   // a bundle being built.
   if (!config.preloadModules.empty() && config.buildBundlePath.empty()) {
     std::fprintf(stderr, "Error: --preload requires --build-bundle.\n");
+    return false;
+  }
+
+  // --bake-wasm copies a --record-wasm file's entries into the container
+  // being built. Outside bundle producer mode there is no container for it
+  // to land in.
+  if (!config.bakeWasmPaths.empty() && config.buildBundlePath.empty()) {
+    std::fprintf(stderr, "Error: --bake-wasm requires --build-bundle.\n");
+    return false;
+  }
+
+  // --record-wasm asks the run to write a file as it executes; --build-bundle
+  // compiles and never runs, so it can compile no Wasm and the file would
+  // always be empty.
+  if (!config.recordWasmPath.empty() && !config.buildBundlePath.empty()) {
+    std::fprintf(
+        stderr,
+        "Error: --record-wasm cannot be combined with --build-bundle.\n"
+        "The producer compiles and never runs, so it can compile no Wasm; "
+        "the file would always be empty.\n");
+    return false;
+  }
+
+  // The recorder's write is a rename over the destination. A running
+  // container keeps the mapping it already has, and so does the interpreter
+  // for the script it is executing, so recording onto either would replace
+  // the very file the run is reading from while the run continued happily to
+  // completion -- the run succeeds and the artifact is destroyed. Compared
+  // by (st_dev, st_ino), like --extract-module --out, so a symlink or a hard
+  // link to the same file counts too.
+  if (!config.recordWasmPath.empty() && !config.bundlePath.empty() &&
+      hermes::node_compat::isSameFile(
+          config.recordWasmPath, config.bundlePath)) {
+    std::fprintf(
+        stderr,
+        "Error: --record-wasm=%s names the same file as --bundle=%s; "
+        "recording onto the running container would replace it.\n",
+        config.recordWasmPath.c_str(),
+        config.bundlePath.c_str());
+    return false;
+  }
+  if (!config.recordWasmPath.empty() && config.bundlePath.empty() &&
+      !containerPath.empty() &&
+      hermes::node_compat::isSameFile(config.recordWasmPath, containerPath)) {
+    std::fprintf(
+        stderr,
+        "Error: --record-wasm=%s names the same file as the script being "
+        "run (%s).\n",
+        config.recordWasmPath.c_str(),
+        containerPath.c_str());
     return false;
   }
 
@@ -465,6 +594,26 @@ static bool checkToolOptions(
     std::fprintf(stderr, "Error: --cc requires a compiler name or path.\n");
     return false;
   }
+  if (tools.dumpWasm.has_value() && tools.dumpWasm->empty()) {
+    std::fprintf(stderr, "Error: --dump-wasm requires a file path.\n");
+    return false;
+  }
+  // recordWasmPath itself cannot distinguish "given an empty value" from
+  // "never given" -- both leave it as an empty string -- so the parse loop
+  // passes recordWasmGiven alongside it, the same way hasEvalCode lets
+  // checkToolOptions ask the same question about evalCode.
+  if (recordWasmGiven && config.recordWasmPath.empty()) {
+    std::fprintf(stderr, "Error: --record-wasm requires a file path.\n");
+    return false;
+  }
+  // --bake-wasm is repeatable, so each occurrence can be checked the same
+  // way --vm's loop below checks each of its own repeated values.
+  for (const std::string &path : config.bakeWasmPaths) {
+    if (path.empty()) {
+      std::fprintf(stderr, "Error: --bake-wasm requires a file path.\n");
+      return false;
+    }
+  }
   // --vm takes a flag name rather than a path, but empty is the same
   // mistake and belongs in the same place: checked here, both spellings
   // ("--vm=" and "--vm ''") reach one message, where the parse loop could
@@ -504,6 +653,18 @@ static void printUsage(const char *argv0) {
       "                                 record it to run before the entry "
       "point\n"
       "                                 (repeatable)\n"
+      "  --record-wasm=<file>           Record every WebAssembly module this "
+      "run\n"
+      "                                 compiles to <file>, for a later "
+      "--bake-wasm\n"
+      "  --bake-wasm=<file>             With --build-bundle, bake a "
+      "--record-wasm\n"
+      "                                 file's Wasm entries into the "
+      "container\n"
+      "                                 (repeatable)\n"
+      "  --dump-wasm=<file>             Print a standalone --record-wasm "
+      "file's\n"
+      "                                 entries\n"
       "  --vm=<flag>, --vm <flag>       Hermes VM option (repeatable); with\n"
       "                                 --build-bundle, record it in the "
       "container\n"
@@ -785,6 +946,11 @@ int main(int argc, char **argv) {
   int scriptArgIndex = argc; // no script by default
   int argvStartIndex = argc;
   bool hasEvalCode = false;
+  // Tracks whether --record-wasm was named at all, since config.recordWasmPath
+  // is a plain string on HermesNodeConfig and so cannot itself distinguish
+  // "given an empty value" from "never given" -- the same reason
+  // hasEvalCode exists alongside config.evalCode.
+  bool recordWasmGiven = false;
 
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--version") == 0 ||
@@ -835,6 +1001,11 @@ int main(int argc, char **argv) {
       config.includeModules.push_back(argv[i] + 10);
     } else if (std::strncmp(argv[i], "--preload=", 10) == 0) {
       config.preloadModules.push_back(argv[i] + 10);
+    } else if (std::strncmp(argv[i], "--bake-wasm=", 12) == 0) {
+      config.bakeWasmPaths.push_back(argv[i] + 12);
+    } else if (std::strncmp(argv[i], "--record-wasm=", 14) == 0) {
+      config.recordWasmPath = argv[i] + 14;
+      recordWasmGiven = true;
     } else if (std::strncmp(argv[i], "--vm=", 5) == 0) {
       // Never split on whitespace: -Xperf-prof-dir=<dir> proves a value
       // can legitimately contain a space. One flag per occurrence. An
@@ -865,6 +1036,8 @@ int main(int argc, char **argv) {
       tools.extractModule = argv[i] + 17;
     } else if (std::strncmp(argv[i], "--dump-bytecode=", 16) == 0) {
       tools.dumpBytecode = argv[i] + 16;
+    } else if (std::strncmp(argv[i], "--dump-wasm=", 12) == 0) {
+      tools.dumpWasm = argv[i] + 12;
     } else if (std::strncmp(argv[i], "--out=", 6) == 0) {
       tools.out = argv[i] + 6;
     } else if (std::strcmp(argv[i], "--verify-natives") == 0) {
@@ -952,7 +1125,8 @@ int main(int argc, char **argv) {
   // The read-only verbs and the flags that serve them, as one block, before
   // the refusals that belong to running a program: a verb that never starts
   // the program should not be explained in terms of the debugger.
-  if (!checkToolOptions(config, tools, hasEvalCode, containerPath))
+  if (!checkToolOptions(
+          config, tools, hasEvalCode, recordWasmGiven, containerPath))
     return 1;
 
   // Everything after the first positional belongs to the program being run,

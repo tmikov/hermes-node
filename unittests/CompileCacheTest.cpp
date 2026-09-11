@@ -554,6 +554,25 @@ static const uint8_t kCfgB[] = "hermes-wasm;bc=100;cg=1;t262=1";
 #define CFG_A kCfgA, sizeof(kCfgA) - 1
 #define CFG_B kCfgB, sizeof(kCfgB) - 1
 
+/// CompileCache::lookupWasm() takes the digest its caller derived, because
+/// the caller keys a container's baked Wasm table and a --record-wasm file
+/// on the same identity and must not derive it twice. These tests still
+/// think in terms of (module, codegen configuration), so this derives it for
+/// them exactly as the Wasm cache hooks do.
+static bool wasmLookup(
+    CompileCache &cache,
+    CompileCacheEntry &entry,
+    const uint8_t *wasm,
+    size_t size,
+    const uint8_t *codegenConfig,
+    size_t codegenConfigSize) {
+  return cache.lookupWasm(
+      entry,
+      compileCacheWasmDigest(codegenConfig, codegenConfigSize, wasm, size),
+      wasm,
+      size);
+}
+
 TEST(CompileCacheTest, WasmDigestIsStableAndLowercaseHex) {
   const uint8_t bytes[] = {1, 2, 3, 4};
   std::string a = compileCacheWasmDigest(CFG_A, bytes, sizeof(bytes));
@@ -607,25 +626,25 @@ TEST(CompileCacheTest, WasmEntryRoundTripsThroughADirectory) {
   const uint8_t bytecode[] = {9, 8, 7, 6, 5, 4, 3, 2, 1, 0};
 
   CompileCacheEntry miss;
-  EXPECT_FALSE(cache.lookupWasm(miss, wasm, sizeof(wasm), CFG_A));
+  EXPECT_FALSE(wasmLookup(cache, miss, wasm, sizeof(wasm), CFG_A));
   cache.saveWasm(miss, bytecode, sizeof(bytecode));
 
   CompileCacheEntry hit;
-  ASSERT_TRUE(cache.lookupWasm(hit, wasm, sizeof(wasm), CFG_A));
+  ASSERT_TRUE(wasmLookup(cache, hit, wasm, sizeof(wasm), CFG_A));
   ASSERT_EQ(sizeof(bytecode), hit.bytecodeSize);
   EXPECT_EQ(0, memcmp(bytecode, hit.bytecode, sizeof(bytecode)));
   hit.mapping->destroy();
 
   // A different codegen config must miss.
   CompileCacheEntry other;
-  EXPECT_FALSE(cache.lookupWasm(other, wasm, sizeof(wasm), CFG_B));
+  EXPECT_FALSE(wasmLookup(cache, other, wasm, sizeof(wasm), CFG_B));
 
   // A one-byte edit must miss.
   uint8_t edited[sizeof(wasm)];
   memcpy(edited, wasm, sizeof(wasm));
   edited[7] = 1;
   CompileCacheEntry edit;
-  EXPECT_FALSE(cache.lookupWasm(edit, edited, sizeof(edited), CFG_A));
+  EXPECT_FALSE(wasmLookup(cache, edit, edited, sizeof(edited), CFG_A));
 }
 
 TEST(CompileCacheTest, EvictionSpansEveryGeneration) {
@@ -659,7 +678,7 @@ TEST(CompileCacheTest, EvictionSpansEveryGeneration) {
 
   uint8_t wasm[] = {0, 97, 115, 109, 1, 0, 0, 9};
   CompileCacheEntry e;
-  EXPECT_FALSE(cache.lookupWasm(e, wasm, sizeof(wasm), CFG_A));
+  EXPECT_FALSE(wasmLookup(cache, e, wasm, sizeof(wasm), CFG_A));
   std::vector<uint8_t> payload(100, 0xab);
   cache.saveWasm(e, payload.data(), payload.size());
 
@@ -726,7 +745,7 @@ TEST(CompileCacheTest, EvictionKeepsTheBudget) {
   for (int i = 0; i < 3; ++i) {
     uint8_t wasm[] = {0, 97, 115, 109, 1, 0, 0, static_cast<uint8_t>(i)};
     CompileCacheEntry e;
-    EXPECT_FALSE(cache.lookupWasm(e, wasm, sizeof(wasm), CFG_A));
+    EXPECT_FALSE(wasmLookup(cache, e, wasm, sizeof(wasm), CFG_A));
     cache.saveWasm(e, payload.data(), payload.size());
     // Distinct timestamps, since the sweep orders by them.
     std::this_thread::sleep_for(std::chrono::milliseconds(1100));
@@ -738,8 +757,8 @@ TEST(CompileCacheTest, EvictionKeepsTheBudget) {
   uint8_t oldest[] = {0, 97, 115, 109, 1, 0, 0, 0};
   uint8_t newest[] = {0, 97, 115, 109, 1, 0, 0, 2};
   CompileCacheEntry a, b;
-  EXPECT_FALSE(cache.lookupWasm(a, oldest, sizeof(oldest), CFG_A));
-  EXPECT_TRUE(cache.lookupWasm(b, newest, sizeof(newest), CFG_A));
+  EXPECT_FALSE(wasmLookup(cache, a, oldest, sizeof(oldest), CFG_A));
+  EXPECT_TRUE(wasmLookup(cache, b, newest, sizeof(newest), CFG_A));
   if (b.mapping)
     b.mapping->destroy();
 }
@@ -804,11 +823,11 @@ TEST(CompileCacheTest, EvictionWithZeroBudgetRemovesARealWasmEntry) {
   const uint8_t bytecode[] = {9, 8, 7, 6};
 
   CompileCacheEntry miss;
-  EXPECT_FALSE(cache.lookupWasm(miss, wasm, sizeof(wasm), CFG_A));
+  EXPECT_FALSE(wasmLookup(cache, miss, wasm, sizeof(wasm), CFG_A));
   cache.saveWasm(miss, bytecode, sizeof(bytecode));
 
   CompileCacheEntry hit;
-  ASSERT_TRUE(cache.lookupWasm(hit, wasm, sizeof(wasm), CFG_A));
+  ASSERT_TRUE(wasmLookup(cache, hit, wasm, sizeof(wasm), CFG_A));
   if (hit.mapping)
     hit.mapping->destroy();
 
@@ -817,7 +836,7 @@ TEST(CompileCacheTest, EvictionWithZeroBudgetRemovesARealWasmEntry) {
   compileCacheEvictWasm(cache.versionedRoot(), config);
 
   CompileCacheEntry again;
-  EXPECT_FALSE(cache.lookupWasm(again, wasm, sizeof(wasm), CFG_A));
+  EXPECT_FALSE(wasmLookup(cache, again, wasm, sizeof(wasm), CFG_A));
 }
 
 #include <hermes/node-compat/compile-cache/source_buffer.h>

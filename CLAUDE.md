@@ -383,7 +383,7 @@ WebAssembly section above), and that compile is cached too. Design
   configuration, and then the module bytes, and it *is* the file name:
   `<generation>/<first two hex digits>/w<64 hex digits>`. Content-keying is
   not a preference -- Wasm bytes usually arrive without a path (a
-  `Uint8Array` from a JS module, a `fetch`, a base64 blob), so there is
+  `Uint8Array` from a JS module, a `fetch`, an inline byte string), so there is
   nothing else to key on. SHA-256 rather than the CRC-32 the JavaScript
   kinds use, because the roles differ: there the CRC guards an entry already
   found by path, here it would be the key itself, and a collision would
@@ -1124,6 +1124,190 @@ Five diagnostic flags, none of them on the run path. Design
   `BundleFormatTest`. `bundle-tool-no-runtime.js` pins the pre-runtime
   dispatch: a verb given `--compile-cache=<dir>` never creates the
   directory, while running the same container does.
+
+### Baked Wasm entries
+
+A container carries compiled JavaScript, never compiled WebAssembly (see the
+WebAssembly section above), so a bundled program that instantiates a Wasm
+module recompiles it on every launch -- the disk compile cache's Wasm tier
+(see "Wasm entries" under Compile Cache above) removes that cost for a
+developer running the same program repeatedly, but not for a produced
+executable shipped to a machine whose cache starts cold, or for any run with
+the cache disabled. This puts the compiled bytecode inside the container
+itself. Design
+`docs/superpowers/specs/2026-09-09-wasm-bundle-bake-design.md`, plan
+`docs/superpowers/plans/2026-09-09-wasm-bundle-bake.md`, progress
+`docs/superpowers/plans/progress-wasm-bundle-bake.md`. **No Hermes change**:
+the `hermes_set_wasm_cache` hooks the disk tier already uses are the entire
+mechanism.
+
+- **The module ends up in the container twice, and both copies are
+  load-bearing.** The source bytes ride inside whatever JavaScript holds
+  them, and the bytecode is the baked entry. The source copy cannot be
+  dropped, because content keying computes the digest over the bytes the
+  program hands to `WebAssembly.Module` -- the program has to produce them
+  before the container can answer. Measured on
+  `examples/hermes-parser-ast-wasm`: the module is 768,303 raw bytes,
+  `HermesParserWASM.js` compiles to 1,620,013 bytes because it holds them as
+  a string, the baked entry is 2,054,308, and the container is 3,912,872 --
+  about 94% the same module twice. The first copy costs roughly double the
+  raw bytes: a string literal containing any character above U+007F is
+  stored as UTF-16, measured at 100,000 ASCII characters -> 100,560 bytes
+  against 100,000 characters over 0x00-0xFF -> 200,552. Carrying only
+  bytecode needs a token where the bytes were, which is not built.
+- **Two steps, because the producer never executes the program.** It cannot
+  see a byte string decoded or a `.wasm` file read, so it cannot obtain
+  Wasm bytes; only a run can. `--record-wasm=<file>` on an ordinary run (a
+  plain script, `-e`, or a `--bundle=` run -- anything that runs) writes a
+  self-contained record file naming the bytecode of every Wasm module the
+  run compiled or looked up, keyed by the same SHA-256 content digest the
+  disk cache uses. `--build-bundle --bake-wasm=<file>` (repeatable) copies
+  those entries into the container's new Wasm table. Two `--bake-wasm` files
+  naming the same digest: the first wins, and `--verbose` says so.
+  `--record-wasm` is refused with `--build-bundle` (the producer compiles
+  and never runs, so the file would always be empty) and with any tool verb
+  (a verb creates no runtime).
+- **The record file is its own format** (`HNWASMRC` magic,
+  `include/hermes/node-compat/bundle/wasm_record.h`,
+  `lib/bundle/wasm_record.cpp`), not tar: the deciding argument was the read
+  side, not the write side -- this codebase's habit is small purpose-built
+  formats validated structurally at every read, and a `tar` reader robust
+  against ustar/GNU/pax extensions is a bigger commitment than the format
+  itself. `--dump-wasm=<file>` is what `tar tvf` would have given for free,
+  and prints more: format version, the recorded `HERMES_NODE_VERSION_STRING`
+  and whether it matches this binary, then one line per entry. It is a sixth
+  read-only tool verb, dispatched in `runToolVerb()` before `runHermesNode`
+  like the other five.
+- **Format v6** adds a Wasm table to the container -- `wasmTableOffset` and
+  `wasmCount` on `BundleHeader`, `BundleWasmRecord[wasmCount]` sorted by
+  digest so a lookup binary-searches it with `memcmp`. `BundleWasmRecord`
+  (digest, payload offset, payload size) is shared verbatim between the
+  record file and the container, so baking is relocating payload offsets
+  onto the container's own payload cursor, not translating between two
+  shapes. As with every past bump, a version mismatch is fatal in **both**
+  `open()` and `openForInspection()`, and every container's bytes change
+  (the header grows) even with no Wasm entries -- but a container with none
+  runs exactly as before and its dump gains no `WASM` section, only the new
+  format version and file size. `--build-exe` gains no new flag: the
+  entries travel inside the container it links in, for free.
+- **The install rule had to change, and getting it wrong was the design's
+  one CRITICAL review finding.** The hooks now install whenever a disk
+  cache, a `--record-wasm` recorder, **or a container that might be opened**
+  could answer -- not only when a disk cache exists. The old rule made a
+  baked container invisible under `--no-compile-cache`,
+  `HERMES_NODE_DISABLE_COMPILE_CACHE=1`, or on a machine with no writable
+  `$HOME/.cache`, which is precisely the deployment case this feature exists
+  for: a produced executable's user has no `--no-compile-cache` to *not*
+  pass. Installing unconditionally is not the fix either -- Hermes sets
+  `cacheUsable` from `hooks.installed()`, not from what a lookup finds, so
+  an always-missing hook still makes every Wasm compile serialize its
+  bytecode, SHA-1 the input and call `store`, for nothing. The struct that
+  decides is `WasmCacheContext`
+  (`include/hermes/node-compat/compile-cache/wasm_cache_hooks.h`): a
+  `CompileCache *` and a recorder, both optional, plus whether this run is
+  in bundle mode -- known before the runtime exists, from the same two
+  config fields that already choose `--bundle` vs. an embedded payload.
+  **One residual cost is accepted rather than closed**: bundle-mode
+  installation is decided from that flag alone, not from whether the
+  container it will open actually has a populated Wasm table, so a
+  `--bundle` run with the disk cache disabled still pays the
+  serialize/hash/store overhead above on every Wasm compile even when the
+  container bakes nothing at all. Closing it would mean reading the
+  container's header before the runtime exists to install hooks against,
+  which `readBundleVmOptions` already does for a different section -- for a
+  saving that is a fraction of the compile it precedes.
+- **Lookup order is container, then disk, then compile**, all keyed on one
+  digest computed once in the callback. A container miss falls through to
+  exactly the path this run would have taken with no container. A hit hands
+  Hermes a pointer straight into the container's own mapping with
+  `finalize_cb` NULL -- the mapping outlives the run, so nothing needs
+  releasing. That is not the same as allocation-free: the store token and
+  the digest still allocate, and Hermes copies the returned bytes into a
+  `MemoryBuffer` before building a provider, so this sits inside the same
+  OOM caveat the disk cache's Wasm hooks already carry (see "The contract
+  excludes allocation failure" above), not outside it.
+- **A container hit that comes back to `store` means Hermes refused this
+  container's own bytecode, and that terminates the run.**
+  `bundleFatalWasmRefused()` (`lib/bundle/bundle_run.cpp`) names the
+  container and the digest and exits 1, the same rule `fatalBadPayload()`
+  already applies to a corrupt JavaScript module. **A refused disk-cache
+  entry takes the opposite path and falls back silently, as it always has**
+  -- the difference is deliberate and is the whole point: the disk cache is
+  an optimisation with a right answer to fall back on, and the compile it
+  falls back to *is* that right answer; the container is the artifact, and
+  a corrupt artifact is not a slow artifact. The fatal rule reaches provider
+  rejection **only**, and three things it does not catch are worth listing
+  because each is a way a damaged baked entry does *not* terminate: a
+  refusal whose recompile then fails (the `WebAssembly.Module` call throws
+  instead; no `store`, so no termination), a refusal whose recompile
+  succeeds but serializes to nothing (falls back silently on the compiled
+  module; the genuinely silent case), and damage that leaves the bytecode
+  header valid, which is not detected at all and simply runs -- the same
+  exposure every container payload has (`bundle_reader.h`).
+- **Neither the record file nor the container's Wasm table checksums a
+  payload.** Both validate structurally only (magic, format version, every
+  offset/length/alignment/range) -- the same trade-off the rest of the
+  container format already makes for every payload it carries. This was
+  drafted with a CRC, then cut; the reasoning is in the design doc. It is
+  worth restating what that accepts: damage bad enough for Hermes to refuse
+  the bytecode is caught by the fatal rule above, but damage that leaves the
+  header valid is not caught at all, only at the container's usual cost of
+  entry.
+- **The bake step's version check is a provenance policy, not a proof.**
+  `--build-bundle --bake-wasm=<file>` compares the record file's recorded
+  `HERMES_NODE_VERSION_STRING` against this binary's for exact equality, and
+  a mismatch is a hard build error naming both -- the same rule
+  `kit.manifest` already applies to `--build-exe`. It is not a guarantee
+  that the digests will hit: Hermes's codegen configuration (bytecode
+  version, Wasm codegen version, `t262`) does not include hermes-node's own
+  build version, so two different hermes-node builds over one Hermes can
+  share digests, and the same binary under `--vm=-test262` cannot. What the
+  check buys is catching a stale recording *at bake time*, where the error
+  can name the file, instead of shipping a container that quietly compiles
+  at every launch.
+- **The recorder's own file write is the one loud failure in a feature whose
+  neighbour swallows everything on purpose** (see "Every failure in here is
+  swallowed on purpose" above) -- deliberately, because a silently
+  incomplete recording produces a container that silently compiles forever.
+  It is written once, at runtime creation, before user code runs (so
+  `--record-wasm=app.js app.js` is caught by the same-file refusal before
+  anything is overwritten), and rewritten atomically after every new digest
+  so that a program ending in `process.exit()` -- both exit paths call
+  `_exit()` on purpose, see the Bootstrap Sequence section -- still leaves a
+  complete file. `--record-wasm` naming the same file as the running
+  `--bundle` container or the script being executed is refused the same way
+  `--extract-module --out` already guards its own overwrite, by
+  `st_dev`/`st_ino` (`isSameFile()`), because the recorder's write is a
+  rename over the destination the run is still mapping. A produced
+  executable gets no way to record at all: `bundle_main.cpp` parses no
+  flags, so every argument belongs to the program, and the workflow does
+  not need it -- the recording run is an ordinary script or `--bundle=` run,
+  built into an executable only afterwards.
+- **Tracing distinguishes the tiers**, under
+  `HERMES_NODE_DEBUG_NATIVE=COMPILE_CACHE`: `wasm container hit`/`wasm
+  container miss` for the new tier, `wasm hit`/`wasm miss` for the disk tier
+  (unchanged), `wasm store` for bytes arriving from a compile, `wasm
+  container refused` traced just before the fatal exit above so a trace
+  explains the exit instead of stopping mid-story, and `wasm record
+  container`/`wasm record disk`/`wasm record compile` naming which tier fed
+  the recorder. As with the disk tier, hits and misses are asserted from
+  this tracing and never from timing -- the suite runs 16-way parallel. A
+  case that needs a *live* disk cache (to prove the container tier answers
+  first) must run through `%hermes-node-cc`, because the suite-wide disable
+  is an environment variable checked before `--compile-cache=`.
+- **Scope is the compile, not the packaging.** A `.wasm` file read from disk
+  with `fs` still has to ship beside a bundle exactly as it does today --
+  nothing here teaches the container to answer that read. It still gets
+  baked, because the digest is over content with no path in it: the `fs`
+  read happens at run time as before, and the compile that follows it hits
+  the container. Packaging `.wasm` data files, and eliminating that
+  remaining sidecar file, are both explicitly out of scope.
+- Measured on `examples/hermes-parser-ast-wasm`: see the progress file for
+  the numbers and the build they were measured on.
+- Tests:
+  `test/test-wasm-{record,bake,bake-refused,record-exit,bake-errors,bake-build-exe}.js`
+  plus `unittests/WasmRecordTest.cpp` and the v6 cases in
+  `BundleFormatTest`/`BundleToolsTest`.
 
 ## Single-File Executables
 

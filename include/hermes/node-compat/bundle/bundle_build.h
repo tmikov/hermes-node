@@ -114,6 +114,21 @@ namespace node_compat {
 /// compiles rather than executes, and a build machine's VM tuning is not
 /// the artifact's business.
 ///
+/// \p bakeWasmPaths names `--record-wasm` files (see wasm_record.h) whose
+/// entries are copied into the container's Wasm table
+/// (BundleWriter::addWasm), in the order given. Each is mapped and opened
+/// with WasmRecordReader::open(); a file that fails to open, or whose
+/// recorded build version does not exactly match HERMES_NODE_VERSION_STRING,
+/// is a hard build error -- a recording made by a different build of
+/// hermes-node is not trustworthy bytecode for this one, and finding that
+/// out at run time (as a recompile nothing warned about) is worse than
+/// refusing the build. A file that opens cleanly but records zero modules is
+/// not an error, only a warning: it costs nothing to bake and is more likely
+/// a forgotten `--record-wasm` run than a mistake worth failing over. Two
+/// files that both record the same digest are not a conflict either: the
+/// first one to name it wins and the rest are skipped, exactly like a module
+/// reached by two require() edges.
+///
 /// \p allowVmOptionsOverride records whether those options may be
 /// overridden at run time. False -- the default -- locks them, because the
 /// honoured flag set includes -enable-eval and
@@ -127,6 +142,7 @@ int buildBundle(
     bool verbose,
     const std::vector<std::string> &includes,
     const std::vector<std::string> &preloads,
+    const std::vector<std::string> &bakeWasmPaths,
     const std::vector<std::string> &vmOptions,
     bool allowVmOptionsOverride);
 

@@ -13,6 +13,7 @@
 #include <hermes/node-compat/bundle/bundle_resolve.h>
 #include <hermes/node-compat/bundle/file_source.h>
 #include <hermes/node-compat/bundle/mapped_file.h>
+#include <hermes/node-compat/bundle/native_digest.h>
 #include <hermes/node-compat/process/node_process.h>
 
 // Header-only, for MAGIC and BytecodeFileHeader. Costs no link dependency,
@@ -666,6 +667,49 @@ bool openEmbeddedBundle(
   publishBundle(state, std::move(*reader), rootDirectoryFor(exePath), exePath);
 
   return true;
+}
+
+bool bundleWasmLookup(
+    const uint8_t *rawDigest,
+    const uint8_t **bytes,
+    size_t *size) {
+  // Read, never captured: this is called from the Wasm cache hooks, which
+  // are installed while the runtime is being created -- before either open
+  // function has run. See the header.
+  const OpenBundle &state = openBundleState();
+  if (!state.reader)
+    return false;
+
+  std::optional<BundleReader::WasmView> entry =
+      state.reader->wasmFor(std::string_view(
+          reinterpret_cast<const char *>(rawDigest), kNativeDigestBytes));
+  if (!entry)
+    return false;
+
+  *bytes = reinterpret_cast<const uint8_t *>(entry->bytecode.data());
+  *size = entry->bytecode.size();
+  return true;
+}
+
+void bundleFatalWasmRefused(const uint8_t *rawDigest) {
+  const OpenBundle &state = openBundleState();
+  std::string digestHex = nativeDigestToHex(std::string_view(
+      reinterpret_cast<const char *>(rawDigest), kNativeDigestBytes));
+  // Terminates for the same reason fatalBadPayload() does, and the two
+  // messages are deliberately alike: a container whose bytecode this engine
+  // will not load is damaged, and continuing would hide that behind nothing
+  // worse than a slower start. Here the detection is exact rather than
+  // approximate -- Hermes asking us to store bytecode for a module it just
+  // read out of the container IS the refusal, with nothing to guess at.
+  std::fprintf(
+      stderr,
+      "error: baked WebAssembly bytecode failed to load\n"
+      "       sha256: %s\n"
+      "       in container: %s\n"
+      "       This container is damaged. Rebuild it with --build-bundle.\n",
+      digestHex.c_str(),
+      state.containerPath.c_str());
+  fatalExit(1);
 }
 
 napi_status installBundleGlobals(napi_env env, napi_value *bundleObject) {

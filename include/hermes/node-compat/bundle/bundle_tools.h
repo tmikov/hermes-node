@@ -107,6 +107,28 @@ int verifyNatives(
     std::ostream &out,
     std::ostream &err);
 
+/// Prints the standalone `--record-wasm` file at \p recordPath: its format
+/// version (always kWasmRecordFormatVersion -- WasmRecordReader::open()
+/// refuses to open any other), its recorded build version, and whether that
+/// version matches \p runningBuildVersion -- then one line per entry with
+/// the digest (truncated to 16 hex characters, or the full 64 under \p
+/// verbose) and the bytecode length.
+///
+/// \p runningBuildVersion is the caller's own HERMES_NODE_VERSION_STRING,
+/// passed in rather than read here so a test can drive a mismatch, exactly
+/// like dumpBundle()'s \p runningGeneration. This reports a mismatch; it
+/// does not enforce one -- refusing to bake a record file from a different
+/// build is the bake step's decision, not this tool's.
+///
+/// Returns 0 once anything was printed, or 1 with the reader's message on
+/// \p err if the file cannot be mapped or fails structural validation.
+int dumpWasmRecord(
+    const std::string &recordPath,
+    const std::string &runningBuildVersion,
+    bool verbose,
+    std::ostream &out,
+    std::ostream &err);
+
 } // namespace node_compat
 } // namespace hermes
 
