@@ -18,6 +18,7 @@
 #include <cassert>
 #include <cerrno>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -561,13 +562,14 @@ void flushPendingWrites(uv_loop_t *loop) {
   }
 }
 
-void fatalExit(int code) {
-  // Everything before this may have written: an 'exit' handler, whatever the
-  // program printed, and whatever the caller just printed about why it is
-  // ending. Those writes are queued on a libuv stream, and _exit() below
-  // does not care. Flush first.
-  flushPendingWrites(exitLoop);
+/// Shared state for the two exit entry points below. Single-threaded by
+/// construction, so plain statics are enough.
+static bool terminating = false;
+static int terminatingCode = 0;
+static bool terminatingIsFatal = false;
 
+/// The tail both exits share: restore the terminal, then leave.
+[[noreturn]] static void restoreAndExit() {
   // Put the terminal back the way the program found it. A program that calls
   // stdin.setRawMode(true) is under no obligation to clear it -- tetris-cli
   // sets it on its fifth line and quits with process.exit(0), and that works
@@ -576,13 +578,11 @@ void fatalExit(int code) {
   // nothing appears, with nothing on screen saying why.
   //
   // Node restores in ResetStdio(), registered with atexit(). That is not
-  // available here, for the same reason the next line gives: this path ends
-  // in _exit(), which runs no atexit handler. So the restore is explicit,
-  // and every path that calls _exit() needs its own -- see
-  // triggerUncaughtException() in node_errors.cpp for the one that cannot
-  // reach this function.
+  // available here, because these paths end in _exit(), which runs no atexit
+  // handler -- see triggerUncaughtException() in node_errors.cpp for the one
+  // that cannot reach this function.
   //
-  // After the flush, not before: the queued writes can be escape sequences an
+  // After the flush, not before: queued writes can be escape sequences an
   // 'exit' handler emitted to restore a screen, and they should go out under
   // the output settings they were written for. This is where node's atexit
   // handler sits relative to them too.
@@ -603,7 +603,69 @@ void fatalExit(int code) {
   // leaks and the symbolizer to hang on the large ASAN binary.
   // TODO: Properly integrate with event loop shutdown instead of
   // terminating immediately.
-  _exit(code);
+  _exit(terminatingCode);
+}
+
+void fatalExit(int code) {
+  // A fatal exit OUTRANKS a requested one, including one already in
+  // progress. process.exit() flushes by running the event loop, so a queued
+  // callback runs inside that flush and can reach a fatal error -- a damaged
+  // container, say. Without this precedence:
+  //
+  //     setImmediate(function () { require('./damaged'); });
+  //     process.exit(0);
+  //
+  // would print that the artifact is broken and then exit 0, because the
+  // clean exit got here first and "first wins" would have kept its code.
+  // Among exits of the same kind the first still wins.
+  if (terminating && terminatingIsFatal)
+    restoreAndExit();
+  terminating = true;
+  terminatingIsFatal = true;
+  terminatingCode = code;
+
+  // fflush and not flushPendingWrites: this path does NOT run the event
+  // loop, where the requested exit below does. Two reasons, and they are
+  // specific to being fatal. Running the loop executes more of a program
+  // that has already been declared unrunnable, which is how a fatal error
+  // ends up preempted by whatever was queued behind it. And a single
+  // callback that never returns would hang the exit outright -- the
+  // iteration cap in flushPendingWrites bounds the number of turns, not the
+  // duration of one.
+  //
+  // The cost is that writes still queued on a libuv stream are lost, which
+  // is the trade triggerUncaughtException() already makes for the same
+  // reason. What the user needs to see is the message the caller just
+  // printed, and fprintf to stderr plus this flush delivers that.
+  std::fflush(nullptr);
+  restoreAndExit();
+}
+
+/// process.exit()'s own tail: flush through the event loop, then leave.
+[[noreturn]] static void requestedExit(int code) {
+  // A nested requested exit keeps the first code: the exit that started is
+  // the one that happens. Measured before this guard existed:
+  //
+  //     setImmediate(function () { process.exit(0); });
+  //     process.exit(1);
+  //
+  // exited 0, where node exits 1, because the nested call reached _exit()
+  // first with its own code.
+  if (terminating)
+    restoreAndExit();
+  terminating = true;
+  terminatingIsFatal = false;
+  terminatingCode = code;
+
+  // Everything above may have written: the 'exit' handlers, and whatever the
+  // program printed before calling exit. Those writes are queued on a libuv
+  // stream, and _exit() does not care. Flush first.
+  //
+  // This runs the loop, so a queued callback can fire here and call exit
+  // again -- handled above -- or reach a fatal error, handled in
+  // fatalExit(), which outranks this one.
+  flushPendingWrites(exitLoop);
+  restoreAndExit();
 }
 
 /// process.exit([code])
@@ -728,7 +790,7 @@ static napi_value processExit(napi_env env, napi_callback_info info) {
     }
   }
 
-  fatalExit(code);
+  requestedExit(code);
 }
 
 /// process.abort()
