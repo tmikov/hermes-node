@@ -34,7 +34,7 @@ package gates behavior on it.
 - Recognizable Node API surface: Node's own `lib/*.js` for the JS side, with
   the native bindings ported on top of Hermes Node-API.
 
-### Two caveats
+### Three caveats
 
 **1. The first run pays for compilation; later runs don't.**
 
@@ -90,6 +90,18 @@ capabilities flow through to it. When
 [Static Hermes](https://github.com/facebook/hermes/blob/static_h/doc/TypedLanguage.md)
 is released, hermes-node will pick it up: code written in the statically
 typed JavaScript dialect will run with substantially higher performance.
+
+**3. `Intl` doesn't exist, except for `Intl.Segmenter`.**
+
+Hermes is built here with Intl support turned off -- it isn't solid enough
+on Linux to ship. `hermes-node` installs a minimal `Intl` namespace of its
+own with exactly one member, `Intl.Segmenter` at grapheme granularity, since
+that is the one API most of the terminal/CLI ecosystem cannot start
+without. Everything else -- `NumberFormat`, `DateTimeFormat`, `Collator`,
+and the rest -- is genuinely absent, not stubbed, so `typeof
+Intl.NumberFormat === 'function'` still answers honestly. See
+[`docs/INTL.md`](docs/INTL.md) for what that means in practice, the
+segmentation guarantees, and where it came from.
 
 ## Install
 

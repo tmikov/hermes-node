@@ -1321,6 +1321,51 @@ int runHermesNode(const HermesNodeConfig &config) {
     }
   }
 
+  // 11a5. Install globalThis.Intl.Segmenter (grapheme granularity only).
+  //
+  // Hermes is built here with HERMES_ENABLE_INTL=OFF (see the "Intl" section
+  // of README.md), so there is no native `Intl` global at all. `Intl` is
+  // created here rather than supplied by the engine, and given exactly one
+  // member: `Segmenter`, backed by the vendored `unicode-segmenter` package
+  // (see vendored/unicode-segmenter/README.md for provenance). That one API
+  // is what most of the terminal/CLI ecosystem needs -- `string-width` and
+  // `@alcalzone/ansi-tokenize` call `new Intl.Segmenter()` at module scope to
+  // walk grapheme clusters, so without this they fail on import rather than
+  // at first use. `word` and `sentence` granularity still throw `TypeError`
+  // (the adapter's own behavior, left alone): segmenting by grapheme when
+  // word or sentence was asked for would be silently wrong, and this
+  // codebase refuses rather than fakes elsewhere it can't deliver the real
+  // thing (see the Hermes VM Options section of CLAUDE.md).
+  //
+  // `Intl` is set the same way as Buffer/URL/performance above: writable and
+  // configurable (an ordinary `napi_set_named_property` global assignment).
+  // `Intl.Segmenter` is defined explicitly instead, as writable and
+  // configurable but NOT enumerable -- `napi_default_method` is exactly that
+  // attribute set -- matching how ECMA-402 specifies properties of a
+  // built-in namespace object.
+  if (exitCode == 0) {
+    napi_value intlAdapterModule;
+    if (loader.require(
+            env,
+            "vendored/unicode-segmenter/intl-adapter",
+            &intlAdapterModule) == napi_ok) {
+      napi_value segmenterCtor;
+      napi_get_named_property(
+          env, intlAdapterModule, "Segmenter", &segmenterCtor);
+
+      napi_value intlObj;
+      if (napi_create_object(env, &intlObj) == napi_ok) {
+        napi_property_descriptor segmenterProp = {};
+        segmenterProp.utf8name = "Segmenter";
+        segmenterProp.value = segmenterCtor;
+        segmenterProp.attributes = napi_default_method;
+        napi_define_properties(env, intlObj, 1, &segmenterProp);
+
+        napi_set_named_property(env, global, "Intl", intlObj);
+      }
+    }
+  }
+
   // 11b. Initialize debuglog.
   if (exitCode == 0) {
     napi_value debuglogModule;

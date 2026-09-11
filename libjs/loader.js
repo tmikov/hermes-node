@@ -213,6 +213,21 @@
     // No disk probing -- purely checks vendoredIdSet.
     function resolveVendoredRelative(fromDir, name) {
       var base = resolvePath(fromDir, name);
+      // A vendored package's own relative requires may or may not spell out
+      // an extension: ws's do not (require('./lib/websocket')), but
+      // unicode-segmenter's do (require('./grapheme.js'), the vendored
+      // rewrite of its .cjs build's require('./grapheme.cjs') -- see
+      // vendored/unicode-segmenter/README.md). The embedded module ID never
+      // carries one (the build strips it when computing the ID), so a
+      // trailing .js/.ts here has to come off before the lookup, or a
+      // module written the second way never resolves and falls through to
+      // loadModule()'s disk fallback with a bogus, extension-bearing "id".
+      if (base.length > 3) {
+        var ext = base.substring(base.length - 3);
+        if (ext === '.js' || ext === '.ts') {
+          base = base.substring(0, base.length - 3);
+        }
+      }
       if (vendoredIdSet.has(base)) return base;
       var indexId = base + '/index';
       if (vendoredIdSet.has(indexId)) return indexId;
