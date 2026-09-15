@@ -30,6 +30,27 @@ set(HERMES_ENABLE_DEBUGGER ON CACHE BOOL "Enable Hermes debugger/CDP" FORCE)
 # that does not want the size can still configure -DHERMES_ENABLE_WASM=OFF.
 set(HERMES_ENABLE_WASM ON CACHE BOOL "Enable WebAssembly support")
 
+# Compile Hermes's own InternalJavaScript to a native Static Hermes unit
+# instead of running it as bytecode at every runtime creation. Without this a
+# "fully native" build-native artifact still interprets Hermes's bootstrap JS,
+# which makes the feature's headline claim false and its residual-bytecode
+# test impossible to write.
+#
+# Nearly free, because the archive already exists: Hermes builds
+# hermesInternalUnit in every non-MSVC configuration to keep it from
+# bitrotting, and only the alias selection is gated. Measured on macOS arm64:
+# hermes-node grows 338,960 bytes and the embedded bytecode magic count drops
+# by exactly one. A universal binary pays the size per slice.
+#
+# FORCE, unlike HERMES_ENABLE_WASM above and like the debugger: a non-FORCE
+# `set(... CACHE ...)` leaves an existing cache entry alone, so every build
+# directory configured before this change would silently keep Hermes's OFF and
+# report the feature as not working -- the exact trap CLAUDE.md records for
+# the Wasm option. Forcing costs nothing here because there is no build
+# configuration that wants the bytecode form.
+set(HERMESVM_INTERNAL_JAVASCRIPT_NATIVE ON CACHE BOOL
+    "Use natively compiled InternalJavaScript" FORCE)
+
 # Pull in Hermes (includes cmake modules, gtest, NAPI, etc.)
 add_subdirectory(hermes)
 
