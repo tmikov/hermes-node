@@ -37,13 +37,34 @@ extern "C" {
 /// with the bytes.
 extern const uint8_t hermesNodeBundleStart[];
 extern const uint8_t hermesNodeBundleEnd[];
+
+/// Defined by the generated payload object, in both configurations: a
+/// bytecode build emits the same two symbols with a count of zero, which is
+/// what lets this one file serve both without a weak symbol. The count is
+/// emitted as a `.quad` (see payloadAssembly()), so it is read as a 64-bit
+/// value regardless of the target's native size_t width.
+extern void *const hermesNodeNativeUnits[];
+extern const uint64_t hermesNodeNativeUnitCount;
 }
+
+// payloadAssembly() emits every table entry as a `.quad` too, unconditionally
+// -- the element stride is hardcoded 8 bytes, not sizeof(void *). That only
+// agrees with `void *const[]` above on a 64-bit target; on a 32-bit one
+// hermesNodeNativeUnits[1] would land mid-slot and read garbage as a function
+// pointer, with nothing to catch it silently. This turns that into a build
+// failure instead, the day someone tries a 32-bit target.
+static_assert(
+    sizeof(void *) == 8,
+    "the payload assembly emits each unit-table entry as an 8-byte .quad; "
+    "hermesNodeNativeUnits must be an array of 8-byte pointers to match");
 
 int main(int argc, char **argv) {
   HermesNodeConfig config;
   config.embeddedBundleData = hermesNodeBundleStart;
   config.embeddedBundleSize =
       static_cast<size_t>(hermesNodeBundleEnd - hermesNodeBundleStart);
+  config.nativeUnits = hermesNodeNativeUnits;
+  config.nativeUnitCount = static_cast<size_t>(hermesNodeNativeUnitCount);
 
   // The container's options, then HERMES_NODE_VM_OPTIONS if the container
   // allows it. There is no --vm= here: every argument this binary receives

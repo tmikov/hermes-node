@@ -704,7 +704,9 @@ int runEmbeddedBundle(
     napi_env env,
     ModuleLoader &loader,
     const uint8_t *data,
-    size_t size) {
+    size_t size,
+    const void *const *nativeUnits,
+    size_t nativeUnitCount) {
   char exePath[4096];
   size_t len = sizeof(exePath);
   if (uv_exepath(exePath, &len) != 0) {
@@ -712,7 +714,13 @@ int runEmbeddedBundle(
     return 1;
   }
   std::string error;
-  if (!openEmbeddedBundle(data, size, std::string(exePath, len), &error)) {
+  if (!openEmbeddedBundle(
+          data,
+          size,
+          std::string(exePath, len),
+          nativeUnits,
+          nativeUnitCount,
+          &error)) {
     std::fprintf(stderr, "error: %s\n", error.c_str());
     return 1;
   }
@@ -1596,7 +1604,12 @@ int runHermesNode(const HermesNodeConfig &config) {
   if (exitCode == 0) {
     if (config.embeddedBundleData != nullptr) {
       exitCode = runEmbeddedBundle(
-          env, loader, config.embeddedBundleData, config.embeddedBundleSize);
+          env,
+          loader,
+          config.embeddedBundleData,
+          config.embeddedBundleSize,
+          config.nativeUnits,
+          config.nativeUnitCount);
     } else if (!config.bundlePath.empty()) {
       exitCode = runBundle(env, loader, config.bundlePath);
     } else if (!config.buildBundlePath.empty()) {

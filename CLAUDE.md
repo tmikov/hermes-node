@@ -1639,6 +1639,198 @@ plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
   feature list does not reach at all -- it links `hermesNodeBuildExe`, which
   is VM-free, and never runs a toolchain.
 
+## Native Compilation
+
+`hermes-node build-native <entry.js> -o <file> [options]` compiles a
+program's whole `require()` graph to native code with Static Hermes
+(`shermes`) and links a standalone executable, instead of interpreting
+Hermes bytecode. Design
+`docs/superpowers/specs/2026-09-13-native-compilation-design.md`, plan
+`docs/superpowers/plans/2026-09-13-native-compilation.md`, progress
+`docs/superpowers/plans/progress-native-compilation.md`.
+
+- **It is a subcommand, dispatched before the ordinary parse loop**, the
+  same way `cache` is (`build-exe` and the other diagnostic verbs are
+  ordinary flags, not subcommands). `hermes-node build-native` in
+  `argv[1]` always means this subcommand, whether or not a file named
+  `build-native` exists in the working directory; run `./build-native` to
+  execute a script so named. It parses its own argv from `i=2` and joins
+  none of `checkToolOptions()`'s flag-conflict matrix, which is the whole
+  reason it is a subcommand rather than one more tool flag: it takes more
+  options than any flag-shaped verb (`--include`, `--preload`, `--vm=`,
+  `--allow-vm-options-override`, `--bake-wasm=`, `--jobs=`,
+  `-O0`/`-O1`/`-O2`/`-O3`/`-Os`, `--kit=`, `--cc=`, `--shermes=`,
+  `--keep-temp`, `--verbose`), with no position restriction on any of
+  them.
+- **A native build is an AOT bundle whose JavaScript module payloads are
+  empty, plus a linked table of native unit functions**, produced by the
+  same discovery/resolution/classification code the bytecode bundle
+  producer uses (`buildBundleImpl` in `lib/bundle/bundle_build.cpp` gained
+  a native mode rather than a parallel copy). Everything else --
+  the closed world, the resolver and its two backends, addon sidecars,
+  preloads, baked Wasm entries, baked VM options -- is exactly the same
+  code the bytecode `--build-bundle`/`--build-exe` path uses. Only the
+  native-specific pieces are new: staging each module's wrapped source,
+  invoking `shermes` then `cc` per module (`lib/build-native/`, VM-free),
+  the job pool that parallelizes those invocations, and the unit table
+  emitted into the generated assembly.
+- **Cross-module calls are structurally safe from the inliner; a module's
+  own internal helper is not.** `shermes -exported-unit=` compiles each
+  module as its own separate compilation unit, so there is no callee IR to
+  inline across a `require()` boundary -- this is a property of how
+  modules are compiled, not of any particular call shape. What remains
+  exposed is ordinary: a function private to one module, called from only
+  one call site inside that same module, can still be inlined into its
+  caller and vanish from a stack trace the way it would in any Static
+  Hermes program.
+- **Compile-flag parity is the most dangerous thing in this feature,
+  because getting it wrong fails silently.** `shermes` defaults
+  `-Xes6-block-scoping` and `-Xasync-generators` **off**, where the
+  bytecode compiler (`hermes_napi_compile.cpp`) turns them on. Measured:
+
+  ```js
+  var fs = [];
+  for (let i = 0; i < 3; i++) fs.push(function () { return i; });
+  print(fs.map(function (f) { return f(); }).join(','));
+  ```
+
+  prints `3,3,3` under plain `shermes`, `0,1,2` under
+  `shermes -Xes6-block-scoping` -- every `let`-in-loop closure changes
+  meaning, with no diagnostic at build time or run time either way.
+  `kJSLanguageFlags` (`include/hermes/node-compat/bundle/cjs_wrapper.h`) is
+  the one copy both the scanner (`require_scanner.cpp`) and the `shermes`
+  argv builder (`native_compile.cpp`) read, so the two cannot drift apart
+  from each other again; `test/build-native-parity.js` is the forcing
+  function that would fail if they ever did.
+- **`kit.manifest`'s `cc` is the C++ link driver, and the compile step must
+  pass `-x c` before the input or the driver silently compiles a `.c` file
+  as C++.** `cc:` records `CMAKE_CXX_COMPILER` (e.g. `/usr/bin/clang++`),
+  because that is what the actual link needs; a `.c` file hits its C++
+  front end without `-x c`. Measured on the generated C for
+  `libjs-node/net.js`: five hard errors without `-x c` (`definition of
+  variable with array type needs an explicit size`, two redefinitions,
+  `cannot initialize a variable of type 'struct UnitData *' with an
+  rvalue of type 'void *'`), clean with it.
+- **Three Hermes changes**, in the submodule (Tasks 1-3): the fixed
+  `SHUnit *units[8]` became a growable `SHUnit **units` plus
+  `units_size`, since a real program has far more than eight modules;
+  `shermes -source-name=<name>` lets a unit's compiled-in filename differ
+  from the temp file it was compiled from, which is what makes a stack
+  trace name the module's real identity instead of a staging path; and
+  `hermes_init_sh_unit`, a NAPI-reachable wrapper around `_sh_unit_init`,
+  is what lets the run-time loader initialize one native unit per bundled
+  module lazily, the same way it evaluates one bytecode module's body per
+  `require()`. **The units-array cap of eight has no recorded reason for
+  the number**: the commit that introduced the array
+  (`23f102e3b`, "Store units by index in the runtime") justifies storing
+  units *by index* rather than a bare list, and says nothing about why
+  eight specifically -- it reads as "enough for the handful of units a
+  shermes program links," which stopped being true the moment a whole
+  `require()` graph became one process's worth of units.
+- **Failure policy has two tiers, one per producer's own second-chance
+  site, not "the scanner decides and nothing past it is tolerated."** The
+  scanner (shared by both producers) catches a *parse* or *sema* failure --
+  a file neither the parser nor the scanner's `sema::resolveAST` can handle
+  -- and packages it as a module that throws if ever required
+  (`warning: cannot parse ...`), before `shermes` or
+  `hermes_compile_to_bytecode` ever runs. Past that point the two producers
+  diverge in *mechanism*, not in *tolerance*: the bytecode path's second
+  stub site catches an IRGen-or-later rejection from
+  `hermes_compile_to_bytecode` (`warning: cannot compile ...`) directly,
+  because the exception it raises already says what went wrong; the native
+  path instead classifies the `CommandResult` (Task 5) that `shermes` or
+  `cc` returned. **This section previously claimed the native path's
+  tolerance stopped at the scanner, on the theory that a `shermes` failure
+  could not be told apart from a compiler crash -- measured wrong (Task
+  17).** `CommandResult` already distinguishes `Exited` (with a status) from
+  `Signalled`, `SpawnFailed` and `WaitFailed`, which is exactly the
+  distinction needed: `Exited`, non-zero, with diagnostic text captured,
+  **from the `shermes` stage**, on a module that is neither the entry nor a
+  preload (both still hard-fail unconditionally, being certain to run) is a
+  **source rejection** -- recompiled in place as a throwing stub carrying
+  the diagnostic, under the bytecode path's own `cannot compile` wording,
+  and counted in the same `stubbedModules`. `Signalled`, `SpawnFailed`,
+  `WaitFailed`, a non-zero exit with no diagnostic text, a zero exit that
+  wrote nothing, or **any failure at the `cc` stage**, are a toolchain or
+  machine problem, not a source one, and still hard-fail the build.
+  **`cc` never gets this second chance, deliberately**: it compiles the C
+  `shermes` generated, never the module's own JavaScript, so a rejection
+  there is never about the source -- the realistic case is `cc` running out
+  of memory at `-O3` on one large generated file (peak RSS measured at 3.66
+  GB on a 1,500-module build), and turning that into a stub would report a
+  toolchain failure to the program as its own `SyntaxError`. The
+  classification lives in `lib/bundle/bundle_build_native.cpp`;
+  `lib/build-native/job_pool.cpp` only reports what `shermes`/`cc` did and
+  does not itself decide what a failure means.
+  The case that exposed the false premise: `@babel/core` ships
+  `lib/config/files/import.cjs`, `return import(filepath)` inside a `.cjs`
+  file -- called from a function, not used as a bare statement, which is
+  exactly what makes it **parse** (the scanner's own sema pass accepts it)
+  and fail only in IRGen, which the scanner never reaches. Nearly every
+  `@babel/core`-based plugin transitively requires this file, so before this
+  fix `build-native` could not compile most real Babel-based programs at
+  all; measured on a real graph in
+  `docs/superpowers/specs/2026-09-13-native-compilation-design.md`'s
+  Measurements section. Filed as dz `01a0a0d6-03d4`, fixed by Task 17.
+- **Stack traces carry location at one level but not the other.** The
+  plain `e.stack` string is correct: it carries `identity:line:column`,
+  because `-source-name=<identity>` (Task 2's Hermes change) makes
+  `shermes` compile each unit with its bundle identity as the file name.
+  Structured `CallSite`s (`Error.captureStackTrace`'s per-frame objects)
+  carry no location at any `-g` level -- `getFileName()`,
+  `getLineNumber()` and `getColumnNumber()` all return null, native or
+  not. This is a Hermes limitation the feature exposes rather than one it
+  introduces. `test/build-native.js` asserts the CURRENT behaviour (the
+  string correct, the structured accessors null), so a future fix to the
+  latter needs that test updated alongside it, not treated as a
+  regression. Filed as dz `01a0a0d5-7fcd`.
+- **Measured** (macOS arm64, Release `hermes-node`/`shermes`): tetris (22
+  JS modules) builds in ~4.3 s at `-O3`, ~13.7 MB, about 1.09x the
+  equivalent `--build-exe` artifact's 12.6 MB -- far below the roughly
+  7.4x ratio a single compiled object shows against its bytecode
+  equivalent, because the linked runtime is the same size in both and
+  dominates a small program. At ~1,500 modules the ratio grows to about
+  3.07x (94 MB against 31 MB) as the runtime becomes a smaller fraction of
+  a larger program; that build took about 460 s wall clock at
+  `--jobs=16`. Startup showed no measurable native-vs-bytecode difference
+  at either scale. `-O0` was predicted roughly 4x faster to build than
+  `-O3`; measured, it was about 10% faster on tetris, because build time
+  there is dominated by one large file's C-frontend cost and by small
+  files' fixed per-process `shermes`/`cc` overhead, neither of which an
+  optimization level touches. Full detail, plus the disabled
+  full-GC-pause-versus-unit-count benchmark (linear in unit count, about
+  0.8 ms of extra pause per 1,000 realistically-sized units), is in the
+  spec's Measurements section and the progress file above.
+- **Not in scope.** Built-in JavaScript stays interpreted bytecode --
+  nothing here recompiles `libjs`/`libjs-node`. No object cache: every
+  `build-native` invocation recompiles every module from scratch (dz
+  `01a0a0d5-a1b0`). No cross-module optimization beyond what one
+  `shermes` compilation unit already does internally. No runnable native
+  container: a native build's container carries empty JavaScript
+  payloads, so only the linked executable runs, never `--bundle=` against
+  the intermediate container. macOS releases ship no kit at all (a
+  pre-existing single-executable-plan limitation), so a produced macOS
+  `hermes-node` cannot itself run `build-native`.
+- Tests:
+  `test/build-native{,-errors,-container,-natives,-escapes,-smoke,-wasm,-parity,-tolerant}.js`
+  plus `BuildNativeTest`. `build-native-errors.js` is deliberately **not**
+  gated on `linker-available`/`shermes-available`: every case in it is
+  refused before either toolchain is reached, matching
+  `build-exe-errors.js`'s convention. `BuildNativeTest` links no VM and no
+  compiler, so it runs under `check-hermes-node-unit` even on a checkout
+  with no kit.
+- **Two worked examples, and they cover different ground.**
+  `examples/tetris/run.sh` and `examples/ditz2/run.sh` each gained a
+  `build-native` arm beside their `--build-exe` one, checked with the source
+  tree moved away so the artifact is proven rather than asserted. tetris is
+  22 modules of hand-written CommonJS and needs a pty to drive. ditz2 is 137
+  modules of **tsc output** -- a shape nothing else here exercises natively,
+  and the likelier place for discovery to meet something it cannot follow --
+  and it is a plain CLI, so it needs no pty and makes the better subject for
+  timing an iteration loop. Both arms assert the producer emits no warnings
+  at all, which is the real claim: these graphs are fully static, so an
+  `--include` should never become necessary.
+
 ## Test Infrastructure
 
 JS tests use LLVM Lit (`test/lit.cfg`), run in parallel via `check-hermes-node-js` target.

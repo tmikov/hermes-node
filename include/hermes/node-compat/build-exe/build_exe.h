@@ -41,6 +41,20 @@ struct DriverCandidate {
   DriverSource source;
 };
 
+/// Why \p candidate was offered, in the words the user needs to act on it.
+/// Printed for every candidate when none works, and for the winner under
+/// --verbose, because "which compiler did it actually run" is the first
+/// question when a link fails on a machine that did not cut the kit.
+///
+/// Public (rather than a static in build_exe.cpp) because
+/// buildNativeExecutable (bundle_build_native.cpp) needs the identical
+/// label for its own "no usable driver" and --verbose messages, and
+/// hermesNodeBuildExe is already a PUBLIC link dependency of
+/// hermesNodeBundleBuild -- a second copy of this switch would cost no
+/// link dependency to avoid and would only give the two producers a chance
+/// to drift on wording.
+const char *driverSourceName(const DriverCandidate &candidate);
+
 /// The drivers to try, best first, without touching the filesystem.
 ///
 /// The kit records an absolute path to the compiler that cut it, which is
@@ -91,6 +105,28 @@ std::optional<DriverCandidate> resolveDriver(
 /// warnings.
 bool versionOutputIsClang(const std::string &versionOutput);
 
+/// Why \p path cannot be named inside the assembler's quoted string, or ""
+/// if it can.
+///
+/// GAS processes C-style escapes inside a quoted string, so a backslash is
+/// as unrepresentable as a quote is: `.incbin "a\tb"` names a path with a
+/// tab in it. Rejecting all three with the reason is the honest answer --
+/// escaping them instead would mean maintaining a second model of the
+/// assembler's string lexer, and getting it wrong writes the wrong file
+/// into the executable rather than failing.
+///
+/// Public (rather than a static in build_exe.cpp) for the same reason
+/// driverSourceName() is: buildNativeExecutable
+/// (lib/bundle/bundle_build_native.cpp) is a second caller with a container
+/// path of its own to check before generating its payload assembly, and
+/// linkResponseFile() (lib/build-native/native_compile.cpp) calls this too
+/// rather than keeping its own copy of the same four-character check --
+/// response-file syntax permits everything checkIncbinPath() permits (a
+/// quoted path, so a space is harmless) and refuses exactly the same four
+/// characters for the same reason, so the two checks are one function, not
+/// two that could drift.
+std::string checkIncbinPath(const std::string &path);
+
 /// \p argv rendered as a command line the user can paste into a shell,
 /// edit, and run.
 ///
@@ -115,6 +151,66 @@ std::string formatCommandLine(const std::vector<std::string> &argv);
 /// False for --cc, which skips the recorded compiler without judging it:
 /// reporting it "not usable" there would be untrue.
 bool recordedDriverWasRejected(DriverSource source);
+
+/// What happened to a subprocess, in the detail a caller needs to decide
+/// whether to continue.
+///
+/// The existing bool-returning runCommand() is enough for --build-exe, which
+/// runs two commands and gives up on either. A native build runs two per
+/// module and must tell "the compiler rejected this file" from "the
+/// compiler crashed" -- one is about the program being built, the other is
+/// about the machine building it, and only the second should ever be
+/// silently retried or reported as a toolchain problem.
+struct CommandResult {
+  enum class Outcome {
+    /// The child ran and exited; `status` is its exit status.
+    Exited,
+    /// The child was killed; `status` is the signal number.
+    Signalled,
+    /// posix_spawnp failed; `status` is the errno it reported.
+    SpawnFailed,
+    /// waitpid failed; `status` is errno.
+    WaitFailed,
+  };
+  Outcome outcome = Outcome::Exited;
+  int status = 0;
+  /// The child's stdout and stderr, interleaved as the child wrote them.
+  std::string output;
+
+  bool ok() const {
+    return outcome == Outcome::Exited && status == 0;
+  }
+};
+
+/// Runs \p argv to completion with its stdout and stderr captured into the
+/// result rather than inherited.
+///
+/// The pipe is drained while the child runs. Reading it after waitpid()
+/// deadlocks as soon as the child writes more than a pipe buffer, which a
+/// compiler emitting a page of diagnostics does routinely.
+///
+/// Both streams share one pipe, so their interleaving is the child's own --
+/// which is what you want when the output is going to be quoted back to a
+/// user as "what the compiler said".
+CommandResult runCommandCaptured(const std::vector<std::string> &argv);
+
+/// One-line description of what happened to a subprocess, naming it as
+/// \p what: "<what> failed with exit status <n>", "<what> was killed by
+/// signal <n>", "cannot run <what>: <strerror>", "waiting for <what>:
+/// <strerror>".
+///
+/// Shared by every command-failure report in this codebase -- runCommand()
+/// here, reportCommandFailure() (bundle_build_native.cpp) and what used to
+/// be job_pool.cpp's own static describe() -- because all three are the
+/// same four outcomes in the same four sentences, wearing three different
+/// voices only because each grew up beside its own CommandResult-shaped
+/// switch. \p what is the caller's own choice of label: an absolute
+/// compiler path for one caller, "shermes" or "the C compiler" for
+/// another, "the assembler" or "the linker" for a third -- this function
+/// only supplies the wording common to all of them.
+std::string describeCommandResult(
+    const CommandResult &result,
+    const char *what);
 
 /// Builds a standalone executable from an already-built container.
 ///
@@ -253,8 +349,16 @@ constexpr ObjectFormat hostObjectFormat() {
 /// goes wrong -- the alignment openEmbeddedBundle() enforces, and the ELF
 /// note whose absence makes the linker mark the executable as needing an
 /// executable stack.
+///
+/// \p unitSymbols is one entry per container module, in module-index order:
+/// the Static Hermes unit name for a natively compiled JavaScript module, or
+/// an empty string for every record that has no unit -- a JSON module, a
+/// native addon, a resolve-only package.json. Empty overall for a bytecode
+/// --build-exe, which still gets the two table symbols with a count of zero,
+/// so one bundle_main.cpp serves both configurations without weak symbols.
 std::string payloadAssembly(
     const std::string &bundlePath,
+    const std::vector<std::string> &unitSymbols,
     ObjectFormat format = hostObjectFormat());
 
 } // namespace node_compat

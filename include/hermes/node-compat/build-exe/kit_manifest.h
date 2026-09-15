@@ -29,6 +29,16 @@ struct KitManifest {
   std::string cc;
   std::vector<std::string> driverFlags;
   std::vector<std::string> linkArgs; // {kit} already substituted
+
+  /// Flags for compiling a generated C file against this kit: the include
+  /// path to its headers plus whatever the build that cut it required. Not
+  /// the same list as driverFlags, which is about selecting a target for
+  /// the link. `{kit}` already substituted.
+  ///
+  /// -fno-strict-aliasing and -fno-strict-overflow are not stylistic here:
+  /// Static Hermes's generated C reads and writes C++ objects through
+  /// mirroring C structs, so unrelated types alias by construction.
+  std::vector<std::string> ccFlags; // {kit} already substituted
 };
 
 /// Reads and parses `<kitDir>/kit.manifest`. Returns std::nullopt with a

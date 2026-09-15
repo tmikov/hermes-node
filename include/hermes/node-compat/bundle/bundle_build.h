@@ -8,6 +8,8 @@
 #ifndef HERMES_NODE_COMPAT_BUNDLE_BUNDLE_BUILD_H
 #define HERMES_NODE_COMPAT_BUNDLE_BUNDLE_BUILD_H
 
+#include <hermes/node-compat/build-native/build_native.h>
+
 #include <node_api.h>
 
 #include <string>
@@ -65,7 +67,10 @@ namespace node_compat {
 /// prints `bundle root: <root>` to stdout, where <root> is the longest
 /// path prefix common to every file the walk visited (see
 /// bundle_resolve.h's commonAncestor) -- the directory the consumer must
-/// treat as the bundle's root when resolving disk fallbacks.
+/// treat as the bundle's root when resolving disk fallbacks -- followed by
+/// a final `bundle: <N> modules[, <M> packaged as throwing stubs]` line,
+/// printed whether or not \p verbose was given, with the stub count
+/// present only when it is non-zero.
 ///
 /// When \p verbose is true, the walk additionally narrates itself to
 /// stderr: the entry, the absolute output path, and the generation tag with
@@ -145,6 +150,59 @@ int buildBundle(
     const std::vector<std::string> &bakeWasmPaths,
     const std::vector<std::string> &vmOptions,
     bool allowVmOptionsOverride);
+
+/// Everything buildNativeExecutable() needs, gathered in one struct because
+/// it is long even by this codebase's standard: a native build is
+/// buildBundle's whole discovery/resolution/classification walk PLUS a
+/// toolchain drive (shermes then cc, per module, then one link), so it has
+/// every knob buildBundle has and every knob --build-exe has too.
+struct NativeBuildOptions {
+  std::string entryPath, outPath, kitDir, ccOverride, shermesOverride;
+  std::vector<std::string> includes, preloads, bakeWasmPaths, vmOptions;
+  bool allowVmOptionsOverride = false;
+  unsigned jobs = 0; // 0 -> hardware_concurrency()
+  OptLevel opt = OptLevel::O3;
+  bool keepTemp = false, verbose = false;
+};
+
+/// Builds a standalone executable directly from an entry script, compiling
+/// every JavaScript module it discovers to native code with Static Hermes
+/// rather than to Hermes bytecode.
+///
+/// Shares its whole discovery/resolution/classification/container-assembly
+/// walk with buildBundle() (see buildBundleImpl in bundle_build_internal.h)
+/// -- two implementations that packaged different graphs for the same entry
+/// would be the same class of defect as a specifier resolving differently
+/// at build and run time. What differs is the payload step: instead of
+/// bytecode, every module's unwrapped source comes back in
+/// BuildProducts::pendingNative, compiled here with shermes and cc (see
+/// lib/build-native), and linked into the container's own module-index
+/// table of Static Hermes units.
+///
+/// A module's own JavaScript gets the same tolerance buildBundle() gives
+/// it, just split across two stages instead of one. The scanner (shared by
+/// both producers) catches a parse or sema failure before either ever
+/// compiles, packaging it as a module that throws if required. Past that,
+/// shermes gets the second chance buildBundle()'s own compile step gets:
+/// an IRGen-or-later rejection -- `import()` inside a `.cjs` is the case
+/// that forced this, since it parses fine and fails only here -- is
+/// classified from the CommandResult shermes returned and, on a module
+/// that is neither the entry nor a preload (both of which still hard-fail
+/// unconditionally, being certain to run), packaged as a throwing stub the
+/// same way.
+///
+/// A failure at the cc stage is always a hard build error, with no such
+/// second chance: cc compiles the C shermes generated, never the module's
+/// own JavaScript, so a rejection there says nothing about the module --
+/// it is the toolchain or the machine (a clang allocation failure at -O3
+/// on one large generated file, measured at 3.66 GB peak RSS on a
+/// 1,500-module build, is the realistic case) and must never be reported
+/// to the program as if it were a `SyntaxError` in its own source. Every
+/// failed module is reported, not just the first.
+///
+/// \return a process exit code -- 0, or 1 with the reason reported on
+/// stderr.
+int buildNativeExecutable(const NativeBuildOptions &options);
 
 } // namespace node_compat
 } // namespace hermes

@@ -11,6 +11,17 @@
 // container arrives already compiled -- which is what keeps this library
 // free of the VM.
 
+// pipe2() (used by runCommandCaptured() below, on the non-Apple branch) is
+// a GNU/Linux extension: glibc only declares it when _GNU_SOURCE is
+// defined. This project's usual Linux configuration happens to define it
+// ambiently, so leaving this implicit would compile today and fail with an
+// unexplained implicit-declaration error on a stricter libc (musl) or a
+// differently-configured build. It has to be defined before the FIRST
+// header this translation unit pulls in, glibc's own included -- once
+// <features.h> has been processed once with its include guard set, a later
+// #define here would be too late to change what it already decided.
+#define _GNU_SOURCE
+
 #include <hermes/node-compat/build-exe/build_exe.h>
 
 #include <hermes/node-compat/bundle/atomic_write.h>
@@ -19,6 +30,7 @@
 #include <hermes/node-compat/bundle/mapped_file.h>
 #include <hermes/node-compat/version.h>
 
+#include <fcntl.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -28,6 +40,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -72,24 +85,6 @@ bool needsShellQuoting(const std::string &arg) {
       return true;
   }
   return false;
-}
-
-/// Why a candidate was offered, in the words the user needs to act on it.
-/// Printed for every candidate when none works, and for the winner under
-/// --verbose, because "which compiler did it actually run" is the first
-/// question when a link fails on a machine that did not cut the kit.
-const char *driverSourceName(const DriverCandidate &candidate) {
-  switch (candidate.source) {
-    case DriverSource::Override:
-      return "--cc";
-    case DriverSource::ManifestPath:
-      return "recorded in the kit";
-    case DriverSource::ManifestName:
-      return "the kit's compiler, from PATH";
-    case DriverSource::Fallback:
-      return "portable fallback";
-  }
-  return "unknown";
 }
 
 /// Runs `<driver> --version` and returns what it printed, or nullopt if it
@@ -196,7 +191,10 @@ bool runCommand(const std::vector<std::string> &argv, std::ostream &err) {
   pid_t pid = 0;
   int rc = posix_spawnp(&pid, raw[0], nullptr, nullptr, raw.data(), environ);
   if (rc != 0) {
-    err << "error: cannot run " << argv[0] << ": " << std::strerror(rc) << "\n";
+    CommandResult result;
+    result.outcome = CommandResult::Outcome::SpawnFailed;
+    result.status = rc;
+    err << "error: " << describeCommandResult(result, argv[0].c_str()) << "\n";
     err << "  command: " << formatCommandLine(argv) << "\n";
     return false;
   }
@@ -204,7 +202,10 @@ bool runCommand(const std::vector<std::string> &argv, std::ostream &err) {
   int status = 0;
   while (waitpid(pid, &status, 0) < 0) {
     if (errno != EINTR) {
-      err << "error: waiting for " << argv[0] << ": " << std::strerror(errno)
+      CommandResult result;
+      result.outcome = CommandResult::Outcome::WaitFailed;
+      result.status = errno;
+      err << "error: " << describeCommandResult(result, argv[0].c_str())
           << "\n";
       err << "  command: " << formatCommandLine(argv) << "\n";
       return false;
@@ -214,35 +215,17 @@ bool runCommand(const std::vector<std::string> &argv, std::ostream &err) {
   if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
     return true;
 
-  if (WIFSIGNALED(status))
-    err << "error: " << argv[0] << " was killed by signal " << WTERMSIG(status)
-        << "\n";
-  else
-    err << "error: " << argv[0] << " failed with exit status "
-        << WEXITSTATUS(status) << "\n";
+  CommandResult result;
+  if (WIFSIGNALED(status)) {
+    result.outcome = CommandResult::Outcome::Signalled;
+    result.status = WTERMSIG(status);
+  } else {
+    result.outcome = CommandResult::Outcome::Exited;
+    result.status = WEXITSTATUS(status);
+  }
+  err << "error: " << describeCommandResult(result, argv[0].c_str()) << "\n";
   err << "  command: " << formatCommandLine(argv) << "\n";
   return false;
-}
-
-/// Why \p path cannot be named inside the assembler's quoted string, or ""
-/// if it can.
-///
-/// GAS processes C-style escapes inside a quoted string, so a backslash is
-/// as unrepresentable as a quote is: `.incbin "a\tb"` names a path with a
-/// tab in it. Rejecting all three with the reason is the honest answer --
-/// escaping them instead would mean maintaining a second model of the
-/// assembler's string lexer, and getting it wrong writes the wrong file
-/// into the executable rather than failing.
-std::string checkIncbinPath(const std::string &path) {
-  for (char c : path) {
-    if (c == '"')
-      return "a double quote";
-    if (c == '\\')
-      return "a backslash";
-    if (c == '\n' || c == '\r')
-      return "a newline";
-  }
-  return "";
 }
 
 /// Removes the temporaries when the call leaves, however it leaves. A
@@ -259,8 +242,189 @@ struct TempFiles {
 
 } // namespace
 
+std::string describeCommandResult(
+    const CommandResult &result,
+    const char *what) {
+  switch (result.outcome) {
+    case CommandResult::Outcome::Exited:
+      return std::string(what) + " failed with exit status " +
+          std::to_string(result.status);
+    case CommandResult::Outcome::Signalled:
+      return std::string(what) + " was killed by signal " +
+          std::to_string(result.status);
+    case CommandResult::Outcome::SpawnFailed:
+      return std::string("cannot run ") + what + ": " +
+          std::strerror(result.status);
+    case CommandResult::Outcome::WaitFailed:
+      return std::string("waiting for ") + what + ": " +
+          std::strerror(result.status);
+  }
+  return what;
+}
+
+std::string checkIncbinPath(const std::string &path) {
+  for (char c : path) {
+    if (c == '"')
+      return "a double quote";
+    if (c == '\\')
+      return "a backslash";
+    if (c == '\n' || c == '\r')
+      return "a newline";
+  }
+  return "";
+}
+
+const char *driverSourceName(const DriverCandidate &candidate) {
+  switch (candidate.source) {
+    case DriverSource::Override:
+      return "--cc";
+    case DriverSource::ManifestPath:
+      return "recorded in the kit";
+    case DriverSource::ManifestName:
+      return "the kit's compiler, from PATH";
+    case DriverSource::Fallback:
+      return "portable fallback";
+  }
+  return "unknown";
+}
+
+CommandResult runCommandCaptured(const std::vector<std::string> &argv) {
+  CommandResult result;
+
+  // Close-on-exec, created atomically where the platform allows it. This
+  // runner is called from several worker threads at once: with plain
+  // pipe(), one worker's write end leaks into another worker's child, that
+  // child holds it open, and the first worker's read never sees EOF -- a
+  // hang, not a wrong answer. pipe2() closes the window entirely; the macOS
+  // fallback leaves a small one, which is why the fcntl comes immediately.
+  //
+  // On the fallback path the window between pipe() and the two fcntl()s is
+  // still a window, so a mutex serializes create-flag-spawn against other
+  // threads in this process. It costs nothing measurable next to a compiler
+  // invocation, and it is the only way to make the fallback actually safe
+  // rather than merely narrower.
+  int fds[2];
+#ifdef __APPLE__
+  static std::mutex spawnMutex;
+  std::unique_lock<std::mutex> spawnLock(spawnMutex);
+  if (pipe(fds) != 0) {
+    result.outcome = CommandResult::Outcome::SpawnFailed;
+    result.status = errno;
+    return result;
+  }
+  // Both calls always run -- no short-circuit -- so neither descriptor is
+  // left without FD_CLOEXEC because the other one's call happened to be
+  // checked first. Harmless today, since either failure closes both fds
+  // right below, but a future refactor that kept one fd open past this
+  // point must not inherit a short-circuit that silently skipped its flag.
+  int cloexec0 = fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+  int cloexec1 = fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+  if (cloexec0 != 0 || cloexec1 != 0) {
+    int saved = errno;
+    close(fds[0]);
+    close(fds[1]);
+    result.outcome = CommandResult::Outcome::SpawnFailed;
+    result.status = saved;
+    return result;
+  }
+#else
+  if (pipe2(fds, O_CLOEXEC) != 0) {
+    result.outcome = CommandResult::Outcome::SpawnFailed;
+    result.status = errno;
+    return result;
+  }
+#endif
+
+  std::vector<char *> raw;
+  raw.reserve(argv.size() + 1);
+  for (const std::string &arg : argv)
+    raw.push_back(const_cast<char *>(arg.c_str()));
+  raw.push_back(nullptr);
+
+  // One pipe for both streams, so the child's own interleaving survives.
+  // adddup2 clears FD_CLOEXEC on the duplicate, which is what lets the
+  // child keep fds 1 and 2 while every other descriptor closes. Each call
+  // is checked: a silently failed action means the child runs with the
+  // wrong descriptors and the output vanishes.
+  posix_spawn_file_actions_t actions;
+  // init separately: destroying an object whose init failed is undefined.
+  if (int ierr = posix_spawn_file_actions_init(&actions)) {
+    close(fds[0]);
+    close(fds[1]);
+    result.outcome = CommandResult::Outcome::SpawnFailed;
+    result.status = ierr;
+    return result;
+  }
+  int aerr = 0;
+  if (aerr == 0)
+    aerr = posix_spawn_file_actions_addclose(&actions, fds[0]);
+  if (aerr == 0)
+    aerr = posix_spawn_file_actions_adddup2(&actions, fds[1], STDOUT_FILENO);
+  if (aerr == 0)
+    aerr = posix_spawn_file_actions_adddup2(&actions, fds[1], STDERR_FILENO);
+  if (aerr == 0)
+    aerr = posix_spawn_file_actions_addclose(&actions, fds[1]);
+  if (aerr != 0) {
+    posix_spawn_file_actions_destroy(&actions);
+    close(fds[0]);
+    close(fds[1]);
+    result.outcome = CommandResult::Outcome::SpawnFailed;
+    result.status = aerr;
+    return result;
+  }
+
+  pid_t pid = 0;
+  int rc = posix_spawnp(&pid, raw[0], &actions, nullptr, raw.data(), environ);
+  posix_spawn_file_actions_destroy(&actions);
+  close(fds[1]);
+#ifdef __APPLE__
+  // The child has been forked; nothing else can inherit these now.
+  spawnLock.unlock();
+#endif
+
+  if (rc != 0) {
+    close(fds[0]);
+    result.outcome = CommandResult::Outcome::SpawnFailed;
+    result.status = rc;
+    return result;
+  }
+
+  // Drained here, before waitpid: a child that fills the pipe blocks
+  // writing while we block waiting, and neither side ever moves.
+  char buf[4096];
+  ssize_t n;
+  while ((n = read(fds[0], buf, sizeof(buf))) != 0) {
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+      break;
+    }
+    result.output.append(buf, static_cast<size_t>(n));
+  }
+  close(fds[0]);
+
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0) {
+    if (errno != EINTR) {
+      result.outcome = CommandResult::Outcome::WaitFailed;
+      result.status = errno;
+      return result;
+    }
+  }
+
+  if (WIFSIGNALED(status)) {
+    result.outcome = CommandResult::Outcome::Signalled;
+    result.status = WTERMSIG(status);
+  } else {
+    result.outcome = CommandResult::Outcome::Exited;
+    result.status = WEXITSTATUS(status);
+  }
+  return result;
+}
+
 std::string payloadAssembly(
     const std::string &bundlePath,
+    const std::vector<std::string> &unitSymbols,
     ObjectFormat format) {
   std::ostringstream os;
 
@@ -292,18 +456,52 @@ std::string payloadAssembly(
        << "hermesNodeBundleStart:\n"
        << "\t.incbin \"" << bundlePath << "\"\n"
        << "\t.globl hermesNodeBundleEnd\n"
-       << "hermesNodeBundleEnd:\n"
-       // Without this, the linker cannot tell that an object assembled
-       // from hand-written source needs no executable stack, so it
-       // conservatively marks the whole program's GNU_STACK segment RWE --
-       // measured with readelf, and GNU ld additionally warns that the
-       // behavior is deprecated. Every executable this feature produces
-       // would carry it. A security regression introduced by our own code
-       // generator is not something to leave to whoever reads the linker's
-       // warnings. Mach-O has no equivalent: its stack is non-executable
-       // unless the load command says otherwise.
-       << "\t.section .note.GNU-stack,\"\",@progbits\n";
+       << "hermesNodeBundleEnd:\n";
   }
+
+  // The unit table. Not in .rodata on ELF: each entry is the address of a
+  // function, which in a PIE is a dynamic relocation applied at load time,
+  // and relocations into a read-only section are the text-relocation
+  // problem. .data.rel.ro is the section made read-only after relocation,
+  // which is what a table of function pointers wants. Mach-O's
+  // __DATA,__const already is that section, so the payload's own section
+  // serves.
+  //
+  // Indexed by container module index with holes, never compacted: the
+  // index is how bundleLoadCallback finds an entry, and a second mapping
+  // from module index to table slot is a second thing that can be wrong.
+  //
+  // Both symbols are emitted unconditionally, even for an empty table --
+  // that is what lets one bundle_main.cpp link against a single definition
+  // whether this executable is a bytecode --build-exe (a count of zero) or
+  // a native one.
+  const char *prefix = format == ObjectFormat::MachO ? "_" : "";
+  if (format == ObjectFormat::ELF)
+    os << "\t.section .data.rel.ro\n";
+  os << "\t.p2align 3\n"
+     << "\t.globl " << prefix << "hermesNodeNativeUnits\n"
+     << prefix << "hermesNodeNativeUnits:\n";
+  for (const std::string &symbol : unitSymbols) {
+    if (symbol.empty())
+      os << "\t.quad 0\n";
+    else
+      os << "\t.quad " << prefix << "sh_export_" << symbol << "\n";
+  }
+  os << "\t.globl " << prefix << "hermesNodeNativeUnitCount\n"
+     << prefix << "hermesNodeNativeUnitCount:\n"
+     << "\t.quad " << unitSymbols.size() << "\n";
+
+  // Without this, the linker cannot tell that an object assembled from
+  // hand-written source needs no executable stack, so it conservatively
+  // marks the whole program's GNU_STACK segment RWE -- measured with
+  // readelf, and GNU ld additionally warns that the behavior is deprecated.
+  // Every executable this feature produces would carry it. A security
+  // regression introduced by our own code generator is not something to
+  // leave to whoever reads the linker's warnings. Mach-O has no
+  // equivalent: its stack is non-executable unless the load command says
+  // otherwise. This MUST stay the last thing emitted.
+  if (format == ObjectFormat::ELF)
+    os << "\t.section .note.GNU-stack,\"\",@progbits\n";
 
   return os.str();
 }
@@ -579,7 +777,7 @@ int buildExecutable(
   std::string objPath = (outDir / (stem + ".o")).string();
   TempFiles temps{{asmPath, objPath}};
 
-  std::string source = payloadAssembly(absBundleStr);
+  std::string source = payloadAssembly(absBundleStr, {});
   if (verbose)
     err << "payload assembly (" << asmPath << "):\n" << source;
 

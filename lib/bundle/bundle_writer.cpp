@@ -96,6 +96,10 @@ void BundleWriter::setAllowVmOptionsOverride(bool allow) {
   allowVmOptionsOverride_ = allow;
 }
 
+void BundleWriter::setNativeUnits(bool native) {
+  nativeUnits_ = native;
+}
+
 size_t BundleWriter::stringCount() const {
   return internTable_.size();
 }
@@ -240,7 +244,8 @@ std::vector<uint8_t> BundleWriter::serialize(uint32_t generationTag) {
   header.wasmTableOffset = static_cast<uint32_t>(wasmTableOffset);
   header.wasmCount = static_cast<uint32_t>(wasm_.size());
   header.containerFlags =
-      allowVmOptionsOverride_ ? kBundleFlagAllowVmOptionsOverride : 0;
+      (allowVmOptionsOverride_ ? kBundleFlagAllowVmOptionsOverride : 0) |
+      (nativeUnits_ ? kBundleFlagNativeUnits : 0);
   header.payloadOffset = static_cast<uint32_t>(payloadOffset);
   header.payloadSize = static_cast<uint32_t>(payloadSize);
   appendPod(out, header);

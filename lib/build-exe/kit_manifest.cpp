@@ -18,6 +18,9 @@
 //                 inside a linkarg value is replaced with the kit
 //                 directory -- it appears on kit-relative paths only, never
 //                 on absolute system paths.
+//   ccflag    -- repeated, ordered; flags for compiling a generated C
+//                file against this kit's headers. `{kit}` substituted, as
+//                for linkarg.
 // Any other key is an error naming the key: an unknown key means the kit
 // was cut by a newer make-kit.py recording something this reader would
 // otherwise silently drop.
@@ -129,6 +132,8 @@ std::optional<KitManifest> readKitManifest(
       manifest.driverFlags.push_back(value);
     } else if (key == "linkarg") {
       manifest.linkArgs.push_back(substituteKitDir(value, kitDir));
+    } else if (key == "ccflag") {
+      manifest.ccFlags.push_back(substituteKitDir(value, kitDir));
     } else {
       if (error)
         *error = manifestPath + ": unknown key '" + key + "'";

@@ -4,10 +4,11 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 #
-# Runs ditz2 three ways -- from disk, from an AOT bundle, and as a standalone
-# executable with node_modules and dist-cjs moved out of the way -- and drives
-# a real workflow through each one, checking what it wrote rather than just
-# that it exited 0.
+# Runs ditz2 four ways -- from disk, from an AOT bundle, as a standalone
+# executable, and as a natively compiled executable, the last two with
+# node_modules and dist-cjs moved out of the way -- and drives a real
+# workflow through each one, checking what it wrote rather than just that it
+# exited 0.
 #
 # No pty is needed here, unlike the two TUI examples: ditz2 is a plain CLI
 # that reads no keys and draws no screen.
@@ -163,6 +164,40 @@ if [ -f "$OUT/dz" ]; then
   mv "$HERE/.dist_cjs_hidden" "$HERE/dist-cjs"
 else
   echo "standalone executable: skipped (no link kit in $BUILD_DIR)"
+fi
+
+if [ -x "$BUILD_DIR/kit/shermes" ]; then
+  echo "hermes-node build-native:"
+  if ! build_log="$("$HERMES_NODE" build-native "$HERE/dist-cjs/cli/main.js" \
+      -o "$OUT/dz-native" --kit="$BUILD_DIR/kit" --verbose 2>&1)"; then
+    echo "$build_log" 1>&2
+    fail "build-native"
+  fi
+  [ -f "$OUT/dz-native" ] || fail "$OUT/dz-native was not produced"
+  # Same claim as the bytecode bundle above, and it is worth re-checking
+  # rather than inheriting: the native producer shares buildBundleImpl, so a
+  # warning here would mean discovery found something it could not follow --
+  # and TypeScript output is a likelier place for that to appear than
+  # hand-written CommonJS, since what tsc emits is nobody's idea of idiomatic.
+  if printf '%s' "$build_log" | grep -q '^warning:'; then
+    printf '%s' "$build_log" | grep '^warning:' 1>&2
+    fail "build-native warned; this graph is supposed to be fully static"
+  fi
+  echo "  ok: $OUT/dz-native built with no producer warnings"
+
+  echo "build-native executable:"
+  # Both trees go away, as for the bytecode executable above: a natively
+  # compiled program carries its JavaScript as linked machine code, so
+  # neither the packages nor the transpiled source should be reachable.
+  mv "$HERE/node_modules" "$HERE/.node_modules_hidden"
+  mv "$HERE/dist-cjs" "$HERE/.dist_cjs_hidden"
+  expect_workflow "dist/dz-native with node_modules and dist-cjs moved away" \
+    "$OUT/dz-native"
+  rm -rf "$HERE/node_modules" "$HERE/dist-cjs"
+  mv "$HERE/.node_modules_hidden" "$HERE/node_modules"
+  mv "$HERE/.dist_cjs_hidden" "$HERE/dist-cjs"
+else
+  echo "build-native executable: skipped (no shermes in $BUILD_DIR/kit)"
 fi
 
 echo "PASS: ditz2"

@@ -762,6 +762,31 @@ TEST(BundleToolsTest, ExtractModuleRefusesANative) {
   EXPECT_FALSE(std::filesystem::exists(tree.path("out.bin")));
 }
 
+// A container `build-native` produced (kBundleFlagNativeUnits) carries every
+// JavaScript module's payload EMPTY -- the module was compiled ahead of time
+// to a Static Hermes unit and linked into an executable rather than kept as
+// bytecode here. Without the refusal this pins, extractModule() would
+// "succeed" by writing a zero-byte file and calling it the module's
+// payload, exactly the failure mode ExtractModuleRefusesANative above
+// exists to avoid for a native addon.
+TEST(BundleToolsTest, ExtractModuleRefusesANativeUnit) {
+  TempTree tree;
+  BundleWriter writer;
+  uint32_t entry =
+      writer.addModule("cli.js", ModuleKind::kJavaScript, kRequirable, "");
+  writer.setEntry(entry);
+  writer.setNativeUnits(true);
+  tree.writeBytes("app.hbb", writer.serialize(bundleGenerationTag()));
+
+  std::ostringstream err;
+  EXPECT_EQ(
+      extractModule(tree.path("app.hbb"), "cli.js", tree.path("out.bin"), err),
+      1);
+  EXPECT_NE(err.str().find("compiled to native code"), std::string::npos)
+      << err.str();
+  EXPECT_FALSE(std::filesystem::exists(tree.path("out.bin")));
+}
+
 /// A kNativeDigestBytes-byte digest whose every byte is \p fill, distinct
 /// enough for tests that need two or more digests to compare unequal and to
 /// produce a recognizable hex prefix ("cdcdcdcd...") rather than an opaque

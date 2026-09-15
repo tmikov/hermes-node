@@ -144,7 +144,9 @@ std::optional<BundleReader> BundleReader::openImpl(
   // here is a container claiming something this reader has no definition
   // for, and the format version is already an exact match, so it can only
   // mean a corrupt or hand-edited file.
-  if ((header->containerFlags & ~kBundleFlagAllowVmOptionsOverride) != 0)
+  constexpr uint32_t kKnownContainerFlags =
+      kBundleFlagAllowVmOptionsOverride | kBundleFlagNativeUnits;
+  if ((header->containerFlags & ~kKnownContainerFlags) != 0)
     return fail("hermes-node bundle: container has unknown flags");
 
   // Every (offset, size) pair the header claims must land inside the
@@ -511,6 +513,10 @@ std::string_view BundleReader::vmOption(uint32_t i) const {
 
 bool BundleReader::allowsVmOptionsOverride() const {
   return (header_->containerFlags & kBundleFlagAllowVmOptionsOverride) != 0;
+}
+
+bool BundleReader::hasNativeUnits() const {
+  return (header_->containerFlags & kBundleFlagNativeUnits) != 0;
 }
 
 uint32_t BundleReader::wasmCount() const {
