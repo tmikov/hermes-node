@@ -422,6 +422,11 @@ bool scanRequires(
   std::string ownedSource = wrapCJS(source);
 
   auto context = std::make_shared<Context>();
+  // These must match what the compile step behind this scan will use, or
+  // the scan rejects files the compiler would accept. See JSLanguageFlags
+  // in cjs_wrapper.h for what that cost.
+  context->setEnableES6BlockScoping(kJSLanguageFlags.es6BlockScoping);
+  context->setEnableAsyncGenerators(kJSLanguageFlags.asyncGenerators);
   if (enableTS)
     context->setParseTS(true);
   context->getSourceErrorManager().setDiagHandler(&diagHandler, error);
@@ -440,6 +445,10 @@ bool scanRequires(
   // failure lands in *error like a parse error does -- and a failure here
   // means the compiler will reject the same wrapped text for the same
   // reason, so treating it as a scan failure is not a new restriction.
+  //
+  // That holds only because this Context is configured from
+  // kJSLanguageFlags above -- with Hermes's own defaults it was false, and
+  // an async generator was stubbed here and compiled fine ten lines later.
   sema::SemContext semCtx(*context);
   if (!sema::resolveAST(*context, semCtx, *program)) {
     if (error->empty())
