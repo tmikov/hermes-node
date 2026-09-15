@@ -82,6 +82,9 @@ target_link_libraries(WasmRecordTest hermesNodeBundle)
 add_node_compat_unittest(BuildExeTest BuildExeTest.cpp)
 target_link_libraries(BuildExeTest hermesNodeBuildExe)
 
+add_node_compat_unittest(BuildNativeTest BuildNativeTest.cpp)
+target_link_libraries(BuildNativeTest hermesNodeBuildNative)
+
 add_node_compat_unittest(VmOptionsTest VmOptionsTest.cpp)
 target_link_libraries(VmOptionsTest hermesNodeVmOptions)
 

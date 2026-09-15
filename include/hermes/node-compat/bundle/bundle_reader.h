@@ -138,6 +138,11 @@ class BundleReader {
   /// permits its VM options to be overridden at run time.
   bool allowsVmOptionsOverride() const;
 
+  /// True when kBundleFlagNativeUnits is set -- the container's JavaScript
+  /// payloads are empty because its code is linked into an executable as
+  /// Static Hermes units rather than carried here.
+  bool hasNativeUnits() const;
+
   /// One entry of the Wasm table -- see BundleWasmRecord in
   /// bundle_format.h. `digest` and `bytecode` are views into the mapped
   /// container: `digest` is the raw 32-byte SHA-256 (may contain NUL

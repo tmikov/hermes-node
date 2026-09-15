@@ -46,12 +46,19 @@ bool openBundle(const std::string &path, std::string *error);
 /// layer -- the caller already links libuv, which answers the question
 /// portably (uv_exepath).
 ///
+/// \p nativeUnits and \p nativeUnitCount are the payload object's unit
+/// table (null/0 for a bytecode build). A native container that arrives
+/// without one, or with one of the wrong size, is a producer bug -- caught
+/// here, rather than surfacing much later as a module that will not load.
+///
 /// Only one bundle can be open at a time; a second call to either open
 /// function fails.
 bool openEmbeddedBundle(
     const uint8_t *data,
     size_t size,
     const std::string &exePath,
+    const void *const *nativeUnits,
+    size_t nativeUnitCount,
     std::string *error);
 
 /// What a container records about its VM configuration.

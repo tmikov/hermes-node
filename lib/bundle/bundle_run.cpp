@@ -58,6 +58,12 @@ struct OpenBundle {
   /// Directory holding the bundle file, with symlinks resolved. Module
   /// identities are relative to it, so it is what __filename is built from.
   std::string root;
+  /// The payload object's native unit table, or null for a bytecode
+  /// container (openBundle() never sets these -- a disk container is never
+  /// native, which Task 8's producer-side refusal enforces). Indexed by
+  /// container module index; a null entry means that record has no unit.
+  const void *const *nativeUnits = nullptr;
+  size_t nativeUnitCount = 0;
   /// The container itself: the .hbb for --bundle, the executable for an
   /// embedded one. Kept only so a message about a damaged container can name
   /// the file to rebuild -- `root` is its directory and does not identify
@@ -342,6 +348,27 @@ napi_value bundleLoadCallback(napi_env env, napi_callback_info info) {
     return result;
   }
 
+  // A natively compiled module: its code is linked in, and its unit's
+  // top-level completion value is the CommonJS wrapper function this
+  // callback exists to return -- the same thing running its bytecode
+  // yields. Initialized here, on first require(), not at startup.
+  if (state.nativeUnits && *index < state.nativeUnitCount &&
+      state.nativeUnits[*index] != nullptr) {
+    napi_value result;
+    // A throwing top level comes back as napi_pending_exception with the
+    // value pending, exactly as hermes_run_bytecode reports one, so it
+    // propagates through require() the same way. There is no
+    // fatalBadPayload() analogue: a linked unit cannot be a corrupt
+    // payload -- a damaged object fails at link time.
+    if (hermes_init_sh_unit(
+            env,
+            reinterpret_cast<SHUnitCreator>(
+                const_cast<void *>(state.nativeUnits[*index])),
+            &result) != napi_ok)
+      return nullptr;
+    return result;
+  }
+
   // The mapping outlives the runtime, so there is nothing to finalize and
   // no copy to make: pass a null finalizer (the buffer is externally
   // managed) and mark it persistent, exactly as the embedded-module loader
@@ -582,6 +609,17 @@ bool openBundle(const std::string &path, std::string *error) {
     return false;
   }
 
+  // openBundle() is the disk path; openEmbeddedBundle() is the linked copy.
+  // They share BundleReader::open(), so the refusal has to be here -- doing
+  // it in the reader would refuse every native executable, which is the one
+  // thing that must work.
+  if (reader->hasNativeUnits()) {
+    *error = "hermes-node bundle: " + path +
+        " holds no bytecode -- its code is linked into the executable that "
+        "was built from it. Run that executable instead.";
+    return false;
+  }
+
   // Past the point of no return, so the mapping becomes permanent: bundled
   // bytecode is executed in place out of it and stays reachable from the
   // runtime for as long as the process lives (see the header). This is the
@@ -633,6 +671,8 @@ bool openEmbeddedBundle(
     const uint8_t *data,
     size_t size,
     const std::string &exePath,
+    const void *const *nativeUnits,
+    size_t nativeUnitCount,
     std::string *error) {
   OpenBundle &state = openBundleState();
   if (state.reader) {
@@ -662,9 +702,30 @@ bool openEmbeddedBundle(
   if (!reader)
     return false;
 
+  // A native container's code is in the table; a container that says it is
+  // native and arrives without one, or with one of the wrong size, is a
+  // producer bug that would otherwise surface as a module that will not
+  // load.
+  if (reader->hasNativeUnits()) {
+    if (nativeUnits == nullptr) {
+      *error =
+          "hermes-node bundle: the embedded container is native but this "
+          "executable carries no unit table";
+      return false;
+    }
+    if (nativeUnitCount != reader->moduleCount()) {
+      *error = "hermes-node bundle: the unit table has " +
+          std::to_string(nativeUnitCount) + " entries for " +
+          std::to_string(reader->moduleCount()) + " modules";
+      return false;
+    }
+  }
+
   // No mapping to release: the payload is a read-only section of this
   // executable, mapped by the loader and live for as long as the process.
   publishBundle(state, std::move(*reader), rootDirectoryFor(exePath), exePath);
+  state.nativeUnits = nativeUnits;
+  state.nativeUnitCount = nativeUnitCount;
 
   return true;
 }

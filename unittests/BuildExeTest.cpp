@@ -13,12 +13,17 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <csignal>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 using hermes::node_compat::buildAssembleCommand;
 using hermes::node_compat::buildLinkCommand;
+using hermes::node_compat::CommandResult;
 using hermes::node_compat::DriverCandidate;
 using hermes::node_compat::driverCandidates;
 using hermes::node_compat::DriverSource;
@@ -28,6 +33,7 @@ using hermes::node_compat::payloadAssembly;
 using hermes::node_compat::readKitManifest;
 using hermes::node_compat::recordedDriverWasRejected;
 using hermes::node_compat::resolveDriver;
+using hermes::node_compat::runCommandCaptured;
 using hermes::node_compat::versionOutputIsClang;
 using hermes::node_compat::test::TempTree;
 
@@ -89,6 +95,36 @@ TEST(KitManifestTest, UnknownKeyIsAnError) {
   std::string error;
   EXPECT_FALSE(readKitManifest(tree.path("kit"), &error).has_value());
   EXPECT_NE(error.find("sysroot"), std::string::npos);
+}
+
+TEST(KitManifestTest, ParsesCcFlagsInOrderWithKitSubstitution) {
+  TempTree tree;
+  tree.write(
+      "kit/kit.manifest",
+      "version: 1.2.3\n"
+      "cc: /usr/bin/clang++\n"
+      "ccflag: -DNDEBUG\n"
+      "ccflag: -fno-strict-aliasing\n"
+      "ccflag: -I{kit}/include\n"
+      "driverflag: -arch\n"
+      "linkarg: -lm\n");
+  std::string error;
+  auto m = readKitManifest(tree.path("kit"), &error);
+  ASSERT_TRUE(m.has_value()) << error;
+  ASSERT_EQ(3u, m->ccFlags.size());
+  EXPECT_EQ("-DNDEBUG", m->ccFlags[0]);
+  EXPECT_EQ("-fno-strict-aliasing", m->ccFlags[1]);
+  EXPECT_EQ(tree.path("kit") + "/include", m->ccFlags[2].substr(2));
+  EXPECT_EQ("-I", m->ccFlags[2].substr(0, 2));
+}
+
+TEST(KitManifestTest, ManifestWithNoCcFlagsIsStillValid) {
+  TempTree tree;
+  tree.write("kit/kit.manifest", "version: 1.2.3\ncc: /usr/bin/clang++\n");
+  std::string error;
+  auto m = readKitManifest(tree.path("kit"), &error);
+  ASSERT_TRUE(m.has_value()) << error;
+  EXPECT_TRUE(m->ccFlags.empty());
 }
 
 TEST(BuildExeTest, LinkCommandPutsObjectsBeforeArchives) {
@@ -177,7 +213,7 @@ TEST(BuildExeTest, AssembleCommandWithNoDriverFlags) {
 // the first Darwin build.
 TEST(BuildExeTest, PayloadAssemblyElf) {
   std::string s = payloadAssembly(
-      "/tmp/some dir/app.hbb", hermes::node_compat::ObjectFormat::ELF);
+      "/tmp/some dir/app.hbb", {}, hermes::node_compat::ObjectFormat::ELF);
   EXPECT_EQ(
       s,
       "\t.section .rodata\n"
@@ -187,12 +223,19 @@ TEST(BuildExeTest, PayloadAssemblyElf) {
       "\t.incbin \"/tmp/some dir/app.hbb\"\n"
       "\t.globl hermesNodeBundleEnd\n"
       "hermesNodeBundleEnd:\n"
+      "\t.section .data.rel.ro\n"
+      "\t.p2align 3\n"
+      "\t.globl hermesNodeNativeUnits\n"
+      "hermesNodeNativeUnits:\n"
+      "\t.globl hermesNodeNativeUnitCount\n"
+      "hermesNodeNativeUnitCount:\n"
+      "\t.quad 0\n"
       "\t.section .note.GNU-stack,\"\",@progbits\n");
 }
 
 TEST(BuildExeTest, PayloadAssemblyMachO) {
   std::string s = payloadAssembly(
-      "/tmp/some dir/app.hbb", hermes::node_compat::ObjectFormat::MachO);
+      "/tmp/some dir/app.hbb", {}, hermes::node_compat::ObjectFormat::MachO);
   EXPECT_EQ(
       s,
       "\t.section __DATA,__const\n"
@@ -201,7 +244,13 @@ TEST(BuildExeTest, PayloadAssemblyMachO) {
       "_hermesNodeBundleStart:\n"
       "\t.incbin \"/tmp/some dir/app.hbb\"\n"
       "\t.globl _hermesNodeBundleEnd\n"
-      "_hermesNodeBundleEnd:\n");
+      "_hermesNodeBundleEnd:\n"
+      "\t.p2align 3\n"
+      "\t.globl _hermesNodeNativeUnits\n"
+      "_hermesNodeNativeUnits:\n"
+      "\t.globl _hermesNodeNativeUnitCount\n"
+      "_hermesNodeNativeUnitCount:\n"
+      "\t.quad 0\n");
 }
 
 // Both spellings share the properties that make the payload usable at all:
@@ -213,7 +262,7 @@ TEST(BuildExeTest, PayloadAssemblyAlignsAndBracketsTheBytesInBothFormats) {
   for (auto format :
        {hermes::node_compat::ObjectFormat::ELF,
         hermes::node_compat::ObjectFormat::MachO}) {
-    std::string s = payloadAssembly("/tmp/app.hbb", format);
+    std::string s = payloadAssembly("/tmp/app.hbb", {}, format);
     EXPECT_NE(s.find("\t.p2align 4\n"), std::string::npos);
     EXPECT_NE(s.find("\t.incbin \"/tmp/app.hbb\"\n"), std::string::npos);
     EXPECT_LT(s.find("hermesNodeBundleStart"), s.find(".incbin"));
@@ -224,8 +273,68 @@ TEST(BuildExeTest, PayloadAssemblyAlignsAndBracketsTheBytesInBothFormats) {
 // The default is the host's format, which is what buildExecutable() uses.
 TEST(BuildExeTest, PayloadAssemblyDefaultsToTheHostFormat) {
   EXPECT_EQ(
-      payloadAssembly("/tmp/app.hbb"),
-      payloadAssembly("/tmp/app.hbb", hermes::node_compat::hostObjectFormat()));
+      payloadAssembly("/tmp/app.hbb", {}),
+      payloadAssembly(
+          "/tmp/app.hbb", {}, hermes::node_compat::hostObjectFormat()));
+}
+
+// --- The native-unit table ----------------------------------------------
+//
+// A produced executable carries a table of function pointers, one per
+// container module, so bundleLoadCallback can find a natively compiled
+// module's entry point. The two symbols are emitted unconditionally, even
+// with no units at all, so one bundle_main.cpp can link against a single
+// definition whether the executable is a bytecode --build-exe or a native
+// one.
+
+TEST(BuildExeTest, PayloadAssemblyEmitsAnEmptyUnitTableForELF) {
+  std::string s = payloadAssembly(
+      "/tmp/app.hbb", {}, hermes::node_compat::ObjectFormat::ELF);
+  EXPECT_NE(std::string::npos, s.find(".section .rodata"));
+  EXPECT_NE(std::string::npos, s.find("hermesNodeBundleStart:"));
+  // The two symbols exist even with no units, so bundle_main.cpp links
+  // against one definition in both configurations.
+  EXPECT_NE(std::string::npos, s.find("hermesNodeNativeUnits:"));
+  EXPECT_NE(std::string::npos, s.find("hermesNodeNativeUnitCount:"));
+  EXPECT_NE(std::string::npos, s.find(".quad 0\n"));
+  // A pointer table must not sit in .rodata in a PIE.
+  EXPECT_NE(std::string::npos, s.find(".section .data.rel.ro"));
+  // The GNU-stack note stays last.
+  EXPECT_NE(std::string::npos, s.find(".note.GNU-stack"));
+}
+
+TEST(BuildExeTest, PayloadAssemblyEmitsUnitPointersAndNullsForELF) {
+  std::string s = payloadAssembly(
+      "/tmp/app.hbb",
+      {"hn_m000000", "", "hn_m000002"},
+      hermes::node_compat::ObjectFormat::ELF);
+  EXPECT_NE(std::string::npos, s.find(".quad sh_export_hn_m000000\n"));
+  EXPECT_NE(std::string::npos, s.find(".quad sh_export_hn_m000002\n"));
+  // The hole is a JSON module, a native addon or a resolve-only
+  // package.json: indexed by container module index, so it cannot be
+  // compacted.
+  EXPECT_NE(std::string::npos, s.find(".quad 0\n"));
+  EXPECT_NE(std::string::npos, s.find(".quad 3\n")); // the count
+}
+
+TEST(BuildExeTest, PayloadAssemblyUnderscoresSymbolsForMachO) {
+  std::string s = payloadAssembly(
+      "/tmp/app.hbb", {"hn_m000000"}, hermes::node_compat::ObjectFormat::MachO);
+  EXPECT_NE(std::string::npos, s.find("_hermesNodeNativeUnits:"));
+  EXPECT_NE(std::string::npos, s.find(".quad _sh_export_hn_m000000\n"));
+  EXPECT_NE(std::string::npos, s.find(".section __DATA,__const"));
+  // Mach-O needs no GNU-stack note and must not emit one.
+  EXPECT_EQ(std::string::npos, s.find(".note.GNU-stack"));
+}
+
+TEST(BuildExeTest, PayloadAssemblyAlignsTheUnitTable) {
+  std::string s = payloadAssembly(
+      "/tmp/app.hbb", {"hn_m000000"}, hermes::node_compat::ObjectFormat::ELF);
+  size_t table = s.find("hermesNodeNativeUnits:");
+  ASSERT_NE(std::string::npos, table);
+  size_t align = s.rfind(".p2align 3", table);
+  EXPECT_NE(std::string::npos, align);
+  EXPECT_LT(align, table);
 }
 
 // --- Driver resolution -------------------------------------------------
@@ -455,6 +564,139 @@ TEST(BuildExeTest, AssembleCommandOmitsTheClangOnlyFlagForOtherDrivers) {
   EXPECT_EQ(clang[1], "-Qunused-arguments");
   clang.erase(clang.begin() + 1);
   EXPECT_EQ(clang, gcc);
+}
+
+// --- runCommandCaptured --------------------------------------------------
+//
+// A native build runs a compiler twice per module and has to tell "the
+// compiler rejected this source" from "the compiler crashed" -- runCommand's
+// bare bool cannot say which, and its inherited fd 2 cannot be attributed to
+// a module. These pin the structured result and the two ways draining it
+// wrong turns into a hang instead of a failure.
+
+TEST(BuildExeTest, RunCommandCapturedReportsCleanExit) {
+  CommandResult r = runCommandCaptured({"/bin/sh", "-c", "exit 0"});
+  EXPECT_EQ(CommandResult::Outcome::Exited, r.outcome);
+  EXPECT_EQ(0, r.status);
+  EXPECT_TRUE(r.ok());
+}
+
+TEST(BuildExeTest, RunCommandCapturedReportsExitStatus) {
+  CommandResult r = runCommandCaptured({"/bin/sh", "-c", "exit 3"});
+  EXPECT_EQ(CommandResult::Outcome::Exited, r.outcome);
+  EXPECT_EQ(3, r.status);
+  EXPECT_FALSE(r.ok());
+}
+
+TEST(BuildExeTest, RunCommandCapturedMergesStdoutAndStderr) {
+  CommandResult r =
+      runCommandCaptured({"/bin/sh", "-c", "echo out; echo err 1>&2"});
+  EXPECT_TRUE(r.ok());
+  EXPECT_NE(std::string::npos, r.output.find("out"));
+  EXPECT_NE(std::string::npos, r.output.find("err"));
+}
+
+TEST(BuildExeTest, RunCommandCapturedReportsASignal) {
+  CommandResult r = runCommandCaptured({"/bin/sh", "-c", "kill -TERM $$"});
+  EXPECT_EQ(CommandResult::Outcome::Signalled, r.outcome);
+  EXPECT_EQ(SIGTERM, r.status);
+  EXPECT_FALSE(r.ok());
+}
+
+TEST(BuildExeTest, RunCommandCapturedReportsSpawnFailure) {
+  CommandResult r =
+      runCommandCaptured({"/nonexistent/definitely-not-a-program"});
+  EXPECT_TRUE(
+      r.outcome == CommandResult::Outcome::SpawnFailed ||
+      (r.outcome == CommandResult::Outcome::Exited && r.status == 127))
+      << "outcome=" << (int)r.outcome << " status=" << r.status;
+  EXPECT_FALSE(r.ok());
+}
+
+/// The reason the pipe is drained while the child runs rather than after
+/// waitpid. 1 MiB is comfortably past any platform's pipe buffer, so a
+/// read-after-wait implementation deadlocks here instead of failing.
+TEST(BuildExeTest, RunCommandCapturedDoesNotDeadlockOnALargeStream) {
+  CommandResult r = runCommandCaptured(
+      {"/bin/sh",
+       "-c",
+       "i=0; while [ $i -lt 16384 ]; do "
+       "echo 0123456789012345678901234567890123456789012345678901234567890123;"
+       " i=$((i+1)); done"});
+  EXPECT_TRUE(r.ok());
+  EXPECT_GT(r.output.size(), 1024u * 1024u);
+}
+
+// The reason the descriptors are close-on-exec. Fork inherits a snapshot of
+// the parent's descriptor table once, at the moment it happens; it is not
+// an ongoing share. So a leak can only be picked up by a fork that lands
+// WHILE the leaking descriptor is open -- the handful of instructions in
+// runCommandCaptured() between this thread's own pipe() and its own close()
+// of that same fd. A version of this test that starts a long-lived child,
+// waits until it is confirmedly running, and only THEN times a short call
+// against it cannot ever observe this bug, no matter how it is implemented:
+// the long-lived child has already forked by the time the short call's
+// descriptor exists, so there is nothing left for it to inherit. (An
+// earlier draft of this test did exactly that and passed even with both
+// FD_CLOEXEC calls disabled -- see the task report for that run.) Catching
+// the leak needs the fork of the long-lived child to race the open window
+// of a short call, which means starting them all together rather than one
+// after the other is known to have finished starting.
+//
+// An even earlier version ran one "sleep 2" alongside eight "echo quick"s,
+// all started together, and asserted only that all nine eventually
+// finished. That version DOES have the necessary race, but still cannot
+// tell a leak apart from success: a quick call whose write end leaks into
+// the sleeper cannot finish until the sleeper does, which is a couple of
+// seconds -- the same order of magnitude as the whole test's own expected
+// runtime, so nothing about the total time looks wrong. Measured: disabling
+// FD_CLOEXEC and running that version five times, it passed every time.
+//
+// This version keeps the race (many quick calls started together with one
+// long-lived child) but times each quick call individually, and makes the
+// long-lived child's duration far exceed the per-call bound rather than be
+// close to it, so a leaked call cannot hide inside the test's own expected
+// runtime. Timing an individual call is a timing assertion, which this
+// codebase is deliberately suspicious of (see "Known flaky tests" in
+// CLAUDE.md) -- justified here because the quantity under test IS a
+// duration, the margin is 2.5x (a 2s bound against a 5s long-lived child),
+// wide enough that a loaded machine cannot manufacture a false failure
+// (an uninfected call returns in single-digit milliseconds) while a leaked
+// one cannot finish before the long-lived child does. Running many quick
+// calls concurrently, rather than one, is what gives the fork race a
+// realistic chance of firing on a fast machine, where the open window is a
+// handful of syscalls wide.
+//
+// Verified per the review's instructions by disabling FD_CLOEXEC (and, on
+// this platform, the fallback mutex that otherwise also closes this same
+// window -- see the task report) and confirming this test fails; restoring
+// both and confirming it passes again.
+TEST(BuildExeTest, RunCommandCapturedQuickCallsDoNotWaitForALongLivedChild) {
+  constexpr int kQuickCalls = 32;
+  std::vector<std::thread> threads;
+  threads.reserve(kQuickCalls + 1);
+  std::atomic<int> tooSlow{0};
+
+  threads.emplace_back(
+      [] { runCommandCaptured({"/bin/sh", "-c", "sleep 5"}); });
+  for (int i = 0; i < kQuickCalls; ++i) {
+    threads.emplace_back([&tooSlow] {
+      auto start = std::chrono::steady_clock::now();
+      CommandResult r = runCommandCaptured({"/bin/sh", "-c", "echo quick"});
+      auto elapsed = std::chrono::steady_clock::now() - start;
+      EXPECT_TRUE(r.ok());
+      EXPECT_NE(std::string::npos, r.output.find("quick"));
+      if (elapsed >= std::chrono::seconds(2))
+        ++tooSlow;
+    });
+  }
+  for (std::thread &t : threads)
+    t.join();
+
+  EXPECT_EQ(0, tooSlow.load())
+      << tooSlow.load() << " of " << kQuickCalls
+      << " quick calls took 2s or more -- looks like a pipe write end "
+         "leaked into the long-lived child";
 }
 
 } // namespace

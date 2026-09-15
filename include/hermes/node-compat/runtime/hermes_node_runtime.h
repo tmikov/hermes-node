@@ -157,6 +157,16 @@ struct HermesNodeConfig {
   const uint8_t *embeddedBundleData = nullptr;
   size_t embeddedBundleSize = 0;
 
+  /// The native unit table the payload object defines, or null for a
+  /// bytecode build. Indexed by container module index; a null entry means
+  /// that record has no unit -- a JSON module, an addon, a resolve-only
+  /// package.json.
+  ///
+  /// An opaque pointer rather than SHUnitCreator so this header stays clear
+  /// of Hermes VM headers, exactly as the rest of it is.
+  const void *const *nativeUnits = nullptr;
+  size_t nativeUnitCount = 0;
+
   /// Inline JS code to eval after bootstrap, before event loop.
   /// Useful for programmatic use (e.g. inspector runtime).
   std::string evalCode;

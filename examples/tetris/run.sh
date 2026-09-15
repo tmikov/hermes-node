@@ -107,4 +107,30 @@ else
   echo "standalone executable: skipped (no link kit in $BUILD_DIR)"
 fi
 
+if [ -x "$BUILD_DIR/kit/shermes" ]; then
+  echo "hermes-node build-native:"
+  if ! build_log="$("$HERMES_NODE" build-native "$HERE/play.js" -o "$OUT/tetris-native" --kit="$BUILD_DIR/kit" --verbose 2>&1)"; then
+    echo "$build_log" 1>&2
+    echo "FAIL: build-native" 1>&2
+    exit 1
+  fi
+  # Same claim as the bytecode bundle above: this graph is fully static, so
+  # the native producer -- which shares the same buildBundleImpl -- should
+  # emit no warnings either.
+  if printf '%s' "$build_log" | grep -q '^warning:'; then
+    echo "FAIL: build-native warned; this graph is supposed to be fully static" 1>&2
+    printf '%s' "$build_log" | grep '^warning:' 1>&2
+    exit 1
+  fi
+  echo "  ok: $OUT/tetris-native built with no producer warnings"
+
+  echo "build-native executable:"
+  mv "$HERE/node_modules" "$HERE/.node_modules_hidden"
+  expect_game "build-native tetris with node_modules moved away" "$OUT/tetris-native"
+  rm -rf "$HERE/node_modules"
+  mv "$HERE/.node_modules_hidden" "$HERE/node_modules"
+else
+  echo "build-native executable: skipped (no shermes in $BUILD_DIR/kit)"
+fi
+
 echo "PASS: tetris"

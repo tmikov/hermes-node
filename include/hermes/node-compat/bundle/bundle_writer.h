@@ -80,6 +80,10 @@ class BundleWriter {
   /// time. False -- the default -- means locked.
   void setAllowVmOptionsOverride(bool allow);
 
+  /// Record that this container's JavaScript payloads are empty and its
+  /// code is linked. See kBundleFlagNativeUnits.
+  void setNativeUnits(bool native);
+
   void setEntry(uint32_t moduleIndex);
 
   /// Returns the serialized container. Sorts the edge table by
@@ -139,6 +143,7 @@ class BundleWriter {
   uint32_t entry_ = 0;
   bool hasEntry_ = false;
   bool allowVmOptionsOverride_ = false;
+  bool nativeUnits_ = false;
 };
 
 } // namespace node_compat

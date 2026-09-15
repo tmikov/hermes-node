@@ -88,6 +88,7 @@ target_link_libraries(hermesNodeBundle PRIVATE
 add_hermes_library(hermesNodeBundleBuild STATIC
   require_scanner.cpp
   bundle_build.cpp
+  bundle_build_native.cpp
 )
 
 target_include_directories(hermesNodeBundleBuild
@@ -121,6 +122,13 @@ target_link_libraries(hermesNodeBundleBuild
     # identically, since CMake still forwards a static library's PRIVATE
     # dependencies via $<LINK_ONLY:> for linking purposes.
     hermesNapiCompile
+    # The pure half of the native producer -- staging, command
+    # construction, the job pool, the unit table. VM-free, which is why it
+    # is a separate target: BuildNativeTest links it alone.
+    hermesNodeBuildNative
+    # buildAssembleCommand/buildLinkCommand/payloadAssembly/resolveDriver,
+    # the same toolchain-driving code --build-exe uses. Also VM-free.
+    hermesNodeBuildExe
   PRIVATE
     hermesvm_a
     # crc32(), for the short identity hash that disambiguates two native

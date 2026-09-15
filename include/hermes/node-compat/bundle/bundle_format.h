@@ -58,6 +58,16 @@ constexpr uint32_t kResolveOnly = 0;
 /// -Xhermes-internal-test-methods, which are not tuning knobs.
 constexpr uint32_t kBundleFlagAllowVmOptionsOverride = 1u << 0;
 
+/// The container's JavaScript payloads are empty because its code is linked
+/// into an executable as Static Hermes units rather than carried here.
+///
+/// Such a container is a build intermediate, not an artifact: the producer
+/// writes it only because .incbin takes a path, and deletes it unless
+/// --keep-temp keeps it. The bit exists for the case where --keep-temp did:
+/// without it, `--bundle=` on that file reaches fatalBadPayload() and calls
+/// a perfectly well-formed container damaged.
+constexpr uint32_t kBundleFlagNativeUnits = 1u << 1;
+
 /// Fixed-width. Offsets are byte offsets from the start of the file.
 struct BundleHeader {
   char magic[8];
@@ -99,8 +109,9 @@ struct BundleHeader {
   // ~1500 modules and one or two Wasm entries.
   uint32_t wasmTableOffset;
   uint32_t wasmCount;
-  // Container-wide flags: currently only kBundleFlagAllowVmOptionsOverride.
-  // Distinct from BundleModuleRecord::flags, which is per module.
+  // Container-wide flags: kBundleFlagAllowVmOptionsOverride and
+  // kBundleFlagNativeUnits. Distinct from BundleModuleRecord::flags, which
+  // is per module.
   uint32_t containerFlags;
   uint32_t payloadOffset;
   uint32_t payloadSize;

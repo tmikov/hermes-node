@@ -7,6 +7,7 @@
 
 #include <hermes/node-compat/build-exe/build_exe.h>
 #include <hermes/node-compat/bundle/atomic_write.h>
+#include <hermes/node-compat/bundle/bundle_build.h>
 #include <hermes/node-compat/bundle/bundle_generation.h>
 #include <hermes/node-compat/bundle/bundle_run.h>
 #include <hermes/node-compat/bundle/bundle_tools.h>
@@ -19,11 +20,13 @@
 
 #include <uv.h>
 
+#include <cerrno>
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -635,6 +638,12 @@ static void printUsage(const char *argv0) {
       stderr,
       "Usage: %s [options] [script.js] [-- script-args...]\n"
       "\n"
+      "Subcommands:\n"
+      "  cache <action>                 Manage the compile cache\n"
+      "                                 (see `cache --help`)\n"
+      "  build-native <entry> -o <file> Compile to native code and link\n"
+      "                                 (see `build-native --help`)\n"
+      "\n"
       "Options:\n"
       "  -e, --eval <code>              Evaluate code\n"
       "  --inspect[=[host:]port]        Enable inspector (default 127.0.0.1:9229)\n"
@@ -932,6 +941,203 @@ static int runCacheSubcommand(int argc, char **argv) {
   return 1;
 }
 
+/// Usage for the `build-native` subcommand.
+static void printBuildNativeUsage(const char *argv0) {
+  std::printf(
+      "Usage: %s build-native <entry.js> -o <file> [options]\n"
+      "\n"
+      "Compile a program's whole require() graph to native code with\n"
+      "Static Hermes and link a standalone executable.\n"
+      "\n"
+      "Options:\n"
+      "  -o <file>                 Output executable (required)\n"
+      "  --include=<specifier>     Package a module static discovery cannot\n"
+      "                            see; repeatable\n"
+      "  --preload=<specifier>     Package and run before the entry;\n"
+      "                            repeatable\n"
+      "  --vm=<flag>               Bake a Hermes VM option in; repeatable\n"
+      "  --allow-vm-options-override\n"
+      "                            Let HERMES_NODE_VM_OPTIONS override them\n"
+      "  --bake-wasm=<file>        Bake a --record-wasm file's entries in;\n"
+      "                            repeatable\n"
+      "  --jobs=<n>                Parallel compiles (default: CPU count)\n"
+      "  -O0 -O1 -O2 -O3 -Os       Optimization level (default: -O3)\n"
+      "  --kit=<dir>               Kit directory (default: beside this\n"
+      "                            binary)\n"
+      "  --cc=<path>               C compiler driver\n"
+      "  --shermes=<path>          shermes binary (default: <kit>/shermes)\n"
+      "  --keep-temp               Keep the build's temporary directory\n"
+      "  --verbose                 Narrate to stderr\n"
+      "\n"
+      "Note: `%s build-native` always means this subcommand. To run a\n"
+      "script named `build-native`, write `%s ./build-native`.\n",
+      argv0,
+      argv0,
+      argv0);
+}
+
+/// Handles `hermes-node build-native <entry.js> -o <file> [options]`.
+///
+/// Dispatched from main() BEFORE the ordinary parse loop, for the same
+/// reason `cache` is: a subcommand has to read the first positional itself,
+/// so it sits beside the parse loop's grammar instead of inside it, leaving
+/// the invariant that loop rests on -- everything after the first
+/// positional belongs to the program being run -- exactly as it was. This
+/// verb wants more flags than any of the flag-shaped tool verbs
+/// (--build-exe included), which is the whole reason it is a subcommand
+/// rather than one more row in checkToolOptions()'s conflict matrix: a
+/// subcommand parses its own argv, with flags in any position, and joins no
+/// matrix at all.
+///
+/// Runs no runtime, event loop or napi_env at all, like the other tool
+/// verbs: buildNativeExecutable() calls buildBundleImpl() with a null
+/// napi_env (NativeSources mode never reaches hermes_compile_to_bytecode,
+/// the only thing on that path that needs one) and compiles through
+/// shermes and cc as subprocesses rather than an embedded Hermes runtime.
+/// So this verb, too, must not fail for reasons belonging to a runtime the
+/// argument parsing never needed.
+static int runBuildNativeSubcommand(int argc, char **argv) {
+  hermes::node_compat::NativeBuildOptions options;
+  std::string entry;
+  bool haveEntry = false;
+  bool haveOut = false;
+  std::optional<std::string> kitDir;
+
+  for (int i = 2; i < argc; ++i) {
+    const char *arg = argv[i];
+    if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
+      printBuildNativeUsage(argv[0]);
+      return 0;
+    } else if (std::strcmp(arg, "-o") == 0) {
+      if (i + 1 >= argc) {
+        std::fprintf(stderr, "Error: -o requires a file path\n");
+        return 1;
+      }
+      options.outPath = argv[++i];
+      haveOut = true;
+      if (options.outPath.empty()) {
+        std::fprintf(stderr, "Error: -o requires a file path\n");
+        return 1;
+      }
+    } else if (std::strncmp(arg, "--include=", 10) == 0) {
+      options.includes.push_back(arg + 10);
+    } else if (std::strncmp(arg, "--preload=", 10) == 0) {
+      options.preloads.push_back(arg + 10);
+    } else if (std::strncmp(arg, "--vm=", 5) == 0) {
+      options.vmOptions.push_back(arg + 5);
+    } else if (std::strcmp(arg, "--allow-vm-options-override") == 0) {
+      options.allowVmOptionsOverride = true;
+    } else if (std::strncmp(arg, "--bake-wasm=", 12) == 0) {
+      options.bakeWasmPaths.push_back(arg + 12);
+    } else if (
+        std::strcmp(arg, "--record-wasm") == 0 ||
+        std::strncmp(arg, "--record-wasm=", 14) == 0) {
+      // build-native never runs the program -- it compiles and links -- so
+      // there is no run to record Wasm modules from. Refused by name rather
+      // than silently ignored, the same reason --build-bundle refuses it.
+      std::fprintf(
+          stderr,
+          "Error: --record-wasm cannot be used with 'build-native': it "
+          "never runs\n"
+          "       the program. Record with a plain run, then --bake-wasm "
+          "here.\n");
+      return 1;
+    } else if (std::strncmp(arg, "--jobs=", 7) == 0) {
+      const char *val = arg + 7;
+      char *end = nullptr;
+      errno = 0;
+      long n = val[0] == '\0' ? 0 : std::strtol(val, &end, 10);
+      // n > UINT_MAX is caught here, before the narrowing cast below: on a
+      // platform where long is wider than unsigned (64-bit long here), a
+      // value like 4294967296 passes the n <= 0 check and then truncates to
+      // 0 -- silently reintroducing the "unlimited" sentinel --jobs=0 is
+      // refused for, three lines below where the refusal is written.
+      if (val[0] == '\0' || *end != '\0' || n <= 0 || errno != 0 ||
+          static_cast<unsigned long>(n) >
+              std::numeric_limits<unsigned>::max()) {
+        std::fprintf(stderr, "Error: --jobs requires a positive number\n");
+        return 1;
+      }
+      options.jobs = static_cast<unsigned>(n);
+    } else if (std::strcmp(arg, "-O0") == 0) {
+      options.opt = hermes::node_compat::OptLevel::O0;
+    } else if (std::strcmp(arg, "-O1") == 0) {
+      options.opt = hermes::node_compat::OptLevel::O1;
+    } else if (std::strcmp(arg, "-O2") == 0) {
+      options.opt = hermes::node_compat::OptLevel::O2;
+    } else if (std::strcmp(arg, "-O3") == 0) {
+      options.opt = hermes::node_compat::OptLevel::O3;
+    } else if (std::strcmp(arg, "-Os") == 0) {
+      options.opt = hermes::node_compat::OptLevel::Os;
+    } else if (std::strncmp(arg, "--kit=", 6) == 0) {
+      kitDir = arg + 6;
+      if (kitDir->empty()) {
+        std::fprintf(stderr, "Error: --kit requires a directory path\n");
+        return 1;
+      }
+    } else if (std::strncmp(arg, "--cc=", 5) == 0) {
+      options.ccOverride = arg + 5;
+      if (options.ccOverride.empty()) {
+        std::fprintf(stderr, "Error: --cc requires a compiler name or path\n");
+        return 1;
+      }
+    } else if (std::strncmp(arg, "--shermes=", 10) == 0) {
+      options.shermesOverride = arg + 10;
+      if (options.shermesOverride.empty()) {
+        std::fprintf(stderr, "Error: --shermes requires a file path\n");
+        return 1;
+      }
+    } else if (std::strcmp(arg, "--keep-temp") == 0) {
+      options.keepTemp = true;
+    } else if (std::strcmp(arg, "--verbose") == 0) {
+      options.verbose = true;
+    } else if (arg[0] == '-') {
+      std::fprintf(
+          stderr, "Error: unknown option '%s' for 'build-native'\n", arg);
+      printBuildNativeUsage(argv[0]);
+      return 1;
+    } else if (!haveEntry) {
+      entry = arg;
+      haveEntry = true;
+    } else {
+      std::fprintf(
+          stderr,
+          "Error: 'build-native' takes one entry, got '%s' and '%s'\n",
+          entry.c_str(),
+          arg);
+      return 1;
+    }
+  }
+
+  if (!haveEntry) {
+    std::fprintf(stderr, "Error: 'build-native' requires an entry script\n");
+    printBuildNativeUsage(argv[0]);
+    return 1;
+  }
+  if (!haveOut) {
+    std::fprintf(stderr, "Error: 'build-native' requires -o <file>\n");
+    printBuildNativeUsage(argv[0]);
+    return 1;
+  }
+
+  // Made absolute and checked for existence here, so a typo in the entry
+  // path is reported before a temp directory is created for the build.
+  char absBuf[PATH_MAX];
+  const char *resolved = realpath(entry.c_str(), absBuf);
+  if (!resolved) {
+    std::fprintf(
+        stderr,
+        "Error: cannot find entry script '%s': %s\n",
+        entry.c_str(),
+        std::strerror(errno));
+    return 1;
+  }
+  options.entryPath = resolved;
+  options.kitDir = resolveKitDir(kitDir);
+
+  return hermes::node_compat::buildNativeExecutable(options);
+}
+
 int main(int argc, char **argv) {
   // The one subcommand, recognised before anything else parses. Always the
   // subcommand when it is argv[1], never conditional on whether a file of
@@ -940,6 +1146,11 @@ int main(int argc, char **argv) {
   // avoided. `./cache` runs a script of that name.
   if (argc > 1 && std::strcmp(argv[1], "cache") == 0)
     return runCacheSubcommand(argc, argv);
+  // Same rule, same reason: argv[1] == "build-native" is always this
+  // subcommand, never conditional on whether a file of that name exists.
+  // `./build-native` runs a script so named.
+  if (argc > 1 && std::strcmp(argv[1], "build-native") == 0)
+    return runBuildNativeSubcommand(argc, argv);
 
   HermesNodeConfig config;
   ToolOptions tools;

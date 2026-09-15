@@ -52,6 +52,15 @@ int dumpBundle(
 /// directly loadable; a JSON module's payload is the source file's own
 /// bytes, so the file this writes is byte-identical to it.
 ///
+/// Refused, by name, for two records whose bytes are not in the
+/// container at all: a native addon (kNative), whose bytes ship as a flat
+/// sidecar beside the bundle, and -- in a container `build-native` produced
+/// (kBundleFlagNativeUnits) -- an ordinary JavaScript module, which was
+/// compiled ahead of time to a Static Hermes unit and linked into an
+/// executable rather than kept as bytecode here. Either extraction would
+/// otherwise "succeed" by writing an empty file and calling it the
+/// module's payload.
+///
 /// Opened in inspection mode, exactly like dumpBundle(): getting bytecode
 /// out of a container the current binary refuses to run is a reason to
 /// have this feature, not a reason to withhold it.

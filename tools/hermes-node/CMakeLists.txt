@@ -120,6 +120,9 @@ set(HERMES_NODE_KIT_DIR ${CMAKE_BINARY_DIR}/kit)
 set(HERMES_NODE_KIT_DIR ${HERMES_NODE_KIT_DIR} PARENT_SCOPE)
 add_hermes_tool(hermes-node-kit hermes-node.cpp)
 hermes_node_link_setup(hermes-node-kit)
+# The launcher copies the shermes binary into the kit (see make-kit.py), so
+# it must exist before the "link" runs.
+add_dependencies(hermes-node-kit shermes)
 set_target_properties(hermes-node-kit PROPERTIES
   EXCLUDE_FROM_ALL TRUE
   RUNTIME_OUTPUT_DIRECTORY ${HERMES_NODE_KIT_DIR}
@@ -127,14 +130,20 @@ set_target_properties(hermes-node-kit PROPERTIES
   RULE_LAUNCH_LINK
     "${Python_EXECUTABLE} ${PROJECT_SOURCE_DIR}/utils/make-kit.py \
      --kit-dir ${HERMES_NODE_KIT_DIR} \
-     --version-header ${HERMES_NODE_VERSION_HEADER} --"
+     --version-header ${HERMES_NODE_VERSION_HEADER} \
+     --shermes $<TARGET_FILE:shermes> \
+     --sh-include ${PROJECT_SOURCE_DIR}/hermes/include \
+     --sh-include ${CMAKE_BINARY_DIR}/hermes/lib/config \
+     --ndebug $<CONFIG:Release,RelWithDebInfo,MinSizeRel> --"
   # `ninja clean` knows about the stamp and nothing else, for the same reason
   # -- these three are written behind its back, so name them.
   ADDITIONAL_CLEAN_FILES
     "${HERMES_NODE_KIT_DIR}/libhermes-node-kit.a;\
 ${HERMES_NODE_KIT_DIR}/kit.manifest;\
 ${HERMES_NODE_KIT_DIR}/hermes-node-bundle-main.o;\
-${HERMES_NODE_KIT_DIR}/$<TARGET_FILE_NAME:hermesNapi>"
+${HERMES_NODE_KIT_DIR}/$<TARGET_FILE_NAME:hermesNapi>;\
+${HERMES_NODE_KIT_DIR}/shermes;\
+${HERMES_NODE_KIT_DIR}/include"
 )
 
 # The app entry, compiled but never linked here: --build-exe links it

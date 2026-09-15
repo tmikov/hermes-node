@@ -868,6 +868,68 @@ TEST(BundleFormatTest, RejectsVmOptionStringIndexOutOfRange) {
       << error;
 }
 
+TEST(BundleFormatTest, NativeUnitsFlagRoundTrips) {
+  BundleWriter writer;
+  uint32_t m =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(m);
+  writer.setNativeUnits(true);
+  std::vector<uint8_t> bytes = writer.serialize(kGen);
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), kGen, &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+  EXPECT_TRUE(reader->hasNativeUnits());
+  EXPECT_FALSE(reader->allowsVmOptionsOverride());
+}
+
+TEST(BundleFormatTest, NativeUnitsFlagDefaultsOff) {
+  BundleWriter writer;
+  uint32_t m =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(m);
+  std::vector<uint8_t> bytes = writer.serialize(kGen);
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), kGen, &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+  EXPECT_FALSE(reader->hasNativeUnits());
+}
+
+TEST(BundleFormatTest, NativeUnitsAndVmOverrideAreIndependentBits) {
+  BundleWriter writer;
+  uint32_t m =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "x");
+  writer.setEntry(m);
+  writer.setNativeUnits(true);
+  writer.setAllowVmOptionsOverride(true);
+  std::vector<uint8_t> bytes = writer.serialize(kGen);
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), kGen, &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+  EXPECT_TRUE(reader->hasNativeUnits());
+  EXPECT_TRUE(reader->allowsVmOptionsOverride());
+}
+
+// A native container's JavaScript payloads are empty. The format permits a
+// zero-length payload but nothing has ever written one, so assert it rather
+// than assume it.
+TEST(BundleFormatTest, ZeroLengthJavaScriptPayloadRoundTrips) {
+  BundleWriter writer;
+  uint32_t m =
+      writer.addModule("a.js", ModuleKind::kJavaScript, kRequirable, "");
+  writer.setEntry(m);
+  writer.setNativeUnits(true);
+  std::vector<uint8_t> bytes = writer.serialize(kGen);
+
+  std::string error;
+  auto reader = BundleReader::open(bytes.data(), bytes.size(), kGen, &error);
+  ASSERT_TRUE(reader.has_value()) << error;
+  EXPECT_EQ(0u, reader->payload(0).size());
+  EXPECT_TRUE(reader->isRequirable(0));
+}
+
 TEST(BundleFormatTest, WasmRecordsRoundTrip) {
   BundleWriter writer;
   uint32_t m =

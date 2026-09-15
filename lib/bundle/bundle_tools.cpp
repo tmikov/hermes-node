@@ -481,6 +481,23 @@ int extractModule(
     return 1;
   }
 
+  // The same reasoning as the kNative case above, for a different reason a
+  // module's bytes can be missing: a container built by `build-native` (see
+  // the WebAssembly/AOT Bundles "Baked Wasm entries" and "Single-File
+  // Executables" sections of CLAUDE.md, and kBundleFlagNativeUnits) carries
+  // every JavaScript module's payload EMPTY, because the module was
+  // compiled ahead of time to a Static Hermes unit and linked into an
+  // executable rather than kept as bytecode here. Without this check,
+  // extraction would "succeed" by writing a zero-byte file and calling it
+  // the module's payload -- succeeding at nothing is not success.
+  if (reader->hasNativeUnits() &&
+      reader->kind(*found) == ModuleKind::kJavaScript) {
+    err << "error: '" << identity
+        << "' was compiled to native code, not bytecode; there is no "
+           "payload in the container to extract.\n";
+    return 1;
+  }
+
   // Verbatim: no header, no transformation. That is what makes a
   // JavaScript extraction directly loadable and a JSON extraction
   // byte-identical to its source.

@@ -19,6 +19,8 @@
 #include <hermes/node-compat/bundle/wasm_record.h>
 #include <hermes/node-compat/version.h>
 
+#include "bundle_build_internal.h"
+
 #include <napi/hermes_napi_compile.h>
 
 #include <zlib.h>
@@ -112,6 +114,14 @@ std::string takeCompileErrorText(napi_env env) {
   return std::string(buf, len);
 }
 
+} // namespace
+
+// quoteForJSString and makeThrowingStub have external linkage (declared in
+// bundle_build_internal.h) rather than living in the anonymous namespace
+// above: the native producer's own tolerant-stub path (Task 17) reuses them
+// verbatim, so the throwing-stub source and the warning wording it feeds
+// cannot drift between the bytecode and native producers.
+
 /// Escapes \p s for use inside a double-quoted JavaScript string literal.
 ///
 /// Bytes at 0x80 and above are passed through unchanged: the input is the
@@ -176,6 +186,8 @@ std::string makeThrowingStub(
   return "throw new SyntaxError(\"" +
       quoteForJSString(path + ": " + std::string(message)) + "\");\n";
 }
+
+namespace {
 
 /// What the producer does with a file the resolver handed back.
 enum class Packageability {
@@ -732,6 +744,35 @@ int buildBundle(
     const std::vector<std::string> &bakeWasmPaths,
     const std::vector<std::string> &vmOptions,
     bool allowVmOptionsOverride) {
+  BuildProducts products;
+  return buildBundleImpl(
+      env,
+      entryPath,
+      outPath,
+      /*sidecarDir=*/"",
+      verbose,
+      includes,
+      preloads,
+      bakeWasmPaths,
+      vmOptions,
+      allowVmOptionsOverride,
+      PayloadMode::Bytecode,
+      &products);
+}
+
+int buildBundleImpl(
+    napi_env env,
+    const std::string &entryPath,
+    const std::string &outPath,
+    const std::string &sidecarDir,
+    bool verbose,
+    const std::vector<std::string> &includes,
+    const std::vector<std::string> &preloads,
+    const std::vector<std::string> &bakeWasmPaths,
+    const std::vector<std::string> &vmOptions,
+    bool allowVmOptionsOverride,
+    PayloadMode mode,
+    BuildProducts *products) {
   BuildReporter reporter(verbose);
   uint32_t generation = bundleGenerationTag();
 
@@ -972,6 +1013,7 @@ int buildBundle(
           path.c_str(),
           parseError.c_str());
       reporter.stubbed(path, "does not parse");
+      ++products->stubbedModules;
       info.payload = makeThrowingStub(path, parseError);
       files.emplace(path, std::move(info));
       continue;
@@ -1262,7 +1304,11 @@ int buildBundle(
   // Naming happens here, next to the root it needs; the copying happens at
   // step 5b, once everything that can fail the build has run. Nothing in
   // this block writes a file.
-  fs::path sidecarDir = fs::path(outPath).parent_path();
+  // Where addon bytes are copied. Normally beside the container, but a
+  // native build's container lives in a temp directory it deletes, so the
+  // caller names the produced executable's directory instead.
+  fs::path sidecarRoot = sidecarDir.empty() ? fs::path(outPath).parent_path()
+                                            : fs::path(sidecarDir);
   std::unordered_map<std::string, std::string> sidecarOwner; // name -> id
   auto identityOf = [&rootPath](const std::string &path) {
     return fs::path(path).lexically_relative(rootPath).generic_string();
@@ -1286,7 +1332,7 @@ int buildBundle(
     // the same file (a hard link, or a symlink into the tree): the second
     // one falls through to pass 2 and takes a hashed name of its own.
     if (sidecarOwner.count(base) == 0 &&
-        isSameFile(path, (sidecarDir / base).string())) {
+        isSameFile(path, (sidecarRoot / base).string())) {
       info.sidecarName = base;
       sidecarOwner.emplace(base, identityOf(path));
     }
@@ -1360,7 +1406,7 @@ int buildBundle(
     const FileInfo &info = files.at(paths[i]);
     if (info.kind != ModuleKind::kNative)
       continue;
-    std::string dst = (sidecarDir / info.sidecarName).string();
+    std::string dst = (sidecarRoot / info.sidecarName).string();
 
     // Refuse to write over the container itself: an addon whose sidecar
     // name collides with the bundle's own would otherwise have the build
@@ -1369,7 +1415,7 @@ int buildBundle(
     // rebuild, where the container from last time is still there, and the
     // spelling comparison catches the first build, where neither file
     // exists yet and stat() has nothing to say. dst is always
-    // sidecarDir / name, so the two spellings are equal exactly when the
+    // sidecarRoot / name, so the two spellings are equal exactly when the
     // sidecar name is the bundle's own basename.
     if (isSameFile(dst, outPath) ||
         fs::path(dst).lexically_normal() ==
@@ -1433,6 +1479,37 @@ int buildBundle(
     if (info.kind != ModuleKind::kJavaScript)
       continue;
 
+    if (mode == PayloadMode::NativeSources) {
+      // The payload goes into the container empty; the code will be linked
+      // in as a Static Hermes unit. The source is kept here because the
+      // unit name is derived from the module index, which step 5 has not
+      // assigned yet -- moduleIndex is filled in below, not here. Moved
+      // rather than copied -- it costs nothing and halves peak memory on a
+      // large graph -- but info.payload is still explicitly cleared after:
+      // a moved-from std::string's state is unspecified (a short string may
+      // survive the move under SSO), and step 5 below reads info.payload's
+      // size for the largest-module summary line.
+      //
+      // isEntry/isPreload are computed here, not derived later from
+      // moduleIndex: i == 0 is the entry (paths[0] is always absEntry, set
+      // up before this loop), and preloadPaths is already fully populated
+      // by the time this loop runs. See the scanner-failure classification
+      // above, which applies the identical test.
+      bool isPreload =
+          std::find(preloadPaths.begin(), preloadPaths.end(), path) !=
+          preloadPaths.end();
+      products->pendingNative.push_back(
+          {path,
+           /*identity=*/"",
+           std::move(info.payload),
+           0,
+           hasExtension(path, ".ts"),
+           /*isEntry=*/i == 0,
+           isPreload});
+      info.payload.clear();
+      continue;
+    }
+
     std::string wrapped = wrapCJS(info.payload);
 
     hermes_compile_flags cflags{};
@@ -1480,6 +1557,7 @@ int buildBundle(
           path.c_str(),
           error.c_str());
       reporter.stubbed(path, "does not compile");
+      ++products->stubbedModules;
 
       wrapped = wrapCJS(makeThrowingStub(path, error));
       // The stub is plain JavaScript whatever the file's extension was.
@@ -1521,6 +1599,8 @@ int buildBundle(
   // edge, since an edge references a target module's index and every index
   // must exist before any edge can be recorded.
   BundleWriter writer;
+  if (mode == PayloadMode::NativeSources)
+    writer.setNativeUnits(true);
   std::unordered_map<std::string, uint32_t> moduleIndex;
   // Filled in as the container is assembled, and completed below once
   // serialize() has laid it out. Accumulated unconditionally rather than
@@ -1546,6 +1626,15 @@ int buildBundle(
     uint32_t idx =
         writer.addModule(identity, info.kind, info.flags, info.payload);
     moduleIndex.emplace(path, idx);
+  }
+  products->root = rootPath.generic_string();
+  products->moduleCount = static_cast<uint32_t>(paths.size());
+  for (PendingNativeModule &pending : products->pendingNative) {
+    pending.moduleIndex = moduleIndex.at(pending.path);
+    // The identity is what -source-name records, so it is what a stack
+    // trace names. Same derivation the container's own identities use.
+    pending.identity =
+        fs::path(pending.path).lexically_relative(rootPath).generic_string();
   }
   // Every module now has an index, so the preload table -- which stores
   // indices, not paths -- can be filled in, in the order --preload was
@@ -1615,6 +1704,22 @@ int buildBundle(
     const FileInfo &info = files.at(src);
     std::string identity = identityOf(src);
 
+    // A native build's container lives in a temp directory it deletes, and
+    // its executable does not exist yet -- the whole reason this build has
+    // a compile and a link left to fail. Performing the copy here would
+    // widen the window a failed build leaves stale sidecars in back out to
+    // the size it was before that reasoning existed (see
+    // bundle_build_internal.h). So the plan is handed back instead, and the
+    // orchestration performs it once the executable exists.
+    if (mode == PayloadMode::NativeSources) {
+      // Every addon is carried through, including an in-place one: it needs
+      // no copy, but it is still required and the orchestration still has
+      // to print its `native:` line and count it (see SidecarCopy's own
+      // doc comment for why this used to be dropped).
+      products->sidecarCopies.push_back({src, copy.dst, copy.inPlace});
+      continue;
+    }
+
     if (!copy.inPlace) {
       std::string contents;
       if (!readFile(src, &contents)) {
@@ -1649,7 +1754,11 @@ int buildBundle(
         "native: %s (from %s)\n", info.sidecarName.c_str(), identity.c_str());
     reporter.nativeCopied(identity, info, src, copy.dst, copy.inPlace);
   }
-  if (!nativeCopies.empty()) {
+  // Gated on Bytecode mode: a native build's copies are deferred (see
+  // above) and reported by its own orchestration once they are actually
+  // made, against the produced executable rather than this throwaway temp
+  // container.
+  if (mode == PayloadMode::Bytecode && !nativeCopies.empty()) {
     // Packaging a native changes the distribution contract from "one file"
     // to "one file plus these", and a build that changed it silently would
     // be the same class of failure this subsystem exists to remove -- found
@@ -1788,6 +1897,27 @@ int buildBundle(
   // which has no stdio stream of its own to print to.
   if (!writeFileAtomically(outPath, bytes.data(), bytes.size(), std::cerr))
     return 1;
+
+  // Unconditional, not --verbose-gated: a build that quietly turned some
+  // modules into throwing stubs should say so in its last line, where
+  // today the count is visible only in the per-module warnings (which
+  // scroll away) and in the verbose summary above (which most builds do
+  // not ask for). Gated on Bytecode mode because a native build's own
+  // orchestration (buildNativeExecutable) prints the equivalent line
+  // against the produced executable, not this throwaway temp container.
+  if (mode == PayloadMode::Bytecode) {
+    std::printf(
+        "bundle: %u module%s",
+        products->moduleCount,
+        products->moduleCount == 1 ? "" : "s");
+    if (products->stubbedModules != 0) {
+      std::printf(
+          ", %u packaged as throwing stub%s",
+          products->stubbedModules,
+          products->stubbedModules == 1 ? "" : "s");
+    }
+    std::printf("\n");
+  }
 
   return 0;
 }

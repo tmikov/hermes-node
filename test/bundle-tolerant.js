@@ -37,6 +37,10 @@
 // RUN: echo "console.log('BEFORE'); try { require('./dyn.cjs'); } catch (e) { console.log('THREW', e.name); } console.log('AFTER');" > %t.stub/cli.js
 // RUN: %hermes-node --build-bundle=%t.stub/app.hbb %t.stub/cli.js 2>&1 | %FileCheck --check-prefix=STUBWARN %s
 // STUBWARN: warning: cannot compile {{.*}}dyn.cjs (SyntaxError: {{.*}}); packaged as a module that throws when required
+// The stub count is on the final summary line with no --verbose: it should
+// not take a flag to find out that a build quietly turned a module into a
+// throwing stub.
+// STUBWARN: bundle: 2 modules, 1 packaged as throwing stub
 
 // Requiring it throws a SyntaxError, and nothing else about the run
 // changes: the lines on either side of the require() are what say the

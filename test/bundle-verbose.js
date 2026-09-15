@@ -96,8 +96,11 @@
 // FLAT-NEXT:{{^}}require './lib/dep' -> {{.*}}lib/dep.js
 // FLAT-NEXT:{{^}}discover [1] {{.*}}lib/dep.js
 
-// Without --verbose none of it appears: the default output is the warning
-// and the root line, exactly as before. --implicit-check-not (unlike
+// Without --verbose none of the verbose-only narration appears: the default
+// output is the warning, the root line, and the final
+// `bundle: <N> modules[, <M> packaged as throwing stubs]` summary line (see
+// test/bundle-tolerant.js for that line with a non-zero stub count).
+// --implicit-check-not (unlike
 // CHECK-NOT, which only covers the region before the first positive match)
 // scans the whole output, so a leak anywhere -- including after
 // `bundle root:` -- is caught. `skip` alone would false-match the
@@ -117,16 +120,27 @@
 
 // A file the compiler rejects is packaged as a module that throws (see
 // test/bundle-tolerant.js for what that module does); the narration reports
-// it as a stub. The warning is default output and appears either way, the
-// `stub` line is verbose-only, and the container is the same either way.
+// it as a stub. The warning and the final summary's stub count are default
+// output and appear either way; the per-module `stub <path> (<reason>)`
+// narration line is verbose-only, and the container is the same either way.
 // RUN: rm -rf %t.nc && mkdir -p %t.nc
 // RUN: echo "module.exports = function (f) { return import(f); };" > %t.nc/dyn.cjs
 // RUN: echo "if (globalThis.never) { require('./dyn.cjs'); } console.log('V', 1);" > %t.nc/cli.js
 // RUN: %hermes-node --build-bundle=%t.nc/app.hbb --verbose %t.nc/cli.js 2>&1 | %FileCheck --check-prefix=STUB %s
 // STUB: warning: cannot compile {{.*}}dyn.cjs
 // STUB: stub {{.*}}dyn.cjs (does not compile)
-// RUN: %hermes-node --build-bundle=%t.nc/plain.hbb %t.nc/cli.js 2>&1 | %FileCheck --check-prefix=STUBQUIET --implicit-check-not="stub " %s
+// The check-not pattern names the path rather than the bare word "stub":
+// FileCheck strips trailing whitespace from a check pattern unless
+// --strict-whitespace --match-full-lines, so "stub " degrades to the bare
+// substring "stub" and would also match inside the final summary's
+// "...throwing stub", which is intentionally present here (see
+// test/bundle-tolerant.js). Measured directly against this repo's own
+// FileCheck: --implicit-check-not="stub " matched "...throwing stub" with
+// a four-character caret span covering exactly "stub", confirming the
+// trailing space contributed nothing to the pattern.
+// RUN: %hermes-node --build-bundle=%t.nc/plain.hbb %t.nc/cli.js 2>&1 | %FileCheck --check-prefix=STUBQUIET --implicit-check-not="stub {{.*}}dyn.cjs" %s
 // STUBQUIET: warning: cannot compile {{.*}}dyn.cjs
+// STUBQUIET: bundle: 2 modules, 1 packaged as throwing stub
 // RUN: cmp %t.nc/app.hbb %t.nc/plain.hbb
 
 // A require() the scanner cannot follow is counted in the default output,
