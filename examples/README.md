@@ -142,3 +142,19 @@ it is what turned up the `fs.rmSync` `force` and `crypto.randomUUID` gaps.
 `run.sh` drives a real workflow through all three modes. Requires `git
 submodule update --init` and `npm install` in the directory first; see
 `ditz2/README.md`.
+
+## typescript/
+
+The TypeScript compiler itself. Where `ditz2` is a program *written* in
+TypeScript, this one runs `tsc`: it type-checks a file with a deliberate
+error and asserts on the exact diagnostic and on the JavaScript emitted
+beside it, since tsc exits 2 for any error at all and a status check would
+pass against a compiler that had never loaded `lib.d.ts`. Its shape is why
+it earns an example -- one 6,213,092-byte module with no dependencies of its
+own, which makes it the sharpest compile-cache measurement here (5.79 s cold
+against 0.03 s warm for `tsc --version`, which is startup alone), and a hard
+case for native compilation: `build-native` on it takes 103 s and peaks at
+6.0 GB of RSS, so that arm is behind `TSC_BUILD_NATIVE=1` and is not part of
+`check-hermes-node-examples`. No `build-bundle.sh` -- a bundle would gain
+nothing over the cache. Requires `npm install` in the directory first; see
+`typescript/README.md`.
