@@ -2051,8 +2051,8 @@ failing unit test fails the build.
 
 ### Known flaky tests
 
-Two JS tests fail intermittently under the suite's 16-way parallel load and
-pass in isolation. **A single red run naming one of these is not a
+Three JS tests fail intermittently under the suite's 16-way parallel load
+and pass in isolation. **A single red run naming one of these is not a
 regression**; confirm before chasing it, because each has cost a session time
 already:
 
@@ -2063,14 +2063,24 @@ for i in 1 2 3 4 5 6; do
 done
 ```
 
-Measured 6/6 passing in isolation for both, on both sides of an
-unrelated change:
+Measured 6/6 passing in isolation for each, the first two on both sides of
+an unrelated change:
 
 - `test-inspect.js` -- spawns a child and waits for
   `Debugger listening on ws://` on its stderr with a timeout. The most
-  frequent of the two, and the timing dependency is explicit in the test.
+  frequent of the three, and the timing dependency is explicit in the test.
 - `test-repl-history.js` -- same shape, a spawned REPL session read through
   a pipe.
+- `test-fs-event-wrap.js` -- **test 10**, `change event should have fired`,
+  a macOS FSEvent coalescing miss past the test's own 10 s deadline. Unlike
+  the two above it is not a spawned child: the dependency is the platform's
+  event delivery under load. Measured 1 in 8 full ASAN `check-hermes-node`
+  runs, forced to 1 in 16 by running sixteen concurrent copies, and 6/6 in
+  isolation. Unrelated to the native built-ins work that found it -- the
+  file was last touched in `3776619` -- and it is almost certainly the
+  unnamed one-in-seven ASAN failure that same work saw and could not name,
+  since it is the only test in the suite with a load-sensitive wall-clock
+  deadline.
 
 `test-fs-async-verify.js` was the third entry here and is no longer one.
 This note suspected it of being genuinely racy rather than load-sensitive,
@@ -2081,8 +2091,8 @@ roughly five failures in six before. Recorded rather than deleted because
 the reasoning is the useful part: a flake that fails in *isolation* is a
 race, not a scheduling artifact, and is worth chasing rather than listing.
 
-Neither of the two remaining is understood, neither has been fixed, and
-neither is quarantined -- an `XFAIL`ed flake stops reporting the day it
+None of the three is understood, none has been fixed, and none is
+quarantined -- an `XFAIL`ed flake stops reporting the day it
 becomes a real failure. The honest state is that they are known,
 reproducible only under load, and someone should eventually find out why.
 
