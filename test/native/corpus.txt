@@ -1,0 +1,125 @@
+# Tests the native-built-ins suite runs. One path per line, relative to
+# test/. Reconciled against the tree by check-corpus.py, which runs before
+# the suite: a test with a wrappable RUN line must appear here or in
+# excluded.txt, so the corpus cannot shrink or grow without someone saying so.
+#
+# Within "wrappable", and no further. The gate can only see a test whose sole
+# RUN line is one of the three shapes in corpus_util.py, so a test written in
+# any other shape is not in either manifest and nothing here reports it. That
+# is not hypothetical: the bare `%hermes-node %s` shape was missing at first,
+# which made fifteen tests invisible -- crypto, repl, querystring, dgram,
+# https, tls, cluster and diagnostics_channel among them -- with the checker
+# silent throughout. A new RUN shape needs adding there before this file can
+# be trusted to cover it.
+node-tests/parallel/test-child-process-cwd.js
+node-tests/parallel/test-child-process-exec-cwd.js
+node-tests/parallel/test-child-process-exec-env.js
+node-tests/parallel/test-child-process-exec-error.js
+node-tests/parallel/test-child-process-spawn-args.js
+node-tests/parallel/test-child-process-spawn-error.js
+node-tests/parallel/test-child-process-spawnsync-env.js
+node-tests/parallel/test-child-process-spawnsync-input.js
+node-tests/parallel/test-child-process-spawnsync-timeout.js
+node-tests/parallel/test-child-process-spawnsync.js
+node-tests/parallel/test-fs-chmod.js
+node-tests/parallel/test-fs-link.js
+node-tests/parallel/test-fs-mkdir.js
+node-tests/parallel/test-fs-readfile.js
+node-tests/parallel/test-fs-truncate.js
+node-tests/parallel/test-http-client-get-url.js
+node-tests/parallel/test-http-content-length.js
+node-tests/parallel/test-http-contentLength0.js
+node-tests/parallel/test-http-date-header.js
+node-tests/parallel/test-http-head-response-has-no-body.js
+node-tests/parallel/test-http-keep-alive.js
+node-tests/parallel/test-http-methods.js
+node-tests/parallel/test-http-no-content-length.js
+node-tests/parallel/test-http-request-end.js
+node-tests/parallel/test-http-set-cookies.js
+node-tests/parallel/test-http-status-code.js
+node-tests/parallel/test-http-write-empty-string.js
+node-tests/parallel/test-net-after-close.js
+node-tests/parallel/test-net-bind-twice.js
+node-tests/parallel/test-net-bytes-read.js
+node-tests/parallel/test-net-connect-buffer.js
+node-tests/parallel/test-net-connect-destroy.js
+node-tests/parallel/test-net-connect-options-port.js
+node-tests/parallel/test-net-dns-lookup.js
+node-tests/parallel/test-net-pipe-connect-errors.js
+node-tests/parallel/test-net-server-close.js
+node-tests/parallel/test-net-server-listen-path.js
+node-tests/parallel/test-net-socket-timeout.js
+node-tests/parallel/test-net-write-slow.js
+test-async-wrap.js
+test-boot.js
+test-buffer.js
+test-child-process.js
+test-compile-function-cjs.js
+test-config.js
+test-constants.js
+test-core-modules.js
+test-crypto-hash.js
+test-crypto-random-uuid.js
+test-crypto-random.js
+test-dns-resolve.js
+test-dns.js
+test-domain-basic.js
+test-encoding.js
+test-errors.js
+test-fs-async-verify.js
+test-fs-async.js
+test-fs-cp-sync.js
+test-fs-dir.js
+test-fs-event-wrap.js
+test-fs-rm-force.js
+test-fs-sync-verify.js
+test-fs-sync.js
+test-fs-utf8-stream.js
+test-global.js
+test-http-close-idle.js
+test-http-headers-timeout.js
+test-http-parser.js
+test-http-request-timeout.js
+test-http.js
+test-intl-segmenter.js
+test-legacy-main-resolve.js
+test-modules-binding.js
+test-net.js
+test-nexttick-no-starvation.js
+test-nexttick.js
+test-os.js
+test-performance.js
+test-pipe-wrap.js
+test-process-wrap.js
+test-read-package-json.js
+test-readline-basic.js
+test-repl-basic.js
+test-repl-features.js
+test-repl-runInNewContext.js
+test-require-process.js
+test-shebang.js
+test-spawn-sync.js
+test-stream-operators.js
+test-stream-wrap.js
+test-streams.js
+test-string-decoder.js
+test-symbols.js
+test-tcp-wrap.js
+test-tick-after-loop-exit.js
+test-timers.js
+test-tty-wrap.js
+test-types.js
+test-typescript-require.js
+test-typescript.ts
+test-udp-wrap.js
+test-util.js
+test-vendored-ws.js
+test-vm-basic.js
+test-vm-module.js
+test-wasm-api.js
+test-wasm-exec.js
+test-zlib-async.js
+test-zlib-basic.js
+test-zlib-brotli.js
+test-zlib-stream.js
+test-zlib-zstd.js

@@ -172,6 +172,33 @@ int buildNativeExecutable(const NativeBuildOptions &options) {
         "hermes-node-kit\n");
     return 1;
   }
+  // Refused here, before a single module is compiled: this is known the
+  // moment the manifest is read, and failing after a multi-minute compile
+  // for a reason available at the start is the worst available ordering.
+  // Which is why the file itself is stat'd and not only the manifest key:
+  // an archive the manifest names but the kit does not hold is just as
+  // knowable now, and the only other thing that would notice is the link --
+  // which runs after every module has been compiled.
+  if (!options.bytecodeBuiltins) {
+    const char *why = nullptr;
+    if (manifest->nativeBuiltinsArchive.empty())
+      why = "records no native built-ins archive";
+    else if (::access(manifest->nativeBuiltinsArchive.c_str(), R_OK) != 0)
+      why = "records a native built-ins archive that is not readable";
+    if (why) {
+      std::fprintf(stderr, "error: kit %s %s", manifest->kitDir.c_str(), why);
+      if (!manifest->nativeBuiltinsArchive.empty())
+        std::fprintf(stderr, ": %s", manifest->nativeBuiltinsArchive.c_str());
+      std::fprintf(
+          stderr,
+          "\n"
+          "       Rebuild it with: cmake --build <build dir> --target "
+          "hermes-node-kit\n"
+          "       or pass --bytecode-builtins to link the interpreted "
+          "built-ins.\n");
+      return 1;
+    }
+  }
 
   // 2. shermes. Unlike the C driver below there is no second candidate
   // worth trying: the kit's Static Hermes headers and this binary's
@@ -243,6 +270,18 @@ int buildNativeExecutable(const NativeBuildOptions &options) {
         "kit: %s (hermes-node %s)\n",
         manifest->kitDir.c_str(),
         manifest->version.c_str());
+    // Which registry the link will resolve findEmbeddedModule() from. The
+    // one link-time choice this producer makes whose wrong answer is
+    // silent -- a binary with the bytecode registry runs correctly and
+    // interprets everything -- so it is the one worth narrating. Beside
+    // the kit because the archive is the kit's.
+    if (options.bytecodeBuiltins)
+      std::fprintf(stderr, "built-ins: bytecode (--bytecode-builtins)\n");
+    else
+      std::fprintf(
+          stderr,
+          "built-ins: native (%s)\n",
+          manifest->nativeBuiltinsArchive.c_str());
     std::fprintf(stderr, "shermes: %s\n", shermesPath.c_str());
     std::fprintf(
         stderr,
@@ -552,8 +591,13 @@ int buildNativeExecutable(const NativeBuildOptions &options) {
       }
     }
 
-    std::vector<std::string> linkCmd = buildLinkCommand(
-        *manifest, driver->driver, "@" + responsePath, options.outPath);
+    std::vector<std::string> linkCmd = buildNativeLinkCommand(
+        *manifest,
+        driver->driver,
+        "@" + responsePath,
+        options.outPath,
+        options.bytecodeBuiltins,
+        hostObjectFormat());
     if (options.verbose)
       std::fprintf(stderr, "link: %s\n", formatCommandLine(linkCmd).c_str());
     CommandResult linkResult = runCommandCaptured(linkCmd);

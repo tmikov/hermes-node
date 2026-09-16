@@ -523,4 +523,82 @@ TEST(BuildNativeTest, SourceRejectionExcludesAToolchainOrMachineFailure) {
   EXPECT_FALSE(isNativeSourceRejection(false, false, exitedZero));
 }
 
+KitManifest nbManifest() {
+  KitManifest m;
+  m.kitDir = "/k";
+  m.version = "0.0.0";
+  m.cc = "/usr/bin/c++";
+  m.driverFlags = {"-O3"};
+  m.linkArgs = {"/k/libhermes-node-kit.a", "-lm"};
+  m.nativeBuiltinsArchive = "/k/libhermes-node-builtins-native.a";
+  return m;
+}
+
+TEST(NativeBuiltinsTest, RootsTheMarkerBeforeTheArchive) {
+  std::vector<std::string> args =
+      nativeBuiltinsLinkArgs("/k/libnb.a", ObjectFormat::MachO);
+  ASSERT_EQ(args.size(), 2u);
+  EXPECT_EQ(args[0], "-Wl,-u,_hermesNodeNativeBuiltinsMarker");
+  EXPECT_EQ(args[1], "/k/libnb.a");
+}
+
+TEST(NativeBuiltinsTest, ElfHasNoSymbolPrefix) {
+  std::vector<std::string> args =
+      nativeBuiltinsLinkArgs("/k/libnb.a", ObjectFormat::ELF);
+  EXPECT_EQ(args[0], "-Wl,-u,hermesNodeNativeBuiltinsMarker");
+}
+
+// The property the linker cannot check for us: the producer's OWN command
+// carries the -u root, in front of the archive, in front of the merged kit
+// archive. A test over nativeBuiltinsLinkArgs() alone would pass with the
+// producer never calling it -- which is the exact silent regression here,
+// since the artifact would still work and would simply be interpreted.
+TEST(NativeBuiltinsTest, ProducerCommandCarriesTheRootInOrder) {
+  std::vector<std::string> cmd = buildNativeLinkCommand(
+      nbManifest(),
+      "/usr/bin/c++",
+      "@/tmp/objects.rsp",
+      "/tmp/app",
+      /*bytecodeBuiltins=*/false,
+      ObjectFormat::MachO);
+  auto idx = [&cmd](const std::string &s) {
+    return std::find(cmd.begin(), cmd.end(), s) - cmd.begin();
+  };
+  auto marker = idx("-Wl,-u,_hermesNodeNativeBuiltinsMarker");
+  auto archive = idx("/k/libhermes-node-builtins-native.a");
+  auto kit = idx("/k/libhermes-node-kit.a");
+  auto blob = idx("@/tmp/objects.rsp");
+  ASSERT_LT(marker, (long)cmd.size()) << "the -u root is missing entirely";
+  EXPECT_LT(blob, marker) << "objects must precede the archives";
+  EXPECT_LT(marker, archive) << "-u must precede the archive it extracts";
+  EXPECT_LT(archive, kit) << "the native registry must win over the merged "
+                             "archive's bytecode one";
+}
+
+TEST(NativeBuiltinsTest, BytecodeModeAddsNeither) {
+  std::vector<std::string> cmd = buildNativeLinkCommand(
+      nbManifest(),
+      "/usr/bin/c++",
+      "@/tmp/objects.rsp",
+      "/tmp/app",
+      /*bytecodeBuiltins=*/true,
+      ObjectFormat::MachO);
+  for (const std::string &a : cmd) {
+    EXPECT_EQ(a.find("hermesNodeNativeBuiltinsMarker"), std::string::npos);
+    EXPECT_NE(a, "/k/libhermes-node-builtins-native.a");
+  }
+}
+
+TEST(NativeBuiltinsTest, SymbolPrefixMatchesPayloadAssembly) {
+  // payloadAssembly() computes the same prefix for its own symbols. If the
+  // two disagreed, the -u root would name a symbol the archive does not
+  // define and every native-builtins link would fail.
+  EXPECT_EQ(std::string(symbolPrefix(ObjectFormat::MachO)), "_");
+  EXPECT_EQ(std::string(symbolPrefix(ObjectFormat::ELF)), "");
+  EXPECT_NE(
+      payloadAssembly("/tmp/x.hbb", {}, ObjectFormat::MachO)
+          .find("_hermesNodeNativeUnits"),
+      std::string::npos);
+}
+
 } // namespace

@@ -241,6 +241,42 @@ std::vector<std::string> unitSymbolTable(
     uint32_t moduleCount,
     const std::vector<NativeModuleJob> &jobs);
 
+/// The two link arguments that select the kit's NATIVE built-in registry, in
+/// the order they must appear.
+///
+/// Both registries define findEmbeddedModule(). The linker takes the first
+/// definition it needs, so placing \p archivePath ahead of the merged kit
+/// archive resolves it here and leaves the bytecode member unpulled -- which
+/// keeps 2.1 MB of built-in bytecode out of the artifact rather than merely
+/// unused inside it. Not a saving overall: the native code that replaces it
+/// costs +7.27 MB, so this only keeps the default from paying for both.
+///
+/// Order alone would be silent when wrong: a link that picked the bytecode
+/// registry would succeed and produce a working, interpreted binary. So the
+/// marker is rooted with -Wl,-u, which does three jobs -- it extracts the
+/// archive member, it keeps that member from -dead_strip / --gc-sections, and
+/// it fails the link by name if the archive is absent. The -u MUST precede the
+/// archive: GNU ld scans archives in order and does not go back.
+std::vector<std::string> nativeBuiltinsLinkArgs(
+    const std::string &archivePath,
+    ObjectFormat format);
+
+/// The complete link command for a native build.
+///
+/// This exists so the producer and its test call the SAME construction. The
+/// one misconfiguration the linker cannot catch is a correct archive order
+/// with the -u root missing, and a test over nativeBuiltinsLinkArgs() alone
+/// would pass in exactly that state, because the producer would not be calling
+/// it. \p bytecodeBuiltins omits both arguments, which is what
+/// --bytecode-builtins does.
+std::vector<std::string> buildNativeLinkCommand(
+    const KitManifest &manifest,
+    const std::string &driver,
+    const std::string &blobArg,
+    const std::string &outPath,
+    bool bytecodeBuiltins,
+    ObjectFormat format);
+
 /// Generates the assembly carrying both the container at \p containerPath
 /// and \p unitSymbols, via payloadAssembly() at this host's object format --
 /// one generated .s so the two cannot get out of step and the link gains

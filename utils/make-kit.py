@@ -352,6 +352,9 @@ def main():
     ap.add_argument("--version-header", required=True)
     ap.add_argument("--shermes", required=True,
                     help="path to the shermes binary to copy into the kit")
+    ap.add_argument("--native-builtins-name", default="",
+                    help="file name (not path) of the native built-ins "
+                         "archive inside the kit, recorded in the manifest")
     ap.add_argument("--sh-include", action="append", default=[],
                     help="a -I root the generated C compiles against; "
                          "repeatable, in search order")
@@ -450,6 +453,14 @@ def main():
             ccflags.insert(0, "-DNDEBUG")
         for c in ccflags:
             f.write("ccflag: %s\n" % c)
+        # Recorded, not copied. The archive is placed in the kit by a tracked
+        # CMake custom command (tools/hermes-node/CMakeLists.txt) so the build
+        # system can tell when it is stale -- the kit's real outputs are
+        # invisible to CMake, which is the same reason the entry object needs
+        # a real OUTPUT rule. Copying it here as well would give one
+        # destination two writers.
+        if args.native_builtins_name:
+            f.write("nativebuiltins: {kit}/%s\n" % args.native_builtins_name)
     if stamp:
         # See the module docstring: this stands in for the binary we did not
         # link, and is what makes the probe target incremental.

@@ -177,5 +177,30 @@ bool linkResponseFile(
   return true;
 }
 
+std::vector<std::string> nativeBuiltinsLinkArgs(
+    const std::string &archivePath,
+    ObjectFormat format) {
+  return {
+      std::string("-Wl,-u,") + symbolPrefix(format) +
+          "hermesNodeNativeBuiltinsMarker",
+      archivePath};
+}
+
+std::vector<std::string> buildNativeLinkCommand(
+    const KitManifest &manifest,
+    const std::string &driver,
+    const std::string &blobArg,
+    const std::string &outPath,
+    bool bytecodeBuiltins,
+    ObjectFormat format) {
+  // An empty archive path yields a command with neither argument rather than
+  // a failure: a pure command builder decides no policy, and the caller has
+  // already refused the build with a better message.
+  std::vector<std::string> before;
+  if (!bytecodeBuiltins && !manifest.nativeBuiltinsArchive.empty())
+    before = nativeBuiltinsLinkArgs(manifest.nativeBuiltinsArchive, format);
+  return buildLinkCommand(manifest, driver, blobArg, outPath, before);
+}
+
 } // namespace node_compat
 } // namespace hermes

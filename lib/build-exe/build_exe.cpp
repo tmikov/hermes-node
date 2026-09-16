@@ -422,6 +422,10 @@ CommandResult runCommandCaptured(const std::vector<std::string> &argv) {
   return result;
 }
 
+const char *symbolPrefix(ObjectFormat format) {
+  return format == ObjectFormat::MachO ? "_" : "";
+}
+
 std::string payloadAssembly(
     const std::string &bundlePath,
     const std::vector<std::string> &unitSymbols,
@@ -475,7 +479,7 @@ std::string payloadAssembly(
   // that is what lets one bundle_main.cpp link against a single definition
   // whether this executable is a bytecode --build-exe (a count of zero) or
   // a native one.
-  const char *prefix = format == ObjectFormat::MachO ? "_" : "";
+  const char *prefix = symbolPrefix(format);
   if (format == ObjectFormat::ELF)
     os << "\t.section .data.rel.ro\n";
   os << "\t.p2align 3\n"
@@ -609,7 +613,8 @@ std::vector<std::string> buildLinkCommand(
     const KitManifest &manifest,
     const std::string &driver,
     const std::string &blobObject,
-    const std::string &outPath) {
+    const std::string &outPath,
+    const std::vector<std::string> &beforeLinkArgs) {
   std::vector<std::string> cmd;
   cmd.push_back(driver);
   // The driver's own flags first: some of them (a target triple, a
@@ -621,6 +626,12 @@ std::vector<std::string> buildLinkCommand(
   // before the object that needs it contributes nothing at all.
   cmd.push_back(blobObject);
   cmd.push_back((fs::path(manifest.kitDir) / kEntryObjectName).string());
+  // After every object, before the manifest's archives: an archive
+  // contributes only what is already undefined, and -u must reach the
+  // native-builtins archive before the merged kit archive defines the same
+  // findEmbeddedModule().
+  for (const std::string &arg : beforeLinkArgs)
+    cmd.push_back(arg);
   // The manifest's order is the link line CMake generated, with system
   // libraries already hoisted past every archive by make-kit.py.
   for (const std::string &arg : manifest.linkArgs)

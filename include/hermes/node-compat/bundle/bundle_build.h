@@ -163,6 +163,9 @@ struct NativeBuildOptions {
   unsigned jobs = 0; // 0 -> hardware_concurrency()
   OptLevel opt = OptLevel::O3;
   bool keepTemp = false, verbose = false;
+  /// Link the kit's bytecode built-in registry instead of its native one, as
+  /// --build-exe does. Off by default: a fully native binary is the point.
+  bool bytecodeBuiltins = false;
 };
 
 /// Builds a standalone executable directly from an entry script, compiling

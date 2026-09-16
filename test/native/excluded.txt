@@ -1,0 +1,37 @@
+# Tests that have a wrappable RUN line and are nevertheless not run, one
+# `<path>: <reason>` per line, relative to test/.
+#
+# The rule is deliberately wider than "candidate": it holds both tests that
+# fail the sole-RUN criterion and tests that pass it and then fail when run.
+# One list with one rule beats two lists that each need explaining.
+#
+# Not XFAIL. An XFAILed test stops reporting the day it becomes a real
+# failure, which is why CLAUDE.md declines to quarantine the two known flaky
+# tests either.
+node-tests/parallel/test-child-process-exec-timeout.js: re-runs itself as common.spawnCmd(__filename, 'child'); a produced executable ignores that argument and re-runs its own entry, so every child spawns three more -- measured as a fork bomb of ~6000 processes
+node-tests/parallel/test-child-process-exit-code.js: re-spawns through process.execPath, which under the wrapper is the artifact rather than hermes-node
+node-tests/parallel/test-child-process-kill.js: re-spawns through process.execPath, which under the wrapper is the artifact rather than hermes-node
+node-tests/parallel/test-fs-open.js: opens __filename, its own source; the producer packages code, not source text, so nothing at that path exists beside the artifact
+node-tests/parallel/test-fs-readdir.js: readdirs __filename expecting ENOTDIR and gets ENOENT: its own source is packaged as code, so no file exists at that path beside the artifact
+node-tests/parallel/test-fs-stat.js: stats __filename, its own source; the producer packages code, not source text, so nothing at that path exists beside the artifact
+test-bootstrap.js: requires internal/assert, internal/errors, internal/util, internal/util/types and internal/validators by bare specifier; the closed world's builtin classifier does not answer for internal/*, so each is MODULE_NOT_FOUND. Identical under --bytecode-builtins
+test-builtin-module-shim.js: requires 'internal/bootstrap/realm', which the closed world does not classify as a builtin. Identical under --bytecode-builtins
+test-cjs-loader-integration.js: requires 'internal/modules/cjs/loader', which the closed world does not classify as a builtin. Identical under --bytecode-builtins
+test-cjs-loader-module.js: requires 'internal/modules/cjs/loader', which the closed world does not classify as a builtin. Identical under --bytecode-builtins
+test-cli-eval.js: spawnSync(process.execPath, ['-e', ...]); a produced executable ignores every argument and re-runs its own entry, so the child spawns again -- observed growing past the vetting guard's threshold before it was killed
+test-console.js: requires 'internal/console/constructor', which the closed world does not classify as a builtin. Identical under --bytecode-builtins
+test-esm-formats.js: requires 'internal/modules/esm/formats', which the closed world does not classify as a builtin. Identical under --bytecode-builtins
+test-inspect.js: spawnSync(process.execPath, ['--inspect', ...]); the artifact ignores the flags and re-runs its own entry, spawning again -- observed growing past the vetting guard's threshold before it was killed
+test-module-builtin.js: asserts Module._resolveFilename(__filename) returns __filename; under the artifact that is an absolute path in the executable's directory, which the closed world refuses. Identical under --bytecode-builtins
+test-modules-helpers.js: requires 'internal/modules/helpers', which the closed world does not classify as a builtin. Identical under --bytecode-builtins
+test-options.js: requires 'internal/options', which the closed world does not classify as a builtin. Identical under --bytecode-builtins
+test-process-exit-code.js: re-spawns through process.execPath, which under the wrapper is the artifact rather than hermes-node
+test-process-exit-event.js: re-spawns through process.execPath, which under the wrapper is the artifact rather than hermes-node
+test-process-stdio.js: spawnSync(process.execPath, [tmpFile]); the artifact ignores the script argument and re-runs its own entry, spawning again -- observed growing past the vetting guard's threshold before it was killed
+test-process-version.js: second RUN line passes --node-version, which a produced executable cannot accept: every argument belongs to the program
+test-repl-entry.js: execSync('printf ... | ' + process.argv[0]); argv[0] is the artifact, which re-runs its own entry and pipes into another copy -- observed growing past the vetting guard's threshold before it was killed
+test-repl-history.js: requires 'internal/repl', which the closed world does not classify as a builtin
+test-sigint-watchdog.js: spawn(process.execPath, []) to drive a REPL over stdin; the artifact re-runs its own entry instead -- observed growing past the vetting guard's threshold before it was killed
+test-uncaught-exception-async.js: re-spawns through process.execPath, which under the wrapper is the artifact rather than hermes-node
+test-uncaught-exception-io.js: re-spawns through process.execPath, which under the wrapper is the artifact rather than hermes-node
+test-url.js: requires 'internal/url', which the closed world does not classify as a builtin. Identical under --bytecode-builtins

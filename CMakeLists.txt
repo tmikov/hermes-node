@@ -39,8 +39,16 @@ set(HERMES_ENABLE_WASM ON CACHE BOOL "Enable WebAssembly support")
 # Nearly free, because the archive already exists: Hermes builds
 # hermesInternalUnit in every non-MSVC configuration to keep it from
 # bitrotting, and only the alias selection is gated. Measured on macOS arm64:
-# hermes-node grows 338,960 bytes and the embedded bytecode magic count drops
-# by exactly one. A universal binary pays the size per slice.
+# hermes-node grows 337,904 bytes (12,504,968 -> 12,842,872) and the embedded
+# bytecode magic count drops by exactly one, 189 -> 188. A universal binary
+# pays the size per slice.
+#
+# An earlier measurement of the same flip, on the same platform, reported
+# 338,960. Both are real: the post-flip binaries were the same size to the
+# byte, and the two pre-flip baselines differed by 1,056 -- almost certainly
+# because they were taken at different commits, though that was never run
+# down. The number above is the one whose two absolutes are recorded here, so
+# the subtraction can be checked.
 #
 # FORCE, unlike HERMES_ENABLE_WASM above and like the debugger: a non-FORCE
 # `set(... CACHE ...)` leaves an existing cache entry alone, so every build
@@ -236,8 +244,28 @@ add_lit_testsuite(check-hermes-node-unit "Running hermes-node unit tests"
 # addon without setting HERMES_PARSER_NATIVE_ADDON. That was already true of
 # a default `cmake --build` -- the target is in ALL -- so this widens an
 # existing hazard rather than introducing one.
+# Reconciles test/native/corpus.txt and test/native/excluded.txt against the
+# tree. A gate rather than a convention: without it the corpus shrinks
+# silently the first time someone edits a RUN line, which is the whole failure
+# mode the two manifests exist to prevent.
+#
+# Part of check-hermes-node, unlike the native suite it also gates: this
+# reconciliation needs no kit, no linker, no shermes and nothing built, and
+# runs in well under a second. Reachable only from check-hermes-node-native it
+# would run nowhere anyone runs -- that target is Release-only and absent from
+# CI -- so someone adding an ordinary-shaped test would see a green
+# check-hermes-node having silently left the corpus incomplete.
+add_custom_target(check-hermes-node-native-corpus
+  COMMAND ${Python_EXECUTABLE}
+          ${CMAKE_CURRENT_SOURCE_DIR}/test/native/check-corpus.py
+          ${CMAKE_CURRENT_SOURCE_DIR}/test
+  COMMENT "Reconciling the native test corpus"
+  VERBATIM
+)
+
 add_custom_target(check-hermes-node
   DEPENDS check-hermes-node-unit check-hermes-node-js hermes-parser-napi
+          check-hermes-node-native-corpus
   COMMENT "Running hermes-node-compat tests"
 )
 
@@ -250,4 +278,25 @@ add_custom_target(check-hermes-node-examples
   DEPENDS hermes-node hermes-parser-napi
   COMMENT "Running hermes-node examples"
   VERBATIM
+)
+
+# The same JS tests again, each built into a standalone executable with
+# build-native so that natively compiled built-in modules are exercised by
+# real programs. Deliberately NOT part of check-hermes-node, for the reason
+# check-hermes-node-examples is not: cost. Each test is a link, and the ASAN
+# kit this project develops against is ~755 MB and links far slower than the
+# Release one -- folding these into the primary suite would make the
+# configuration used for everyday work the slowest one to test. Run it
+# against cmake-build-release.
+#
+# --config-prefix=litnative is what lets one source tree carry two suites:
+# lit reads test/litnative.cfg instead of test/lit.cfg and walks test/
+# normally. Selection is test/native/corpus.txt, applied by a custom format.
+add_lit_testsuite(check-hermes-node-native
+  "Running hermes-node JS tests with native built-ins"
+  ${CMAKE_CURRENT_SOURCE_DIR}/test
+  PARAMS ${HERMES_NODE_LIT_PARAMS}
+  ARGS --config-prefix=litnative
+  DEPENDS hermes hermes-node hello_addon hermes-node-kit
+          check-hermes-node-native-corpus
 )

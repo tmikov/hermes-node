@@ -961,11 +961,15 @@ static void printBuildNativeUsage(const char *argv0) {
       "  --bake-wasm=<file>        Bake a --record-wasm file's entries in;\n"
       "                            repeatable\n"
       "  --jobs=<n>                Parallel compiles (default: CPU count)\n"
-      "  -O0 -O1 -O2 -O3 -Os       Optimization level (default: -O3)\n"
+      "  -O0 -O1 -O2 -O3 -Os       Optimization level for the program's own\n"
+      "                            modules (default: -O3); the built-ins are\n"
+      "                            prebuilt in the kit and unaffected\n"
       "  --kit=<dir>               Kit directory (default: beside this\n"
       "                            binary)\n"
       "  --cc=<path>               C compiler driver\n"
       "  --shermes=<path>          shermes binary (default: <kit>/shermes)\n"
+      "  --bytecode-builtins       Link interpreted built-in modules\n"
+      "                            (smaller binary)\n"
       "  --keep-temp               Keep the build's temporary directory\n"
       "  --verbose                 Narrate to stderr\n"
       "\n"
@@ -1087,6 +1091,8 @@ static int runBuildNativeSubcommand(int argc, char **argv) {
         std::fprintf(stderr, "Error: --shermes requires a file path\n");
         return 1;
       }
+    } else if (std::strcmp(arg, "--bytecode-builtins") == 0) {
+      options.bytecodeBuiltins = true;
     } else if (std::strcmp(arg, "--keep-temp") == 0) {
       options.keepTemp = true;
     } else if (std::strcmp(arg, "--verbose") == 0) {

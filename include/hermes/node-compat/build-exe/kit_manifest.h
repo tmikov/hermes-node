@@ -39,6 +39,16 @@ struct KitManifest {
   /// Static Hermes's generated C reads and writes C++ objects through
   /// mirroring C structs, so unrelated types alias by construction.
   std::vector<std::string> ccFlags; // {kit} already substituted
+
+  /// The kit's archive of natively compiled built-in modules, or empty if the
+  /// kit records none (a kit cut before this key existed, or one cut by a
+  /// build that did not produce it). `{kit}` already substituted.
+  ///
+  /// Optional on purpose, unlike `version` and `cc`: a kit without it can
+  /// still link a --build-exe artifact and can still run build-native with
+  /// --bytecode-builtins. The consumer reports the absence with an error that
+  /// says which kit and what to rebuild; the reader does not.
+  std::string nativeBuiltinsArchive; // {kit} already substituted
 };
 
 /// Reads and parses `<kitDir>/kit.manifest`. Returns std::nullopt with a
