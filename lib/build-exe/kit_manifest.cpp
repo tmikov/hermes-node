@@ -21,6 +21,9 @@
 //   ccflag    -- repeated, ordered; flags for compiling a generated C
 //                file against this kit's headers. `{kit}` substituted, as
 //                for linkarg.
+//   nativebuiltins -- at most once, the archive of natively compiled
+//                 built-in modules. `{kit}` substituted. Optional: a kit
+//                 without it cannot serve `build-native` default built-ins.
 // Any other key is an error naming the key: an unknown key means the kit
 // was cut by a newer make-kit.py recording something this reader would
 // otherwise silently drop.
@@ -134,6 +137,13 @@ std::optional<KitManifest> readKitManifest(
       manifest.linkArgs.push_back(substituteKitDir(value, kitDir));
     } else if (key == "ccflag") {
       manifest.ccFlags.push_back(substituteKitDir(value, kitDir));
+    } else if (key == "nativebuiltins") {
+      if (!manifest.nativeBuiltinsArchive.empty()) {
+        if (error)
+          *error = manifestPath + ": duplicate key 'nativebuiltins'";
+        return std::nullopt;
+      }
+      manifest.nativeBuiltinsArchive = substituteKitDir(value, kitDir);
     } else {
       if (error)
         *error = manifestPath + ": unknown key '" + key + "'";

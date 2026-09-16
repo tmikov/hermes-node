@@ -71,6 +71,45 @@ TEST(KitManifestTest, ParsesKeysInOrder) {
   EXPECT_EQ(m->linkArgs[4], "-lpthread"); // system libs stay last
 }
 
+TEST(KitManifestTest, ReadsTheNativeBuiltinsArchive) {
+  TempTree tree;
+  tree.write(
+      "kit/kit.manifest",
+      "version: 1.2.3\n"
+      "cc: /usr/bin/clang\n"
+      "nativebuiltins: {kit}/libhermes-node-builtins-native.a\n");
+  std::string error;
+  auto m = readKitManifest(tree.path("kit"), &error);
+  ASSERT_TRUE(m.has_value()) << error;
+  EXPECT_EQ(
+      m->nativeBuiltinsArchive,
+      tree.path("kit") + "/libhermes-node-builtins-native.a");
+}
+
+TEST(KitManifestTest, NativeBuiltinsArchiveIsOptional) {
+  // A kit cut before this key existed still parses. The consumer decides
+  // what to do about an empty value; the reader does not require it.
+  TempTree tree;
+  tree.write("kit/kit.manifest", "version: 1.2.3\ncc: /usr/bin/clang\n");
+  std::string error;
+  auto m = readKitManifest(tree.path("kit"), &error);
+  ASSERT_TRUE(m.has_value()) << error;
+  EXPECT_TRUE(m->nativeBuiltinsArchive.empty());
+}
+
+TEST(KitManifestTest, DuplicateNativeBuiltinsIsAnError) {
+  TempTree tree;
+  tree.write(
+      "kit/kit.manifest",
+      "version: 1.2.3\n"
+      "cc: /usr/bin/clang\n"
+      "nativebuiltins: {kit}/a.a\n"
+      "nativebuiltins: {kit}/b.a\n");
+  std::string error;
+  EXPECT_FALSE(readKitManifest(tree.path("kit"), &error).has_value());
+  EXPECT_NE(error.find("nativebuiltins"), std::string::npos);
+}
+
 TEST(KitManifestTest, MissingFileIsAnError) {
   TempTree tree;
   std::string error;

@@ -270,11 +270,17 @@ int buildExecutable(
 /// which is why kitDir is a field on KitManifest: it is the same directory
 /// the manifest's {kit} substitution already used, and a second parameter
 /// would be one more chance for the two to disagree.
+///
+/// \p beforeLinkArgs go after the objects and before the manifest's own
+/// linkArgs. That boundary is this function's to know -- a caller splicing
+/// them in afterwards would have to rediscover it by searching the vector,
+/// which is not even sound, since a driverflag can equal the first linkarg.
 std::vector<std::string> buildLinkCommand(
     const KitManifest &manifest,
     const std::string &driver,
     const std::string &blobObject,
-    const std::string &outPath);
+    const std::string &outPath,
+    const std::vector<std::string> &beforeLinkArgs = {});
 
 /// The exact argv for assembling the generated payload source into an
 /// object, given a manifest and the two paths.
@@ -331,6 +337,15 @@ constexpr ObjectFormat hostObjectFormat() {
   return ObjectFormat::ELF;
 #endif
 }
+
+/// The prefix a linker symbol carries in \p format's object files: "_" on
+/// Mach-O, nothing on ELF.
+///
+/// Shared rather than recomputed because two callers must agree. Emitting
+/// `_hermesNodeNativeUnits` in payloadAssembly() and rooting
+/// `_hermesNodeNativeBuiltinsMarker` at the link are the same question, and a
+/// disagreement fails the link naming a symbol nobody wrote.
+const char *symbolPrefix(ObjectFormat format);
 
 /// The assembler source that carries \p bundlePath's bytes into a
 /// read-only section, defining hermesNodeBundleStart and

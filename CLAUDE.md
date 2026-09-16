@@ -1801,8 +1801,7 @@ Hermes bytecode. Design
   full-GC-pause-versus-unit-count benchmark (linear in unit count, about
   0.8 ms of extra pause per 1,000 realistically-sized units), is in the
   spec's Measurements section and the progress file above.
-- **Not in scope.** Built-in JavaScript stays interpreted bytecode --
-  nothing here recompiles `libjs`/`libjs-node`. No object cache: every
+- **Not in scope.** No object cache: every
   `build-native` invocation recompiles every module from scratch (dz
   `01a0a0d5-a1b0`). No cross-module optimization beyond what one
   `shermes` compilation unit already does internally. No runnable native
@@ -1810,7 +1809,10 @@ Hermes bytecode. Design
   payloads, so only the linked executable runs, never `--bundle=` against
   the intermediate container. macOS releases ship no kit at all (a
   pre-existing single-executable-plan limitation), so a produced macOS
-  `hermes-node` cannot itself run `build-native`.
+  `hermes-node` cannot itself run `build-native`. **Built-in JavaScript
+  was on this list and no longer is**: an artifact's `libjs`/`libjs-node`
+  are compiled natively too, by default -- see the subsection below,
+  which supersedes that row rather than extending it.
 - Tests:
   `test/build-native{,-errors,-container,-natives,-escapes,-smoke,-wasm,-parity,-tolerant}.js`
   plus `BuildNativeTest`. `build-native-errors.js` is deliberately **not**
@@ -1830,6 +1832,206 @@ Hermes bytecode. Design
   timing an iteration loop. Both arms assert the producer emits no warnings
   at all, which is the real claim: these graphs are fully static, so an
   `--include` should never become necessary.
+
+### Native built-ins
+
+`build-native` compiles the **built-in** JavaScript natively too, and links
+it by default -- all 187 modules of `libjs`, `libjs-node` and the shims, each
+a `shermes -emit-c` unit built at hermes-node build time into
+`libhermes-node-builtins-native.a` and shipped in the kit. A produced
+artifact therefore interprets no JavaScript of ours at all, where before this
+the user's own graph was native and every `fs`, `path`, `net` and `util`
+underneath it was still bytecode. Design
+`docs/superpowers/specs/2026-09-14-native-builtins-design.md`, plan
+`docs/superpowers/plans/2026-09-14-native-builtins.md`, progress
+`docs/superpowers/plans/progress-native-builtins.md`.
+
+- **Two archives define `findEmbeddedModule`, and the link order decides
+  which one a binary gets.** The native archive goes on the link line ahead
+  of the merged kit archive, whose bytecode registry would otherwise answer
+  first. Order alone is not enough: nothing in a user's program references
+  the native registry, so the linker would never extract the member at all.
+  `-Wl,-u,<prefix>hermesNodeNativeBuiltinsMarker` roots one symbol to force
+  that extraction, and the marker is `extern "C"` and defined in the same
+  translation unit as `findEmbeddedModule` -- both load-bearing. A mangled
+  name cannot be spelled on a link line, and a marker in some other object
+  would be rooted without pulling the definition that matters.
+  **What makes this worth a paragraph is that getting it wrong is silent**:
+  the wrong registry links, resolves, runs, and interprets everything, with
+  the right answers and none of the speed. `buildNativeLinkCommand()`
+  (`lib/build-native/native_compile.cpp`) is the one copy the producer and
+  `BuildNativeTest` both call, so the test cannot pass against a command the
+  producer does not build; the end-to-end check is `nm` for the marker, not
+  the argv. `--bytecode-builtins` omits both the `-u` and the archive.
+- **`HERMESVM_INTERNAL_JAVASCRIPT_NATIVE` is `FORCE`d**, in the top-level
+  `CMakeLists.txt` before `add_subdirectory(hermes)`, so Hermes's own
+  `InternalJavaScript` bootstrap is native as well. `FORCE` where
+  `HERMES_ENABLE_WASM` deliberately is not, and the difference is not
+  stylistic: a non-`FORCE` `set(... CACHE ...)` leaves an existing entry
+  alone, which is exactly the trap the Wasm bullet above records -- every
+  build directory configured before this change would have kept Hermes's
+  `OFF` and reported the feature as not working. Forcing costs nothing
+  because no configuration wants the bytecode form. It is paid by
+  `hermes-node` itself and by every `--build-exe` artifact, not only by
+  `build-native`: **+337,904 bytes** measured on macOS arm64 (12,504,968 ->
+  12,842,872), per slice in a universal binary, and the binary's embedded
+  bytecode count drops from 189 to 188. The comment beside the option
+  records a second measurement of the same flip that came out 1,056 bytes
+  higher, and why. Accepted there because Hermes's `InternalJavaScript` is JSLib
+  internals rather than Node lib code, so nobody steps into it.
+- **The cost is a flat +7.27 MB per artifact, and flat is the surprising
+  part.** One measurement, macOS arm64, Release, both programs built against
+  the same kit -- quoted whole so the subtraction can be checked:
+
+  | program | `--bytecode-builtins` | native built-ins | delta |
+  | --- | --- | --- | --- |
+  | hello world, 1 module | 12,626,776 | 19,897,896 | +7,271,120 |
+  | `examples/ditz2`, 137 modules | 15,197,928 | 22,467,416 | +7,269,488 |
+
+  Two runs of the hello-world case differ by a few hundred bytes, since the
+  entry's path and the build metadata land in the binary; quoting one run's
+  absolutes beside another run's delta would give a reader a subtraction
+  that does not close, which is worse than either number alone.
+  The `-Wl,-u` roots one symbol in a
+  translation unit that statically references all 187 units, so the whole
+  registry is pulled in whether the program requires two built-ins or forty.
+  Absolute growth is constant to within 1,632 bytes across those two; only
+  the ratio improves with program size.
+  **`-O0`/`-Os` no longer reach the whole program**, and the flag's scope
+  shrank quietly when this landed. The 187 built-ins are compiled once, into
+  the kit, at `shermes -O` and the kit's own C flags; a `build-native -O0`
+  artifact therefore has `-O0` user modules and `-O3` built-ins. That is the
+  only sane design -- the alternative is recompiling 187 modules per build,
+  which is what shipping them prebuilt exists to avoid -- but the flag no
+  longer means what its name suggests.
+  `--bytecode-builtins` declines it, costs nothing to offer (both archives
+  ship in the kit either way) and earns its place twice: a size-sensitive
+  build can take the smaller binary, and when a test fails only under native
+  built-ins it is the lever that separates a fault in a built-in from a
+  fault in a user module. A kit cut before this feature has no
+  `nativebuiltins:` line, and that is a **refusal before anything is
+  compiled**, naming both the re-cut command and the flag.
+- Compiling the 187 modules takes 8.2 s wall (47.6 s CPU, `-j16` on a
+  16-core macOS arm64) with no failure and no warning, and a plain
+  `hermes-node` build does not pay it: the archive reaches only
+  `hermes-node-kit`, which `check-hermes-node-js` already depends on.
+  **"No warning" is a claim only because the flag is narrow.** `shermes` gets
+  the bytecode pipeline's own `-Wno-undefined-variable` -- every built-in
+  reads `primordials`, `internalBinding` and `process` as undeclared globals
+  -- and deliberately not `-w`, which was there first and silences
+  everything, making the statement unobservable rather than true. Narrowing
+  it left all 187 clean and produced a byte-identical archive, so the
+  suppression `-w` was buying was of diagnostics nobody had.
+- **`check-hermes-node-native` is the verification, and it is a separate
+  target on purpose.** It re-runs 112 of the ordinary JS tests through
+  `build-native` -- one linked 19.9 MB executable per test, ~9 s wall for
+  the suite -- so real programs exercise the natively compiled `fs`, `path`,
+  `net`, `crypto` and the rest rather than a fixture doing so. Separate for
+  the reason `check-hermes-node-examples` is: cost. Every case is a link,
+  and the ASAN kit this project develops against is ~755 MB and links far
+  slower than the Release one -- folding these in would make the
+  configuration used for everyday work the slowest one to test. Run it
+  against `cmake-build-release`. One source tree carries two suites because
+  `--config-prefix=litnative` makes lit read `test/litnative.cfg` instead of
+  `test/lit.cfg` and walk `test/` normally.
+  **Selection is a manifest** (`test/native/corpus.txt`, plus
+  `test/native/excluded.txt` carrying the observed reason per line), not
+  `config.excludes`: lit drops an excluded name *silently*, so a test whose
+  RUN line someone edited would leave the corpus with nothing said, and
+  `test/node-tests/lit.local.cfg` assigns `config.excludes` outright,
+  discarding anything inherited. `check-hermes-node-native-corpus`
+  reconciles both manifests against the tree and the suite depends on it,
+  so the corpus cannot grow or shrink by accident. `check-hermes-node`
+  depends on it too, which is the half that matters: reachable only from the
+  Release-only suite, in no CI job, the gate would have run nowhere anyone
+  runs, and someone adding an ordinary-shaped test would see green while the
+  corpus silently went incomplete. It needs no kit, no linker, no `shermes`
+  and nothing built, and costs 74 ms.
+  **It writes to two directories, and only one of them is where you would
+  look.** The artifacts are the bulk -- 2.1 GB after a full run, one 19.9 MB
+  executable per test -- and they live in `<build>/test/nb`, a *sibling* of
+  the suite's exec root `<build>/test/native`, so `rm -rf <build>/test/native`
+  reclaims nothing. Remove both. `nb` cannot move under the exec root and is
+  not tersely named by accident: the ported net tests build a Unix socket
+  path inside their artifact's work directory, and `sockaddr_un.sun_path` is
+  104 bytes on macOS, so every character of that prefix comes out of a
+  budget one test has only 18 bytes of.
+- **What the corpus does not cover is the part to remember.** The gate sees
+  only the three RUN shapes in `test/native/corpus_util.py`; the bare
+  `%hermes-node %s` shape was missing at first and **fifteen** tests were
+  invisible to both manifests, with the checker silent throughout -- a new
+  RUN shape has to be taught there before this suite can be said to cover
+  it. Of the 27 exclusions the largest classes are a bare `internal/*`
+  require (a closed-world limitation, identical under `--build-exe`) and
+  re-spawning `process.execPath`. **Six natively compiled built-ins have
+  zero direct coverage** -- `querystring`, `dgram`, `https`, `tls`,
+  `cluster`, `diagnostics_channel` -- because every test reaching them
+  re-spawns, and a produced executable ignores the script argument, so the
+  child re-runs its own entry. That is not a failing test but a fork bomb:
+  `test-child-process-exec-timeout.js` reached roughly **6,000 live
+  processes** before it was killed. Anyone wrapping tests in a
+  `build-native` artifact elsewhere should write the process-count guard
+  first, not after.
+  **This suite now has one** (`run_guarded()` in `test/native/run-native.py`),
+  and its shape is the transferable part. `start_new_session=True` so that
+  `killpg` reaps the tree rather than orphaning it below a dead root; a
+  **process count**, polled, because a deadline alone is the wrong
+  instrument -- at the observed 600 processes a second, any deadline loose
+  enough not to flake an honest test admits tens of thousands -- and a poll
+  that starts at 250 ms and backs off, so a bomb is caught in its first few
+  hundred while a ten-second test costs six `pgrep` calls. Both of the
+  wrapper's subprocesses are bounded, the build as well as the artifact.
+  Measured rather than assumed: logging every poll across a full 112-test
+  run put the largest process group at **3** and every artifact's at 1, so
+  the ceiling of 64 has about twenty times the headroom it needs. The
+  *timeout* is the branch that fires in practice -- roughly one run in
+  thirty has an artifact hang past it under load, which before this wrapper
+  hung lit indefinitely instead of failing one test.
+  Two mechanisms were considered and are wrong, each for a structural
+  reason. A textual scan of a corpus file for `process.execPath` misses the
+  node-ported half outright: the bomb that actually happened spawns through
+  `common.spawnCmd`, and `common/` is pruned from the walk
+  (`corpus_util.py`). And `RLIMIT_NPROC` is per-**user**, not per-process-
+  tree, so under a 16-way lit run it would bound every other worker and
+  everything else on the developer's machine, failing somewhere unrelated.
+  `lit_config.maxIndividualTestTime` is not the backstop either: lit's setter
+  calls `fatal()` when `psutil` is absent, so on a machine without it asking
+  for that bound costs the whole run instead.
+- **`--inspect` cannot break inside a natively compiled built-in**: there is
+  no bytecode debug info to break on. Nothing is lost that was available --
+  `--inspect` is already refused with `--bundle`, and a produced executable
+  parses no flags at all -- but it is the reason native built-ins are a
+  `build-native` artifact's property and not `hermes-node`'s. The
+  development binary keeps bytecode built-ins, where stepping into Node's
+  lib code still works.
+- **The two JS language flags now have three copies and nothing forces them
+  to agree.** `kJSLanguageFlags`
+  (`include/hermes/node-compat/bundle/cjs_wrapper.h`) drives the scanner and
+  the `shermes` argv for a user's modules; `HERMES_NODE_JS_LANGUAGE_FLAGS`
+  (`lib/embedded-modules/CMakeLists.txt`) drives both built-in pipelines,
+  the `hermesc` one and the new `shermes` one, and holds *only* the two
+  genuinely shared language flags -- sharing the whole `JS_COMPILER_FLAGS`
+  list would hand `shermes` the bytecode-only `-emit-binary`; and
+  `hermes_napi_compile.cpp` sets them again for what the runtime compiles.
+  Generating the header from CMake was rejected: its prose carries most of
+  its value. What is new is the forcing function -- a block-scoping
+  divergence inside Node's lib code has no diagnostic at build or run time,
+  but it would fail a great many of the 112.
+- **What remains interpreted, and what is known broken, are in the
+  tracker.** A default artifact still carries exactly one bytecode blob per
+  architecture slice, Hermes's own 1,680-byte `ExtensionsBytecode`, which
+  nothing in this repo can reach (dz `01a0a5cd-d63a`); and errors raised
+  through `internal/errors`' `hideStackFrames()` lose their frames under
+  native built-ins (dz `01a0a417-48e6`), which
+  `test/build-native-builtins.js` asserts as the current behaviour so that
+  fixing it fails there.
+- Tests: `test/build-native-builtins.js` (`REQUIRES: linker-available,
+  shermes-available`), which builds one program both ways, diffs the two
+  runs, and counts Hermes bytecode magics per architecture slice with
+  `test/fixtures/native/count-magic.py` -- **per slice, never averaged**,
+  since 0 and 2 across two slices average to the 1 a correct binary has;
+  plus the `NativeBuiltinsTest` cases in `unittests/BuildNativeTest.cpp` and
+  the whole `check-hermes-node-native` suite.
 
 ## Test Infrastructure
 
@@ -1896,7 +2098,7 @@ to be useful as a check).
 - Event loop: single libuv loop, `uv_run(UV_RUN_DEFAULT)`, standalone CLI only
 - Async hooks: stubbed (no-op)
 - Node version: v24.13.0 LTS
-- Built-in JS (`libjs/`, `libjs-node/`, shims) is compiled to Hermes bytecode at build time and embedded into the binary; only the user's script is parsed at run time
+- Built-in JS (`libjs/`, `libjs-node/`, shims) is compiled to Hermes bytecode at build time and embedded into the binary; only the user's script is parsed at run time. A `build-native` artifact is the exception: the same files are compiled to native code instead -- see "Native built-ins"
 - **C++ porting philosophy**: Keep our native binding implementations as close to Node's as reasonable. When Node uses a third-party library (simdutf, Ada, llhttp, c-ares, etc.), vendor and use that same library rather than hand-rolling equivalent functionality. This ensures behavioral parity, gets us battle-tested optimizations, and makes future porting easier since our code structure mirrors Node's.
 
 ## Progress Tracking

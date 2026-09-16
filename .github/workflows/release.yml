@@ -209,11 +209,27 @@ jobs:
           # fails loudly if make-kit.py ever renames an output instead of
           # quietly shipping an incomplete kit. The archives are deliberately
           # NOT stripped -- they are link inputs.
-          cp build/kit/kit.manifest \
-             build/kit/libhermes-node-kit.a \
+          cp build/kit/libhermes-node-kit.a \
              build/kit/libhermesNapi.a \
              build/kit/hermes-node-bundle-main.o \
              "staging/${NAME}/kit/"
+          # This is a --build-exe kit and nothing more: shermes and the kit's
+          # include/ tree are not staged either, so build-native cannot run
+          # against it whatever else is here. Staging the 12 MB native
+          # built-ins archive would therefore buy weight and no capability,
+          # while leaving its manifest key would have the manifest advertise a
+          # file the tarball does not hold -- which readKitManifest() accepts
+          # and build-native then refuses, naming a path that was never
+          # shipped. So the key goes, and the manifest describes exactly what
+          # is beside it. Turning this into a build-native kit is a capability
+          # addition needing a verify job of its own, not a staging change.
+          #
+          # Asserted rather than filtered quietly, for the same reason the
+          # copy above is an explicit list: if make-kit.py stops emitting the
+          # key, that is a decision this step must be revisited alongside.
+          test "$(grep -c '^nativebuiltins:' build/kit/kit.manifest)" = 1
+          grep -v '^nativebuiltins:' build/kit/kit.manifest \
+             > "staging/${NAME}/kit/kit.manifest"
           echo "STAGING_NAME=${NAME}" >> "$GITHUB_ENV"
 
       - name: Create tarball

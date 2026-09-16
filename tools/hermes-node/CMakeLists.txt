@@ -132,6 +132,7 @@ set_target_properties(hermes-node-kit PROPERTIES
      --kit-dir ${HERMES_NODE_KIT_DIR} \
      --version-header ${HERMES_NODE_VERSION_HEADER} \
      --shermes $<TARGET_FILE:shermes> \
+     --native-builtins-name libhermes-node-builtins-native.a \
      --sh-include ${PROJECT_SOURCE_DIR}/hermes/include \
      --sh-include ${CMAKE_BINARY_DIR}/hermes/lib/config \
      --ndebug $<CONFIG:Release,RelWithDebInfo,MinSizeRel> --"
@@ -141,6 +142,7 @@ set_target_properties(hermes-node-kit PROPERTIES
     "${HERMES_NODE_KIT_DIR}/libhermes-node-kit.a;\
 ${HERMES_NODE_KIT_DIR}/kit.manifest;\
 ${HERMES_NODE_KIT_DIR}/hermes-node-bundle-main.o;\
+${HERMES_NODE_KIT_DIR}/libhermes-node-builtins-native.a;\
 ${HERMES_NODE_KIT_DIR}/$<TARGET_FILE_NAME:hermesNapi>;\
 ${HERMES_NODE_KIT_DIR}/shermes;\
 ${HERMES_NODE_KIT_DIR}/include"
@@ -186,3 +188,22 @@ add_custom_command(
 add_custom_target(hermes-node-kit-entry
   DEPENDS ${HERMES_NODE_KIT_DIR}/hermes-node-bundle-main.o)
 add_dependencies(hermes-node-kit hermes-node-kit-entry)
+
+# The native built-ins archive, copied with a real OUTPUT rule for the same
+# reason the entry object above is: the kit's own outputs are written behind
+# the build system's back, so a POST_BUILD step or a bare add_dependencies
+# would leave a stale archive in the kit whenever the sources changed without
+# the kit's stamp being invalidated. make-kit.py records the manifest line but
+# deliberately does not copy the file -- one destination, one writer.
+add_custom_command(
+  OUTPUT ${HERMES_NODE_KIT_DIR}/libhermes-node-builtins-native.a
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${HERMES_NODE_KIT_DIR}
+  COMMAND ${CMAKE_COMMAND} -E copy
+          $<TARGET_FILE:hermesNodeBuiltinsNative>
+          ${HERMES_NODE_KIT_DIR}/libhermes-node-builtins-native.a
+  DEPENDS hermesNodeBuiltinsNative
+  COMMENT "Copying the native built-ins archive into the kit"
+  VERBATIM)
+add_custom_target(hermes-node-kit-builtins
+  DEPENDS ${HERMES_NODE_KIT_DIR}/libhermes-node-builtins-native.a)
+add_dependencies(hermes-node-kit hermes-node-kit-builtins)
