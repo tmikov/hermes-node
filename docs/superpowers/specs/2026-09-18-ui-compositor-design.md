@@ -212,6 +212,7 @@ request, when no JS-side call can be outstanding.
 | `lib/compositor-gpu/` | Per-backend sharing, completion and blitting; both `sokol_gfx` copies. `.mm` on macOS. |
 | `tools/hermes-node-ui/` | `main()`, `sokol_app` callbacks, the `hermes-node:ui` module; exports `hnui_*` and `sg_*`. |
 | `external/sokol/sokol` | Vendored upstream, pinned, plus our patches (see Build). |
+| `examples/hnui-demo/` | The reference addon and its entry script; built when `HERMES_NODE_ENABLE_UI` is on. |
 
 ## Surfaces
 
@@ -612,6 +613,44 @@ vendored Sokol commit and the `hnui` API version, and
 `HNUI_CHECK_VERSION(env)` throws a JS error naming both on a mismatch. An
 `hnui` addon loaded into plain hermes-node fails to `dlopen`.
 
+## The reference addon
+
+**`examples/hnui-demo/` ships in v1 and is part of the deliverable**, not a
+sample written afterwards. Without it, the first thing anyone could render
+would have to be written from scratch against an API that had never had a
+consumer, and an API with no consumer is usually subtly unusable.
+
+It is deliberately small -- on the order of 150 lines of C plus a short entry
+script -- and uses **`sokol_gl` only, never ImGui**:
+
+- `demo.js` loads `hermes-node:ui`, calls `createWindow`, loads the addon,
+  and runs an ordinary JS `requestAnimationFrame` loop that calls into it.
+  That is the common shape, so it is the one demonstrated by default.
+- The addon registers itself, and on each frame calls `hnui_frame_target`,
+  begins a pass against the returned color view, clears, and draws a rotating
+  triangle sized from the target's reported dimensions. It never calls
+  `sg_setup`, `sg_shutdown` or `sg_commit`.
+- A key event, delivered through `hnui_add_event_listener`, changes the clear
+  colour, which exercises the input path end to end.
+- Resize needs no special handling: the target reports its size and
+  generation every frame, which is the point of that being per-frame data.
+- A flag switches it to drive frames through `hnui_request_animation_frame`
+  instead, so the native callback path has a consumer too.
+
+It has three jobs:
+
+1. **A smoke test a person can run**: `hermes-node-ui examples/hnui-demo/demo.js`
+   shows a window with a moving triangle.
+2. **The worked example for `hnui.h`.** It is written *during* implementation,
+   before the C API is frozen: if the demo is awkward to write, the API is
+   wrong and changes while it still can.
+3. **The artifact the end-to-end tests capture.** The capture hook needs
+   something whose output is known, and this is it.
+
+**Not in v1: an ImGui addon.** That is the real target and the reason the
+input, cursor and clipboard paths exist, but it brings ImGui vendoring and
+its own build questions, and the C API can be proven without it.
+
 ## Build and integration
 
 **Sokol** is vendored at `external/sokol/sokol`, pinned, with our patches
@@ -692,6 +731,12 @@ it does not resize the real framebuffer -- and capturing a presented frame.
 **Capture is keyed to a publication id and acknowledged**, never to an
 absolute frame number, because blits can precede any publication.
 
+**What draws in these tests is the reference addon** (`examples/hnui-demo/`,
+above), in a mode that renders a fixed pattern rather than a rotating one, so
+captured pixels are deterministic. The end-to-end tests assert its output,
+the order of its events, that a resize produces a new generation, and that
+closing the window runs `'exit'` and yields the expected status.
+
 GPU exclusion cannot be established by a CPU-level stress test, so the
 backend tests use controllable producer and consumer completion, covering
 empty ticks, abandoned generations, quarantined slots and shutdown.
@@ -750,6 +795,8 @@ Throwaway code, go/no-go:
 - **No JS-level graphics API.** Rendering is native. A Canvas-style API over
   a native renderer would be a separate piece of work, and is what an
   animated 2D program would need.
+- **No ImGui addon in v1.** The reference addon (`sokol_gl`, above) is what
+  ships; an ImGui one is the next round.
 - **No idle sleep.** The main thread wakes every frame callback and
   re-presents, because `sokol_app` has no on-demand mode.
 - **Windows and D3D11 are not built.**
