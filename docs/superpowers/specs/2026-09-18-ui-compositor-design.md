@@ -183,8 +183,9 @@ once, in the presenting unit, or not at all.
 - **UI mode does not support `--inspect`.** `processExiting` and `exitLoop`
   are file-static in `lib/process/node_process.cpp` (529, 538) and
   `setProcessExitLoop` is last-writer-wins, so a second runtime in the
-  process would leave `process.exit()` running the wrong loop. A tracker
-  issue records that defect; until it is fixed, a UI process runs exactly one
+  process would leave `process.exit()` running the wrong loop. That defect is
+  pre-existing and independent of this work, and **still needs a tracker
+  issue of its own**; until it is fixed, a UI process runs exactly one
   runtime, and the design relies on that contract rather than on the header's
   "one independent runtime per call".
 
