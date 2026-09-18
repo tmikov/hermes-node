@@ -212,7 +212,7 @@ request, when no JS-side call can be outstanding.
 | `lib/compositor-gpu/` | Per-backend sharing, completion and blitting; both `sokol_gfx` copies. `.mm` on macOS. |
 | `tools/hermes-node-ui/` | `main()`, `sokol_app` callbacks, the `hermes-node:ui` module; exports `hnui_*` and `sg_*`. |
 | `external/sokol/sokol` | Vendored upstream, pinned, plus our patches (see Build). |
-| `examples/hnui-demo/` | The reference addon and its entry script; built when `HERMES_NODE_ENABLE_UI` is on. |
+| `test/fixtures/hnui-demo/` | The reference addon and its entry script; built when `HERMES_NODE_ENABLE_UI` is on. |
 
 ## Surfaces
 
@@ -615,10 +615,21 @@ vendored Sokol commit and the `hnui` API version, and
 
 ## The reference addon
 
-**`examples/hnui-demo/` ships in v1 and is part of the deliverable**, not a
-sample written afterwards. Without it, the first thing anyone could render
-would have to be written from scratch against an API that had never had a
-consumer, and an API with no consumer is usually subtly unusable.
+**`test/fixtures/hnui-demo/` ships in v1 and is part of the deliverable**,
+not a sample written afterwards. Without it, the first thing anyone could
+render would have to be written from scratch against an API that had never
+had a consumer, and an API with no consumer is usually subtly unusable.
+
+**It is a test fixture, not an `examples/` entry**, which is a deliberate
+departure from where a demo would normally go. `examples/` here means an npm
+project: `examples/run-examples.sh` skips any directory without a
+`node_modules`, so a dependency-free addon placed there would be permanently
+reported as not installed. The precedent it follows instead is `hello_addon`
+(`CMakeLists.txt:128`), a `.node` addon built by our own CMake from
+`test/fixtures/test-addon/`. Its build is conditional on
+`HERMES_NODE_ENABLE_UI`, its graphical tests are gated on the `ui` and
+`display` lit features, and the built addon's path is passed to the entry
+script rather than resolved by `require()` from a package.
 
 It is deliberately small -- on the order of 150 lines of C plus a short entry
 script -- and uses **`sokol_gl` only, never ImGui**:
@@ -635,12 +646,25 @@ script -- and uses **`sokol_gl` only, never ImGui**:
 - Resize needs no special handling: the target reports its size and
   generation every frame, which is the point of that being per-frame data.
 - A flag switches it to drive frames through `hnui_request_animation_frame`
-  instead, so the native callback path has a consumer too.
+  instead, so the native callback path has a consumer too. **Lit runs both
+  modes**, not just the default one.
+- **A conformance mode** calls the entry points the visual demo does not, once
+  each, and prints what it observed: `hnui_cancel_animation_frame`,
+  `hnui_remove_event_listener` (including removal during dispatch, and when
+  its user data becomes safe to free), `hnui_get_window_state`,
+  `hnui_set_cursor`, `hnui_show_cursor`, `hnui_lock_pointer`,
+  `hnui_write_clipboard`, `hnui_read_clipboard_sync` (a normal read and a
+  timeout), and `hnui_free`. It also renders one frame through the
+  **resolve view** with an MSAA image of its own, which is otherwise the one
+  part of `hnui_frame_target` nothing exercises. This mode is textual and
+  runs under lit; it is not part of what a person sees when running the demo
+  by hand.
 
 It has three jobs:
 
-1. **A smoke test a person can run**: `hermes-node-ui examples/hnui-demo/demo.js`
-   shows a window with a moving triangle.
+1. **A smoke test a person can run**:
+   `hermes-node-ui test/fixtures/hnui-demo/demo.js <addon path>` shows a
+   window with a moving triangle.
 2. **The worked example for `hnui.h`.** It is written *during* implementation,
    before the C API is frozen: if the demo is awkward to write, the API is
    wrong and changes while it still can.
@@ -649,7 +673,10 @@ It has three jobs:
 
 **Not in v1: an ImGui addon.** That is the real target and the reason the
 input, cursor and clipboard paths exist, but it brings ImGui vendoring and
-its own build questions, and the C API can be proven without it.
+its own build questions. With the conformance mode above, every `hnui_*`
+entry point has a caller in v1 -- but "has a caller" is not "is pleasant to
+build a real UI on". **The ergonomics of the C API stay unproven until an
+ImGui addon exists**, and that is the risk accepted by deferring it.
 
 ## Build and integration
 
@@ -731,11 +758,28 @@ it does not resize the real framebuffer -- and capturing a presented frame.
 **Capture is keyed to a publication id and acknowledged**, never to an
 absolute frame number, because blits can precede any publication.
 
-**What draws in these tests is the reference addon** (`examples/hnui-demo/`,
-above), in a mode that renders a fixed pattern rather than a rotating one, so
-captured pixels are deterministic. The end-to-end tests assert its output,
-the order of its events, that a resize produces a new generation, and that
-closing the window runs `'exit'` and yields the expected status.
+**What draws in these tests is the reference addon**
+(`test/fixtures/hnui-demo/`, above), in a mode that renders a fixed pattern
+rather than a rotating one.
+
+**A fixed pattern is not by itself enough to make captured pixels
+deterministic**, because the same publication can be presented at a different
+framebuffer size, and the blit stretches with linear filtering when the sizes
+differ. So a capture request carries, and the capture is only taken when they
+agree: the target generation, the target's dimensions, the actual framebuffer
+dimensions and DPI scale, and the input state the frame was drawn from.
+Transitional stretching is asserted separately, as its own case, rather than
+being something the ordinary assertions have to tolerate.
+
+Comparison is by policy, not by golden image: solid interior regions are
+compared exactly, and rasterized or filtered edges with a tolerance, with the
+pixel format and any colour conversion stated by the test. Naming `llvmpipe`
+does not make a byte-for-byte golden image portable.
+
+The end-to-end tests assert that output, the order of the addon's events,
+that a resize produces a new generation, that both frame-driving modes work,
+the conformance mode's printed results, and that closing the window runs
+`'exit'` and yields the expected status.
 
 GPU exclusion cannot be established by a CPU-level stress test, so the
 backend tests use controllable producer and consumer completion, covering
