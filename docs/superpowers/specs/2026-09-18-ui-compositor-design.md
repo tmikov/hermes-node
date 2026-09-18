@@ -226,8 +226,13 @@ resolves into the surface.
 This is the core of the design; everything else is built around it.
 
 Each slot is in exactly one of **FREE**, **WRITING**, **READY**,
-**PRESENTING**, and additionally carries a **read-reference count** for blits
-that have been submitted but not yet completed on the GPU.
+**PRESENTING**, **RETIRING**, and additionally carries a **read-reference
+count** for blits that have been submitted but not yet completed on the GPU.
+
+RETIRING is the state a displaced surface occupies: it is no longer the
+presenting image, but blits that sampled it may still be executing. It is
+neither reusable nor presentable, and it is the reason "stopped presenting"
+and "reusable" are two different things.
 
 - **Acquire.** The producer takes a FREE slot. **If none is FREE the frame
   tick is withheld** -- this is the backpressure that paces rendering.
@@ -239,10 +244,16 @@ that have been submitted but not yet completed on the GPU.
 - **Blit.** Every blit, including a re-present of an unchanged surface,
   **acquires a read reference before submission** and releases it when that
   blit completes on the GPU.
-- **Release.** A slot becomes FREE only when it is **no longer the presenting
-  slot** *and* its **read-reference count has reached zero**. Ceasing to be
-  presenting is not sufficient, and a completion handler releases a read
-  reference rather than freeing the slot outright.
+- **Retire.** When a take installs a replacement, the outgoing slot goes
+  PRESENTING -> RETIRING if it has outstanding reads, or straight to FREE if
+  it has none.
+- **Release.** RETIRING -> FREE when the **read-reference count reaches
+  zero**. A completion handler releases a read reference; it never frees a
+  slot outright, and it never frees one that is still PRESENTING.
+- **Reclaim.** WRITING -> FREE covers the two cases where a frame produces no
+  publication: a tick that drew nothing, and a publication dropped because
+  its generation retired or the window is closing. Reclamation waits for the
+  producer's own GPU work to complete, exactly as a publication would.
 
 The full ordering chain is:
 
@@ -261,7 +272,7 @@ consumer latency; it is not a stronger correctness guarantee.
 
 | Backend | Producer completion | Consumer completion |
 |---|---|---|
-| Metal | After `sg_commit()`, a marker command buffer is **committed** (not merely enqueued) on the JS instance's queue with a completion handler; its captured slot and generation are installed **before** commit, since completion can race the submitting thread. | The presenting copy's command buffer carries a completion handler that releases the read reference. |
+| Metal | After `sg_commit()`, a marker command buffer is **committed** (not merely enqueued) on the JS instance's queue with a completion handler; its captured slot and generation are installed **before** commit, since completion can race the submitting thread. | The same marker-buffer strategy on the presenting instance's queue, committed after its blit, releasing the read reference. Sokol exposes no accessor for its current command buffer -- `sg_mtl_command_queue()` gives the queue only (`sokol_gfx.h:28324`) -- so a handler *on Sokol's own buffer* would need a patch; the marker avoids that, at the cost of depending on the same ordering property the producer does. |
 | GL | `glFenceSync` followed by `glFlush` on the producer context. The fence is created by the producer and **ownership transfers to the main thread**, which polls `glClientWaitSync` with timeout 0 in `frame_cb` and deletes it; the producer never touches it again. | A fence inserted after the blit, polled the same way. |
 
 `GL_WAIT_FAILED` **does not establish completion**: the slot is quarantined,
@@ -301,16 +312,36 @@ A resize allocates a new *generation* of three slots. Lifetime is a
 - each outstanding consumer read;
 - each wrapper held by the presenting copy.
 
+There is one further owner: **the current-generation reference**, which the
+pool itself holds. It exists so the count is never zero for a live
+generation: a freshly
+allocated generation has all slots FREE and none of the other owners, so
+without it the first acquisition would be forbidden by the rule below.
+Retiring a generation is exactly the act of dropping that reference.
+
 A reference is acquired before work is scheduled and held until the callback
 finishes or transfers its reference onward -- a completion handler transfers
 its reference to READY ownership before releasing its own, so the count
-cannot reach zero while a handler is still running. Acquisition from a
-retired or zero-count generation is impossible, being guarded by the same
-CAS. A generation is destroyed when its count reaches zero and it is not
-current, which covers a generation created during a burst of resizes and
-never presented. **Destruction always runs on the JS owner thread**,
-whichever thread dropped the last reference; the main thread and Metal
-callback threads post it there.
+cannot reach zero while a handler is still running.
+
+**Retirement forbids new producer ownership, not existing readers.** A
+retired generation accepts no new slot acquisition and no new publication,
+but its still-presenting surface keeps being blitted, and each of those blits
+takes a read reference as usual, until a surface of the current generation
+replaces it. Without that distinction the screen would have to go blank at
+every resize.
+
+**Obsolete wrappers are released on a trigger, not by waiting.** The
+presenting instance destroys its wrappers for a generation when that
+generation stops being current *and* has no PRESENTING or RETIRING slot left;
+waiting for the reference count to reach zero first would deadlock, since the
+wrappers are themselves counted owners.
+
+A generation is destroyed when its count reaches zero, which now implies it
+is no longer current; that covers a generation created during a burst of
+resizes and never presented. **Destruction always runs on the JS owner
+thread**, whichever thread dropped the last reference; the main thread and
+Metal callback threads post it there.
 
 ### Presenting
 
@@ -336,6 +367,11 @@ GPU_PENDING -> PUBLISHED_AWAITING_TAKE -> IDLE.
   FREE slot exists.
 - A tick in which nothing drew, or whose callbacks were all cancelled,
   returns to IDLE immediately, so non-rendering rAF chains never stall.
+- **GPU_PENDING -> IDLE without publication** is a defined transition, taken
+  when a publication is dropped (retired generation, or CLOSING). Otherwise a
+  dropped frame would wait in PUBLISHED_AWAITING_TAKE for a take that can
+  never come. Requests recorded while it was pending survive the transition,
+  so the next eligible frame callback still runs.
 - Requests made in any state are recorded and served at the next eligible
   frame callback.
 - **An exception never short-circuits GPU bookkeeping.** If drawing was
@@ -359,16 +395,19 @@ the exception and the runtime stays open; otherwise the process is going away
 and the batch ends. Exceptions from the microtask checkpoints between
 callbacks take the same path.
 
-**Three deliberate deviations from browser rAF**, stated as such:
+**Two deliberate deviations from browser rAF**, stated as such:
 
-1. The first frame after idle waits for a tick rather than running
-   immediately -- this matches browsers and is listed because the opposite
-   was considered and rejected (it breaks `rAF(() => rAF(fn))`).
-2. Ticks are paced by the main thread signalling that it took a surface,
+1. Ticks are paced by the main thread signalling that it took a surface,
    rather than by the rendering thread being the presenting thread.
-3. **Presentation backpressure:** a tick is withheld while no slot is FREE.
+2. **Presentation backpressure:** a tick is withheld while no slot is FREE.
    A slow GPU therefore delays even rAF callbacks that would not have drawn.
    Browsers have no equivalent rule.
+
+Not a deviation, but worth recording: the first frame after idle waits for a
+tick rather than running immediately. That is what browsers do. Running it
+immediately would save up to one refresh of latency and was rejected, because
+it breaks `rAF(() => rAF(fn))` as "wait one frame" and gives that callback a
+timestamp that is not a frame time.
 
 ## Input and platform services
 
@@ -426,6 +465,11 @@ CLOSING -> CLOSED.
 
 - `main()` spawns the JS thread and waits on a condition variable. Waiting
   before `[NSApp run]` is fine on macOS.
+- **The wait predicate is "a window was requested **or** the runtime
+  finished".** A script that never loads the UI module runs to completion
+  like any hermes-node program; the JS thread signals the same condition
+  variable on its way out, and `main()` exits with the runtime's code without
+  ever calling `sapp_run()`.
 - **The referenced libuv handle is taken when `createWindow` is called**, not
   when the window opens, so the runtime cannot drain during creation.
 - `createWindow({...})` sends the options; the main thread builds `sapp_desc`
@@ -663,10 +707,16 @@ Throwaway code, go/no-go:
 1. **GLX sharing.** Routes in order of preference: (a) patch Sokol's config
    filter to require `GLX_PBUFFER_BIT` as well as `GLX_WINDOW_BIT`;
    (b) a surfaceless current context where the implementation allows it;
-   (c) the EGL path via `sapp_egl_get_context()`. Whichever is chosen must
-   resolve the queried `GLX_FBCONFIG_ID` back to a compatible `GLXFBConfig`
-   handle and validate directness and drawable support. Also: whether sync
-   objects are visible across the share group.
+   (c) the EGL path via `sapp_egl_get_context()`. **Routes (a) and (b) are
+   GLX and must** resolve the queried `GLX_FBCONFIG_ID` back to a compatible
+   `GLXFBConfig` handle and validate directness and drawable support. **Route
+   (c) is EGL and has none of those objects**: a Sokol EGL build creates no
+   GLX context (`sokol_app.h:2400`), so it validates its own `EGLConfig`,
+   shared `EGLContext` and surfaceless or pbuffer drawable instead. The spike
+   also delimits which configurations v1 supports: desktop GL through GLX,
+   and whether forced-EGL and GLES3 Linux builds are supported or refused at
+   configure time. Also: whether sync objects are visible across the share
+   group.
 2. **Xlib threading.** `XInitThreads()` runs a few statements into
    `_sapp_linux_run`, so "after `sapp_run()` starts" is not a safe rule. The
    spike settles whether we need an initialization-complete signal from
@@ -677,9 +727,12 @@ Throwaway code, go/no-go:
 4. **Offscreen-only frames** with no swapchain pass, and a render target
    wrapped from a single injected texture.
 5. **Metal ordering.** Whether a later-committed command buffer on one queue
-   completes after earlier ones. If not, a completion hook on Sokol's own
-   frame command buffer is needed -- `sg_mtl_command_queue()` gives the queue
-   only (`sokol_gfx.h:28324`), so that would mean a Sokol patch. Also:
+   completes after earlier ones. **Both** sides depend on this: the producer's
+   publication marker and the consumer's read-release marker. If it does not
+   hold, both need a completion hook on Sokol's own frame command buffer,
+   which `sg_mtl_command_queue()` cannot provide (`sokol_gfx.h:28324`) and
+   which therefore means a Sokol patch -- for the consumer as much as the
+   producer. Also:
    autorelease pools around all worker-side Metal work, including resource
    creation outside frame callbacks.
 6. **`llvmpipe` under Xvfb** running all of the above.
