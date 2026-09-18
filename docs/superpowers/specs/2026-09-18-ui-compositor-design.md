@@ -51,7 +51,7 @@ renders whole frames, and the thread that owns the window presents them.
 - **The JS thread renders into an offscreen surface** drawn from a pool of
   three; the main thread blits the newest completed surface at every frame
   callback.
-- **Frames follow browser `requestAnimationFrame` semantics**, with three
+- **Frames follow browser `requestAnimationFrame` semantics**, with two
   deliberate deviations recorded below.
 - The compositor is **a separate embedder binary**, `hermes-node-ui`, which
   links hermes-node's runtime library the way `tools/hermes-node/
