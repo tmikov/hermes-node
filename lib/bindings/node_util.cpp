@@ -574,9 +574,19 @@ static napi_value constructSharedArrayBuffer(
   napi_valuetype ctorType;
   napi_typeof(env, sabCtor, &ctorType);
   if (ctorType != napi_function) {
-    napi_throw_error(
-        env, nullptr, "SharedArrayBuffer is not available in this environment");
-    return nullptr;
+    // Hermes provides no SharedArrayBuffer. hermes-node is single-threaded, so
+    // a regular ArrayBuffer is functionally equivalent for the only uses we
+    // care about (e.g. the 4-byte scratch buffer internal/streams/
+    // fast-utf8-stream hands to Atomics.wait for a synchronous sleep). Fall
+    // back to one instead of throwing.
+    uint32_t byteLength = 0;
+    if (argc > 0)
+      napi_get_value_uint32(env, argv, &byteLength);
+    void *data = nullptr;
+    napi_value ab;
+    if (napi_create_arraybuffer(env, byteLength, &data, &ab) != napi_ok)
+      return nullptr;
+    return ab;
   }
 
   napi_value result;
