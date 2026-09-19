@@ -162,7 +162,17 @@ assert(require('node:events') === require('events'), "require('node:events') ===
 assert(require('node:util') === require('util'), "require('node:util') === require('util')");
 console.log('node: prefix: OK');
 
-// --- 6. Integration: process.nextTick + timers ---
+// --- 6. process module: require('process') returns the global process object ---
+var processModule = require('process');
+assert(processModule === process, "require('process') === global process");
+assert(require('node:process') === process, "require('node:process') === global process");
+assert(typeof processModule.pid === 'number', 'process.pid');
+assert(Array.isArray(processModule.argv), 'process.argv');
+assert(typeof processModule.env === 'object', 'process.env');
+assert(typeof processModule.nextTick === 'function', 'process.nextTick');
+console.log('process module: OK');
+
+// --- 7. Integration: process.nextTick + timers ---
 var ticked = false;
 process.nextTick(function() { ticked = true; });
 
