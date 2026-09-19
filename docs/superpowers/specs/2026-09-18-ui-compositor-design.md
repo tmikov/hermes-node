@@ -223,6 +223,16 @@ framebuffer in pixels, in the swapchain's color format
 renderer. A renderer doing MSAA draws into its own multisampled image and
 resolves into the surface.
 
+**On GL, surface textures must use immutable storage** (`glTexStorage2D`),
+and so must any texture injected into a `sokol_gfx` image that will be
+sampled. Sokol turns on `gl_texture_views` for GL 4.3 and above
+(`sokol_gfx.h:10505`) and its texture-view path then calls `glTextureView()`,
+which requires an immutable source; a `glTexImage2D` texture trips an assert
+in `_sg_gl_create_view` instead. Images sokol allocates itself are already
+immutable (`sokol_gfx.h:11217`), so this is a rule for the *injected*
+textures the presenting side wraps. Measured 2026-09-19; see
+`docs/notes/2026-09-19-linux-spike-results.md`.
+
 ### Slot states and the reuse rule
 
 This is the core of the design; everything else is built around it.
@@ -792,7 +802,14 @@ macOS is tested locally; whether CI macOS runners expose Metal is unverified.
 
 ## Spike, before the implementation plan
 
-Throwaway code, go/no-go:
+Throwaway code, go/no-go. **Items 1 to 4 and 6 were run on Linux on
+2026-09-19 and all passed** -- results, caveats and the one new constraint
+they produced are in `docs/notes/2026-09-19-linux-spike-results.md`. Item 5
+and the Metal halves of 3 and 4 need a Mac; the brief for those is
+`docs/notes/2026-09-19-macos-metal-spike-instructions.md`. Two answers below
+were measured on llvmpipe only and need re-measuring on hardware: whether a
+driver's window config also supports pbuffers, and whether sync objects are
+visible across a share group.
 
 1. **GLX sharing.** Routes in order of preference: (a) patch Sokol's config
    filter to require `GLX_PBUFFER_BIT` as well as `GLX_WINDOW_BIT`;
