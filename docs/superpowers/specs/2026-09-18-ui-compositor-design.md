@@ -233,6 +233,37 @@ immutable (`sokol_gfx.h:11217`), so this is a rule for the *injected*
 textures the presenting side wraps. Measured 2026-09-19; see
 `docs/notes/2026-09-19-linux-spike-results.md`.
 
+**On Metal, a marker command buffer is committed immediately after the work
+it marks, and is never `enqueue`d.** `enqueue` reserves a queue slot when it
+is called rather than when the buffer is committed, and Sokol `enqueue`s its
+own frame command buffer at `begin_pass` (`sokol_gfx.h:17167`). A marker
+created after `sg_commit()` on the same thread therefore always takes a later
+slot, which is what makes the ordinary sequence correct; **a pre-created or
+pooled marker inverts deterministically** -- measured 1000 times out of 1000,
+completing a full frame's GPU work *before* the work it was meant to follow.
+
+**The marker also checks, rather than assumes.** Apple documents that a queue
+executes command buffers in order, but nowhere in the SDK documents the
+dispatch order of two distinct buffers' completion handlers. So the marker's
+handler reads the marked buffer's `status == MTLCommandBufferStatusCompleted`
+before treating the work as done: it costs one retain and turns the
+undocumented half of the assumption into a check.
+
+**All worker-thread Metal work runs inside `@autoreleasepool`, not only
+frames.** Per-frame rendering leaks nothing measurable -- but only because the
+driver recycles the two rotating uniform buffers, and there *is* exactly one
+un-pooled autorelease per frame. Resource creation is the case that bites:
+without a pool, RSS grew linearly at ~1.2 KB per create/destroy round with no
+sign of levelling.
+
+**A worker that churns resources must keep committing frames.** Sokol
+advances its Metal id-pool release rotation only inside `sg_commit()`, so
+creating and destroying resources without committing exhausts the pool and
+trips an assert (`sokol_gfx.h:15877`) after a few hundred rounds.
+
+Both measured 2026-09-21 on an Apple M4 Max under API and GPU validation; see
+`docs/notes/2026-09-21-macos-spike-results.md`.
+
 ### Slot states and the reuse rule
 
 This is the core of the design; everything else is built around it.
@@ -284,15 +315,19 @@ consumer latency; it is not a stronger correctness guarantee.
 
 | Backend | Producer completion | Consumer completion |
 |---|---|---|
-| Metal | After `sg_commit()`, a marker command buffer is **committed** (not merely enqueued) on the JS instance's queue with a completion handler; its captured slot and generation are installed **before** commit, since completion can race the submitting thread. | The same marker-buffer strategy on the presenting instance's queue, committed after its blit, releasing the read reference. Sokol exposes no accessor for its current command buffer -- `sg_mtl_command_queue()` gives the queue only (`sokol_gfx.h:28324`) -- so a handler *on Sokol's own buffer* would need a patch; the marker avoids that, at the cost of depending on the same ordering property the producer does. |
+| Metal | After `sg_commit()`, a marker command buffer is **committed** (not merely enqueued) on the JS instance's queue with a completion handler; its captured slot and generation are installed **before** commit, since completion can race the submitting thread. | The same marker-buffer strategy on the presenting instance's queue, committed after its blit, releasing the read reference. Sokol exposes no accessor for its current command buffer -- `sg_mtl_command_queue()` gives the queue only (`sokol_gfx.h:28324`) -- so a handler *on Sokol's own buffer* would need a patch; the marker avoids that. Both markers rest on the same ordering property, **measured: 0 inversions in 1000 for committed buffers, in both the retained and unretained forms** -- provided they are committed and never enqueued, and provided each handler checks the marked buffer's status, as the Surfaces rules above require. |
 | GL | `glFenceSync` followed by `glFlush` on the producer context. The fence is created by the producer and **ownership transfers to the main thread**, which polls `glClientWaitSync` with timeout 0 in `frame_cb` and deletes it; the producer never touches it again. | A fence inserted after the blit, polled the same way. |
 
 `GL_WAIT_FAILED` **does not establish completion**: the slot is quarantined,
 never returned to FREE, and the graphics session is terminated with an error
 rather than risking a write into a texture still being read. The blocking
 fallback -- the producer waiting on its own fence before publishing -- uses
-the identical flush rule and ships if the spike finds sync objects are not
-visible across the share group.
+the identical flush rule and ships wherever sync objects turn out not to be
+visible across the share group. **They are visible on llvmpipe** (measured
+2026-09-19: a fence created by the worker returned `GL_ALREADY_SIGNALED` to
+the other context), so the preferred path is available there; **no hardware
+driver has been tested**, which is one of the two questions still open in the
+spike section below.
 
 ### The atomic protocol
 
@@ -802,14 +837,19 @@ macOS is tested locally; whether CI macOS runners expose Metal is unverified.
 
 ## Spike, before the implementation plan
 
-Throwaway code, go/no-go. **Items 1 to 4 and 6 were run on Linux on
-2026-09-19 and all passed** -- results, caveats and the one new constraint
-they produced are in `docs/notes/2026-09-19-linux-spike-results.md`. Item 5
-and the Metal halves of 3 and 4 need a Mac; the brief for those is
-`docs/notes/2026-09-19-macos-metal-spike-instructions.md`. Two answers below
-were measured on llvmpipe only and need re-measuring on hardware: whether a
-driver's window config also supports pbuffers, and whether sync objects are
-visible across a share group.
+Throwaway code, go/no-go. **All six items have now been run, and none of them
+blocks the design.** Items 1 to 4 and 6 on Linux, 2026-09-19, llvmpipe under
+Xvfb (`docs/notes/2026-09-19-linux-spike-results.md`); item 5 and the Metal
+halves of 3 and 4 on 2026-09-21, Apple M4 Max under API and GPU validation
+(`docs/notes/2026-09-21-macos-spike-results.md`). What they changed is
+recorded in the sections above, not here.
+
+**Two questions remain open, and neither machine could answer them:** whether
+a real GL driver's window framebuffer config also advertises
+`GLX_PBUFFER_BIT` (llvmpipe's does, which settles nothing), and whether sync
+objects are visible across a share group on NVIDIA or AMD hardware -- the
+design's preferred GL completion path depends on the latter, with a blocking
+fallback if it fails. Intel Macs are untested.
 
 1. **GLX sharing.** Routes in order of preference: (a) patch Sokol's config
    filter to require `GLX_PBUFFER_BIT` as well as `GLX_WINDOW_BIT`;
@@ -832,16 +872,24 @@ visible across a share group.
 3. **Both `sokol_gfx` copies** live on two threads at once, GL and Metal,
    including the rename-before-declarations rule and an LTO build.
 4. **Offscreen-only frames** with no swapchain pass, and a render target
-   wrapped from a single injected texture.
+   wrapped from a single injected texture. **Both answered yes**: 100,000
+   offscreen-only frames on Metal and 2,000 on GL ran clean, with the Metal
+   semaphore bounding frames in flight rather than stalling; and one injected
+   texture suffices for a render-target image on both backends, because an
+   attachment-usage image resolves to immutable and therefore to a single
+   slot (`sokol_gfx.h:8594`) rather than `SG_NUM_INFLIGHT_FRAMES` of them.
+   The header's claim that a frame "must have at least one swapchain render
+   pass" is neither enforced nor true.
 5. **Metal ordering.** Whether a later-committed command buffer on one queue
-   completes after earlier ones. **Both** sides depend on this: the producer's
-   publication marker and the consumer's read-release marker. If it does not
-   hold, both need a completion hook on Sokol's own frame command buffer,
-   which `sg_mtl_command_queue()` cannot provide (`sokol_gfx.h:28324`) and
-   which therefore means a Sokol patch -- for the consumer as much as the
-   producer. Also:
-   autorelease pools around all worker-side Metal work, including resource
-   creation outside frame callbacks.
+   completes after earlier ones -- both the producer's publication marker and
+   the consumer's read-release marker depend on it. **Answered yes for
+   committed buffers**, 0 inversions in 1000 iterations against 12 ms of GPU
+   work, in both the retained and the unretained form Sokol uses by default.
+   **Answered no for enqueued ones**, 1000 inversions in 1000, which is where
+   the "commit immediately, never enqueue" rule above comes from. No Sokol
+   patch is needed, so `sg_mtl_command_queue()` exposing only the queue
+   (`sokol_gfx.h:28324`) stops mattering. Autorelease pools were measured at
+   the same time and their requirement widened; see the Surfaces section.
 6. **`llvmpipe` under Xvfb** running all of the above.
 
 ## What this does not do
