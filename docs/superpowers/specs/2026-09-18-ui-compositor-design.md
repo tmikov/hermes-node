@@ -847,9 +847,13 @@ recorded in the sections above, not here.
 **Two questions remain open, and neither machine could answer them:** whether
 a real GL driver's window framebuffer config also advertises
 `GLX_PBUFFER_BIT` (llvmpipe's does, which settles nothing), and whether sync
-objects are visible across a share group on NVIDIA or AMD hardware -- the
-design's preferred GL completion path depends on the latter, with a blocking
-fallback if it fails. Intel Macs are untested.
+objects are visible across a share group on a hardware driver -- the design's
+preferred GL completion path depends on the latter, with a blocking fallback
+if it fails. **An AMD run is planned and is the only hardware available**, so
+the answers will be AMD's, not "hardware's"; the brief and the committed probe
+are `docs/notes/2026-09-21-linux-hardware-spike-instructions.md` and
+`test/fixtures/hnui-spike/glx_share.c`. NVIDIA, Intel GL and Intel Macs stay
+untested.
 
 1. **GLX sharing.** Routes in order of preference: (a) patch Sokol's config
    filter to require `GLX_PBUFFER_BIT` as well as `GLX_WINDOW_BIT`;
