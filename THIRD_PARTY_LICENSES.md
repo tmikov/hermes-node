@@ -153,6 +153,21 @@ Unicode validation and transcoding library. Statically linked.
 
 See `external/simdutf/simdutf/LICENSE` for the full text.
 
+## sokol
+
+Windowing (`sokol_app.h`) and a cross-backend 3D API wrapper
+(`sokol_gfx.h`), plus `sokol_glue.h` and `sokol_log.h`. Header-only, so
+compiled directly into `hermes-node-ui` rather than linked -- and only when
+`HERMES_NODE_ENABLE_UI` is on, which it is not by default. Nothing from
+sokol reaches the `hermes-node` binary.
+
+- Upstream: https://github.com/floooh/sokol (pinned at commit `c0db757`)
+- License: zlib/libpng (`external/sokol/sokol/LICENSE`)
+- Copyright: 2018 Andre Weissflog
+
+See `external/sokol/sokol/LICENSE` for the full text, and
+`external/sokol/README.md` for which files are vendored and why.
+
 ## zlib
 
 Compression library. Statically linked.

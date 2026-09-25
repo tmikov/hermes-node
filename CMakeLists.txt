@@ -120,6 +120,13 @@ add_subdirectory(lib/runtime)
 
 option(HERMES_NODE_ENABLE_UI "Build the hermes-node-ui compositor" OFF)
 if(HERMES_NODE_ENABLE_UI)
+  # Sokol is added here rather than beside the other vendored dependencies
+  # above, and the reason is the Global Constraint that a build WITHOUT this
+  # option is completely unaffected. An INTERFACE library carrying one
+  # include path could not plausibly affect anything -- but "could not
+  # plausibly" is the argument, and keeping the target out of the graph
+  # entirely is the fact.
+  add_subdirectory(external/sokol)
   add_subdirectory(lib/compositor)
 endif()
 
