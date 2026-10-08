@@ -55,13 +55,15 @@ if ! "$HERMES_NODE" -e 'if (typeof WebAssembly !== "object") process.exit(1)'; t
   exit 1
 fi
 
-# The staging redirect below replaces the top-level hermes-parser only. A
-# nested copy -- which a different npm resolution could produce -- would
-# keep the native parser in some corner of the graph, silently.
+# The staging redirects below replace the top-level hermes-parser and
+# prettier only. A nested copy -- which a different npm resolution could
+# produce -- would keep the replaced package in some corner of the graph,
+# silently.
 nested="$(find "$HERE/node_modules" -mindepth 2 -type d \
-  -path "$HERE/node_modules/*/node_modules/hermes-parser")"
+  \( -path "$HERE/node_modules/*/node_modules/hermes-parser" \
+  -o -path "$HERE/node_modules/*/node_modules/prettier" \))"
 if [ -n "$nested" ]; then
-  echo "ERROR: nested hermes-parser copies; the staging redirect would miss them:" 1>&2
+  echo "ERROR: nested copies the staging redirects would miss:" 1>&2
   echo "$nested" 1>&2
   exit 1
 fi
@@ -71,21 +73,24 @@ OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 STAGE="$OUT_DIR/stage"
 
 # --- 1. Stage --------------------------------------------------------------
-# A node_modules made of symlinks into the real one, except that
-# hermes-parser points at hermes-parser-wasm. The producer never resolves
-# symlinks, so it packages the WebAssembly parser under the name everything
-# requires, and the native package never enters the graph. The real
-# node_modules is left alone.
+# A node_modules made of symlinks into the real one, with two exceptions.
+# The producer never resolves symlinks, so each is packaged under the name
+# everything requires, and the package it replaces never enters the graph:
+#   hermes-parser -> hermes-parser-wasm, the parser the artifacts carry;
+#   prettier      -> prettier-stub, since nothing here formats code and
+#                    prettier would otherwise be half the artifact.
+# The real node_modules is left alone.
 rm -rf "$STAGE"
 mkdir -p "$STAGE/node_modules" "$STAGE/fixture"
 for entry in "$HERE"/node_modules/*; do
   name="$(basename "$entry")"
-  if [ "$name" = hermes-parser ]; then
+  if [ "$name" = hermes-parser ] || [ "$name" = prettier ]; then
     continue
   fi
   ln -s "$entry" "$STAGE/node_modules/$name"
 done
 ln -s "$HERE/node_modules/hermes-parser-wasm" "$STAGE/node_modules/hermes-parser"
+ln -s "$HERE/prettier-stub" "$STAGE/node_modules/prettier"
 cp "$HERE/build.config.js" "$STAGE/build.config.js"
 ln -s "$HERE/fixture/src" "$STAGE/fixture/src"
 

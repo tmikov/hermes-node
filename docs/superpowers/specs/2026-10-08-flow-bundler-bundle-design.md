@@ -281,3 +281,18 @@ The "Layout" list gains `build-bundle.sh`, `transpile.js` and
 - Teaching the producer to follow `build.config.js`'s computed
   `require.resolve`, or anything else that would make the `--include` flags
   unnecessary.
+
+## Addendum: prettier stubbed (2026-10-08)
+
+After the first implementation, the native artifact's size was traced to
+prettier: 8.5 MB of the container's 17.4 MB of bytecode, and of it only
+`index.js`, `doc.js` and `third-party.js` were ever loaded, by
+`hermes-transform/dist/transform/print.js`, whose `print()` the bundler never
+calls. Stage 1 now also links `stage/node_modules/prettier` to a committed
+`prettier-stub/` whose `format` throws; `build-bundle.sh` refuses nested
+`prettier` copies as it does nested `hermes-parser` ones, and
+`check-artifacts.sh` checks the container lists no `prettier/parser-*`.
+Measured after: container 1,317 modules, 11,227,032 bytes, 3.2 s to build;
+`--build-exe` 26,314,000 bytes; `build-native` 1,229 native modules,
+69,786,672 bytes, 53 s compile. The figures in the sections above are the
+pre-stub ones; `examples/flow-bundler/README.md` carries both.

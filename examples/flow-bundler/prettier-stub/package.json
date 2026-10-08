@@ -1,0 +1,7 @@
+{
+  "name": "prettier",
+  "version": "0.0.0-flow-bundler-stub",
+  "private": true,
+  "description": "Stands in for prettier in the flow-bundler artifacts; see index.js",
+  "main": "index.js"
+}

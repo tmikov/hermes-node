@@ -78,6 +78,8 @@ FLOW_BUNDLER_VERBOSE=1 ./run.sh       # have babel-register name its choice
 - `build-bundle.sh`, `transpile.js`, `check-artifacts.sh` -- build the
   example into an AOT container and two executables, and verify them; see
   "Bundling it". Output lands in `dist/`.
+- `prettier-stub/` -- stands in for `prettier` inside those artifacts only;
+  see "Why prettier is stubbed".
 
 ## Running it
 
@@ -109,15 +111,15 @@ cmake --build cmake-build-release --target hermes-node hermes-node-kit
 
 | artifact | from | size | build | run |
 | --- | --- | --- | --- | --- |
-| `dist/flow-bundler.hbb` | `--build-bundle` (1,331 modules) | 19.7 MB | 15 s | 1.3 s |
-| `dist/flow-bundler` | `--build-exe` | 34.8 MB | 0.4 s link | 1.3 s |
-| `dist/flow-bundler-native` | `build-native` (1,243 native modules) | 122.7 MB | 3 min 36 s | 1.2 s |
+| `dist/flow-bundler.hbb` | `--build-bundle` (1,317 modules) | 11.2 MB | 3.2 s | 1.29 s |
+| `dist/flow-bundler` | `--build-exe` | 26.3 MB | 0.4 s link | 1.27 s |
+| `dist/flow-bundler-native` | `build-native` (1,229 native modules) | 69.8 MB | 53 s | 1.20 s |
 
 Measured on Linux x86-64, Release, 16 cores, `build-native` at its default
-`--jobs`; a whole `check-artifacts.sh` run took 25 minutes of CPU, most of
-it there. Run times are single runs of the whole fixture build, not a
-benchmark. Unbaked, the container takes 6.0 s: the 4.7 s difference is
-compiling the parser's Wasm module at launch. The two
+`--jobs`; all of `build-bundle.sh` takes 60 s wall. Run times are the
+middle of three runs of the whole fixture build. Unbaked, the container
+takes about 6 s: the difference is compiling the parser's Wasm module at
+launch. The two
 executables are skipped, with a note, when the kit (or, for
 `build-native`, `shermes` in it) is missing.
 
@@ -200,7 +202,8 @@ under the name every importer uses, and the native package never enters the
 graph. That covers every importer only because there is exactly one
 `hermes-parser` in the installed tree; `build-bundle.sh` refuses to run if
 npm ever nests another. The real `node_modules` is never touched, which is
-what made swapping it on disk unacceptable (see `parser-select.js`).
+what made swapping it on disk unacceptable (see `parser-select.js`). The
+same farm replaces `prettier` with `prettier-stub/`; see the next section.
 
 **The redirect fools the producer and nothing else.** hermes-node's disk
 loader *does* resolve symlinks, as Node does, so running the staged tree
@@ -212,15 +215,52 @@ holds exactly one module. Without both, the failure is silent: correct
 output, an empty record, and artifacts that compile the parser at every
 launch.
 
+### Why prettier is stubbed
+
+Nothing in the bundler formats code, yet prettier was half of every
+artifact. `hermes-transform`'s `transform.js` loads its `print.js`
+unconditionally, and `print.js` requires `prettier` at the top -- the only
+importer in the graph -- and uses it only inside `print()`, as
+`prettier.format`. The bundler never calls `print()`, and could not here:
+its first act is `require('prettier/plugins/estree')`, a Prettier 3 path,
+while this example pins 2.8.8. Prettier 2's `index.js` then names every
+language parser it ships in a literal `require()`, so the producer packaged
+all of them -- Flow, TypeScript (with its whole compiler), Babel, Markdown,
+HTML, YAML, CSS, Glimmer and more.
+
+Measured with `HERMES_NODE_DEBUG_NATIVE=BUNDLE`, which logs every bundled
+`require`: of 1,331 packaged modules, 198 were never loaded, 7.0 MB of the
+container's 17.4 MB of bytecode, and 7.0 MB of that was prettier. The rest
+of prettier -- `index.js`, `doc.js`, `third-party.js`, about 1.56 MB -- was
+loaded at startup and never used.
+
+`prettier-stub/` is a package named `prettier` whose `format` throws,
+linked into the staging `node_modules`. `check-artifacts.sh` checks the
+container lists no `prettier/parser-*` file. Before and after, same
+machine, same three-run method:
+
+| | before | after |
+| --- | --- | --- |
+| `.hbb` | 19.7 MB, built in 15 s | 11.2 MB, 3.2 s |
+| `--build-exe` | 34.8 MB | 26.3 MB |
+| `build-native` | 122.7 MB (96.3 MB `.text`), 216 s compile | 69.8 MB (50.5 MB `.text`), 53 s |
+| run (`.hbb` / exe / native) | 1.32 / 1.30 / 1.21 s | 1.29 / 1.27 / 1.20 s |
+
+The native compile time fell by three quarters where the size fell by
+less than half; why has not been measured. Stubbing is safe only while
+nothing calls `print()`. A call fails today on its Prettier 3 `require`
+before reaching prettier at all; with that path fixed, it would reach the
+stub's `format`, which throws naming `prettier-stub`.
+
 ### Expected producer warnings
 
 The producer warns, and unlike `examples/tetris` that is expected here; the
 scripts print the warnings rather than asserting there are none. There are
 eight unresolvable optional probes (`metro-react-native-babel-preset`, a
 `buildBundleCLI.js` branch this config does not take; three
-`prettier/plugins/*` paths, which are Prettier 3's, while this example pins
-2.8.8; `@babel/preset-typescript` twice; `v8`; `supports-color`), 17
-computed requires and 4 `require`-as-value escapes, and
+`prettier/plugins/*` paths inside `print()`, which are Prettier 3's;
+`@babel/preset-typescript` twice; `v8`; `supports-color`), 13 computed
+requires in 6 files and 3 `require`-as-value escapes, and
 `@babel/core/lib/config/files/import.cjs`, packaged as a module that throws
 if loaded (`import()` inside a `.cjs`). The four `--include` flags in
 `build-bundle.sh` are the computed requires that matter: `build.config.js`

@@ -49,6 +49,15 @@ if printf '%s\n' "$dump" | grep -q 'HermesParserAddon\.js\|^NATIVES'; then
 fi
 echo "ok: flow-bundler.hbb holds the WebAssembly parser and no native addon"
 
+# The prettier stub, checked the same way: the real package's index.js
+# names every language parser it ships, so any of them in the module table
+# means the real prettier was packaged.
+if printf '%s\n' "$dump" | grep -q 'node_modules/prettier/parser-'; then
+  echo "FAIL: flow-bundler.hbb contains the real prettier, not the stub" 1>&2
+  exit 1
+fi
+echo "ok: flow-bundler.hbb holds the prettier stub"
+
 failed=0
 
 # check_one <label> <artifact file> <command...>
