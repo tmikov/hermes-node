@@ -23,7 +23,7 @@
   Claude-Session: https://claude.ai/code/session_014G1ZvumxkNPNrtXx3pzzJZ
   ```
 - **Formatting:** clang-format 18 only. hermes-node-compat: `./utils/format.sh -f` from the root before every commit. Submodule: `clang-format-18 -i <each C/C++ file you touched under hermes/>` (Hermes has its own `.clang-format`).
-- **Build tree:** `cmake-build-asan` (Debug, Clang, ASAN). Hermes's own tests run from the same tree: `cmake-build-asan/hermes/unittests/napi/NapiTests`, `cmake-build-asan/hermes/unittests/VMRuntime/VMRuntimeTests`, and lit through `LIT_FILTER='<regex>' cmake --build cmake-build-asan --target check-hermes` (lit matches the whole path, so anchor with `\.wat$`, not a bare `$`).
+- **Build tree:** `cmake-build-asan` (Debug, Clang, ASAN). Hermes's own tests run from the same tree: `cmake-build-asan/hermes/unittests/napi/NapiTests`, `cmake-build-asan/hermes/unittests/VMRuntime/HermesVMRuntimeTests`, and lit through `LIT_FILTER='<regex>' cmake --build cmake-build-asan --target check-hermes` (lit matches the whole path, so anchor with `\.wat$`, not a bare `$`).
 - **Before every hermes-node-compat commit:** `cmake --build cmake-build-asan --target check-hermes-node` is green except for the known flakes listed in CLAUDE.md ("Known flaky tests") and `test/build-native-builtins.js`, which already fails on x86-64 (dz `01a11c51`).
 - **Values fixed by the spec, verbatim:**
   - unit name: `w` + the 64 lowercase hex digits of SHA-256 over the module bytes **alone**;
@@ -315,8 +315,14 @@ TEST(WasmUnitRegistryDeathTest, DuplicateNameAlwaysAborts) {
 }
 
 TEST(WasmUnitRegistryTest, OneCreatorUnderTwoNamesWithEqualConfigs) {
-  static SHWasmUnitReg a = {"regtest_shared_a", sharedCreator, "cfg", nullptr};
-  static SHWasmUnitReg b = {"regtest_shared_b", sharedCreator, "cfg", nullptr};
+  // Equal text at two addresses: the registry must compare contents, and
+  // two identical literals may be merged into one, which would let a
+  // pointer comparison pass.
+  static const char cfgA[] = "cfg";
+  static const char cfgB[] = "cfg";
+  ASSERT_NE(&cfgA[0], &cfgB[0]);
+  static SHWasmUnitReg a = {"regtest_shared_a", sharedCreator, cfgA, nullptr};
+  static SHWasmUnitReg b = {"regtest_shared_b", sharedCreator, cfgB, nullptr};
   _sh_wasm_register_unit(&a);
   _sh_wasm_register_unit(&b);
   const SHWasmUnitReg *found = _sh_wasm_find_unit_reg(sharedCreator);
@@ -333,8 +339,10 @@ TEST(WasmUnitRegistryTest, NullConfigEqualsOnlyNull) {
 }
 
 TEST(WasmUnitRegistryDeathTest, OneCreatorWithTwoConfigsAborts) {
-  static SHWasmUnitReg first = {"regtest_conflict_a", conflictCreator, "cfg-1", nullptr};
-  static SHWasmUnitReg differs = {"regtest_conflict_b", conflictCreator, "cfg-2", nullptr};
+  static const char cfg1[] = "cfg-1";
+  static const char cfg2[] = "cfg-2";
+  static SHWasmUnitReg first = {"regtest_conflict_a", conflictCreator, cfg1, nullptr};
+  static SHWasmUnitReg differs = {"regtest_conflict_b", conflictCreator, cfg2, nullptr};
   static SHWasmUnitReg none = {"regtest_conflict_c", conflictCreator, nullptr, nullptr};
   _sh_wasm_register_unit(&first);
   EXPECT_DEATH(
@@ -353,7 +361,7 @@ Add `WasmUnitRegistryTest.cpp` to the source list in `hermes/unittests/VMRuntime
 - [ ] **Step 3: Confirm it fails**
 
 ```bash
-cmake --build cmake-build-asan --target VMRuntimeTests 2>&1 | grep -m3 error
+cmake --build cmake-build-asan --target HermesVMRuntimeTests 2>&1 | grep -m3 error
 ```
 Expected: compile errors, either about too many initializers for `SHWasmUnitReg` or about `_sh_wasm_find_unit_reg` being undeclared.
 
@@ -508,8 +516,8 @@ extern "C" const SHWasmUnitReg *_sh_wasm_find_unit_reg(SHUnitCreator creator) {
 - [ ] **Step 6: Run the registry test**
 
 ```bash
-cmake --build cmake-build-asan --target VMRuntimeTests && \
-  cmake-build-asan/hermes/unittests/VMRuntime/VMRuntimeTests \
+cmake --build cmake-build-asan --target HermesVMRuntimeTests && \
+  cmake-build-asan/hermes/unittests/VMRuntime/HermesVMRuntimeTests \
   --gtest_filter='WasmUnitRegistry*'
 ```
 Expected: 5 tests PASS.
@@ -669,8 +677,8 @@ try {
 - [ ] **Step 13: Run the Hermes suites**
 
 ```bash
-cmake --build cmake-build-asan --target VMRuntimeTests && \
-  cmake-build-asan/hermes/unittests/VMRuntime/VMRuntimeTests \
+cmake --build cmake-build-asan --target HermesVMRuntimeTests && \
+  cmake-build-asan/hermes/unittests/VMRuntime/HermesVMRuntimeTests \
   --gtest_filter='WasmUnitRegistry*:SHUnitABITest*'
 LIT_FILTER='wasm/native-' cmake --build cmake-build-asan --target check-hermes
 LIT_FILTER='shermes/no-wasm-register\.js$' cmake --build cmake-build-asan --target check-hermes
@@ -1303,7 +1311,7 @@ Claude-Session: https://claude.ai/code/session_014G1ZvumxkNPNrtXx3pzzJZ"
 The tests so far reach H3 only with creators Hermes must refuse. This one links real units into an addon and drives `new WebAssembly.Module(bytes)` from the `hermes` binary, so a matching unit is actually run.
 
 **Files:**
-- Create: `hermes/test/wasm/native-lookup/addon.c`
+- Create: `hermes/test/wasm/native-lookup/addon.cpp`
 - Create: `hermes/test/wasm/native-lookup/lkmod.wat_`
 - Create: `hermes/test/wasm/native-lookup.js`
 - Modify: `hermes/unittests/napi/CMakeLists.txt` (the addon target)
@@ -1332,9 +1340,9 @@ Create `hermes/test/wasm/native-lookup/lkmod.wat_`. The trailing underscore keep
 
 - [ ] **Step 2: The addon**
 
-Create `hermes/test/wasm/native-lookup/addon.c`:
+Create `hermes/test/wasm/native-lookup/addon.cpp`. It is C++, not C, because `hermes_napi.h` is C++-only (a default argument at `:156`, an untagged struct name at `:107`); the generated units stay C.
 
-```c
+```cpp
 /*
  * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
@@ -1342,112 +1350,92 @@ Create `hermes/test/wasm/native-lookup/addon.c`:
  * LICENSE file in the root directory of this source tree.
  */
 
-/*
- * A Wasm cache whose native tier answers with units linked into this addon,
- * so that new WebAssembly.Module(bytes) goes through createModuleFromBytes's
- * native tier -- the path WebAssembly.Module.fromNativeUnit() never takes.
- * Loaded by the hermes binary through loadNativeModule(), which gives it a
- * napi_env on the runtime the test script runs on.
- *
- * lkmod and lkmod262 are lkmod.wat_ compiled without and with -test262;
- * throwmod is native-unit-throws-throwing.js_, an ordinary JS unit whose top
- * level throws. The build generates all three (unittests/napi/
- * CMakeLists.txt).
- */
+// A Wasm cache whose native tier answers with units linked into this addon,
+// so that new WebAssembly.Module(bytes) goes through createModuleFromBytes's
+// native tier -- the path WebAssembly.Module.fromNativeUnit() never takes.
+// Loaded by the hermes binary through loadNativeModule(), which gives it a
+// napi_env on the runtime the test script runs on.
+//
+// lkmod and lkmod262 are lkmod.wat_ compiled without and with -test262;
+// throwmod is native-unit-throws-throwing.js_, an ordinary JS unit whose top
+// level throws. The build generates all three as C (unittests/napi/
+// CMakeLists.txt).
 
-#include <hermes/VM/static_h.h>
-#include <hermes_napi.h>
-#include <node_api.h>
+#include "hermes/VM/static_h.h"
+#include "hermes_napi.h"
+#include "node_api.h"
 
-#include <stdbool.h>
-#include <string.h>
+#include <cstring>
 
-extern SHUnit *sh_export_lkmod(void);
-extern SHUnit *sh_export_lkmod262(void);
-extern SHUnit *sh_export_throwmod(void);
+extern "C" {
+SHUnit *sh_export_lkmod(void);
+SHUnit *sh_export_lkmod262(void);
+SHUnit *sh_export_throwmod(void);
+}
 
-static SHUnitCreator s_answer;
-static int s_native, s_lookup, s_store, s_discard, s_accepted;
+namespace {
 
-static SHUnitCreator lookupNative(void *ctx, const uint8_t *wasm, size_t size) {
-  (void)ctx;
-  (void)wasm;
-  (void)size;
+SHUnitCreator s_answer = nullptr;
+int s_native, s_lookup, s_store, s_discard, s_accepted;
+
+SHUnitCreator lookupNative(void *, const uint8_t *, size_t) {
   ++s_native;
   return s_answer;
 }
 
-static bool lookup(
-    void *ctx,
-    const uint8_t *wasm,
-    size_t wasmSize,
-    const uint8_t *config,
-    size_t configSize,
-    const uint8_t **hbc,
-    size_t *hbcSize,
-    void (**finalizeCb)(const uint8_t *, size_t, void *),
-    void **finalizeHint,
+bool lookup(
+    void *,
+    const uint8_t *,
+    size_t,
+    const uint8_t *,
+    size_t,
+    const uint8_t **,
+    size_t *,
+    void (**)(const uint8_t *, size_t, void *),
+    void **,
     void **storeToken) {
-  (void)ctx;
-  (void)wasm;
-  (void)wasmSize;
-  (void)config;
-  (void)configSize;
-  (void)hbc;
-  (void)hbcSize;
-  (void)finalizeCb;
-  (void)finalizeHint;
   ++s_lookup;
-  *storeToken = NULL;
+  *storeToken = nullptr;
   return false;
 }
 
-static void store(void *ctx, void *token, const uint8_t *hbc, size_t size) {
-  (void)ctx;
-  (void)token;
-  (void)hbc;
-  (void)size;
+void store(void *, void *, const uint8_t *, size_t) {
   ++s_store;
 }
 
-static void discard(void *ctx, void *token) {
-  (void)ctx;
-  (void)token;
+void discard(void *, void *) {
   ++s_discard;
 }
 
-static void accepted(void *ctx, void *token) {
-  (void)ctx;
-  (void)token;
+void accepted(void *, void *) {
   ++s_accepted;
 }
 
-/* throwmod is a JS unit, and a JS unit does not register itself. Registered
- * here, at module init -- every constructor in this addon has run by then, so
- * lkmod's registration exists -- with lkmod's configuration, which is what a
- * real Wasm unit compiled by this shermes carries. Stating none, or a
- * different one, would get it refused before its top level threw. */
-static SHWasmUnitReg s_throwReg = {"throwmod", sh_export_throwmod, NULL, NULL};
+// throwmod is a JS unit, and a JS unit does not register itself. Registered
+// at module init -- every constructor in this addon has run by then, so
+// lkmod's registration exists -- with lkmod's configuration, which is what a
+// real Wasm unit compiled by this shermes carries. Stating none, or a
+// different one, would get it refused before its top level threw.
+SHWasmUnitReg s_throwReg = {"throwmod", sh_export_throwmod, nullptr, nullptr};
 
-static napi_value install(napi_env env, napi_callback_info info) {
+napi_value install(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1];
   char mode[32] = {0};
   size_t len = 0;
-  napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
   napi_get_value_string_utf8(env, argv[0], mode, sizeof(mode), &len);
-  if (strcmp(mode, "lkmod") == 0)
+  if (std::strcmp(mode, "lkmod") == 0)
     s_answer = sh_export_lkmod;
-  else if (strcmp(mode, "lkmod262") == 0)
+  else if (std::strcmp(mode, "lkmod262") == 0)
     s_answer = sh_export_lkmod262;
-  else if (strcmp(mode, "throwmod") == 0)
+  else if (std::strcmp(mode, "throwmod") == 0)
     s_answer = sh_export_throwmod;
   else
-    s_answer = NULL;
+    s_answer = nullptr;
   s_native = s_lookup = s_store = s_discard = s_accepted = 0;
 
-  hermes_wasm_cache_callbacks cbs;
-  memset(&cbs, 0, sizeof(cbs));
+  hermes_wasm_cache_callbacks cbs{};
   cbs.struct_size = sizeof(cbs);
   cbs.lookup = lookup;
   cbs.store = store;
@@ -1459,14 +1447,13 @@ static napi_value install(napi_env env, napi_callback_info info) {
   return ok;
 }
 
-static void setInt(napi_env env, napi_value obj, const char *name, int v) {
+void setInt(napi_env env, napi_value obj, const char *name, int v) {
   napi_value n;
   napi_create_int32(env, v, &n);
   napi_set_named_property(env, obj, name, n);
 }
 
-static napi_value counts(napi_env env, napi_callback_info info) {
-  (void)info;
+napi_value counts(napi_env env, napi_callback_info) {
   napi_value obj;
   napi_create_object(env, &obj);
   setInt(env, obj, "native", s_native);
@@ -1477,20 +1464,27 @@ static napi_value counts(napi_env env, napi_callback_info info) {
   return obj;
 }
 
-napi_value napi_register_module_v1(napi_env env, napi_value exports) {
+} // namespace
+
+// NAPI_MODULE_INIT supplies C linkage AND default visibility. Both are
+// needed: Hermes compiles everything -fvisibility=hidden
+// (hermes/CMakeLists.txt), and hermes_napi_load_module() finds the entry
+// point with dlsym().
+NAPI_MODULE_INIT() {
   const SHWasmUnitReg *lk = _sh_wasm_find_unit_reg(sh_export_lkmod);
   if (lk && !s_throwReg.codegen_config) {
     s_throwReg.codegen_config = lk->codegen_config;
     _sh_wasm_register_unit(&s_throwReg);
   }
   napi_value fn;
-  napi_create_function(env, "install", NAPI_AUTO_LENGTH, install, NULL, &fn);
+  napi_create_function(env, "install", NAPI_AUTO_LENGTH, install, nullptr, &fn);
   napi_set_named_property(env, exports, "install", fn);
-  napi_create_function(env, "counts", NAPI_AUTO_LENGTH, counts, NULL, &fn);
+  napi_create_function(env, "counts", NAPI_AUTO_LENGTH, counts, nullptr, &fn);
   napi_set_named_property(env, exports, "counts", fn);
   return exports;
 }
 ```
+Check `hermes/unittests/napi/test_addon.c` for the exact `NAPI_MODULE_INIT()` idiom the existing addons use (the macro names the parameters `env` and `exports`), and confirm that `static_h.h` wraps its declarations in `extern "C"` for C++ (`SHUnitABITest.cpp` includes it from C++).
 
 - [ ] **Step 3: Build it**
 
@@ -1531,7 +1525,7 @@ In `hermes/unittests/napi/CMakeLists.txt`, inside `if(NOT WIN32)` after the last
       DEPENDS shermes ${NL_THROW}
       VERBATIM)
     add_library(napi_wasm_lookup_addon SHARED
-      ${NL_SRC}/addon.c
+      ${NL_SRC}/addon.cpp
       ${NL_OUT}/lkmod.c
       ${NL_OUT}/lkmod262.c
       ${NL_OUT}/throwmod.c
@@ -1545,9 +1539,13 @@ In `hermes/unittests/napi/CMakeLists.txt`, inside `if(NOT WIN32)` after the last
       ${PROJECT_BINARY_DIR}/lib/config
     )
     # What shermes passes when it compiles generated C itself
-    # (tools/shermes/compile.cpp).
-    target_compile_options(napi_wasm_lookup_addon PRIVATE
-      -fno-strict-aliasing -fno-strict-overflow)
+    # (tools/shermes/compile.cpp) -- for the generated units only; the glue
+    # is ordinary C++.
+    set_source_files_properties(
+      ${NL_OUT}/lkmod.c ${NL_OUT}/lkmod262.c ${NL_OUT}/throwmod.c
+      PROPERTIES COMPILE_OPTIONS "-fno-strict-aliasing;-fno-strict-overflow")
+    # C_STANDARD/C_EXTENSIONS reach only the .c sources: gnu11, which the
+    # SH headers need for their zero-length arrays.
     set_target_properties(napi_wasm_lookup_addon PROPERTIES
       PREFIX ""
       SUFFIX ".node"
@@ -1574,9 +1572,11 @@ In `hermes/CMakeLists.txt`, after the `napi_async_work_addon` entry in the `HERM
 
 ```bash
 cmake --build cmake-build-asan --target napi_wasm_lookup_addon
-nm -D cmake-build-asan/hermes/unittests/napi/napi_wasm_lookup_addon.node | grep -E 'sh_export_(lkmod|lkmod262|throwmod)$'
+A=cmake-build-asan/hermes/unittests/napi/napi_wasm_lookup_addon.node
+nm "$A" | grep -cE ' sh_export_(lkmod|lkmod262|throwmod)$'
+nm -D --defined-only "$A" | grep -c ' napi_register_module_v1$'
 ```
-Expected: three `T` lines.
+Expected: `3`, then `1`. The creators are linked in but hidden: the addon references them internally, and nothing outside it needs them. The entry point must be dynamically exported, or `dlsym` cannot find it.
 
 - [ ] **Step 4: Write the lit test**
 
@@ -1649,14 +1649,14 @@ run('throwmod');
 LIT_FILTER='wasm/native-lookup\.js$' cmake --build cmake-build-asan --target check-hermes
 LIT_FILTER='wasm/|napi/' cmake --build cmake-build-asan --target check-hermes
 cmake-build-asan/hermes/unittests/napi/NapiTests
-cmake-build-asan/hermes/unittests/VMRuntime/VMRuntimeTests
+cmake-build-asan/hermes/unittests/VMRuntime/HermesVMRuntimeTests
 ```
 Expected: all pass. If `native-lookup.js` is reported UNSUPPORTED, the lit run lacks the `napi` feature (`napi_enabled` param). Check `hermes/CMakeLists.txt:~903`; the feature must be on in this tree for the test to mean anything.
 
 - [ ] **Step 6: Commit (in the submodule)**
 
 ```bash
-git -C hermes add test/wasm/native-lookup/addon.c test/wasm/native-lookup/lkmod.wat_ \
+git -C hermes add test/wasm/native-lookup/addon.cpp test/wasm/native-lookup/lkmod.wat_ \
   test/wasm/native-lookup.js unittests/napi/CMakeLists.txt CMakeLists.txt
 git -C hermes commit -m "Test the Wasm native tier through a real linked unit
 
@@ -1872,17 +1872,39 @@ TEST(WasmRecordTest, RejectsAnUnknownLaterVersion) {
 }
 
 TEST(WasmRecordTest, RejectsAMisalignedSourceTable) {
+  // Moves the source table itself, as RejectsMisalignedRecordTableOffset
+  // does for the record table: bumping the offset alone would make the
+  // reader parse shifted bytes, and the payload-range check could then
+  // reject the file without the alignment check ever running.
   TempTree tree;
   std::string path = tree.path("rec.bin");
   WasmRecordWriter w(path, "ver");
   ASSERT_TRUE(w.record(commitOf(makeDigest(1), "BC", makeDigest(9), "SRC")));
-  std::vector<uint8_t> bytes = readFileBytes(path);
-  uint32_t off;
-  std::memcpy(&off, bytes.data() + offsetof(WasmRecordHeader, sourceTableOffset), 4);
-  off += 1;
-  std::memcpy(bytes.data() + offsetof(WasmRecordHeader, sourceTableOffset), &off, 4);
-  std::string err;
-  EXPECT_FALSE(WasmRecordReader::open(bytes.data(), bytes.size(), &err));
+  std::vector<uint8_t> good = readFileBytes(path);
+  WasmRecordHeader header;
+  std::memcpy(&header, good.data(), sizeof(header));
+  size_t tableSize = header.sourceCount * sizeof(WasmSourceRecord);
+
+  for (uint32_t delta = 1; delta <= 3; ++delta) {
+    // `delta` bytes before the table misalign it; `8 - delta` after it keep
+    // the payload area's own shift a multiple of kBundlePayloadAlign.
+    std::vector<uint8_t> bytes = good;
+    bytes.insert(bytes.begin() + header.sourceTableOffset, delta, 0);
+    bytes.insert(
+        bytes.begin() + header.sourceTableOffset + delta + tableSize,
+        8 - delta,
+        0);
+    WasmRecordHeader patched = header;
+    patched.sourceTableOffset += delta;
+    patched.payloadOffset += 8;
+    std::memcpy(bytes.data(), &patched, sizeof(patched));
+
+    std::string err;
+    EXPECT_FALSE(WasmRecordReader::open(bytes.data(), bytes.size(), &err))
+        << "accepted a source table misaligned by " << delta;
+    EXPECT_NE(std::string::npos, err.find("source table offset is misaligned"))
+        << err;
+  }
 }
 
 TEST(WasmRecordTest, RejectsAnOutOfRangeSourcePayload) {
@@ -1920,15 +1942,15 @@ In `native_digest.h`:
 /// on: the module alone, with no codegen configuration in it.
 std::string sha256Digest(const uint8_t *bytes, size_t size);
 ```
-In `native_digest.cpp`, following `nativeFileDigest`'s use of picohash:
+In `native_digest.cpp`, through the same `picohash_wrapper.h` functions `nativeFileDigest` uses (`ph_*`; the wrapper exists because upstream picohash does not compile as C++):
 
 ```cpp
 std::string sha256Digest(const uint8_t *bytes, size_t size) {
   picohash_ctx_t ctx;
-  picohash_init_sha256(&ctx);
-  picohash_update(&ctx, bytes, size);
+  ph_init_sha256(&ctx);
+  ph_update(&ctx, bytes, size);
   std::string raw(kNativeDigestBytes, '\0');
-  picohash_final(&ctx, raw.data());
+  ph_final(&ctx, raw.data());
   return raw;
 }
 ```
@@ -2066,6 +2088,8 @@ Then keep the existing range, alignment and per-record checks, reading `h.` inst
     reader.sources_ = src;
   }
 ```
+Order and individual payload alignment are **writer properties, not validated invariants**, for both tables, as they already are for the v1 table. No reader depends on either: the bake step iterates and de-duplicates through a `std::set`, `BundleWriter` copies each payload and serializes its own sorted, aligned table (`bundle_writer.cpp`), and source bytes are never executed in place. Say so in a comment at the end of `open()`'s checks, so nobody adds a check believing one is missing, or removes the sort believing one exists.
+
 `formatVersion()` returns `header_.formatVersion`. `sourceCount()` returns `header_.sourceCount`, which is 0 for v1. `sourceDigest(i)` and `source(i)` mirror `digest(i)` and `payload(i)`.
 
 - [ ] **Step 6: `--dump-wasm` prints the version it read, and the sources**
@@ -2095,7 +2119,7 @@ cmake --build cmake-build-asan --target WasmRecordTest BundleToolsTest && \
   cmake-build-asan/unittests/WasmRecordTest && cmake-build-asan/unittests/BundleToolsTest
 grep -rn 'format v1' test unittests
 ```
-Change each hit that describes a file this binary just wrote to `format v2`. Each `--dump-wasm` check also gains a `SOURCES (0)` line, since the three-argument `record()` the runtime still calls writes no source. Then run the full suite:
+Change each hit that describes a file this binary just wrote to `format v2`, and nothing else. In particular, add no `SOURCES` checks to the lit tests yet: the runtime still calls the three-argument `record()`, which writes no source, and Task 8 is the task that makes `SOURCES (1)` true. Then run the full suite:
 
 ```bash
 cmake --build cmake-build-asan --target check-hermes-node 2>&1 | tail -6
@@ -2132,7 +2156,8 @@ Claude-Session: https://claude.ai/code/session_014G1ZvumxkNPNrtXx3pzzJZ"
 **Files:**
 - Modify: `lib/compile-cache/wasm_cache_hooks.cpp`
 - Modify: `include/hermes/node-compat/bundle/wasm_record.h`, `lib/bundle/wasm_record.cpp` (remove the three-argument `record`)
-- Modify: `unittests/WasmRecordTest.cpp` (move the remaining three-argument callers to `WasmRecordCommit`)
+- Modify: `unittests/WasmRecordTest.cpp` and `unittests/BundleToolsTest.cpp` (move the remaining three-argument callers to `WasmRecordCommit`)
+- Modify: `test/test-wasm-record.js`, `test/test-wasm-record-exit.js` (source counts)
 - Modify: `unittests/CompileCacheRunTest.cpp`, `unittests/CMakeLists.txt`
 
 **Interfaces:**
@@ -2267,8 +2292,19 @@ TEST_F(CompileCacheRunTest, RecordCommitsAtAcceptedFromAReleasedMapping) {
   WasmCacheContext warmCtx;
   warmCtx.cache = &cache;
   warmCtx.recorder = &warm;
+  // Both switches: the disk tier traces its own "wasm hit"
+  // (CompileCache::setTracing), and the adapter traces "wasm store"
+  // (WasmCacheContext::tracing). With only the first, the absence of a
+  // store below would prove nothing.
+  cache.setTracing(true);
+  warmCtx.tracing = true;
   installWasmCacheHooks(env_, &warmCtx, false);
+  testing::internal::CaptureStderr();
   ASSERT_TRUE(compileWasm(kAddWasm));
+  std::string trace = testing::internal::GetCapturedStderr();
+  EXPECT_NE(std::string::npos, trace.find("wasm hit"))
+      << "the warm run must be a disk hit, or this tests nothing:\n" << trace;
+  EXPECT_EQ(std::string::npos, trace.find("wasm store")) << trace;
 
   RecordView c = readRecord(tree.path() + "/cold.bin");
   RecordView h = readRecord(tree.path() + "/warm.bin");
@@ -2321,6 +2357,7 @@ TEST_F(CompileCacheRunTest, NothingCommittedWhenARejectedHitsRecompileFails) {
   WasmCacheContext ctx;
   ctx.cache = &cache;
   ctx.recorder = &w;
+  ctx.tracing = true; // the adapter's "wasm store"; the cache traces "wasm hit"
   installWasmCacheHooks(env_, &ctx, false);
   testing::internal::CaptureStderr();
   EXPECT_FALSE(compileWasm(kGarbageWasm));
@@ -2438,7 +2475,9 @@ void cacheAccepted(void *ctx, void *storeToken) {
 
 7. Update the comments that describe recording at lookup ("replacing whatever the lookup recorded" in `cacheStore`, and `recordWasm`'s doc) so they describe the commit points.
 
-8. Delete the three-argument `WasmRecordWriter::record` from the header and the source. Move its remaining callers in `WasmRecordTest.cpp` to `WasmRecordCommit` (any digest and source will do). Keep the replace-on-same-digest test: it now covers the commit overload.
+8. Delete the three-argument `WasmRecordWriter::record` from the header and the source. Find every caller first (`grep -rn '\.record(' unittests lib`). Today they are in `WasmRecordTest.cpp` and in `BundleToolsTest.cpp`'s `DumpWasmRecordPrintsVersionAndEntries` (`:917`, `:921`). Move each to `WasmRecordCommit` (any source digest and bytes will do). Keep the replace-on-same-digest test: it now covers the commit overload. `DumpWasmRecordPrintsVersionAndEntries` additionally asserts the `SOURCES` section its two commits now produce.
+
+9. The recordings in `test/test-wasm-record.js` and `test/test-wasm-record-exit.js` now carry the module's bytes. Add `// ONE: SOURCES (1)` after each file's `ONE:` lines, and `// ZERO: SOURCES (0)` to `test-wasm-record.js`'s empty case.
 
 - [ ] **Step 4: Run the tests**
 
@@ -2454,8 +2493,9 @@ Expected: all pass. If a `test/test-wasm-record*.js` check fails on ordering, it
 ```bash
 ./utils/format.sh -f
 git add lib/compile-cache/wasm_cache_hooks.cpp include/hermes/node-compat/bundle/wasm_record.h \
-  lib/bundle/wasm_record.cpp unittests/WasmRecordTest.cpp unittests/CompileCacheRunTest.cpp \
-  unittests/CMakeLists.txt <any test/*.js you relaxed>
+  lib/bundle/wasm_record.cpp unittests/WasmRecordTest.cpp unittests/BundleToolsTest.cpp \
+  unittests/CompileCacheRunTest.cpp unittests/CMakeLists.txt \
+  test/test-wasm-record.js test/test-wasm-record-exit.js <any other test/*.js you relaxed>
 git commit -m "--record-wasm: record a module only once Hermes accepted it
 
 The recorder used to record a cache hit at lookup, before Hermes had
@@ -4057,7 +4097,7 @@ Read `examples/tetris/run.sh`'s `build-native` arm first, and copy its conventio
 2. Record: `"$HERMES_NODE" --no-compile-cache --record-wasm="$OUT_NATIVE/ast.wasmrec" "$HERE/ast.js" "$HERE/sample.js" > /dev/null`.
 3. Build: `"$HERMES_NODE" build-native "$HERE/ast.js" -o "$OUT_NATIVE/ast" --bake-wasm="$OUT_NATIVE/ast.wasmrec" --kit="$BUILD_DIR/kit"`. Capture stdout and stderr. Fail if the output contains `warning:`, and fail unless it contains exactly one `wasm: native` line.
 4. Run with `node_modules` moved away and `HERMES_NODE_DISABLE_COMPILE_CACHE=1 HERMES_NODE_DEBUG_NATIVE=COMPILE_CACHE`. Diff stdout against `$UNBUNDLED_OUT`. Require `wasm native hit` and no `warning:` on stderr.
-5. `$OUT_NATIVE` is `"$HERE/out-native"`; extend `cleanup()` to remove it.
+5. `$OUT_NATIVE` is `"$HERE/out-native"`. Create it with `rm -rf "$OUT_NATIVE" && mkdir -p "$OUT_NATIVE"` before recording (the record writer creates no parent directories), and extend `cleanup()` to remove it.
 
 Update the script's header comment and the README: the example now covers four shapes. Run it against Release:
 
@@ -4069,7 +4109,7 @@ Expected: `PASS: hermes-parser-ast-wasm`.
 
 - [ ] **Step 2: Measure**
 
-On `cmake-build-release`, with the recording from Step 1:
+On `cmake-build-release`, in a scratch directory of your own rather than `$OUT_NATIVE` (the example's EXIT trap deletes that). Make a fresh recording there with `--record-wasm`, then build both artifacts from it:
 
 - the artifact size of the native build against the same build with `--bytecode-wasm`;
 - the build wall time of each;
@@ -4092,7 +4132,7 @@ Keep the existing voice: state how it works now, with the reason, and no history
 cmake --build cmake-build-asan --target check-hermes-node 2>&1 | tail -6
 LIT_FILTER='wasm/|napi/' cmake --build cmake-build-asan --target check-hermes 2>&1 | tail -6
 cmake-build-asan/hermes/unittests/napi/NapiTests 2>&1 | tail -3
-cmake-build-asan/hermes/unittests/VMRuntime/VMRuntimeTests 2>&1 | tail -3
+cmake-build-asan/hermes/unittests/VMRuntime/HermesVMRuntimeTests 2>&1 | tail -3
 cmake --build cmake-build-release --target check-hermes-node-native 2>&1 | tail -6
 ```
 Expected: green, with only the exceptions in Global Constraints. `check-hermes-node-native` runs `test-wasm-api.js` and `test-wasm-exec.js` as native artifacts with no recording. They now print first warnings on stderr, which neither test reads; if either fails, that is a finding.

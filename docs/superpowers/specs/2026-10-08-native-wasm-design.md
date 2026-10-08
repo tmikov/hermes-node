@@ -342,10 +342,14 @@ WasmSourceRecord[sourceCount]     -- new: sha256(bytes) -> source bytes
 header, then the magic and version -- rejecting an unknown version
 before interpreting anything past the common prefix -- and, for v2 only,
 `size >=` the v2 header. No accessor reads a v2-only field from a v1
-header. Both tables are sorted by digest and validated structurally,
-like everything else in the format (magic, version, every offset,
-length, alignment and range). No payload checksum, for the reason the
-v6 container has none. Two recordings of one module under different
+header. Both tables are validated structurally, like everything else in
+the format (magic, version, every table offset's alignment, and every
+offset, length and range). The writer sorts both by digest and aligns
+every payload, but neither is a validated invariant, as neither is for
+the v1 table: no reader depends on order or on a payload's alignment.
+The bake step iterates, `BundleWriter` copies each payload into a table
+of its own, and source bytes are never executed in place. No payload
+checksum, for the reason the v6 container has none. Two recordings of one module under different
 configurations share one source entry.
 
 **Commit boundary.** When recording, the recorder copies the module
