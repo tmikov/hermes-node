@@ -1,6 +1,6 @@
 # Native WebAssembly in `build-native` artifacts
 
-Status: design, reviewed externally (two rounds, see "Review history").
+Status: design, reviewed externally (see "Review history").
 
 ## Goal
 
@@ -223,6 +223,13 @@ predictor of whether a compile succeeds, which H4 depends on.
 void (*accepted)(void *ctx, void *store_token);
 ```
 
+The order on an accepted hit is fixed and documented: the buffer's
+finalizer (as today, `WebAssembly.cpp:802`), then `accepted`, then
+`discard`. So by the time `accepted` runs, the bytes `lookup` returned
+may already be gone -- the disk adapter hands its mapping to that
+finalizer (`wasm_cache_hooks.cpp:192`) -- and an embedder that wants
+them at `accepted` must have copied them at `lookup` (section 4).
+
 The recorder needs to know when a module is good, and today it cannot
 tell. An accepted hit and a rejected hit followed by a failed recompile
 both end in `discard` (`WebAssembly.cpp:806` and `:827`), and the second
@@ -341,11 +348,19 @@ length, alignment and range). No payload checksum, for the reason the
 v6 container has none. Two recordings of one module under different
 configurations share one source entry.
 
-**Commit boundary.** The recorder copies the bytes into the store token
-at `lookup` -- they are valid only for that call -- as a **pending**
-entry, keyed by SHA-256 over the bytes alone. It is committed, together
-with its bytecode entry, only when the module is known good: at `store`
-(a compile succeeded) or at `accepted` (H4: Hermes took a hit). A miss
+**Commit boundary.** When recording, the recorder copies the module
+bytes into the store token at `lookup` -- they are valid only for that
+call -- as a **pending** source entry, keyed by SHA-256 over the bytes
+alone. On a hit it also copies the returned **bytecode** into the token
+at `lookup`, because the finalizer that may unmap it runs before
+`accepted` (H4); without recording, nothing is copied and a hit costs
+what it costs today. The pending pair is committed only when Hermes has
+taken the module: at `store` (a compile succeeded) or at `accepted`
+(Hermes accepted the returned bytecode). That is all "committed" means.
+It is not proof that the source is valid Wasm: `accepted` reports that a
+bytecode provider was accepted, not that it corresponds to these bytes,
+and a cache can associate bytecode with bytes it was not compiled from
+(Hermes's own test does exactly that, `NapiWasmCacheTest.cpp:185`). A miss
 whose compile fails, and a rejected hit whose recompile fails, both end
 in a bare `discard` and commit nothing. This applies to the bytecode
 side as well, which today records a container or disk hit at `lookup`,
@@ -380,10 +395,14 @@ Then `bundle_build_native.cpp`:
 error.** The two-tier policy for JavaScript modules does not transfer.
 There, a `shermes` source rejection becomes a throwing stub because the
 static walk reaches code the program may never load. A recorded Wasm
-module, under section 4's commit boundary, is one Hermes accepted during
-the recording run, so `shermes` rejecting it is a defect in one of the
-two, not a property of the program. The message names the digest, the
-failing stage, and `--bytecode-wasm` as the way to ship anyway.
+module is one the recording run actually used, not code the walk merely
+reached, so a stub would hide a module the program certainly loads. The
+failure is not diagnosed further: it can be a defect in `shermes` or in
+the runtime's compiler, or a source/bytecode association in the
+recording's upstream cache that was never valid (section 4 explains why
+a commit is not proof of source validity). The message names the
+digest, the failing stage, and `--bytecode-wasm` as the way to ship
+anyway.
 
 **The open risk is `cc`.** hermes-parser's module is 768,303 bytes of
 Wasm. The C that `shermes` generates from it has not been measured, and
@@ -406,8 +425,12 @@ Hermes (submodule):
   falling through to `lookup`); `accepted` called before `discard` on an
   accepted hit and never on a rejected one; a rejected hit followed by a
   failed recompile ending in a bare `discard`.
-- Registry: a second registration of one creator with different metadata
-  aborts; a matching duplicate does not.
+- Registry, three cases, metadata compared by string contents with NULL
+  equal only to NULL: a duplicate **name** always aborts, as today;
+  **distinct names**, one creator, equal configurations are allowed;
+  distinct names, one creator, unequal configurations abort.
+- Callback order on an accepted hit, with a finalizer that invalidates
+  its buffer: finalizer, then `accepted`, then `discard`.
 - A `test/wasm` lit harness in the existing native-Wasm style whose
   driver installs `lookup_native` through `hermes_set_wasm_cache` and
   calls `new WebAssembly.Module(bytes)`, so H3 is traversed rather than
@@ -423,10 +446,16 @@ Hermes (submodule):
 
 hermes-node:
 
-- `WasmRecordTest`: v2 round-trip; v1 still read for bytecode; an empty
-  v1 file; source entries de-duplicated across configurations; v2-only
-  fields never read from a v1 header; malformed source tables rejected;
-  the commit boundary (pending entries discarded on a bare `discard`).
+- `WasmRecordTest` (VM-free; the format only): v2 round-trip; v1 still
+  read for bytecode; an empty v1 file; source entries de-duplicated
+  across configurations; v2-only fields never read from a v1 header;
+  malformed source tables rejected.
+- `CompileCacheRunTest`, which links the execution layer the callbacks
+  live in: the commit boundary driven through the real callbacks --
+  commit at `store`, commit at `accepted`, nothing committed on a bare
+  `discard` after a miss or after a rejected hit -- and a warm-disk-hit
+  recording whose recorded bytecode and source both match the inputs
+  after the mapping has been released.
 - `VmOptionsTest` or `BuildNativeTest`: the effective baked `-test262`
   for absent, `-test262`, `-test262=false` and a repeated flag.
 - `BuildNativeTest`: the payload assembly's Wasm table (sorted, 40-byte
@@ -498,4 +527,10 @@ after `buildBundleImpl` had already serialized bytecode entries (section
 5). Round 2 accepted eight resolutions and rejected the ninth -- an
 argument that a rejected hit followed by a failed recompile was
 unreachable short of OOM, which `verifyIR` and Hermes's own cache test
-both disprove; H4 replaced it.
+both disprove; H4 replaced it. Round 3 closed all nine and found four
+more in the amended text: deferring the bytecode record to `accepted`
+would read a mapping the finalizer had already released (section 4 now
+copies it at `lookup`); the failure-policy rationale still treated a
+commit as proof of source validity (section 5); the registry test
+needed its duplicate-name case separated; and the commit-boundary test
+was assigned to a target that cannot reach the callbacks.
