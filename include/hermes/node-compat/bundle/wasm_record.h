@@ -23,8 +23,9 @@ namespace node_compat {
 /// Eight bytes, no NUL, like kBundleMagic.
 constexpr char kWasmRecordMagic[8] = {'H', 'N', 'W', 'A', 'S', 'M', 'R', 'C'};
 
-/// Bumped when the layout changes. A mismatch is a hard error at bake time.
-constexpr uint32_t kWasmRecordFormatVersion = 1;
+/// Bumped when the layout changes. What the writer writes; the reader also
+/// accepts version 1. Anything else is a hard error at bake time.
+constexpr uint32_t kWasmRecordFormatVersion = 2;
 
 /// Fixed-width. Everything variable is reached through an offset, so that
 /// the record table is always 4-byte aligned however long the build version
@@ -40,6 +41,40 @@ struct WasmRecordHeader {
   uint32_t recordTableOffset;
   uint32_t payloadOffset;
   uint32_t payloadSize;
+  // Version 2 only. A v1 file ends at payloadSize, so these two fields are
+  // not in it and must never be read from one.
+  uint32_t sourceTableOffset;
+  uint32_t sourceCount;
+};
+
+/// A v1 header is the first this many bytes of a v2 one.
+constexpr size_t kWasmRecordHeaderV1Size =
+    offsetof(WasmRecordHeader, sourceTableOffset);
+static_assert(kWasmRecordHeaderV1Size == 36, "v1 header layout is frozen");
+
+/// One distinct WebAssembly module's bytes, keyed by SHA-256 over those
+/// bytes alone. A separate table rather than a wider BundleWasmRecord,
+/// because that struct is shared verbatim with the container's Wasm table,
+/// which does not change.
+struct WasmSourceRecord {
+  uint8_t digest[kNativeDigestBytes];
+  uint32_t payloadOffset; // relative to the header's payloadOffset
+  uint32_t payloadSize;
+};
+static_assert(
+    sizeof(WasmSourceRecord) == kNativeDigestBytes + 8,
+    "WasmSourceRecord is written to disk verbatim");
+
+/// A module Hermes accepted: the bytecode it compiled to (or was served)
+/// under one codegen configuration, and the module bytes it came from.
+/// Every pointer is borrowed for the call.
+struct WasmRecordCommit {
+  const uint8_t *configDigest; // kNativeDigestBytes; the cache's digest
+  const uint8_t *bytecode;
+  size_t bytecodeSize;
+  const uint8_t *sourceDigest; // kNativeDigestBytes; sha256Digest(source)
+  const uint8_t *source;
+  size_t sourceSize;
 };
 
 /// Accumulates the compiled bytecode of every distinct WebAssembly module a
@@ -78,7 +113,17 @@ class WasmRecordWriter {
   /// kept in memory, so a later record() or flush() gets another chance --
   /// unless that later call is an exact repeat of an entry already held,
   /// which rewrites nothing.
+  ///
+  /// Writes a v2 file with no source for the entry. Superseded by the
+  /// WasmRecordCommit overload below.
   bool record(const uint8_t *digest, const uint8_t *bytecode, size_t size);
+
+  /// Add or replace the bytecode for commit.configDigest -- replacing for
+  /// the reason the three-argument record() gives -- and add the module
+  /// bytes under commit.sourceDigest unless that digest is already held,
+  /// then rewrite the file once. One source entry serves every
+  /// configuration the same module was recorded under.
+  bool record(const WasmRecordCommit &commit);
 
   /// Write the file as it stands, including with no entries. Called once
   /// when the RUNTIME is created -- after the flag-conflict checks, before
@@ -113,9 +158,15 @@ class WasmRecordWriter {
     std::string bytecode;
   };
 
+  struct PendingSource {
+    std::string digest; // kNativeDigestBytes raw bytes
+    std::string bytes;
+  };
+
   std::string path_;
   std::string buildVersion_;
   std::vector<PendingRecord> records_;
+  std::vector<PendingSource> sources_;
   /// See lastError(). Cleared by a write that succeeds, so it always
   /// describes the most recent failure and never an older one.
   std::string lastError_;
@@ -135,12 +186,19 @@ class WasmRecordWriter {
 /// verifies payload bytes. There is no checksum in this format, and none
 /// should be added -- see the comment on BundleWasmRecord in
 /// bundle_format.h for why.
+///
+/// Reads format versions 1 and 2. The header is copied out by value, and a
+/// v1 file's v2-only fields (the source table) stay zero and are never read
+/// from the buffer, which for a v1 file would run past its header.
 class WasmRecordReader {
  public:
   /// Returns std::nullopt and sets \p error on bad magic, format version
   /// mismatch, truncation, or any out-of-range or misaligned offset.
   static std::optional<WasmRecordReader>
   open(const uint8_t *data, size_t size, std::string *error);
+
+  /// The format version the file was written in: 1 or 2.
+  uint32_t formatVersion() const;
 
   /// The build version string the writer was constructed with.
   std::string_view buildVersion() const;
@@ -156,12 +214,24 @@ class WasmRecordReader {
   /// count(), exactly like digest() above.
   std::string_view payload(uint32_t i) const;
 
+  /// Number of distinct module sources; 0 for a v1 file, which has none.
+  uint32_t sourceCount() const;
+
+  /// The raw kNativeDigestBytes-byte SHA-256 of source \p i's module bytes.
+  /// Only valid for \p i below sourceCount().
+  std::string_view sourceDigest(uint32_t i) const;
+
+  /// The module bytes of source \p i. Only valid for \p i below
+  /// sourceCount().
+  std::string_view source(uint32_t i) const;
+
  private:
   WasmRecordReader() = default;
 
   const uint8_t *data_ = nullptr;
-  const WasmRecordHeader *header_ = nullptr;
+  WasmRecordHeader header_{};
   const BundleWasmRecord *records_ = nullptr;
+  const WasmSourceRecord *sources_ = nullptr;
 };
 
 } // namespace node_compat

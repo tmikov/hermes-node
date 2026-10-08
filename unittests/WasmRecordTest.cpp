@@ -5,12 +5,15 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <hermes/node-compat/bundle/native_digest.h>
 #include <hermes/node-compat/bundle/wasm_record.h>
 
 #include "TempTree.h"
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -258,4 +261,224 @@ TEST(WasmRecordTest, RejectsOutOfRangePayload) {
   auto r = WasmRecordReader::open(bytes.data(), bytes.size(), &error);
   EXPECT_FALSE(r.has_value());
   EXPECT_FALSE(error.empty());
+}
+
+namespace {
+
+WasmRecordCommit commitOf(
+    const std::string &cfg,
+    const std::string &bc,
+    const std::string &srcDigest,
+    const std::string &src) {
+  return WasmRecordCommit{
+      reinterpret_cast<const uint8_t *>(cfg.data()),
+      reinterpret_cast<const uint8_t *>(bc.data()),
+      bc.size(),
+      reinterpret_cast<const uint8_t *>(srcDigest.data()),
+      reinterpret_cast<const uint8_t *>(src.data()),
+      src.size()};
+}
+
+/// A v1 file exactly as every hermes-node before format v2 wrote it.
+std::vector<uint8_t> makeV1File(
+    const std::string &version,
+    const std::vector<std::pair<std::string, std::string>> &entries) {
+  auto align = [](size_t n, size_t a) { return (n + a - 1) & ~(a - 1); };
+  size_t tableOff = align(kWasmRecordHeaderV1Size + version.size(), 4);
+  size_t payloadOff =
+      align(tableOff + entries.size() * sizeof(BundleWasmRecord), 8);
+  std::vector<uint8_t> payload;
+  std::vector<BundleWasmRecord> table;
+  for (const auto &[digest, bc] : entries) {
+    BundleWasmRecord r{};
+    std::memcpy(r.digest, digest.data(), kNativeDigestBytes);
+    r.payloadOffset = static_cast<uint32_t>(payload.size());
+    r.payloadSize = static_cast<uint32_t>(bc.size());
+    table.push_back(r);
+    payload.insert(payload.end(), bc.begin(), bc.end());
+    payload.resize(align(payload.size(), 8), 0);
+  }
+  std::vector<uint8_t> out(payloadOff + payload.size(), 0);
+  std::memcpy(out.data(), kWasmRecordMagic, 8);
+  uint32_t fields[7] = {
+      1,
+      static_cast<uint32_t>(entries.size()),
+      static_cast<uint32_t>(kWasmRecordHeaderV1Size),
+      static_cast<uint32_t>(version.size()),
+      static_cast<uint32_t>(tableOff),
+      static_cast<uint32_t>(payloadOff),
+      static_cast<uint32_t>(payload.size())};
+  std::memcpy(out.data() + 8, fields, sizeof(fields));
+  std::memcpy(
+      out.data() + kWasmRecordHeaderV1Size, version.data(), version.size());
+  std::memcpy(
+      out.data() + tableOff,
+      table.data(),
+      table.size() * sizeof(BundleWasmRecord));
+  std::memcpy(out.data() + payloadOff, payload.data(), payload.size());
+  return out;
+}
+
+} // namespace
+
+TEST(WasmRecordTest, Sha256DigestMatchesTheStandardVector) {
+  const uint8_t abc[] = {'a', 'b', 'c'};
+  EXPECT_EQ(
+      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      nativeDigestToHex(sha256Digest(abc, sizeof(abc))));
+}
+
+TEST(WasmRecordTest, V2RoundTripsBytecodeAndSource) {
+  TempTree tree;
+  std::string path = tree.path("rec.bin");
+  WasmRecordWriter w(path, "ver");
+  ASSERT_TRUE(
+      w.record(commitOf(makeDigest(1), "BYTECODE", makeDigest(9), "WASMSRC")));
+  std::vector<uint8_t> bytes = readFileBytes(path);
+  std::string err;
+  auto r = WasmRecordReader::open(bytes.data(), bytes.size(), &err);
+  ASSERT_TRUE(r) << err;
+  EXPECT_EQ(2u, r->formatVersion());
+  ASSERT_EQ(1u, r->count());
+  EXPECT_EQ(makeDigest(1), r->digest(0));
+  EXPECT_EQ("BYTECODE", r->payload(0));
+  ASSERT_EQ(1u, r->sourceCount());
+  EXPECT_EQ(makeDigest(9), r->sourceDigest(0));
+  EXPECT_EQ("WASMSRC", r->source(0));
+}
+
+TEST(WasmRecordTest, OneSourceForTwoConfigurations) {
+  TempTree tree;
+  std::string path = tree.path("rec.bin");
+  WasmRecordWriter w(path, "ver");
+  ASSERT_TRUE(
+      w.record(commitOf(makeDigest(1), "BC-T262-0", makeDigest(9), "SRC")));
+  ASSERT_TRUE(
+      w.record(commitOf(makeDigest(2), "BC-T262-1", makeDigest(9), "SRC")));
+  std::vector<uint8_t> bytes = readFileBytes(path);
+  auto r = WasmRecordReader::open(bytes.data(), bytes.size(), nullptr);
+  ASSERT_TRUE(r);
+  EXPECT_EQ(2u, r->count());
+  EXPECT_EQ(1u, r->sourceCount());
+}
+
+TEST(WasmRecordTest, ReplacingBytecodeKeepsTheSource) {
+  TempTree tree;
+  std::string path = tree.path("rec.bin");
+  WasmRecordWriter w(path, "ver");
+  ASSERT_TRUE(w.record(commitOf(makeDigest(1), "OLD", makeDigest(9), "SRC")));
+  ASSERT_TRUE(w.record(commitOf(makeDigest(1), "NEW", makeDigest(9), "SRC")));
+  std::vector<uint8_t> bytes = readFileBytes(path);
+  auto r = WasmRecordReader::open(bytes.data(), bytes.size(), nullptr);
+  ASSERT_TRUE(r);
+  ASSERT_EQ(1u, r->count());
+  EXPECT_EQ("NEW", r->payload(0));
+  ASSERT_EQ(1u, r->sourceCount());
+  EXPECT_EQ("SRC", r->source(0));
+}
+
+TEST(WasmRecordTest, ReadsAV1FileForItsBytecode) {
+  std::vector<uint8_t> v1 = makeV1File("ver", {{makeDigest(3), "BC3"}});
+  std::string err;
+  auto r = WasmRecordReader::open(v1.data(), v1.size(), &err);
+  ASSERT_TRUE(r) << err;
+  EXPECT_EQ(1u, r->formatVersion());
+  ASSERT_EQ(1u, r->count());
+  EXPECT_EQ("BC3", r->payload(0));
+  EXPECT_EQ(0u, r->sourceCount());
+}
+
+TEST(WasmRecordTest, AnEmptyV1FileIsNeverReadPastItsEnd) {
+  // Exactly the v1 file's bytes and no more: the v2 fields would sit past
+  // its end, so reading them is a heap overflow under AddressSanitizer.
+  std::vector<uint8_t> v1 = makeV1File("", {});
+  ASSERT_LT(v1.size(), sizeof(WasmRecordHeader));
+  auto *exact = static_cast<uint8_t *>(::malloc(v1.size()));
+  ASSERT_NE(nullptr, exact);
+  std::memcpy(exact, v1.data(), v1.size());
+  std::string err;
+  auto r = WasmRecordReader::open(exact, v1.size(), &err);
+  ASSERT_TRUE(r) << err;
+  EXPECT_EQ(1u, r->formatVersion());
+  EXPECT_EQ(0u, r->count());
+  EXPECT_EQ(0u, r->sourceCount());
+  ::free(exact);
+}
+
+TEST(WasmRecordTest, RejectsAV2FileTruncatedToTheV1HeaderSize) {
+  TempTree tree;
+  std::string path = tree.path("rec.bin");
+  WasmRecordWriter w(path, "");
+  ASSERT_TRUE(w.flush());
+  std::vector<uint8_t> bytes = readFileBytes(path);
+  bytes.resize(kWasmRecordHeaderV1Size + 4);
+  std::string err;
+  EXPECT_FALSE(WasmRecordReader::open(bytes.data(), bytes.size(), &err));
+  EXPECT_NE(std::string::npos, err.find("truncated"));
+}
+
+TEST(WasmRecordTest, RejectsAnUnknownLaterVersion) {
+  std::vector<uint8_t> v1 = makeV1File("", {});
+  uint32_t three = 3;
+  std::memcpy(v1.data() + offsetof(WasmRecordHeader, formatVersion), &three, 4);
+  std::string err;
+  EXPECT_FALSE(WasmRecordReader::open(v1.data(), v1.size(), &err));
+  EXPECT_NE(std::string::npos, err.find("version"));
+}
+
+TEST(WasmRecordTest, RejectsAMisalignedSourceTable) {
+  // Moves the source table itself, as RejectsMisalignedRecordTableOffset
+  // does for the record table: bumping the offset alone would make the
+  // reader parse shifted bytes, and the payload-range check could then
+  // reject the file without the alignment check ever running.
+  TempTree tree;
+  std::string path = tree.path("rec.bin");
+  WasmRecordWriter w(path, "ver");
+  ASSERT_TRUE(w.record(commitOf(makeDigest(1), "BC", makeDigest(9), "SRC")));
+  std::vector<uint8_t> good = readFileBytes(path);
+  WasmRecordHeader header;
+  std::memcpy(&header, good.data(), sizeof(header));
+  size_t tableSize = header.sourceCount * sizeof(WasmSourceRecord);
+
+  for (uint32_t delta = 1; delta <= 3; ++delta) {
+    // `delta` bytes before the table misalign it; `8 - delta` after it keep
+    // the payload area's own shift a multiple of kBundlePayloadAlign.
+    std::vector<uint8_t> bytes = good;
+    bytes.insert(bytes.begin() + header.sourceTableOffset, delta, 0);
+    bytes.insert(
+        bytes.begin() + header.sourceTableOffset + delta + tableSize,
+        8 - delta,
+        0);
+    WasmRecordHeader patched = header;
+    patched.sourceTableOffset += delta;
+    patched.payloadOffset += 8;
+    std::memcpy(bytes.data(), &patched, sizeof(patched));
+
+    std::string err;
+    EXPECT_FALSE(WasmRecordReader::open(bytes.data(), bytes.size(), &err))
+        << "accepted a source table misaligned by " << delta;
+    EXPECT_NE(std::string::npos, err.find("source table offset is misaligned"))
+        << err;
+  }
+}
+
+TEST(WasmRecordTest, RejectsAnOutOfRangeSourcePayload) {
+  TempTree tree;
+  std::string path = tree.path("rec.bin");
+  WasmRecordWriter w(path, "ver");
+  ASSERT_TRUE(w.record(commitOf(makeDigest(1), "BC", makeDigest(9), "SRC")));
+  std::vector<uint8_t> bytes = readFileBytes(path);
+  uint32_t tableOff;
+  std::memcpy(
+      &tableOff,
+      bytes.data() + offsetof(WasmRecordHeader, sourceTableOffset),
+      4);
+  uint32_t huge = 0x7fffffff;
+  std::memcpy(
+      bytes.data() + tableOff + offsetof(WasmSourceRecord, payloadSize),
+      &huge,
+      4);
+  std::string err;
+  EXPECT_FALSE(WasmRecordReader::open(bytes.data(), bytes.size(), &err));
+  EXPECT_NE(std::string::npos, err.find("source"));
 }

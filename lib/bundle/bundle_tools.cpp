@@ -635,11 +635,7 @@ int dumpWasmRecord(
     return 1;
   }
 
-  // The format version is not printed as a number read back out of the
-  // file: WasmRecordReader::open() above already refused anything but
-  // kWasmRecordFormatVersion, so a successfully opened reader can only ever
-  // be that one version.
-  out << "record: " << recordPath << "   format v" << kWasmRecordFormatVersion
+  out << "record: " << recordPath << "   format v" << reader->formatVersion()
       << "\n";
   out << "build version: " << reader->buildVersion();
   if (reader->buildVersion() == runningBuildVersion) {
@@ -661,6 +657,20 @@ int dumpWasmRecord(
       digestHex.resize(16);
     out << "  [" << i << "] " << reader->payload(i).size()
         << " bytes  sha256:" << digestHex << "\n";
+  }
+
+  if (reader->formatVersion() < 2) {
+    out << "\nSOURCES: none (format v1 records no module bytes)\n";
+  } else {
+    const uint32_t sources = reader->sourceCount();
+    out << "\nSOURCES (" << sources << ")\n";
+    for (uint32_t i = 0; i < sources; ++i) {
+      std::string digestHex = nativeDigestToHex(reader->sourceDigest(i));
+      if (!verbose)
+        digestHex.resize(16);
+      out << "  [" << i << "] " << reader->source(i).size()
+          << " bytes  sha256:" << digestHex << "\n";
+    }
   }
 
   return 0;

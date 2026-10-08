@@ -8,6 +8,7 @@
 #ifndef HERMES_NODE_COMPAT_BUNDLE_NATIVE_DIGEST_H
 #define HERMES_NODE_COMPAT_BUNDLE_NATIVE_DIGEST_H
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -41,6 +42,11 @@ struct NativeDigest {
 std::optional<NativeDigest> nativeFileDigest(
     const std::string &path,
     std::string *error);
+
+/// SHA-256 of \p size bytes at \p bytes, as kNativeDigestBytes raw bytes.
+/// What a WebAssembly module's source entry and its native unit are keyed
+/// on: the module alone, with no codegen configuration in it.
+std::string sha256Digest(const uint8_t *bytes, size_t size);
 
 /// \p raw (32 bytes) as 64 lowercase hex characters.
 std::string nativeDigestToHex(std::string_view raw);

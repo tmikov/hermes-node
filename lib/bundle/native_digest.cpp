@@ -73,6 +73,15 @@ std::optional<NativeDigest> nativeFileDigest(
   return result;
 }
 
+std::string sha256Digest(const uint8_t *bytes, size_t size) {
+  picohash_ctx_t ctx;
+  ph_init_sha256(&ctx);
+  ph_update(&ctx, bytes, size);
+  std::string raw(kNativeDigestBytes, '\0');
+  ph_final(&ctx, raw.data());
+  return raw;
+}
+
 std::string nativeDigestToHex(std::string_view raw) {
   static const char kHex[] = "0123456789abcdef";
   std::string out;
