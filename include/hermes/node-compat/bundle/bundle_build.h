@@ -166,6 +166,16 @@ struct NativeBuildOptions {
   /// Link the kit's bytecode built-in registry instead of its native one, as
   /// --build-exe does. Off by default: a fully native binary is the point.
   bool bytecodeBuiltins = false;
+  /// Bake each recorded module's bytecode into the container, as
+  /// --build-bundle --bake-wasm does, instead of compiling it natively; also
+  /// turns the run-time fallback warning off. The lever that separates a
+  /// fault in native Wasm codegen from anything else.
+  bool bytecodeWasm = false;
+  /// The -test262 a runtime built from vmOptions alone would have
+  /// (effectiveVmTest262), which every native Wasm unit is compiled under.
+  /// Filled in by the CLI, which links the VM-options parser; this library
+  /// stays VM-free.
+  bool wasmTest262 = false;
 };
 
 /// Builds a standalone executable directly from an entry script, compiling

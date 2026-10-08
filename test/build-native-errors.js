@@ -47,8 +47,24 @@
 // RUN: %not %hermes-node build-native %t/src/app.js -o %t/app --kit=%t/nokit 2>&1 | %FileCheck --check-prefix=AFTER %s
 // AFTER: kit.manifest
 //
+// A v1 recording carries no module bytes, so native mode refuses it before
+// anything else -- before the kit is even read.
+// RUN: python3 %source_dir/test/fixtures/wasm/make-v1-record.py %t/v1.rec
+// RUN: %not %hermes-node build-native %t/src/app.js -o %t/app --bake-wasm=%t/v1.rec --kit=%t/nokit 2>&1 | %FileCheck --check-prefix=V1REC %s
+// V1REC: v1.rec
+// V1REC-SAME: format v1
+// V1REC: --bytecode-wasm
+// V1REC-NOT: kit.manifest
+//
+// Baked --vm= options are parsed at build time now, the whole list, before
+// the kit is read.
+// RUN: %not %hermes-node build-native %t/src/app.js -o %t/app --vm=-no-such-flag --kit=%t/nokit 2>&1 | %FileCheck --check-prefix=BADVM %s
+// BADVM: no-such-flag
+// BADVM-NOT: kit.manifest
+//
 // RUN: %hermes-node build-native --help 2>&1 | %FileCheck --check-prefix=HELP %s
 // HELP: Usage:
 // HELP: build-native
+// HELP: --bytecode-wasm
 
 console.log('unused');

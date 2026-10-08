@@ -970,7 +970,9 @@ static void printBuildNativeUsage(const char *argv0) {
       "  --shermes=<path>          shermes binary (default: <kit>/shermes)\n"
       "  --bytecode-builtins       Link interpreted built-in modules\n"
       "                            (smaller binary)\n"
-      "  --keep-temp               Keep the build's temporary directory\n"
+      "  --bytecode-wasm           Bake recorded WebAssembly as bytecode instead\n"
+      "                            of compiling it natively\n"
+      "  --keep-temp              Keep the build's temporary directory\n"
       "  --verbose                 Narrate to stderr\n"
       "\n"
       "Note: `%s build-native` always means this subcommand. To run a\n"
@@ -1093,6 +1095,8 @@ static int runBuildNativeSubcommand(int argc, char **argv) {
       }
     } else if (std::strcmp(arg, "--bytecode-builtins") == 0) {
       options.bytecodeBuiltins = true;
+    } else if (std::strcmp(arg, "--bytecode-wasm") == 0) {
+      options.bytecodeWasm = true;
     } else if (std::strcmp(arg, "--keep-temp") == 0) {
       options.keepTemp = true;
     } else if (std::strcmp(arg, "--verbose") == 0) {
@@ -1123,6 +1127,20 @@ static int runBuildNativeSubcommand(int argc, char **argv) {
   if (!haveOut) {
     std::fprintf(stderr, "Error: 'build-native' requires -o <file>\n");
     printBuildNativeUsage(argv[0]);
+    return 1;
+  }
+
+  // Parsed here, not in the producer: the parser is the runtime's own
+  // (llvh::cl, a process-global registry), which the producer library does
+  // not link, and it must run before the parallel compile starts. The whole
+  // list is parsed, so an invalid baked option is now a build error rather
+  // than a failure at the artifact's first launch.
+  std::string vmError;
+  if (!hermes::node_compat::effectiveVmTest262(
+          options.vmOptions, &options.wasmTest262, &vmError)) {
+    // The run path's own prefix (hermes_node_runtime.cpp), so one invalid
+    // option reads the same whether a build or a launch found it.
+    std::fprintf(stderr, "Error: VM options: %s\n", vmError.c_str());
     return 1;
   }
 

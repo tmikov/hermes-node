@@ -59,7 +59,9 @@ std::vector<std::string> buildShermesWasmCommand(
   // None of the JavaScript flags: a Wasm module has no source text, no
   // block scoping to get wrong and no source map comment. shermes takes
   // .wasm input by extension; one built without Wasm refuses it, and that
-  // failure is reported as a build error naming --bytecode-wasm.
+  // failure is reported as a build error whose closing note names
+  // --bytecode-wasm (bundle_build_native.cpp prints it after any Wasm
+  // unit's failure).
   std::vector<std::string> argv{
       shermesPath,
       "-emit-c",

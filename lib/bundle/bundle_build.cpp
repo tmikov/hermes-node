@@ -757,6 +757,7 @@ int buildBundle(
       vmOptions,
       allowVmOptionsOverride,
       PayloadMode::Bytecode,
+      WasmBakeMode::Bytecode,
       &products);
 }
 
@@ -772,6 +773,7 @@ int buildBundleImpl(
     const std::vector<std::string> &vmOptions,
     bool allowVmOptionsOverride,
     PayloadMode mode,
+    WasmBakeMode wasmMode,
     BuildProducts *products) {
   BuildReporter reporter(verbose);
   uint32_t generation = bundleGenerationTag();
@@ -1785,6 +1787,12 @@ int buildBundleImpl(
   // by two require() edges is packaged once. That is why the running
   // moduleIndex-style map here is a set of digests already added, not a
   // reason to fail the build.
+  //
+  // In WasmBakeMode::NativeSources (build-native without --bytecode-wasm)
+  // the same loop, with the same version check and the same first-wins
+  // de-duplication, adds nothing to the container: it hands each distinct
+  // module's bytes back in products->wasmSources instead, keyed by the
+  // SHA-256 of those bytes, for the native producer to compile.
   std::set<std::string> bakedWasmDigests; // raw kNativeDigestBytes bytes
   uint32_t wasmBakedCount = 0;
   uint64_t wasmBakedBytes = 0;
@@ -1819,6 +1827,36 @@ int buildBundleImpl(
           HERMES_NODE_VERSION_STRING);
       return 1;
     }
+    if (wasmMode == WasmBakeMode::NativeSources) {
+      // buildNativeExecutable refused a v1 file before the kit was read;
+      // this keeps the step correct on its own.
+      if (record->formatVersion() < 2) {
+        std::fprintf(
+            stderr,
+            "error: %s is a format v1 WebAssembly recording, which carries "
+            "no module bytes to compile natively\n",
+            recordPath.c_str());
+        return 1;
+      }
+      if (record->sourceCount() == 0) {
+        std::fprintf(
+            stderr,
+            "warning: %s records no WebAssembly modules\n",
+            recordPath.c_str());
+        continue;
+      }
+      for (uint32_t i = 0; i < record->sourceCount(); ++i) {
+        std::string_view digest = record->sourceDigest(i);
+        if (!bakedWasmDigests.insert(std::string(digest)).second) {
+          reporter.wasmSkippedDuplicate(
+              nativeDigestToHex(digest).substr(0, 16), recordPath);
+          continue;
+        }
+        products->wasmSources.push_back(
+            {std::string(digest), std::string(record->source(i))});
+      }
+      continue;
+    }
     if (record->count() == 0) {
       std::fprintf(
           stderr,
@@ -1845,7 +1883,9 @@ int buildBundleImpl(
   // --bake-wasm file gets a line even when every entry in it was a
   // duplicate or the file was empty (both already warned about above), so
   // --verbose always closes the loop on a flag the caller actually used.
-  if (!bakeWasmPaths.empty())
+  // Bytecode mode only: in NativeSources mode nothing was baked, and the
+  // native producer reports each module it compiles instead.
+  if (!bakeWasmPaths.empty() && wasmMode == WasmBakeMode::Bytecode)
     reporter.wasmBakeSummary(wasmBakedCount, wasmBakedBytes);
 
   // Step 6: serialize and write via a temp file + rename, so a build that

@@ -10,6 +10,12 @@
 // here too (test-wasm-bake-build-exe.js). Native code and WebAssembly in
 // one process have never been exercised together before this file.
 //
+// Both builds pass --bytecode-wasm. What this file pins -- the disk tier
+// and baked bytecode inside a native artifact -- is now the opt-out's
+// behaviour: by default build-native compiles every recorded module
+// natively and the artifact is served by the native tier, which is pinned
+// by build-native-wasm-native.js and the files beside it.
+//
 // Hits and misses are read from the tracing, never from timing: the suite
 // runs 16-way parallel and both of its known flaky tests got that way
 // through a timing dependency.
@@ -23,7 +29,7 @@
 // Case 1: the disk tier, through a build-native executable. Miss then hit,
 // exactly as test-wasm-cache-build-exe.js pins for --build-exe.
 // RUN: mkdir -p %t/cache1
-// RUN: %hermes-node build-native %t/src/app.js -o %t/app1 --kit=%kit_dir
+// RUN: %hermes-node build-native %t/src/app.js -o %t/app1 --bytecode-wasm --kit=%kit_dir
 //
 // A produced executable takes no --compile-cache flag -- every argument
 // belongs to the program -- so HERMES_NODE_COMPILE_CACHE in the environment
@@ -41,7 +47,7 @@
 // run with the disk cache disabled entirely -- the container tier must
 // still answer, with nothing written to the (nonexistent) disk cache.
 // RUN: %hermes-node --record-wasm=%t/rec.bin %t/src/app.js > /dev/null
-// RUN: %hermes-node build-native %t/src/app.js -o %t/app2 --bake-wasm=%t/rec.bin --kit=%kit_dir
+// RUN: %hermes-node build-native %t/src/app.js -o %t/app2 --bake-wasm=%t/rec.bin --bytecode-wasm --kit=%kit_dir
 // RUN: HERMES_NODE_DISABLE_COMPILE_CACHE=1 HERMES_NODE_DEBUG_NATIVE=COMPILE_CACHE %t/app2 2>&1 >/dev/null | %FileCheck --check-prefix=CHIT %s
 // CHIT: wasm container hit
 // CHIT-NOT: wasm store

@@ -50,6 +50,24 @@ enum class PayloadMode {
   NativeSources,
 };
 
+/// What --bake-wasm does with a recording.
+enum class WasmBakeMode {
+  /// Copy each recorded module's bytecode into the container's Wasm table.
+  Bytecode,
+  /// Add no bytecode -- a native hit never reads it -- and return each
+  /// distinct module's bytes in BuildProducts::wasmSources, for the native
+  /// producer to compile. Requires format v2 recordings.
+  NativeSources,
+};
+
+/// One distinct WebAssembly module a native build still has to compile.
+/// Owned copies: the recording's mapping is closed before the bake step
+/// returns.
+struct PendingWasmSource {
+  std::string digest; // kNativeDigestBytes raw: SHA-256 of `bytes`
+  std::string bytes;
+};
+
 /// One JavaScript module a native build still has to compile, collected
 /// while the container is assembled because that is where the source and
 /// the identity are both in hand.
@@ -102,6 +120,10 @@ struct BuildProducts {
   /// required and still reported. Empty in Bytecode mode, where the copies
   /// have already happened.
   std::vector<SidecarCopy> sidecarCopies;
+  /// Empty unless the bake step ran in NativeSources mode; de-duplicated
+  /// across every --bake-wasm file, first file wins, so each digest appears
+  /// once -- which compileNativeBatch requires of its Wasm jobs.
+  std::vector<PendingWasmSource> wasmSources;
 };
 
 /// The one implementation behind both producers.
@@ -125,6 +147,14 @@ struct BuildProducts {
 /// out. So the plan is returned in BuildProducts::sidecarCopies and the
 /// orchestration performs it once the executable exists.
 ///
+/// \p wasmMode decides what each --bake-wasm recording contributes:
+/// bytecode entries in the container's Wasm table (Bytecode, the only mode
+/// buildBundle uses), or nothing in the container and each distinct
+/// module's bytes in BuildProducts::wasmSources (NativeSources, which a
+/// format v1 recording cannot satisfy and is refused for). Independent of
+/// \p mode: build-native --bytecode-wasm is NativeSources payloads with
+/// Bytecode Wasm.
+///
 /// \p products must not be null: it is dereferenced unconditionally, both
 /// callers (buildBundle's own forwarder and buildNativeExecutable) always
 /// pass the address of a live, local BuildProducts.
@@ -140,6 +170,7 @@ int buildBundleImpl(
     const std::vector<std::string> &vmOptions,
     bool allowVmOptionsOverride,
     PayloadMode mode,
+    WasmBakeMode wasmMode,
     BuildProducts *products);
 
 } // namespace node_compat

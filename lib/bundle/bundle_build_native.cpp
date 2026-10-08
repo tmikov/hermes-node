@@ -23,6 +23,8 @@
 #include <hermes/node-compat/build-exe/kit_manifest.h>
 #include <hermes/node-compat/build-native/build_native.h>
 #include <hermes/node-compat/bundle/atomic_write.h>
+#include <hermes/node-compat/bundle/mapped_file.h>
+#include <hermes/node-compat/bundle/wasm_record.h>
 #include <hermes/node-compat/version.h>
 
 #include <unistd.h>
@@ -123,6 +125,31 @@ bool readWholeFile(const std::string &path, std::string *out) {
   return true;
 }
 
+/// Native mode compiles each recorded module from its bytes, which a v1
+/// recording does not carry. Refused here, before the kit is read and long
+/// before anything is compiled, naming both ways out. A file that does not
+/// open is left for the bake step, which reports it in full.
+bool refuseV1Recordings(const std::vector<std::string> &paths) {
+  for (const std::string &path : paths) {
+    std::optional<MappedFile> file = MappedFile::open(path, nullptr);
+    if (!file)
+      continue;
+    std::optional<WasmRecordReader> r =
+        WasmRecordReader::open(file->data(), file->size(), nullptr);
+    if (r && r->formatVersion() < 2) {
+      std::fprintf(
+          stderr,
+          "error: %s is a format v1 WebAssembly recording, which carries no "
+          "module bytes to compile natively\n"
+          "       Re-record it with --record-wasm, or pass --bytecode-wasm to "
+          "bake its bytecode instead.\n",
+          path.c_str());
+      return true;
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 int buildNativeExecutable(const NativeBuildOptions &options) {
@@ -142,6 +169,12 @@ int buildNativeExecutable(const NativeBuildOptions &options) {
         options.entryPath.c_str());
     return 1;
   }
+
+  // A v1 --bake-wasm recording cannot feed a native Wasm build. Checked
+  // before the kit, so the message is about the input the caller can fix
+  // rather than about whatever the toolchain lookup happens to say.
+  if (!options.bytecodeWasm && refuseV1Recordings(options.bakeWasmPaths))
+    return 1;
 
   // 1. The kit. Its absence is the common case for a binary installed
   // without one, so say where it looked and how to point elsewhere -- and a
@@ -340,9 +373,12 @@ int buildNativeExecutable(const NativeBuildOptions &options) {
   auto run = [&]() -> int {
     // 5. The shared walk, with the payload step told to leave every
     // JavaScript module's source in BuildProducts::pendingNative instead of
-    // compiling it to bytecode. env is null: NativeSources never reaches
-    // hermes_compile_to_bytecode (see bundle_build_internal.h and the env
-    // audit in bundle_build.cpp's task history).
+    // compiling it to bytecode, and -- unless --bytecode-wasm -- the bake
+    // step told to return each recorded WebAssembly module's bytes in
+    // BuildProducts::wasmSources instead of baking its bytecode. env is null:
+    // NativeSources never reaches hermes_compile_to_bytecode (see
+    // bundle_build_internal.h and the env audit in bundle_build.cpp's task
+    // history).
     std::string containerPath = (fs::path(tempDir) / "container.hbb").string();
     BuildProducts products;
     int buildRc = buildBundleImpl(
@@ -357,12 +393,16 @@ int buildNativeExecutable(const NativeBuildOptions &options) {
         options.vmOptions,
         options.allowVmOptionsOverride,
         PayloadMode::NativeSources,
+        options.bytecodeWasm ? WasmBakeMode::Bytecode
+                             : WasmBakeMode::NativeSources,
         &products);
     if (buildRc != 0)
       return buildRc;
 
-    // 6. Every pending module becomes a compile job. The index and identity
-    // are already filled in by buildBundleImpl's step 5 (see
+    // 6. Every pending module becomes a compile job, and so does every
+    // recorded WebAssembly module; both kinds run in one pool, so --jobs
+    // bounds them together. A JavaScript job's index and identity are
+    // already filled in by buildBundleImpl's step 5 (see
     // bundle_build_internal.h): the index comes from moduleIndex, assigned
     // only once every module has one, which is why native compilation
     // cannot start any earlier.
@@ -382,16 +422,34 @@ int buildNativeExecutable(const NativeBuildOptions &options) {
     if (parallelism == 0)
       parallelism = 1;
 
-    std::vector<NativeModuleResult> results = compileModules(
+    // Already one per digest: the bake step de-duplicated across every
+    // --bake-wasm file, which compileNativeBatch requires (a digest names
+    // its staged files and its unit).
+    std::vector<NativeWasmJob> wasmJobs;
+    wasmJobs.reserve(products.wasmSources.size());
+    for (const PendingWasmSource &s : products.wasmSources)
+      wasmJobs.push_back({s.digest, s.bytes});
+    if (options.verbose && !wasmJobs.empty())
+      std::fprintf(
+          stderr,
+          "wasm: %zu module%s, compiled%s\n",
+          wasmJobs.size(),
+          wasmJobs.size() == 1 ? "" : "s",
+          options.wasmTest262 ? " with -test262 (baked --vm=)" : "");
+
+    NativeBatchResults batch = compileNativeBatch(
         jobs,
+        wasmJobs,
         tempDir,
         shermesPath,
         *manifest,
         driver->driver,
         driverIsClang,
         options.opt,
+        options.wasmTest262,
         parallelism,
         runCommandCaptured);
+    std::vector<NativeModuleResult> &results = batch.modules;
 
     // 7. A failure is classified by CommandResult's own Outcome (Task 5),
     // which is exactly the distinction Task 11 assumed was unavailable from
@@ -511,13 +569,54 @@ int buildNativeExecutable(const NativeBuildOptions &options) {
             formatCommandLine(r.failedCommand).c_str());
       }
     }
+
+    // Any Wasm failure is a hard error. A recorded module is one the
+    // recording run actually used, so a throwing stub would hide a module
+    // this program certainly loads. Not diagnosed further: the cause may be
+    // shermes, the runtime's compiler, or a recording whose upstream cache
+    // filed bytecode under bytes it was never compiled from. Every failure
+    // ends with the one way out that does not compile the module at all.
+    bool wasmFailed = false;
+    for (size_t i = 0; i < batch.wasm.size(); ++i) {
+      const NativeModuleResult &r = batch.wasm[i];
+      std::string hex16 = nativeWasmUnitName(wasmJobs[i].digest).substr(1, 16);
+      if (r.ok) {
+        std::printf(
+            "wasm: native %s (%zu bytes)\n",
+            hex16.c_str(),
+            wasmJobs[i].bytes.size());
+        continue;
+      }
+      wasmFailed = true;
+      std::fprintf(
+          stderr,
+          "error: WebAssembly module %s: %s\n",
+          hex16.c_str(),
+          r.message.c_str());
+      if (!r.diagnostics.empty())
+        std::fprintf(stderr, "%s", r.diagnostics.c_str());
+      if (!r.failedCommand.empty())
+        std::fprintf(
+            stderr,
+            "  command: %s\n",
+            formatCommandLine(r.failedCommand).c_str());
+    }
+    if (wasmFailed) {
+      std::fprintf(
+          stderr,
+          "note: --bytecode-wasm bakes the recorded bytecode instead of "
+          "compiling these modules natively.\n");
+      anyFailed = true;
+    }
     if (anyFailed)
       return 1;
 
-    // 8. The unit table and the payload assembly that carries it plus the
-    // container, written to one generated .s so the two cannot get out of
-    // step (see nativePayloadAssembly / payloadAssembly). containerPath is
-    // interpolated into a quoted assembler string exactly as buildExecutable
+    // 8. The unit table, the native Wasm table (one entry per compiled
+    // WebAssembly unit, plus the policy word: warn on a run-time fallback
+    // unless --bytecode-wasm), and the payload assembly that carries them
+    // plus the container, written to one generated .s so they cannot get
+    // out of step (see nativePayloadAssembly / payloadAssembly). containerPath
+    // is interpolated into a quoted assembler string exactly as buildExecutable
     // interpolates a bytecode bundle's path (build_exe.cpp), so it needs the
     // identical guard: it comes from tempDir, which comes from $TMPDIR, and
     // nothing upstream of here has ever checked what characters that
@@ -535,8 +634,11 @@ int buildNativeExecutable(const NativeBuildOptions &options) {
     }
     std::vector<std::string> unitSymbols =
         unitSymbolTable(products.moduleCount, jobs);
-    std::string asmSource =
-        nativePayloadAssembly(containerPath, unitSymbols, {}, false);
+    std::string asmSource = nativePayloadAssembly(
+        containerPath,
+        unitSymbols,
+        nativeWasmUnitSymbols(wasmJobs),
+        /*wasmWarnOnFallback=*/!options.bytecodeWasm);
     std::string asmPath = (fs::path(tempDir) / "payload.s").string();
     {
       std::ofstream asmFile(asmPath, std::ios::binary | std::ios::trunc);
@@ -571,10 +673,15 @@ int buildNativeExecutable(const NativeBuildOptions &options) {
     }
 
     std::vector<std::string> objects;
-    objects.reserve(jobs.size() + 1);
+    objects.reserve(jobs.size() + wasmJobs.size() + 1);
     objects.push_back(payloadObjPath);
     for (const NativeModuleJob &job : jobs)
       objects.push_back(stagedObjectPath(tempDir, job.moduleIndex));
+    // Directly on the link line, never in an archive: the table references
+    // each unit's creator, and the unit's registering constructor must run.
+    for (const NativeWasmJob &job : wasmJobs)
+      objects.push_back(
+          stagedWasmObjectPath(tempDir, nativeWasmUnitName(job.digest)));
     std::string responseFile, responseError;
     if (!linkResponseFile(objects, &responseFile, &responseError)) {
       std::fprintf(stderr, "error: %s\n", responseError.c_str());
@@ -675,7 +782,8 @@ int buildNativeExecutable(const NativeBuildOptions &options) {
     }
 
     // 11. The summary: the output path and its size, modules compiled,
-    // stubs (unconditionally, matching the bytecode producer's own summary
+    // WebAssembly modules compiled (when there were any), stubs
+    // (unconditionally, matching the bytecode producer's own summary
     // line -- see bundle_build.cpp), and wall clock.
     std::error_code sizeEc;
     uintmax_t outSize = fs::file_size(options.outPath, sizeEc);
@@ -704,6 +812,11 @@ int buildNativeExecutable(const NativeBuildOptions &options) {
           products.stubbedModules,
           products.stubbedModules == 1 ? "" : "s");
     }
+    if (!wasmJobs.empty())
+      std::printf(
+          ", %zu WebAssembly module%s",
+          wasmJobs.size(),
+          wasmJobs.size() == 1 ? "" : "s");
     std::printf("\n");
     std::printf("compile: %.2f ms\n", wallMs);
 

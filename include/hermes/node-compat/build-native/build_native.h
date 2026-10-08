@@ -287,6 +287,12 @@ struct NativeBatchResults {
 /// pool, so \p parallelism bounds the two kinds jointly. A Wasm job runs the
 /// same stages as a module -- stage, shermes, cc -- with the same failure
 /// reporting. \p wasmTest262 reaches the Wasm units only.
+///
+/// The digests in \p wasm must be unique: a digest names the job's staged
+/// .wasm, .c and object files and its unit, so two jobs with one digest
+/// would write the same files concurrently. Nothing here checks it; the
+/// bake step that produces the list (buildBundleImpl in NativeSources mode)
+/// de-duplicates across every --bake-wasm file.
 NativeBatchResults compileNativeBatch(
     const std::vector<NativeModuleJob> &modules,
     const std::vector<NativeWasmJob> &wasm,
