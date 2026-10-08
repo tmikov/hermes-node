@@ -95,34 +95,26 @@ class WasmRecordWriter {
   /// against its own build's version before trusting an entry's bytecode.
   WasmRecordWriter(std::string path, std::string buildVersion);
 
-  /// Add or replace the entry for \p digest, then rewrite the file. \p
-  /// digest is kNativeDigestBytes (32) raw bytes, the same SHA-256 the
-  /// compile cache computes over the codegen configuration and the module
-  /// bytes.
+  /// Record a module Hermes accepted: add or replace the bytecode for
+  /// commit.configDigest, and add the module bytes under commit.sourceDigest
+  /// unless that digest is already held, then rewrite the file once.
+  /// commit.configDigest is kNativeDigestBytes (32) raw bytes, the same
+  /// SHA-256 the compile cache computes over the codegen configuration and
+  /// the module bytes. One source entry serves every configuration the same
+  /// module was recorded under.
   ///
-  /// Replacing rather than keeping the first is required, not incidental: a
-  /// lookup records the bytes it returned, and Hermes may then REJECT them
-  /// and compile fresh bytecode instead. The store that follows must
-  /// overwrite what the lookup recorded, or the next bake carries the bad
+  /// Replacing the bytecode rather than keeping the first is required, not
+  /// incidental: a store after a rejected hit must overwrite what an earlier
+  /// commit for the same digest recorded, or the next bake carries the bad
   /// entry forward.
   ///
-  /// A record whose digest and bytes already match rewrites nothing: it
-  /// costs a linear scan and a memcmp against one entry, not a write.
+  /// A commit that changes nothing rewrites nothing: it costs a linear scan
+  /// and a memcmp against one entry, not a write.
   ///
-  /// Returns false if the file could not be written; the entry is still
+  /// Returns false if the file could not be written; the entries are still
   /// kept in memory, so a later record() or flush() gets another chance --
   /// unless that later call is an exact repeat of an entry already held,
   /// which rewrites nothing.
-  ///
-  /// Writes a v2 file with no source for the entry. Superseded by the
-  /// WasmRecordCommit overload below.
-  bool record(const uint8_t *digest, const uint8_t *bytecode, size_t size);
-
-  /// Add or replace the bytecode for commit.configDigest -- replacing for
-  /// the reason the three-argument record() gives -- and add the module
-  /// bytes under commit.sourceDigest unless that digest is already held,
-  /// then rewrite the file once. One source entry serves every
-  /// configuration the same module was recorded under.
   bool record(const WasmRecordCommit &commit);
 
   /// Write the file as it stands, including with no entries. Called once

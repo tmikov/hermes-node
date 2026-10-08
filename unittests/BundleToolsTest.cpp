@@ -914,14 +914,26 @@ TEST(BundleToolsTest, DumpWasmRecordPrintsVersionAndEntries) {
   WasmRecordWriter w(path, "hermes-node 9.9.9");
   std::string digestA = makeWasmDigest(0xaa);
   std::string digestB = makeWasmDigest(0xbb);
-  ASSERT_TRUE(w.record(
-      reinterpret_cast<const uint8_t *>(digestA.data()),
-      reinterpret_cast<const uint8_t *>("ALPHA-BYTES"),
-      11));
-  ASSERT_TRUE(w.record(
-      reinterpret_cast<const uint8_t *>(digestB.data()),
-      reinterpret_cast<const uint8_t *>("BETA-BYTES-LONGER!"),
-      19));
+  std::string bytecodeA = "ALPHA-BYTES";
+  std::string bytecodeB = "BETA-BYTES-LONGER!!";
+  std::string srcDigestA = makeWasmDigest(0x11);
+  std::string srcDigestB = makeWasmDigest(0x22);
+  std::string srcA = "ALPHA-SRC";
+  std::string srcB = "BETA-SOURCE-BYTES";
+  auto commit = [](const std::string &cfg,
+                   const std::string &bc,
+                   const std::string &srcDigest,
+                   const std::string &src) {
+    return WasmRecordCommit{
+        reinterpret_cast<const uint8_t *>(cfg.data()),
+        reinterpret_cast<const uint8_t *>(bc.data()),
+        bc.size(),
+        reinterpret_cast<const uint8_t *>(srcDigest.data()),
+        reinterpret_cast<const uint8_t *>(src.data()),
+        src.size()};
+  };
+  ASSERT_TRUE(w.record(commit(digestA, bytecodeA, srcDigestA, srcA)));
+  ASSERT_TRUE(w.record(commit(digestB, bytecodeB, srcDigestB, srcB)));
 
   std::ostringstream out, err;
   EXPECT_EQ(dumpWasmRecord(path, "hermes-node 9.9.9", false, out, err), 0)
@@ -935,6 +947,12 @@ TEST(BundleToolsTest, DumpWasmRecordPrintsVersionAndEntries) {
   EXPECT_NE(text.find("19 bytes"), std::string::npos) << text;
   EXPECT_NE(text.find("sha256:aaaaaaaaaaaaaaaa"), std::string::npos) << text;
   EXPECT_NE(text.find("sha256:bbbbbbbbbbbbbbbb"), std::string::npos) << text;
+  // Format v2: each commit also recorded the module bytes it came from.
+  EXPECT_NE(text.find("SOURCES (2)"), std::string::npos) << text;
+  EXPECT_NE(text.find("9 bytes  sha256:1111111111111111"), std::string::npos)
+      << text;
+  EXPECT_NE(text.find("17 bytes  sha256:2222222222222222"), std::string::npos)
+      << text;
 }
 
 // A build version that does not match this binary's is reported, not

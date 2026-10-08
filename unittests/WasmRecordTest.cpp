@@ -30,6 +30,20 @@ std::string makeDigest(uint8_t fill) {
   return std::string(kNativeDigestBytes, static_cast<char>(fill));
 }
 
+WasmRecordCommit commitOf(
+    const std::string &cfg,
+    const std::string &bc,
+    const std::string &srcDigest,
+    const std::string &src) {
+  return WasmRecordCommit{
+      reinterpret_cast<const uint8_t *>(cfg.data()),
+      reinterpret_cast<const uint8_t *>(bc.data()),
+      bc.size(),
+      reinterpret_cast<const uint8_t *>(srcDigest.data()),
+      reinterpret_cast<const uint8_t *>(src.data()),
+      src.size()};
+}
+
 std::vector<uint8_t> readFileBytes(const std::string &path) {
   std::ifstream f(path, std::ios::binary);
   std::ostringstream ss;
@@ -66,14 +80,8 @@ TEST(WasmRecordTest, RoundTripsTwoEntries) {
   std::string bytecodeA = "BYTECODE-A-SHORT";
   std::string bytecodeB = "BYTECODE-B-A-BIT-LONGER-THAN-A";
 
-  ASSERT_TRUE(w.record(
-      reinterpret_cast<const uint8_t *>(digestA.data()),
-      reinterpret_cast<const uint8_t *>(bytecodeA.data()),
-      bytecodeA.size()));
-  ASSERT_TRUE(w.record(
-      reinterpret_cast<const uint8_t *>(digestB.data()),
-      reinterpret_cast<const uint8_t *>(bytecodeB.data()),
-      bytecodeB.size()));
+  ASSERT_TRUE(w.record(commitOf(digestA, bytecodeA, makeDigest(9), "SRC")));
+  ASSERT_TRUE(w.record(commitOf(digestB, bytecodeB, makeDigest(9), "SRC")));
 
   std::vector<uint8_t> bytes = readFileBytes(path);
   std::string error;
@@ -107,14 +115,8 @@ TEST(WasmRecordTest, RecordWithExistingDigestReplacesThePayload) {
   std::string oldBytecode = "OLD-BYTECODE";
   std::string newBytecode = "REPLACEMENT-BYTECODE-DIFFERENT-LENGTH";
 
-  ASSERT_TRUE(w.record(
-      reinterpret_cast<const uint8_t *>(digest.data()),
-      reinterpret_cast<const uint8_t *>(oldBytecode.data()),
-      oldBytecode.size()));
-  ASSERT_TRUE(w.record(
-      reinterpret_cast<const uint8_t *>(digest.data()),
-      reinterpret_cast<const uint8_t *>(newBytecode.data()),
-      newBytecode.size()));
+  ASSERT_TRUE(w.record(commitOf(digest, oldBytecode, makeDigest(9), "SRC")));
+  ASSERT_TRUE(w.record(commitOf(digest, newBytecode, makeDigest(9), "SRC")));
 
   std::vector<uint8_t> bytes = readFileBytes(path);
   std::string error;
@@ -162,10 +164,7 @@ TEST(WasmRecordTest, RejectsTruncationAtEveryLength) {
   WasmRecordWriter w(path, "hermes-node 1.2.3");
   std::string digest = makeDigest(0x11);
   std::string bytecode = "SOME-BYTECODE-BYTES";
-  ASSERT_TRUE(w.record(
-      reinterpret_cast<const uint8_t *>(digest.data()),
-      reinterpret_cast<const uint8_t *>(bytecode.data()),
-      bytecode.size()));
+  ASSERT_TRUE(w.record(commitOf(digest, bytecode, makeDigest(9), "SRC")));
 
   std::vector<uint8_t> bytes = readFileBytes(path);
   for (size_t n = 0; n < bytes.size(); ++n) {
@@ -195,14 +194,8 @@ TEST(WasmRecordTest, RejectsMisalignedRecordTableOffset) {
   std::string digestB = makeDigest(0x02);
   std::string bytecodeA = "AAAA";
   std::string bytecodeB = "BBBB";
-  ASSERT_TRUE(w.record(
-      reinterpret_cast<const uint8_t *>(digestA.data()),
-      reinterpret_cast<const uint8_t *>(bytecodeA.data()),
-      bytecodeA.size()));
-  ASSERT_TRUE(w.record(
-      reinterpret_cast<const uint8_t *>(digestB.data()),
-      reinterpret_cast<const uint8_t *>(bytecodeB.data()),
-      bytecodeB.size()));
+  ASSERT_TRUE(w.record(commitOf(digestA, bytecodeA, makeDigest(9), "SRC")));
+  ASSERT_TRUE(w.record(commitOf(digestB, bytecodeB, makeDigest(9), "SRC")));
 
   std::vector<uint8_t> good = readFileBytes(path);
   WasmRecordHeader header;
@@ -241,10 +234,7 @@ TEST(WasmRecordTest, RejectsOutOfRangePayload) {
   WasmRecordWriter w(path, "v1");
   std::string digest = makeDigest(0x33);
   std::string bytecode = "SOME-BYTECODE";
-  ASSERT_TRUE(w.record(
-      reinterpret_cast<const uint8_t *>(digest.data()),
-      reinterpret_cast<const uint8_t *>(bytecode.data()),
-      bytecode.size()));
+  ASSERT_TRUE(w.record(commitOf(digest, bytecode, makeDigest(9), "SRC")));
 
   std::vector<uint8_t> bytes = readFileBytes(path);
   WasmRecordHeader header;
@@ -264,20 +254,6 @@ TEST(WasmRecordTest, RejectsOutOfRangePayload) {
 }
 
 namespace {
-
-WasmRecordCommit commitOf(
-    const std::string &cfg,
-    const std::string &bc,
-    const std::string &srcDigest,
-    const std::string &src) {
-  return WasmRecordCommit{
-      reinterpret_cast<const uint8_t *>(cfg.data()),
-      reinterpret_cast<const uint8_t *>(bc.data()),
-      bc.size(),
-      reinterpret_cast<const uint8_t *>(srcDigest.data()),
-      reinterpret_cast<const uint8_t *>(src.data()),
-      src.size()};
-}
 
 /// A v1 file exactly as every hermes-node before format v2 wrote it.
 std::vector<uint8_t> makeV1File(

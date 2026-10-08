@@ -67,27 +67,6 @@ bool tableInRange(
 WasmRecordWriter::WasmRecordWriter(std::string path, std::string buildVersion)
     : path_(std::move(path)), buildVersion_(std::move(buildVersion)) {}
 
-bool WasmRecordWriter::record(
-    const uint8_t *digest,
-    const uint8_t *bytecode,
-    size_t size) {
-  std::string digestStr(
-      reinterpret_cast<const char *>(digest), kNativeDigestBytes);
-  std::string bytecodeStr(reinterpret_cast<const char *>(bytecode), size);
-
-  for (PendingRecord &r : records_) {
-    if (r.digest == digestStr) {
-      if (r.bytecode == bytecodeStr)
-        return true; // Already exactly this entry: nothing to rewrite.
-      r.bytecode = std::move(bytecodeStr);
-      return writeFile();
-    }
-  }
-  records_.push_back(
-      PendingRecord{std::move(digestStr), std::move(bytecodeStr)});
-  return writeFile();
-}
-
 bool WasmRecordWriter::record(const WasmRecordCommit &c) {
   std::string digest(
       reinterpret_cast<const char *>(c.configDigest), kNativeDigestBytes);

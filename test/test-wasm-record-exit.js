@@ -22,3 +22,4 @@
 // ADD: add 42
 // ONE: WASM (1)
 // ONE: [0]
+// ONE: SOURCES (1)

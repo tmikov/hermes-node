@@ -17,6 +17,7 @@
 
 #include <hermes/node-compat/bundle/bundle_run.h>
 #include <hermes/node-compat/bundle/native_digest.h>
+#include <hermes/node-compat/bundle/wasm_record.h>
 
 #include <napi/hermes_napi.h>
 
@@ -56,6 +57,18 @@ struct StoreToken {
   /// container's own bytecode was refused.
   enum class Origin { kMiss, kContainer, kDisk };
   Origin origin = Origin::kMiss;
+
+  /// --record-wasm only. The module bytes are valid only during lookup, and
+  /// a hit's bytecode may be unmapped by its finalizer before accepted runs
+  /// (the order is finalizer, accepted, discard), so both are copied here,
+  /// at lookup, and committed only once Hermes has taken the module: at
+  /// store (a compile succeeded) or accepted (the returned bytecode was
+  /// loaded). A bare discard commits nothing. Without a recorder nothing is
+  /// copied, and a hit costs what it always did.
+  bool recording = false;
+  std::string sourceDigest; // sha256Digest(module bytes), raw
+  std::string source;
+  std::string hitBytecode;
 };
 
 void wasmTrace(
@@ -96,26 +109,39 @@ std::array<uint8_t, kNativeDigestBytes> rawDigestFromHex(
   return raw;
 }
 
-/// Hand \p bytes to the --record-wasm writer, if there is one, replacing
-/// whatever was recorded for this digest before. \p traceEvent names the
-/// tier the bytes came from, and is used for the trace line only.
+/// Commit this token's module to the --record-wasm writer, if there is one:
+/// the bytecode Hermes ended up with (\p bytes) and the module bytes copied
+/// at lookup, replacing whatever was committed for this digest before.
+/// \p traceEvent names where the bytecode came from, and is used for the
+/// trace line only.
+///
+/// Called from exactly two places -- cacheStore (a compile succeeded) and
+/// cacheAccepted (Hermes loaded the bytecode a hit returned) -- so nothing
+/// is recorded for a module Hermes did not end up with.
 ///
 /// A failed write is reported ONCE and fails the run (see recordingFailed):
 /// the compile cache next door swallows every failure because it has a right
 /// answer to fall back on, and a recording does not -- a record file that
 /// silently did not get written produces a container that silently compiles
 /// at every launch.
-void recordWasm(
+void commitRecord(
     const StoreToken *token,
     const char *traceEvent,
     const uint8_t *bytes,
     size_t size) {
-  WasmCacheContext *ctx = token->ctx;
-  if (ctx->recorder == nullptr)
+  if (!token->recording)
     return;
+  WasmCacheContext *ctx = token->ctx;
 
   wasmTrace(ctx, traceEvent, token->digest.data());
-  if (ctx->recorder->record(token->digest.data(), bytes, size))
+  WasmRecordCommit commit{
+      token->digest.data(),
+      bytes,
+      size,
+      reinterpret_cast<const uint8_t *>(token->sourceDigest.data()),
+      reinterpret_cast<const uint8_t *>(token->source.data()),
+      token->source.size()};
+  if (ctx->recorder->record(commit))
     return;
 
   // Once per run, not once per failure: a full disk fails every record, and
@@ -156,6 +182,14 @@ bool cacheLookup(
       compileCacheWasmDigest(codegenConfig, codegenConfigSize, wasm, wasmSize);
   token->digest = rawDigestFromHex(digest);
 
+  // Copied now because the module bytes are valid only during this call.
+  // Committed later, at store or accepted, if Hermes takes the module.
+  if (cacheCtx->recorder != nullptr) {
+    token->recording = true;
+    token->sourceDigest = sha256Digest(wasm, wasmSize);
+    token->source.assign(reinterpret_cast<const char *>(wasm), wasmSize);
+  }
+
   // Container tier first. A miss here falls through to exactly the path this
   // run would have taken without a container, so the two tiers cooperate.
   if (cacheCtx->container) {
@@ -164,7 +198,9 @@ bool cacheLookup(
     if (bundleWasmLookup(token->digest.data(), &baked, &bakedSize)) {
       wasmTrace(cacheCtx, "wasm container hit", token->digest.data());
       token->origin = StoreToken::Origin::kContainer;
-      recordWasm(token, "wasm record container", baked, bakedSize);
+      if (token->recording)
+        token->hitBytecode.assign(
+            reinterpret_cast<const char *>(baked), bakedSize);
       *hbc = baked;
       *hbcSize = bakedSize;
       // No finalizer: these bytes are part of the container's mapping, which
@@ -183,11 +219,12 @@ bool cacheLookup(
     return false;
 
   token->origin = StoreToken::Origin::kDisk;
-  recordWasm(
-      token,
-      "wasm record disk",
-      token->entry.bytecode,
-      token->entry.bytecodeSize);
+  // Copied before the mapping is handed off: Hermes runs its finalizer
+  // before it reports acceptance.
+  if (token->recording)
+    token->hitBytecode.assign(
+        reinterpret_cast<const char *>(token->entry.bytecode),
+        token->entry.bytecodeSize);
 
   // Hand the mapping to Hermes along with the finalizer that releases it.
   // Unlike hermes_run_bytecode, which transfers the mapping to the bytecode
@@ -241,11 +278,28 @@ void cacheStore(
   // sweep must not run against a root the cache never claimed.
   if (token->ctx->cache != nullptr && token->ctx->cache->enabled())
     token->ctx->cache->saveWasm(token->entry, hbc, hbcSize);
-  // Replaces whatever the lookup recorded for this digest: if a disk hit was
-  // refused, the recording must end up holding what was compiled instead, or
-  // the next bake carries the bad entry forward.
-  recordWasm(token, "wasm record compile", hbc, hbcSize);
+  // Commit what was compiled. A rejected hit reaches here too and commits
+  // nothing of its own (accepted never runs for it), so the recording ends
+  // up holding the fresh bytecode and never the bad entry.
+  commitRecord(token, "wasm record compile", hbc, hbcSize);
   delete token;
+}
+
+/// Hermes loaded the bytecode a hit returned. The only point at which a hit
+/// is known good, so it is where a hit is recorded. Runs after the hit's
+/// finalizer, hence the copy made at lookup. The token is not freed here:
+/// discard follows and does that.
+void cacheAccepted(void *ctx, void *storeToken) {
+  (void)ctx;
+  auto *token = static_cast<StoreToken *>(storeToken);
+  if (token == nullptr || !token->recording)
+    return;
+  commitRecord(
+      token,
+      token->origin == StoreToken::Origin::kContainer ? "wasm record container"
+                                                      : "wasm record disk",
+      reinterpret_cast<const uint8_t *>(token->hitBytecode.data()),
+      token->hitBytecode.size());
 }
 
 void cacheDiscard(void *ctx, void *storeToken) {
@@ -277,6 +331,7 @@ void installWasmCacheHooks(
   callbacks.ctx = ctx;
   callbacks.lookup = &cacheLookup;
   callbacks.store = &cacheStore;
+  callbacks.accepted = &cacheAccepted;
   callbacks.discard = &cacheDiscard;
   // Best effort: a non-napi_ok return (e.g. Hermes built without Wasm
   // support) means the hooks are simply never consulted. Nothing here may

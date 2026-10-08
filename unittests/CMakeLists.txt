@@ -49,9 +49,16 @@ target_link_libraries(CacheToolsTest hermesNodeCompileCache)
 add_node_compat_unittest(CompileCacheRunTest CompileCacheRunTest.cpp)
 target_link_libraries(CompileCacheRunTest
   hermesNodeCompileCacheRun
+  # The Wasm hooks reach the bundle runner and, through it, hermesNodeProcess,
+  # which calls napi_* functions: hermesNapi has to come after it on the line.
+  hermesNodeProcess
   hermesNapi
   hermesvm_a
 )
+# The Wasm cases drive a real WebAssembly.Module compile.
+if(HERMES_ENABLE_WASM)
+  target_compile_definitions(CompileCacheRunTest PRIVATE HERMES_ENABLE_WASM)
+endif()
 
 add_node_compat_unittest(BundleFormatTest BundleFormatTest.cpp)
 target_link_libraries(BundleFormatTest hermesNodeBundle)

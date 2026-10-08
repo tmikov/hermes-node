@@ -5,7 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <hermes/node-compat/bundle/native_digest.h>
+#include <hermes/node-compat/bundle/wasm_record.h>
+#include <hermes/node-compat/compile-cache/compile_cache.h>
 #include <hermes/node-compat/compile-cache/compile_cache_run.h>
+#include <hermes/node-compat/compile-cache/wasm_cache_hooks.h>
 
 #include "napi/hermes_napi.h"
 
@@ -62,6 +66,43 @@ std::string readFile(const std::string &path) {
   return std::string(
       std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
 }
+
+#ifdef HERMES_ENABLE_WASM
+/// (module (func (export "add") (param i32 i32) (result i32)
+///   (i32.add (local.get 0) (local.get 1))))
+const std::vector<uint8_t> kAddWasm = {
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01,
+    0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f, 0x03, 0x02, 0x01, 0x00, 0x07,
+    0x07, 0x01, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00, 0x0a, 0x09, 0x01,
+    0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b};
+/// The right magic and a version Hermes does not know: never compiles.
+const std::vector<uint8_t> kGarbageWasm =
+    {0x00, 0x61, 0x73, 0x6d, 0x09, 0x00, 0x00, 0x00};
+
+struct RecordView {
+  uint32_t count = 0, sourceCount = 0;
+  std::string bytecode, source, sourceDigest;
+};
+
+/// What the record file at \p path holds now.
+RecordView readRecord(const std::string &path) {
+  std::string bytes = readFile(path);
+  RecordView v;
+  auto r = WasmRecordReader::open(
+      reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size(), nullptr);
+  if (!r)
+    return v;
+  v.count = r->count();
+  v.sourceCount = r->sourceCount();
+  if (v.count)
+    v.bytecode = std::string(r->payload(0));
+  if (v.sourceCount) {
+    v.source = std::string(r->source(0));
+    v.sourceDigest = std::string(r->sourceDigest(0));
+  }
+  return v;
+}
+#endif // HERMES_ENABLE_WASM
 
 } // namespace
 
@@ -135,6 +176,52 @@ class CompileCacheRunTest : public ::testing::Test {
       return std::nan("");
     return d;
   }
+
+#ifdef HERMES_ENABLE_WASM
+  /// new WebAssembly.Module over \p bytes; true if it compiled. Leaves no
+  /// exception pending.
+  bool compileWasm(const std::vector<uint8_t> &bytes) {
+    std::string src = "(function(){var b=new Uint8Array([";
+    for (uint8_t b : bytes)
+      src += std::to_string(b) + ",";
+    src += "]); new WebAssembly.Module(b); return true;})()";
+    napi_value script = nullptr, result = nullptr;
+    EXPECT_EQ(
+        napi_ok,
+        napi_create_string_utf8(env_, src.c_str(), NAPI_AUTO_LENGTH, &script));
+    bool ok = napi_run_script(env_, script, &result) == napi_ok;
+    clearException();
+    return ok;
+  }
+
+  /// The codegen configuration Hermes hands a cache, learned the way an
+  /// embedder learns it: from a lookup. Leaves no cache installed.
+  std::string codegenConfig() {
+    static std::string seen;
+    hermes_wasm_cache_callbacks probe{};
+    probe.struct_size = sizeof(probe);
+    probe.lookup = [](void *,
+                      const uint8_t *,
+                      size_t,
+                      const uint8_t *cfg,
+                      size_t cfgSize,
+                      const uint8_t **,
+                      size_t *,
+                      void (**)(const uint8_t *, size_t, void *),
+                      void **,
+                      void **token) {
+      seen.assign(reinterpret_cast<const char *>(cfg), cfgSize);
+      *token = nullptr;
+      return false;
+    };
+    probe.store = [](void *, void *, const uint8_t *, size_t) {};
+    probe.discard = [](void *, void *) {};
+    EXPECT_EQ(napi_ok, hermes_set_wasm_cache(env_, &probe));
+    EXPECT_TRUE(compileWasm(kAddWasm));
+    EXPECT_EQ(napi_ok, hermes_set_wasm_cache(env_, nullptr));
+    return seen;
+  }
+#endif // HERMES_ENABLE_WASM
 };
 
 TEST_F(CompileCacheRunTest, MissCompilesPersistsAndRuns) {
@@ -354,3 +441,158 @@ TEST_F(CompileCacheRunTest, OptimizedAndUnoptimizedEntriesDoNotCollide) {
   EXPECT_DOUBLE_EQ(42.0, asNumber(b2));
   EXPECT_FALSE(clearException());
 }
+
+#ifdef HERMES_ENABLE_WASM
+
+TEST_F(CompileCacheRunTest, RecordCommitsAtStore) {
+  TempTree tree;
+  WasmRecordWriter w(tree.path() + "/rec.bin", "test");
+  WasmCacheContext ctx;
+  ctx.recorder = &w;
+  installWasmCacheHooks(env_, &ctx, /*bundleMode*/ false);
+  ASSERT_TRUE(compileWasm(kAddWasm));
+  RecordView v = readRecord(tree.path() + "/rec.bin");
+  EXPECT_EQ(1u, v.count);
+  EXPECT_FALSE(v.bytecode.empty());
+  ASSERT_EQ(1u, v.sourceCount);
+  EXPECT_EQ(std::string(kAddWasm.begin(), kAddWasm.end()), v.source);
+  EXPECT_EQ(sha256Digest(kAddWasm.data(), kAddWasm.size()), v.sourceDigest);
+}
+
+TEST_F(CompileCacheRunTest, RecordCommitsAtAcceptedFromAReleasedMapping) {
+  TempTree tree;
+  CompileCache cache;
+  ASSERT_TRUE(cache.enable(tree.path() + "/cc", "g"));
+
+  WasmRecordWriter cold(tree.path() + "/cold.bin", "test");
+  WasmCacheContext coldCtx;
+  coldCtx.cache = &cache;
+  coldCtx.recorder = &cold;
+  installWasmCacheHooks(env_, &coldCtx, false);
+  ASSERT_TRUE(compileWasm(kAddWasm)); // miss: compiled, stored, recorded
+
+  // Warm: a disk hit. The disk adapter hands Hermes its mapping with a
+  // finalizer, and Hermes finalizes before it calls accepted -- so what is
+  // recorded must have been copied at lookup.
+  WasmRecordWriter warm(tree.path() + "/warm.bin", "test");
+  WasmCacheContext warmCtx;
+  warmCtx.cache = &cache;
+  warmCtx.recorder = &warm;
+  // Both switches: the disk tier traces its own "wasm hit"
+  // (CompileCache::setTracing), and the adapter traces "wasm store"
+  // (WasmCacheContext::tracing). With only the first, the absence of a
+  // store below would prove nothing.
+  cache.setTracing(true);
+  warmCtx.tracing = true;
+  installWasmCacheHooks(env_, &warmCtx, false);
+  testing::internal::CaptureStderr();
+  ASSERT_TRUE(compileWasm(kAddWasm));
+  std::string trace = testing::internal::GetCapturedStderr();
+  EXPECT_NE(std::string::npos, trace.find("wasm hit"))
+      << "the warm run must be a disk hit, or this tests nothing:\n"
+      << trace;
+  EXPECT_EQ(std::string::npos, trace.find("wasm store")) << trace;
+
+  RecordView c = readRecord(tree.path() + "/cold.bin");
+  RecordView h = readRecord(tree.path() + "/warm.bin");
+  ASSERT_EQ(1u, h.count);
+  EXPECT_EQ(c.bytecode, h.bytecode);
+  ASSERT_EQ(1u, h.sourceCount);
+  EXPECT_EQ(std::string(kAddWasm.begin(), kAddWasm.end()), h.source);
+}
+
+TEST_F(CompileCacheRunTest, NothingCommittedWhenAMissFailsToCompile) {
+  TempTree tree;
+  WasmRecordWriter w(tree.path() + "/rec.bin", "test");
+  WasmCacheContext ctx;
+  ctx.recorder = &w;
+  installWasmCacheHooks(env_, &ctx, false);
+  EXPECT_FALSE(compileWasm(kGarbageWasm));
+  RecordView v = readRecord(tree.path() + "/rec.bin");
+  EXPECT_EQ(0u, v.count);
+  EXPECT_EQ(0u, v.sourceCount);
+}
+
+TEST_F(CompileCacheRunTest, NothingCommittedWhenARejectedHitsRecompileFails) {
+  TempTree tree;
+  std::string cfg = codegenConfig();
+  ASSERT_FALSE(cfg.empty());
+
+  // Real bytecode for kAddWasm, cut in half, is not bytecode Hermes will
+  // load. Filed under kGarbageWasm's digest, it is a disk hit Hermes
+  // rejects, for bytes whose recompile then fails.
+  WasmRecordWriter seed(tree.path() + "/seed.bin", "test");
+  WasmCacheContext seedCtx;
+  seedCtx.recorder = &seed;
+  installWasmCacheHooks(env_, &seedCtx, false);
+  ASSERT_TRUE(compileWasm(kAddWasm));
+  std::string bc = readRecord(tree.path() + "/seed.bin").bytecode;
+  ASSERT_GT(bc.size(), 16u);
+  std::string half = bc.substr(0, bc.size() / 2);
+
+  CompileCache cache;
+  ASSERT_TRUE(cache.enable(tree.path() + "/cc", "g"));
+  cache.setTracing(true);
+  CompileCacheEntry entry;
+  std::string digest = compileCacheWasmDigest(
+      reinterpret_cast<const uint8_t *>(cfg.data()),
+      cfg.size(),
+      kGarbageWasm.data(),
+      kGarbageWasm.size());
+  ASSERT_FALSE(cache.lookupWasm(
+      entry, digest, kGarbageWasm.data(), kGarbageWasm.size()));
+  cache.saveWasm(
+      entry, reinterpret_cast<const uint8_t *>(half.data()), half.size());
+
+  WasmRecordWriter w(tree.path() + "/rec.bin", "test");
+  WasmCacheContext ctx;
+  ctx.cache = &cache;
+  ctx.recorder = &w;
+  ctx.tracing = true; // the adapter's "wasm store"; the cache traces "wasm hit"
+  installWasmCacheHooks(env_, &ctx, false);
+  testing::internal::CaptureStderr();
+  EXPECT_FALSE(compileWasm(kGarbageWasm));
+  std::string trace = testing::internal::GetCapturedStderr();
+  EXPECT_NE(std::string::npos, trace.find("wasm hit"))
+      << "the planted entry must be a hit, or this tests nothing:\n"
+      << trace;
+  EXPECT_EQ(std::string::npos, trace.find("wasm store"));
+  RecordView v = readRecord(tree.path() + "/rec.bin");
+  EXPECT_EQ(0u, v.count);
+  EXPECT_EQ(0u, v.sourceCount);
+}
+
+TEST_F(CompileCacheRunTest, ARejectedHitRecordsWhatWasRecompiled) {
+  TempTree tree;
+  std::string cfg = codegenConfig();
+  WasmRecordWriter seed(tree.path() + "/seed.bin", "test");
+  WasmCacheContext seedCtx;
+  seedCtx.recorder = &seed;
+  installWasmCacheHooks(env_, &seedCtx, false);
+  ASSERT_TRUE(compileWasm(kAddWasm));
+  std::string good = readRecord(tree.path() + "/seed.bin").bytecode;
+  std::string half = good.substr(0, good.size() / 2);
+
+  CompileCache cache;
+  ASSERT_TRUE(cache.enable(tree.path() + "/cc", "g"));
+  CompileCacheEntry entry;
+  std::string digest = compileCacheWasmDigest(
+      reinterpret_cast<const uint8_t *>(cfg.data()),
+      cfg.size(),
+      kAddWasm.data(),
+      kAddWasm.size());
+  ASSERT_FALSE(
+      cache.lookupWasm(entry, digest, kAddWasm.data(), kAddWasm.size()));
+  cache.saveWasm(
+      entry, reinterpret_cast<const uint8_t *>(half.data()), half.size());
+
+  WasmRecordWriter w(tree.path() + "/rec.bin", "test");
+  WasmCacheContext ctx;
+  ctx.cache = &cache;
+  ctx.recorder = &w;
+  installWasmCacheHooks(env_, &ctx, false);
+  ASSERT_TRUE(compileWasm(kAddWasm));
+  EXPECT_EQ(good, readRecord(tree.path() + "/rec.bin").bytecode);
+}
+
+#endif // HERMES_ENABLE_WASM

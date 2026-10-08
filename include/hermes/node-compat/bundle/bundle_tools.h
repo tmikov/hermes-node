@@ -117,9 +117,9 @@ int verifyNatives(
     std::ostream &err);
 
 /// Prints the standalone `--record-wasm` file at \p recordPath: its format
-/// version (always kWasmRecordFormatVersion -- WasmRecordReader::open()
-/// refuses to open any other), its recorded build version, and whether that
-/// version matches \p runningBuildVersion -- then one line per entry with
+/// version (as read from the file: 1 or 2, both of which
+/// WasmRecordReader::open() accepts), its recorded build version, and whether
+/// that version matches \p runningBuildVersion -- then one line per entry with
 /// the digest (truncated to 16 hex characters, or the full 64 under \p
 /// verbose) and the bytecode length.
 ///

@@ -46,7 +46,9 @@
 
 // ADD: add 42
 // ONE: WASM (1)
+// ONE: SOURCES (1)
 // ZERO: WASM (0)
+// ZERO: SOURCES (0)
 // NOWASM: no wasm here
 // STORE: wasm miss
 // STORE: wasm store
