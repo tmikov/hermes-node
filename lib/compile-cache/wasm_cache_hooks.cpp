@@ -7,6 +7,34 @@
 
 #include "hermes/node-compat/compile-cache/wasm_cache_hooks.h"
 
+#include <cstring>
+
+namespace hermes {
+namespace node_compat {
+
+// Defined outside the HERMES_ENABLE_WASM branch: it uses nothing of
+// Hermes's, and a build without Wasm still links it.
+const NativeWasmUnitEntry *findNativeWasmUnit(
+    const NativeWasmUnitEntry *table,
+    size_t count,
+    const uint8_t *digest) {
+  size_t lo = 0, hi = count;
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    int c = std::memcmp(table[mid].digest, digest, kNativeDigestBytes);
+    if (c == 0)
+      return &table[mid];
+    if (c < 0)
+      lo = mid + 1;
+    else
+      hi = mid;
+  }
+  return nullptr;
+}
+
+} // namespace node_compat
+} // namespace hermes
+
 // This target defines HERMES_ENABLE_WASM (lib/compile-cache/CMakeLists.txt)
 // to mirror the top-level option, which otherwise only reaches Hermes's own
 // add_definitions() scope. Guarding here keeps the adapter's Wasm-specific
@@ -109,6 +137,51 @@ std::array<uint8_t, kNativeDigestBytes> rawDigestFromHex(
   return raw;
 }
 
+SHUnitCreator cacheLookupNative(void *ctx, const uint8_t *wasm, size_t size) {
+  auto *c = static_cast<WasmCacheContext *>(ctx);
+  std::string digest = sha256Digest(wasm, size);
+  const NativeWasmUnitEntry *e = findNativeWasmUnit(
+      c->nativeWasmUnits,
+      c->nativeWasmUnitCount,
+      reinterpret_cast<const uint8_t *>(digest.data()));
+  c->nativeAnswered[digest] = e != nullptr;
+  // "hit" means the table offered a unit. Hermes may still refuse it, in
+  // which case the bytecode lookup that follows says so.
+  wasmTrace(
+      c,
+      e ? "wasm native hit" : "wasm native miss",
+      reinterpret_cast<const uint8_t *>(digest.data()));
+  return e ? reinterpret_cast<SHUnitCreator>(const_cast<void *>(e->creator))
+           : nullptr;
+}
+
+/// Called at the top of the bytecode-tier lookup, before anything there can
+/// fail: reaching that lookup means the native tier did not serve this
+/// module.
+void warnNativeFallback(WasmCacheContext *c, const uint8_t *wasm, size_t size) {
+  if (!c->warnOnNativeFallback)
+    return;
+  std::string digest = sha256Digest(wasm, size);
+  if (!c->nativeWarned.insert(digest).second)
+    return;
+  auto it = c->nativeAnswered.find(digest);
+  bool offered = it != c->nativeAnswered.end() && it->second;
+  std::string hex = nativeDigestToHex(digest).substr(0, 16);
+  if (offered)
+    std::fprintf(
+        stderr,
+        "warning: WebAssembly module %s: its native unit is unavailable or "
+        "incompatible with this run (e.g. -test262); falling back to "
+        "bytecode\n",
+        hex.c_str());
+  else
+    std::fprintf(
+        stderr,
+        "warning: WebAssembly module %s was not compiled natively (it is not "
+        "in the recording); falling back to bytecode\n",
+        hex.c_str());
+}
+
 /// Commit this token's module to the --record-wasm writer, if there is one:
 /// the bytecode Hermes ended up with (\p bytes) and the module bytes copied
 /// at lookup, replacing whatever was committed for this digest before.
@@ -166,6 +239,7 @@ bool cacheLookup(
     void **finalizeHint,
     void **storeToken) {
   auto *cacheCtx = static_cast<WasmCacheContext *>(ctx);
+  warnNativeFallback(cacheCtx, wasm, wasmSize);
   // nothrow: this whole library is built -fno-exceptions, so a plain new
   // that cannot allocate calls std::terminate -- killing a program over an
   // optional cache, which is exactly what this feature promises never to do.
@@ -323,7 +397,9 @@ void installWasmCacheHooks(
   // directory answers every lookup with a miss, and installing for it would
   // buy the serialize-and-store cost with nothing able to use it.
   const bool cacheCanAnswer = ctx->cache != nullptr && ctx->cache->enabled();
-  if (!cacheCanAnswer && ctx->recorder == nullptr && !bundleMode)
+  const bool nativeTier =
+      ctx->nativeWasmUnitCount != 0 || ctx->warnOnNativeFallback;
+  if (!cacheCanAnswer && ctx->recorder == nullptr && !bundleMode && !nativeTier)
     return;
 
   hermes_wasm_cache_callbacks callbacks{};
@@ -333,6 +409,9 @@ void installWasmCacheHooks(
   callbacks.store = &cacheStore;
   callbacks.accepted = &cacheAccepted;
   callbacks.discard = &cacheDiscard;
+  // Only an artifact with a table or a warning policy pays the per-compile
+  // SHA-256 the native lookup costs.
+  callbacks.lookup_native = nativeTier ? &cacheLookupNative : nullptr;
   // Best effort: a non-napi_ok return (e.g. Hermes built without Wasm
   // support) means the hooks are simply never consulted. Nothing here may
   // surface a failure to the running program.

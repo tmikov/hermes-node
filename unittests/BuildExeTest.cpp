@@ -29,6 +29,8 @@ using hermes::node_compat::driverCandidates;
 using hermes::node_compat::DriverSource;
 using hermes::node_compat::formatCommandLine;
 using hermes::node_compat::KitManifest;
+using hermes::node_compat::NativeWasmUnitSymbol;
+using hermes::node_compat::ObjectFormat;
 using hermes::node_compat::payloadAssembly;
 using hermes::node_compat::readKitManifest;
 using hermes::node_compat::recordedDriverWasRejected;
@@ -269,6 +271,15 @@ TEST(BuildExeTest, PayloadAssemblyElf) {
       "\t.globl hermesNodeNativeUnitCount\n"
       "hermesNodeNativeUnitCount:\n"
       "\t.quad 0\n"
+      "\t.p2align 3\n"
+      "\t.globl hermesNodeNativeWasmUnits\n"
+      "hermesNodeNativeWasmUnits:\n"
+      "\t.globl hermesNodeNativeWasmUnitCount\n"
+      "hermesNodeNativeWasmUnitCount:\n"
+      "\t.quad 0\n"
+      "\t.globl hermesNodeNativeWasmPolicy\n"
+      "hermesNodeNativeWasmPolicy:\n"
+      "\t.quad 0\n"
       "\t.section .note.GNU-stack,\"\",@progbits\n");
 }
 
@@ -289,6 +300,15 @@ TEST(BuildExeTest, PayloadAssemblyMachO) {
       "_hermesNodeNativeUnits:\n"
       "\t.globl _hermesNodeNativeUnitCount\n"
       "_hermesNodeNativeUnitCount:\n"
+      "\t.quad 0\n"
+      "\t.p2align 3\n"
+      "\t.globl _hermesNodeNativeWasmUnits\n"
+      "_hermesNodeNativeWasmUnits:\n"
+      "\t.globl _hermesNodeNativeWasmUnitCount\n"
+      "_hermesNodeNativeWasmUnitCount:\n"
+      "\t.quad 0\n"
+      "\t.globl _hermesNodeNativeWasmPolicy\n"
+      "_hermesNodeNativeWasmPolicy:\n"
       "\t.quad 0\n");
 }
 
@@ -374,6 +394,72 @@ TEST(BuildExeTest, PayloadAssemblyAlignsTheUnitTable) {
   size_t align = s.rfind(".p2align 3", table);
   EXPECT_NE(std::string::npos, align);
   EXPECT_LT(align, table);
+}
+
+namespace {
+NativeWasmUnitSymbol wasmUnit(uint8_t fill) {
+  NativeWasmUnitSymbol u;
+  u.digest = std::string(32, static_cast<char>(fill));
+  u.unitName = "w" + std::string(64, fill == 1 ? '1' : '2');
+  return u;
+}
+} // namespace
+
+TEST(BuildExeTest, PayloadAssemblyWasmTableIsSortedByDigest) {
+  std::string s = payloadAssembly(
+      "/tmp/app.hbb", {}, ObjectFormat::ELF, {wasmUnit(2), wasmUnit(1)}, true);
+  size_t first = s.find("sh_export_w" + std::string(64, '1'));
+  size_t second = s.find("sh_export_w" + std::string(64, '2'));
+  ASSERT_NE(std::string::npos, first);
+  ASSERT_NE(std::string::npos, second);
+  EXPECT_LT(first, second);
+  // 32 digest bytes, then the 8-byte creator: one 40-byte entry.
+  std::string ones = "\t.byte 1";
+  for (int i = 1; i < 32; ++i)
+    ones += ",1";
+  EXPECT_NE(std::string::npos, s.find(ones + "\n\t.quad sh_export_w"));
+  EXPECT_NE(
+      std::string::npos, s.find("hermesNodeNativeWasmUnitCount:\n\t.quad 2\n"));
+  EXPECT_NE(
+      std::string::npos, s.find("hermesNodeNativeWasmPolicy:\n\t.quad 1\n"));
+}
+
+// std::string's operator< compares char, which is signed on x86: a digest
+// byte of 0x80 or more would sort BEFORE 0x01. The run time binary-searches
+// with memcmp (unsigned), so the table has to be ordered the same way.
+TEST(BuildExeTest, PayloadAssemblyWasmTableOrdersDigestBytesAsUnsigned) {
+  NativeWasmUnitSymbol high = wasmUnit(1);
+  high.digest[0] = static_cast<char>(0xff);
+  NativeWasmUnitSymbol low = wasmUnit(2);
+  low.digest[0] = 0x01;
+  std::string s = payloadAssembly(
+      "/tmp/app.hbb", {}, ObjectFormat::ELF, {high, low}, false);
+  // `low` (unit name ...2) must come first although 0xff is a negative char.
+  EXPECT_LT(
+      s.find("sh_export_w" + std::string(64, '2')),
+      s.find("sh_export_w" + std::string(64, '1')));
+}
+
+TEST(BuildExeTest, PayloadAssemblyWasmTableIsAlignedInRelRo) {
+  std::string s = payloadAssembly(
+      "/tmp/app.hbb", {}, ObjectFormat::ELF, {wasmUnit(1)}, false);
+  size_t table = s.find("hermesNodeNativeWasmUnits:");
+  ASSERT_NE(std::string::npos, table);
+  size_t align = s.rfind(".p2align 3", table);
+  size_t relro = s.rfind(".section .data.rel.ro", table);
+  EXPECT_NE(std::string::npos, align);
+  EXPECT_NE(std::string::npos, relro);
+  EXPECT_LT(relro, align);
+  // The GNU-stack note stays last.
+  EXPECT_LT(table, s.find(".note.GNU-stack"));
+}
+
+TEST(BuildExeTest, PayloadAssemblyWasmTableUnderscoresForMachO) {
+  std::string s = payloadAssembly(
+      "/tmp/app.hbb", {}, ObjectFormat::MachO, {wasmUnit(1)}, false);
+  EXPECT_NE(std::string::npos, s.find("_hermesNodeNativeWasmUnits:"));
+  EXPECT_NE(std::string::npos, s.find(".quad _sh_export_w"));
+  EXPECT_NE(std::string::npos, s.find("_hermesNodeNativeWasmPolicy:"));
 }
 
 // --- Driver resolution -------------------------------------------------

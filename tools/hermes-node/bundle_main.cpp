@@ -45,6 +45,13 @@ extern const uint8_t hermesNodeBundleEnd[];
 /// value regardless of the target's native size_t width.
 extern void *const hermesNodeNativeUnits[];
 extern const uint64_t hermesNodeNativeUnitCount;
+
+/// The native WebAssembly table, likewise emitted by both producers (empty,
+/// with a zero policy, for a bytecode --build-exe). 40-byte entries; see
+/// NativeWasmUnitEntry.
+extern const uint8_t hermesNodeNativeWasmUnits[];
+extern const uint64_t hermesNodeNativeWasmUnitCount;
+extern const uint64_t hermesNodeNativeWasmPolicy;
 }
 
 // payloadAssembly() emits every table entry as a `.quad` too, unconditionally
@@ -65,6 +72,10 @@ int main(int argc, char **argv) {
       static_cast<size_t>(hermesNodeBundleEnd - hermesNodeBundleStart);
   config.nativeUnits = hermesNodeNativeUnits;
   config.nativeUnitCount = static_cast<size_t>(hermesNodeNativeUnitCount);
+  config.nativeWasmUnits = hermesNodeNativeWasmUnits;
+  config.nativeWasmUnitCount =
+      static_cast<size_t>(hermesNodeNativeWasmUnitCount);
+  config.nativeWasmWarnOnFallback = hermesNodeNativeWasmPolicy != 0;
 
   // The container's options, then HERMES_NODE_VM_OPTIONS if the container
   // allows it. There is no --vm= here: every argument this binary receives

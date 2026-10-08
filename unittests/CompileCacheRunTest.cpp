@@ -575,6 +575,7 @@ TEST_F(CompileCacheRunTest, ARejectedHitRecordsWhatWasRecompiled) {
 
   CompileCache cache;
   ASSERT_TRUE(cache.enable(tree.path() + "/cc", "g"));
+  cache.setTracing(true);
   CompileCacheEntry entry;
   std::string digest = compileCacheWasmDigest(
       reinterpret_cast<const uint8_t *>(cfg.data()),
@@ -591,8 +592,95 @@ TEST_F(CompileCacheRunTest, ARejectedHitRecordsWhatWasRecompiled) {
   ctx.cache = &cache;
   ctx.recorder = &w;
   installWasmCacheHooks(env_, &ctx, false);
+  testing::internal::CaptureStderr();
   ASSERT_TRUE(compileWasm(kAddWasm));
+  std::string trace = testing::internal::GetCapturedStderr();
+  EXPECT_NE(std::string::npos, trace.find("wasm hit"))
+      << "the planted entry must be a hit, or this tests nothing:\n"
+      << trace;
   EXPECT_EQ(good, readRecord(tree.path() + "/rec.bin").bytecode);
+}
+
+namespace {
+/// Offered by the native table but never registered with Hermes, so Hermes
+/// refuses it and asks the bytecode tiers. If Hermes ever ran it, the test
+/// process aborts.
+SHUnit *unregisteredCreator() {
+  ::abort();
+}
+} // namespace
+
+TEST(NativeWasmTableTest, BinarySearchFindsEveryEntryAndNothingElse) {
+  NativeWasmUnitEntry table[3] = {};
+  for (int i = 0; i < 3; ++i) {
+    std::memset(table[i].digest, 0x10 * (i + 1), kNativeDigestBytes);
+    table[i].creator = &table[i];
+  }
+  for (int i = 0; i < 3; ++i)
+    EXPECT_EQ(&table[i], findNativeWasmUnit(table, 3, table[i].digest));
+  uint8_t absent[kNativeDigestBytes];
+  std::memset(absent, 0x18, sizeof(absent));
+  EXPECT_EQ(nullptr, findNativeWasmUnit(table, 3, absent));
+  EXPECT_EQ(nullptr, findNativeWasmUnit(table, 0, table[0].digest));
+}
+
+TEST_F(
+    CompileCacheRunTest,
+    NativeFallbackWarnsOncePerModuleWithTheRightReason) {
+  // kAddWasm is "in the table" with a creator Hermes refuses: the second
+  // message. A module not in the table: the first. Each compiled twice and
+  // each reported once.
+  std::vector<uint8_t> other = kAddWasm;
+  other[other.size() - 2] = 0x6b; // i32.add -> i32.sub: a different module
+  NativeWasmUnitEntry table[1] = {};
+  std::string d = sha256Digest(kAddWasm.data(), kAddWasm.size());
+  std::memcpy(table[0].digest, d.data(), kNativeDigestBytes);
+  table[0].creator = reinterpret_cast<const void *>(&unregisteredCreator);
+
+  WasmCacheContext ctx;
+  ctx.nativeWasmUnits = table;
+  ctx.nativeWasmUnitCount = 1;
+  ctx.warnOnNativeFallback = true;
+  ctx.tracing = true;
+  installWasmCacheHooks(env_, &ctx, false);
+  testing::internal::CaptureStderr();
+  EXPECT_TRUE(compileWasm(kAddWasm));
+  EXPECT_TRUE(compileWasm(kAddWasm));
+  EXPECT_TRUE(compileWasm(other));
+  EXPECT_TRUE(compileWasm(other));
+  std::string err = testing::internal::GetCapturedStderr();
+
+  std::string addHex = nativeDigestToHex(d).substr(0, 16);
+  std::string otherHex =
+      nativeDigestToHex(sha256Digest(other.data(), other.size())).substr(0, 16);
+  std::string unavailable = "warning: WebAssembly module " + addHex +
+      ": its native unit is unavailable or incompatible with this run "
+      "(e.g. -test262); falling back to bytecode\n";
+  std::string notRecorded = "warning: WebAssembly module " + otherHex +
+      " was not compiled natively (it is not in the recording); falling back "
+      "to bytecode\n";
+  auto count = [&](const std::string &needle) {
+    size_t n = 0;
+    for (size_t p = err.find(needle); p != std::string::npos;
+         p = err.find(needle, p + 1))
+      ++n;
+    return n;
+  };
+  EXPECT_EQ(1u, count(unavailable)) << err;
+  EXPECT_EQ(1u, count(notRecorded)) << err;
+  EXPECT_EQ(2u, count("wasm native hit")) << err;
+  EXPECT_EQ(2u, count("wasm native miss")) << err;
+}
+
+TEST_F(CompileCacheRunTest, NoNativeTierNoWarning) {
+  WasmCacheContext ctx; // empty table, policy 0: lookup_native not installed
+  ctx.tracing = true;
+  installWasmCacheHooks(env_, &ctx, /*bundleMode*/ true);
+  testing::internal::CaptureStderr();
+  EXPECT_TRUE(compileWasm(kAddWasm));
+  std::string err = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(std::string::npos, err.find("warning:"));
+  EXPECT_EQ(std::string::npos, err.find("wasm native"));
 }
 
 #endif // HERMES_ENABLE_WASM

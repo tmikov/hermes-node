@@ -875,6 +875,10 @@ int runHermesNode(const HermesNodeConfig &config) {
   // no writable cache root), which is exactly the shipped-artifact case.
   wasmCacheContext.cache = runtimeState->compileCache;
   wasmCacheContext.tracing = compileCacheTracingRequested();
+  wasmCacheContext.nativeWasmUnits =
+      static_cast<const NativeWasmUnitEntry *>(config.nativeWasmUnits);
+  wasmCacheContext.nativeWasmUnitCount = config.nativeWasmUnitCount;
+  wasmCacheContext.warnOnNativeFallback = config.nativeWasmWarnOnFallback;
   installWasmCacheHooks(
       env,
       &wasmCacheContext,
@@ -1794,7 +1798,7 @@ int runHermesNode(const HermesNodeConfig &config) {
   }
 
   // A --record-wasm write that failed mid-run has already printed its reason
-  // (recordWasm() in wasm_cache_hooks.cpp, once per run). This is the other
+  // (commitRecord() in wasm_cache_hooks.cpp, once per run). This is the other
   // half: a recording run whose file is wrong must not exit 0.
   //
   // Only the status is best effort, and deliberately so. process.exit()

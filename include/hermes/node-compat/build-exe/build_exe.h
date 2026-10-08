@@ -347,6 +347,15 @@ constexpr ObjectFormat hostObjectFormat() {
 /// disagreement fails the link naming a symbol nobody wrote.
 const char *symbolPrefix(ObjectFormat format);
 
+/// One natively compiled WebAssembly module, as the payload's Wasm table
+/// names it.
+struct NativeWasmUnitSymbol {
+  /// kNativeDigestBytes raw bytes: SHA-256 over the module bytes alone.
+  std::string digest;
+  /// "w" + 64 hex digits; the unit's creator is sh_export_<unitName>.
+  std::string unitName;
+};
+
 /// The assembler source that carries \p bundlePath's bytes into a
 /// read-only section, defining hermesNodeBundleStart and
 /// hermesNodeBundleEnd around them (bundle_main.cpp declares both; the
@@ -371,10 +380,22 @@ const char *symbolPrefix(ObjectFormat format);
 /// native addon, a resolve-only package.json. Empty overall for a bytecode
 /// --build-exe, which still gets the two table symbols with a count of zero,
 /// so one bundle_main.cpp serves both configurations without weak symbols.
+///
+/// \p wasmUnits is the native WebAssembly table: one 40-byte entry per
+/// module -- its 32-byte SHA-256 digest, then the address of its creator --
+/// sorted by digest (unsigned, as memcmp orders them, so the run time can
+/// binary-search it) and defined as hermesNodeNativeWasmUnits, with
+/// hermesNodeNativeWasmUnitCount beside it. hermesNodeNativeWasmPolicy is
+/// the third symbol: nonzero when \p wasmWarnOnFallback asks the run time to
+/// report on stderr a module the table did not serve. All three are emitted
+/// unconditionally, empty for a bytecode --build-exe, for the reason the unit
+/// table is.
 std::string payloadAssembly(
     const std::string &bundlePath,
     const std::vector<std::string> &unitSymbols,
-    ObjectFormat format = hostObjectFormat());
+    ObjectFormat format = hostObjectFormat(),
+    const std::vector<NativeWasmUnitSymbol> &wasmUnits = {},
+    bool wasmWarnOnFallback = false);
 
 } // namespace node_compat
 } // namespace hermes

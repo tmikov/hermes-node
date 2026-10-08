@@ -35,6 +35,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cassert>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
@@ -429,7 +431,9 @@ const char *symbolPrefix(ObjectFormat format) {
 std::string payloadAssembly(
     const std::string &bundlePath,
     const std::vector<std::string> &unitSymbols,
-    ObjectFormat format) {
+    ObjectFormat format,
+    const std::vector<NativeWasmUnitSymbol> &wasmUnits,
+    bool wasmWarnOnFallback) {
   std::ostringstream os;
 
   // .incbin rather than a generated C array: a multi-megabyte initializer
@@ -494,6 +498,45 @@ std::string payloadAssembly(
   os << "\t.globl " << prefix << "hermesNodeNativeUnitCount\n"
      << prefix << "hermesNodeNativeUnitCount:\n"
      << "\t.quad " << unitSymbols.size() << "\n";
+
+  // The native WebAssembly table: per natively compiled module, its 32-byte
+  // SHA-256 then the address of its creator -- a 40-byte entry -- sorted by
+  // digest so the run time can binary-search it with memcmp. Same section as
+  // the unit table and for the same reason (an address is a load-time
+  // relocation); .p2align 3 because each entry's pointer must be 8-aligned,
+  // which 32 + 8 keeps true for every entry after the first.
+  //
+  // All three symbols are emitted unconditionally, empty for a bytecode
+  // --build-exe, so one bundle_main.cpp links against a single definition
+  // whichever producer generated this file. The policy word says whether a
+  // module the table cannot serve is reported on stderr.
+  //
+  // Sorted with memcmp, not std::string's operator<: that compares char,
+  // which is signed on the common targets, so it would order 0xff before
+  // 0x01 where the run time's memcmp does the opposite and the binary
+  // search would miss entries that are present.
+  std::vector<const NativeWasmUnitSymbol *> wasmSorted;
+  for (const NativeWasmUnitSymbol &u : wasmUnits)
+    wasmSorted.push_back(&u);
+  std::sort(wasmSorted.begin(), wasmSorted.end(), [](auto *a, auto *b) {
+    return std::memcmp(a->digest.data(), b->digest.data(), 32) < 0;
+  });
+  os << "\t.p2align 3\n"
+     << "\t.globl " << prefix << "hermesNodeNativeWasmUnits\n"
+     << prefix << "hermesNodeNativeWasmUnits:\n";
+  for (const NativeWasmUnitSymbol *u : wasmSorted) {
+    assert(u->digest.size() == 32 && "a Wasm table digest is a raw SHA-256");
+    os << "\t.byte ";
+    for (size_t i = 0; i < u->digest.size(); ++i)
+      os << (i ? "," : "") << unsigned(static_cast<uint8_t>(u->digest[i]));
+    os << "\n\t.quad " << prefix << "sh_export_" << u->unitName << "\n";
+  }
+  os << "\t.globl " << prefix << "hermesNodeNativeWasmUnitCount\n"
+     << prefix << "hermesNodeNativeWasmUnitCount:\n"
+     << "\t.quad " << wasmSorted.size() << "\n"
+     << "\t.globl " << prefix << "hermesNodeNativeWasmPolicy\n"
+     << prefix << "hermesNodeNativeWasmPolicy:\n"
+     << "\t.quad " << (wasmWarnOnFallback ? 1 : 0) << "\n";
 
   // Without this, the linker cannot tell that an object assembled from
   // hand-written source needs no executable stack, so it conservatively

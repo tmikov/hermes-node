@@ -167,6 +167,14 @@ struct HermesNodeConfig {
   const void *const *nativeUnits = nullptr;
   size_t nativeUnitCount = 0;
 
+  /// The native WebAssembly table the payload object defines (an array of
+  /// NativeWasmUnitEntry, see wasm_cache_hooks.h), its entry count, and its
+  /// policy word. Null/0/false everywhere but a build-native artifact. Opaque
+  /// for the reason nativeUnits is.
+  const void *nativeWasmUnits = nullptr;
+  size_t nativeWasmUnitCount = 0;
+  bool nativeWasmWarnOnFallback = false;
+
   /// Inline JS code to eval after bootstrap, before event loop.
   /// Useful for programmatic use (e.g. inspector runtime).
   std::string evalCode;
