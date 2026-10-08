@@ -75,6 +75,9 @@ FLOW_BUNDLER_VERBOSE=1 ./run.sh       # have babel-register name its choice
   means requires from inside `hermes-parser` resolve via the symlink's real
   path, outside this directory, where its own `hermes-estree` dependency is
   not found; copying it instead makes that resolve correctly).
+- `build-bundle.sh`, `transpile.js`, `check-artifacts.sh` -- build the
+  example into an AOT container and two executables, and verify them; see
+  "Bundling it". Output lands in `dist/`.
 
 ## Running it
 
@@ -93,58 +96,136 @@ expected/` and exits 0 on success.
 Run under `cmake-build-release`, not an ASan build: the bundler run takes
 several seconds under a release build but exceeds ten minutes under ASan.
 
-## Why there is no build-bundle.sh
+## Bundling it
 
-The other bundleable examples ship a `build-bundle.sh` that produces an AOT
-bundle you can keep. This one does not, because this example cannot be
-bundled -- not "has not been", cannot.
+```sh
+cmake --build cmake-build-release --target hermes-node hermes-node-kit
+./examples/flow-bundler/build-bundle.sh            # into ./dist
+./examples/flow-bundler/check-artifacts.sh         # build, then verify
+```
 
-There are two independent reasons, and the second is the one that matters.
+`build-bundle.sh` produces three artifacts, each carrying the WebAssembly
+`hermes-parser` with its compiled bytecode baked in, and `build.config.js`:
 
-The first is visible immediately. `--build-bundle` compiles every module it
-packages with Hermes's own compiler, and `bundler/buildBundleCLI.js` is
-Flow-typed ESM:
+| artifact | from | size | build | run |
+| --- | --- | --- | --- | --- |
+| `dist/flow-bundler.hbb` | `--build-bundle` (1,331 modules) | 19.7 MB | 15 s | 1.3 s |
+| `dist/flow-bundler` | `--build-exe` | 34.8 MB | 0.4 s link | 1.3 s |
+| `dist/flow-bundler-native` | `build-native` (1,243 native modules) | 122.7 MB | 3 min 36 s | 1.2 s |
+
+Measured on Linux x86-64, Release, 16 cores, `build-native` at its default
+`--jobs`; a whole `check-artifacts.sh` run took 25 minutes of CPU, most of
+it there. Run times are single runs of the whole fixture build, not a
+benchmark. Unbaked, the container takes 6.0 s: the 4.7 s difference is
+compiling the parser's Wasm module at launch. The two
+executables are skipped, with a note, when the kit (or, for
+`build-native`, `shermes` in it) is missing.
+
+`check-artifacts.sh` runs each artifact **alone** -- copied into an empty
+directory with only `fixture/src` beside it, no `node_modules`, no
+`bundler/`, no `build.config.js`, compile cache disabled -- and requires the
+six bundles in `expected/`, exactly one `wasm container hit` and no `wasm
+store` in the compile-cache trace. It also checks with `--dump` that the
+container holds `HermesParserWASM.js` and no native addon. It is not part
+of `run.sh`, and so not of `check-hermes-node-examples`, because
+`build-native` alone takes minutes here.
+
+### Running an artifact
+
+```sh
+cd examples/flow-bundler/dist
+hermes-node --bundle=flow-bundler.hbb -- -c build.config.js
+./flow-bundler -c build.config.js
+./flow-bundler-native -c build.config.js
+```
+
+The input is read from `<artifact dir>/fixture/src` and the output written
+to `<artifact dir>/out/`: `build.config.js` computes both from its own
+`__dirname`, and a bundled module's `__dirname` is its packaged path
+re-rooted at the artifact's directory. `build-bundle.sh` links
+`dist/fixture/src` for that reason; an artifact copied elsewhere needs a
+`fixture/src` beside it. The bundler also writes a source map per bundle.
+
+**The `-c` path names a file that need not exist.** `buildBundleCLI.js`
+`require`s the config, a bundle loads code only from itself, and so the
+packaged `build.config.js` answers. A different config means a different
+artifact; naming one the artifact does not hold fails with
+`Not in the bundle. Add it with: --include=...`, which is the message to
+expect. The `.hbb` also needs `--` before the program's arguments, or
+hermes-node parses `-c` as a flag of its own; the executables take them
+directly.
+
+### Why a transpile step
+
+This example could not be bundled as it stands, for two independent
+reasons, and both still hold.
+
+The entry, `bundler/buildBundleCLI.js`, is Flow-typed ESM. `--build-bundle`
+compiles every module with Hermes's own compiler, and a parse failure in
+the entry -- the one file the program is certain to load -- is a hard error:
 
 ```
-$ hermes-node --build-bundle=dist/app.hbb --preload=../babel-register.js \
-    bundler/buildBundleCLI.js
 error: failed to parse entry .../bundler/buildBundleCLI.js: 11:12: 'from' expected
 ```
 
-The entry is the one file the program is certain to load, so the producer
-treats a parse failure there as a hard error rather than packaging a module
-that throws.
+And the hook cannot help inside a bundle. `babel-register.js` compiles the
+sources as they load by hooking `require.extensions`, and in a bundle
+`Module._load` is answered from the container, with `require.extensions`
+outside that boundary by design. A preload that wraps
+`require.extensions['.js']` and prints on every call prints under
+`hermes-node -r pre.js main.js` and prints nothing under `--preload` plus
+`--bundle`, while the program still runs from the container.
 
-The second reason survives every way around the first. The bundler's
-sources are *meant* to be untranspiled: `babel-register.js` installs
-`@babel/register`, which compiles them on the way in by hooking
-`require.extensions`. A bundle refuses `-r` at run time and takes
-`--preload` at build time instead, so the hook can be packaged and run --
-but it will have nothing to do. In a bundle, `Module._load` is intercepted
-and answered from the container, and `require.extensions` sits outside that
-boundary by design, so the hook never gets a turn.
+So `build-bundle.sh` runs the hook's work ahead of time instead:
+`transpile.js` calls `@babel/core` over `bundler/` with the options
+`babel-register.js` passes `@babel/register`, writing CommonJS into a
+staging directory. That does not turn this into a different example. It
+demonstrates two things, and only the first involves the hook: Babel
+parsing Flow with a vendored `hermes-parser` as sources load, which is
+`run.sh` and is unchanged; and the bundler's own run-time work --
+`@babel/core`, `@babel/generator`, three transform plugins,
+`hermes-transform`, `prettier` and `hermes-parser` parsing and rewriting the
+fixture -- which is exactly what the artifacts run.
 
-That is observable in three lines. A preload that wraps
-`require.extensions['.js']` and prints on every call prints twice under
-`hermes-node -r pre.js main.js`, and prints nothing at all under
-`--preload=./pre.js` plus `--bundle`, while the program still runs
-correctly from the container.
+### Why a staging directory
 
-Routing around the entry-parse error therefore only moves the failure to
-run time. Bundling a CommonJS wrapper that `require`s the Flow entry builds
-successfully -- the producer packages the unparseable module as one that
-throws when required, which is what it does for any file the run may never
-reach -- and then:
+`parser-select.js` chooses the parser by patching
+`Module._resolveFilename` at run time, and a bundle never gets there: the
+bundle loader answers a bundled `require('hermes-parser')` from the edge
+table the producer recorded. So the choice has to be made at build time.
+`dist/stage/node_modules` is a directory of symlinks into the real
+`node_modules`, except that `hermes-parser` points at `hermes-parser-wasm`.
+The producer never resolves symlinks, so it packages the WebAssembly parser
+under the name every importer uses, and the native package never enters the
+graph. That covers every importer only because there is exactly one
+`hermes-parser` in the installed tree; `build-bundle.sh` refuses to run if
+npm ever nests another. The real `node_modules` is never touched, which is
+what made swapping it on disk unacceptable (see `parser-select.js`).
 
-```
-$ hermes-node --bundle=dist/app.hbb -- -c build.config.js
-SyntaxError: .../bundler/buildBundleCLI.js: 11:12: 'from' expected
-```
+**The redirect fools the producer and nothing else.** hermes-node's disk
+loader *does* resolve symlinks, as Node does, so running the staged tree
+unbundled finds the native parser beside each package's real path, produces
+six correct bundles, and compiles no Wasm at all. That matters for one
+step: the run that records the Wasm module for baking runs from disk, so it
+preloads `parser-select.js` too, and `build-bundle.sh` checks the record
+holds exactly one module. Without both, the failure is silent: correct
+output, an empty record, and artifacts that compile the parser at every
+launch.
 
-Pre-transpiling `bundler/` to CommonJS on disk and bundling that would
-produce a working container, but it would no longer be this example: what
-this one demonstrates is Babel parsing Flow with a vendored `hermes-parser`
-as the sources load.
+### Expected producer warnings
+
+The producer warns, and unlike `examples/tetris` that is expected here; the
+scripts print the warnings rather than asserting there are none. There are
+eight unresolvable optional probes (`metro-react-native-babel-preset`, a
+`buildBundleCLI.js` branch this config does not take; three
+`prettier/plugins/*` paths, which are Prettier 3's, while this example pins
+2.8.8; `@babel/preset-typescript` twice; `v8`; `supports-color`), 17
+computed requires and 4 `require`-as-value escapes, and
+`@babel/core/lib/config/files/import.cjs`, packaged as a module that throws
+if loaded (`import()` inside a `.cjs`). The four `--include` flags in
+`build-bundle.sh` are the computed requires that matter: `build.config.js`
+itself, and the three plugins it reaches through a `require.resolve` the
+scanner cannot follow.
 
 ## A note on reproducibility
 
