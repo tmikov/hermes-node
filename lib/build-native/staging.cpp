@@ -42,6 +42,34 @@ std::string stagedObjectPath(const std::string &tempDir, uint32_t i) {
   return tempDir + "/" + stem(i) + ".o";
 }
 
+std::string nativeWasmUnitName(std::string_view rawDigest) {
+  static const char kHex[] = "0123456789abcdef";
+  std::string name = "w";
+  for (unsigned char c : rawDigest) {
+    name.push_back(kHex[c >> 4]);
+    name.push_back(kHex[c & 15]);
+  }
+  return name;
+}
+
+std::string stagedWasmPath(
+    const std::string &tempDir,
+    const std::string &unit) {
+  return tempDir + "/" + unit + ".wasm";
+}
+
+std::string stagedWasmCPath(
+    const std::string &tempDir,
+    const std::string &unit) {
+  return tempDir + "/" + unit + ".c";
+}
+
+std::string stagedWasmObjectPath(
+    const std::string &tempDir,
+    const std::string &unit) {
+  return tempDir + "/" + unit + ".o";
+}
+
 bool stageModule(
     const std::string &tempDir,
     uint32_t i,

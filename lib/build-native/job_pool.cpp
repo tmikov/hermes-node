@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <fstream>
 #include <thread>
 
 namespace hermes {
@@ -113,43 +114,141 @@ NativeModuleResult runOne(
   return result;
 }
 
-} // namespace
-
-std::vector<NativeModuleResult> compileModules(
-    const std::vector<NativeModuleJob> &jobs,
+/// One WebAssembly module, start to object file: the same stages as runOne.
+NativeModuleResult runOneWasm(
+    const NativeWasmJob &job,
     const std::string &tempDir,
     const std::string &shermesPath,
     const KitManifest &manifest,
     const std::string &driver,
     bool driverIsClang,
     OptLevel opt,
+    bool test262,
+    const CommandRunner &run) {
+  NativeModuleResult result;
+  result.sourceBytes = job.bytes.size();
+  auto start = std::chrono::steady_clock::now();
+
+  std::string unit = nativeWasmUnitName(job.digest);
+  std::string wasmPath = stagedWasmPath(tempDir, unit);
+  {
+    std::ofstream out(wasmPath, std::ios::binary | std::ios::trunc);
+    out.write(job.bytes.data(), (std::streamsize)job.bytes.size());
+    out.close();
+    if (!out) {
+      result.failedStage = NativeStage::Stage;
+      result.message = "cannot write " + wasmPath;
+      return result;
+    }
+  }
+
+  std::string cPath = stagedWasmCPath(tempDir, unit);
+  std::vector<std::string> shermesArgv =
+      buildShermesWasmCommand(shermesPath, wasmPath, cPath, unit, test262, opt);
+  CommandResult sh = run(shermesArgv);
+  result.outcome = sh.outcome;
+  result.exitStatus = sh.status;
+  if (!sh.ok()) {
+    result.failedStage = NativeStage::Shermes;
+    result.diagnostics = sh.output;
+    result.failedCommand = shermesArgv;
+    result.message = describeCommandResult(sh, "shermes");
+    return result;
+  }
+  result.cBytes = fileSize(cPath);
+  if (result.cBytes == 0) {
+    result.failedStage = NativeStage::Shermes;
+    result.failedCommand = shermesArgv;
+    result.diagnostics = sh.output;
+    result.message = "shermes exited 0 but wrote no output file";
+    return result;
+  }
+
+  std::string objPath = stagedWasmObjectPath(tempDir, unit);
+  std::vector<std::string> ccArgv =
+      buildCompileCommand(manifest, driver, driverIsClang, cPath, objPath, opt);
+  CommandResult cc = run(ccArgv);
+  result.outcome = cc.outcome;
+  result.exitStatus = cc.status;
+  if (!cc.ok()) {
+    result.failedStage = NativeStage::Compile;
+    result.diagnostics = cc.output;
+    result.failedCommand = ccArgv;
+    result.message = describeCommandResult(cc, "the C compiler");
+    return result;
+  }
+  result.objectBytes = fileSize(objPath);
+  if (result.objectBytes == 0) {
+    result.failedStage = NativeStage::Compile;
+    result.failedCommand = ccArgv;
+    result.diagnostics = cc.output;
+    result.message = "the C compiler exited 0 but wrote no object file";
+    return result;
+  }
+
+  result.ok = true;
+  result.milliseconds = std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - start)
+                            .count();
+  return result;
+}
+
+} // namespace
+
+NativeBatchResults compileNativeBatch(
+    const std::vector<NativeModuleJob> &modules,
+    const std::vector<NativeWasmJob> &wasm,
+    const std::string &tempDir,
+    const std::string &shermesPath,
+    const KitManifest &manifest,
+    const std::string &driver,
+    bool driverIsClang,
+    OptLevel opt,
+    bool wasmTest262,
     unsigned parallelism,
     const CommandRunner &run) {
   // Slots pre-sized and written by index, so results come back in job order
   // whatever order the workers finish in -- no mutex on the output, and no
   // sort afterwards.
-  std::vector<NativeModuleResult> results(jobs.size());
+  NativeBatchResults out;
+  out.modules.resize(modules.size());
+  out.wasm.resize(wasm.size());
+  const size_t total = modules.size() + wasm.size();
 
   if (parallelism == 0)
     parallelism = 1;
   unsigned workers =
-      (unsigned)std::min<size_t>(parallelism, std::max<size_t>(jobs.size(), 1));
+      (unsigned)std::min<size_t>(parallelism, std::max<size_t>(total, 1));
 
+  // One index space over both lists, so --jobs bounds the two kinds
+  // together; results are still written by index, in job order.
   std::atomic<size_t> next{0};
   auto worker = [&]() {
     for (;;) {
       size_t i = next.fetch_add(1);
-      if (i >= jobs.size())
+      if (i >= total)
         return;
-      results[i] = runOne(
-          jobs[i],
-          tempDir,
-          shermesPath,
-          manifest,
-          driver,
-          driverIsClang,
-          opt,
-          run);
+      if (i < modules.size())
+        out.modules[i] = runOne(
+            modules[i],
+            tempDir,
+            shermesPath,
+            manifest,
+            driver,
+            driverIsClang,
+            opt,
+            run);
+      else
+        out.wasm[i - modules.size()] = runOneWasm(
+            wasm[i - modules.size()],
+            tempDir,
+            shermesPath,
+            manifest,
+            driver,
+            driverIsClang,
+            opt,
+            wasmTest262,
+            run);
     }
   };
 
@@ -163,7 +262,32 @@ std::vector<NativeModuleResult> compileModules(
     for (std::thread &t : pool)
       t.join();
   }
-  return results;
+  return out;
+}
+
+std::vector<NativeModuleResult> compileModules(
+    const std::vector<NativeModuleJob> &jobs,
+    const std::string &tempDir,
+    const std::string &shermesPath,
+    const KitManifest &manifest,
+    const std::string &driver,
+    bool driverIsClang,
+    OptLevel opt,
+    unsigned parallelism,
+    const CommandRunner &run) {
+  return compileNativeBatch(
+             jobs,
+             {},
+             tempDir,
+             shermesPath,
+             manifest,
+             driver,
+             driverIsClang,
+             opt,
+             /*wasmTest262=*/false,
+             parallelism,
+             run)
+      .modules;
 }
 
 bool isNativeSourceRejection(

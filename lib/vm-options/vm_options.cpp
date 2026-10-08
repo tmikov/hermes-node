@@ -427,6 +427,17 @@ bool buildVmRuntimeConfig(
   return true;
 }
 
+bool effectiveVmTest262(
+    const std::vector<std::string> &options,
+    bool *test262,
+    std::string *error) {
+  hermes::vm::RuntimeConfig config;
+  if (!buildVmRuntimeConfig(options, &config, error))
+    return false;
+  *test262 = config.getTest262();
+  return true;
+}
+
 std::string vmOptionsHelpText() {
   runtimeFlags();
   std::ostringstream os;

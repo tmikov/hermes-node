@@ -535,7 +535,8 @@ int buildNativeExecutable(const NativeBuildOptions &options) {
     }
     std::vector<std::string> unitSymbols =
         unitSymbolTable(products.moduleCount, jobs);
-    std::string asmSource = nativePayloadAssembly(containerPath, unitSymbols);
+    std::string asmSource =
+        nativePayloadAssembly(containerPath, unitSymbols, {}, false);
     std::string asmPath = (fs::path(tempDir) / "payload.s").string();
     {
       std::ofstream asmFile(asmPath, std::ios::binary | std::ios::trunc);

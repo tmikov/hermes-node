@@ -47,6 +47,29 @@ std::string stagedCPath(const std::string &tempDir, uint32_t i);
 /// The staged path for the object file cc generates from module \p i.
 std::string stagedObjectPath(const std::string &tempDir, uint32_t i);
 
+/// The Static Hermes unit name for a WebAssembly module: "w" followed by the
+/// 64 lowercase hex digits of \p rawDigest (the 32 raw bytes of SHA-256 over
+/// the module bytes alone). Valid for isValidSHUnitName, and the same text
+/// the runtime derives the unit's creator symbol from. A JavaScript
+/// module stages as six or more digits, so a "w"-prefixed stem can never
+/// collide with one.
+std::string nativeWasmUnitName(std::string_view rawDigest);
+
+/// The staged .wasm path for unit \p unitName inside \p tempDir.
+std::string stagedWasmPath(
+    const std::string &tempDir,
+    const std::string &unitName);
+
+/// The staged path for the C file shermes generates from a Wasm unit.
+std::string stagedWasmCPath(
+    const std::string &tempDir,
+    const std::string &unitName);
+
+/// The staged path for the object file cc generates from a Wasm unit.
+std::string stagedWasmObjectPath(
+    const std::string &tempDir,
+    const std::string &unitName);
+
 /// Writes the CommonJS-wrapped form of \p source to stagedSourcePath(
 /// tempDir, i) -- the same wrapper the require() scanner parsed and the
 /// bytecode producer compiles, from the one header both already share, so
@@ -78,6 +101,22 @@ std::vector<std::string> buildShermesCommand(
     const std::string &sourceName,
     const std::string &unitName,
     bool typeScript,
+    OptLevel opt);
+
+/// The shermes argv that turns one staged .wasm file into generated C.
+///
+/// None of the JavaScript flags: a Wasm module has no source text, no block
+/// scoping to get wrong and no source map comment, and no -source-name.
+/// \p test262 adds -test262, which the unit's codegen configuration records
+/// and a runtime accepts only under the same setting (see
+/// effectiveVmTest262() in vm_options.h). shermes takes .wasm input by
+/// extension; one built without Wasm refuses it.
+std::vector<std::string> buildShermesWasmCommand(
+    const std::string &shermesPath,
+    const std::string &wasmPath,
+    const std::string &outCPath,
+    const std::string &unitName,
+    bool test262,
     OptLevel opt);
 
 /// The cc argv that turns generated C into an object.
@@ -229,6 +268,42 @@ std::vector<NativeModuleResult> compileModules(
     unsigned parallelism,
     const CommandRunner &run);
 
+/// One WebAssembly module to compile natively.
+struct NativeWasmJob {
+  /// The raw sha256Digest(bytes): 32 bytes, not hex.
+  std::string digest;
+  /// The module bytes, staged verbatim.
+  std::string bytes;
+};
+
+/// compileNativeBatch()'s results, each list in the order its jobs came in.
+struct NativeBatchResults {
+  std::vector<NativeModuleResult> modules;
+  /// moduleIndex is meaningless here; the position matches NativeWasmJob.
+  std::vector<NativeModuleResult> wasm;
+};
+
+/// compileModules() for JavaScript and WebAssembly jobs together, in ONE
+/// pool, so \p parallelism bounds the two kinds jointly. A Wasm job runs the
+/// same stages as a module -- stage, shermes, cc -- with the same failure
+/// reporting. \p wasmTest262 reaches the Wasm units only.
+NativeBatchResults compileNativeBatch(
+    const std::vector<NativeModuleJob> &modules,
+    const std::vector<NativeWasmJob> &wasm,
+    const std::string &tempDir,
+    const std::string &shermesPath,
+    const KitManifest &manifest,
+    const std::string &driver,
+    bool driverIsClang,
+    OptLevel opt,
+    bool wasmTest262,
+    unsigned parallelism,
+    const CommandRunner &run);
+
+/// The payload entries for \p wasm: each job's digest and unit name.
+std::vector<NativeWasmUnitSymbol> nativeWasmUnitSymbols(
+    const std::vector<NativeWasmJob> &wasm);
+
 /// The per-module-index symbol table payloadAssembly() wants: the unit name
 /// for a module that was compiled, an empty string for every other record
 /// in the container -- a JSON module, a native addon, a resolve-only
@@ -280,10 +355,13 @@ std::vector<std::string> buildNativeLinkCommand(
 /// Generates the assembly carrying both the container at \p containerPath
 /// and \p unitSymbols, via payloadAssembly() at this host's object format --
 /// one generated .s so the two cannot get out of step and the link gains
-/// one object rather than two.
+/// one object rather than two. \p wasmUnits and \p wasmWarnOnFallback are
+/// forwarded to payloadAssembly() unchanged.
 std::string nativePayloadAssembly(
     const std::string &containerPath,
-    const std::vector<std::string> &unitSymbols);
+    const std::vector<std::string> &unitSymbols,
+    const std::vector<NativeWasmUnitSymbol> &wasmUnits,
+    bool wasmWarnOnFallback);
 
 } // namespace node_compat
 } // namespace hermes

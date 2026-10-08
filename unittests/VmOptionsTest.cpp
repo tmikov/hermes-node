@@ -402,4 +402,25 @@ TEST(VmOptionsTest, SplitVmOptionsEnvLeadingTrailingRepeatedWhitespace) {
   EXPECT_EQ(result[1], "-gc-max-heap=1g");
 }
 
+TEST(VmOptionsTest, EffectiveTest262FollowsTheBakedList) {
+  bool t = true;
+  std::string err;
+  ASSERT_TRUE(effectiveVmTest262({}, &t, &err)) << err;
+  EXPECT_FALSE(t);
+  ASSERT_TRUE(effectiveVmTest262({"-test262"}, &t, &err)) << err;
+  EXPECT_TRUE(t);
+  ASSERT_TRUE(effectiveVmTest262({"-test262=false"}, &t, &err)) << err;
+  EXPECT_FALSE(t);
+  // Last occurrence wins, through the same dedupe a run uses.
+  ASSERT_TRUE(effectiveVmTest262({"-test262", "-test262=false"}, &t, &err))
+      << err;
+  EXPECT_FALSE(t);
+  ASSERT_TRUE(effectiveVmTest262({"-test262=false", "-test262"}, &t, &err))
+      << err;
+  EXPECT_TRUE(t);
+  // An unrelated option is still parsed and still has to be valid.
+  EXPECT_FALSE(effectiveVmTest262({"-no-such-flag"}, &t, &err));
+  EXPECT_NE(std::string::npos, err.find("no-such-flag"));
+}
+
 } // namespace

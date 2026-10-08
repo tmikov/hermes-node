@@ -49,6 +49,33 @@ const char *ccOptFlag(OptLevel opt) {
 
 } // namespace
 
+std::vector<std::string> buildShermesWasmCommand(
+    const std::string &shermesPath,
+    const std::string &wasmPath,
+    const std::string &outCPath,
+    const std::string &unitName,
+    bool test262,
+    OptLevel opt) {
+  // None of the JavaScript flags: a Wasm module has no source text, no
+  // block scoping to get wrong and no source map comment. shermes takes
+  // .wasm input by extension; one built without Wasm refuses it, and that
+  // failure is reported as a build error naming --bytecode-wasm.
+  std::vector<std::string> argv{
+      shermesPath,
+      "-emit-c",
+      shermesOptFlag(opt),
+      "-exported-unit=" + unitName};
+  // The unit's codegen configuration records this, and a runtime runs the
+  // unit only under the same setting -- see the effective baked value in
+  // effectiveVmTest262().
+  if (test262)
+    argv.push_back("-test262");
+  argv.push_back("-o");
+  argv.push_back(outCPath);
+  argv.push_back(wasmPath);
+  return argv;
+}
+
 std::vector<std::string> buildShermesCommand(
     const std::string &shermesPath,
     const std::string &stagedPath,

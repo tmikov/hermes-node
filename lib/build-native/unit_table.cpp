@@ -21,12 +21,28 @@ std::vector<std::string> unitSymbolTable(
   return table;
 }
 
+std::vector<NativeWasmUnitSymbol> nativeWasmUnitSymbols(
+    const std::vector<NativeWasmJob> &wasm) {
+  std::vector<NativeWasmUnitSymbol> out;
+  out.reserve(wasm.size());
+  for (const NativeWasmJob &job : wasm)
+    out.push_back({job.digest, nativeWasmUnitName(job.digest)});
+  return out;
+}
+
 std::string nativePayloadAssembly(
     const std::string &containerPath,
-    const std::vector<std::string> &unitSymbols) {
+    const std::vector<std::string> &unitSymbols,
+    const std::vector<NativeWasmUnitSymbol> &wasmUnits,
+    bool wasmWarnOnFallback) {
   // One generated .s carries both the container and the table, so the two
   // cannot get out of step and the link gains one object rather than two.
-  return payloadAssembly(containerPath, unitSymbols, hostObjectFormat());
+  return payloadAssembly(
+      containerPath,
+      unitSymbols,
+      hostObjectFormat(),
+      wasmUnits,
+      wasmWarnOnFallback);
 }
 
 } // namespace node_compat

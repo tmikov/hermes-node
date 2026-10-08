@@ -119,6 +119,18 @@ bool buildVmRuntimeConfig(
     hermes::vm::RuntimeConfig *out,
     std::string *error);
 
+/// The -test262 setting a runtime built from \p options ALONE would have,
+/// through the same classification, dedupe and last-occurrence-wins parse a
+/// run uses (buildVmRuntimeConfig). What build-native compiles WebAssembly
+/// units under, so that an artifact's baked options and its units agree.
+/// The environment is deliberately not consulted. Parsing the whole list
+/// means an unrelated invalid option fails here too, with buildVmRuntime-
+/// Config's message in \p error.
+bool effectiveVmTest262(
+    const std::vector<std::string> &options,
+    bool *test262,
+    std::string *error);
+
 /// The --vm-help body: every honoured flag with the description Hermes
 /// itself gives it, read out of the llvh::cl registry so the help cannot
 /// drift from what is accepted.

@@ -601,4 +601,133 @@ TEST(NativeBuiltinsTest, SymbolPrefixMatchesPayloadAssembly) {
       std::string::npos);
 }
 
+TEST(BuildNativeTest, WasmUnitNameIsWAndTheLowercaseHexDigest) {
+  std::string raw;
+  for (int i = 0; i < 32; ++i)
+    raw.push_back(static_cast<char>(i == 0 ? 0xab : i));
+  std::string name = nativeWasmUnitName(raw);
+  ASSERT_EQ(65u, name.size());
+  EXPECT_EQ("wab01", name.substr(0, 5));
+  EXPECT_EQ(std::string::npos, name.find_first_not_of("w0123456789abcdef"));
+}
+
+TEST(BuildNativeTest, ShermesWasmCommandShape) {
+  auto argv = buildShermesWasmCommand(
+      "/kit/shermes",
+      "/t/wX.wasm",
+      "/t/wX.c",
+      "wX",
+      /*test262=*/false,
+      OptLevel::O3);
+  EXPECT_EQ("/kit/shermes", argv[0]);
+  EXPECT_TRUE(has(argv, "-emit-c"));
+  EXPECT_TRUE(has(argv, "-O"));
+  EXPECT_TRUE(has(argv, "-exported-unit=wX"));
+  EXPECT_FALSE(has(argv, "-test262"));
+  // A Wasm module has no JavaScript: none of the JS parity flags, and no
+  // -source-name.
+  EXPECT_FALSE(has(argv, "-Xes6-block-scoping"));
+  for (const std::string &a : argv)
+    EXPECT_NE(0u, a.rfind("-source-name", 0)) << a;
+  ASSERT_GE(argv.size(), 3u);
+  EXPECT_EQ("-o", argv[argv.size() - 3]);
+  EXPECT_EQ("/t/wX.c", argv[argv.size() - 2]);
+  EXPECT_EQ("/t/wX.wasm", argv.back());
+
+  auto t262 = buildShermesWasmCommand(
+      "/kit/shermes",
+      "/t/wX.wasm",
+      "/t/wX.c",
+      "wX",
+      /*test262=*/true,
+      OptLevel::O0);
+  EXPECT_TRUE(has(t262, "-test262"));
+  EXPECT_TRUE(has(t262, "-O0"));
+}
+
+TEST(BuildNativeTest, CompileNativeBatchRunsBothKindsInOnePool) {
+  std::string dir = makeTempDir();
+  FakeRunner fake;
+  KitManifest m;
+  m.cc = "cc";
+  std::vector<NativeWasmJob> wasm = {
+      {std::string(32, '\x01'), "WASM-ONE"},
+      {std::string(32, '\x02'), "WASM-TWO"}};
+  NativeBatchResults r = compileNativeBatch(
+      {threeJobs()[0]},
+      wasm,
+      dir,
+      "/kit/shermes",
+      m,
+      "cc",
+      true,
+      OptLevel::O3,
+      /*wasmTest262=*/true,
+      4,
+      std::ref(fake));
+  ASSERT_EQ(1u, r.modules.size());
+  ASSERT_EQ(2u, r.wasm.size());
+  EXPECT_TRUE(r.modules[0].ok) << r.modules[0].message;
+  EXPECT_TRUE(r.wasm[0].ok) << r.wasm[0].message;
+  EXPECT_TRUE(r.wasm[1].ok) << r.wasm[1].message;
+  EXPECT_EQ(6u, fake.calls.size()); // shermes + cc for each of three units
+  // The staged module is the bytes, verbatim.
+  std::ifstream in(
+      stagedWasmPath(dir, nativeWasmUnitName(wasm[1].digest)),
+      std::ios::binary);
+  std::ostringstream body;
+  body << in.rdbuf();
+  EXPECT_EQ("WASM-TWO", body.str());
+  // -test262 reaches the Wasm units and only them.
+  size_t t262 = 0;
+  for (const auto &argv : fake.calls)
+    if (has(argv, "-test262")) {
+      ++t262;
+      EXPECT_NE(std::string::npos, argv.back().find(".wasm"));
+    }
+  EXPECT_EQ(2u, t262);
+}
+
+TEST(BuildNativeTest, CompileNativeBatchReportsAWasmShermesFailure) {
+  std::string dir = makeTempDir();
+  FakeRunner fake;
+  fake.behaviour = [](const std::vector<std::string> &argv) {
+    CommandResult r;
+    if (argv[0].find("shermes") != std::string::npos &&
+        argv.back().find(".wasm") != std::string::npos) {
+      r.outcome = CommandResult::Outcome::Exited;
+      r.status = 1;
+      r.output = "Error: unsupported\n";
+    }
+    return r;
+  };
+  KitManifest m;
+  m.cc = "cc";
+  NativeBatchResults r = compileNativeBatch(
+      {},
+      {{std::string(32, '\x03'), "X"}},
+      dir,
+      "/kit/shermes",
+      m,
+      "cc",
+      true,
+      OptLevel::O3,
+      false,
+      1,
+      std::ref(fake));
+  ASSERT_EQ(1u, r.wasm.size());
+  EXPECT_FALSE(r.wasm[0].ok);
+  EXPECT_EQ(NativeStage::Shermes, r.wasm[0].failedStage);
+  EXPECT_NE(std::string::npos, r.wasm[0].diagnostics.find("unsupported"));
+  EXPECT_EQ(1u, fake.calls.size()) << "cc must not run after shermes failed";
+}
+
+TEST(BuildNativeTest, NativeWasmUnitSymbolsCarryDigestAndName) {
+  std::vector<NativeWasmJob> wasm = {{std::string(32, '\x07'), "X"}};
+  auto syms = nativeWasmUnitSymbols(wasm);
+  ASSERT_EQ(1u, syms.size());
+  EXPECT_EQ(wasm[0].digest, syms[0].digest);
+  EXPECT_EQ(nativeWasmUnitName(wasm[0].digest), syms[0].unitName);
+}
+
 } // namespace
