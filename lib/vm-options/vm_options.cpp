@@ -34,11 +34,11 @@ namespace {
 
 /// The flags that reach vm::RuntimeConfig or vm::GCConfig, mirroring the
 /// mapping the hermes binary itself uses at
-/// hermes/tools/hermes/hermes.cpp:110-141. When Hermes moves, diff against
+/// hermes/tools/hermes/hermes.cpp:114-151. When Hermes moves, diff against
 /// that function: it is the authority, not
 /// hermes::cli::buildRuntimeConfig(), which omits ES6BlockScoping,
 /// EnableAsyncGenerators, Test262 and every JIT field.
-constexpr std::array<std::string_view, 25> kHonoured = {
+constexpr std::array<std::string_view, 27> kHonoured = {
     // GCConfig.
     "gc-init-heap",
     "gc-max-heap",
@@ -52,6 +52,8 @@ constexpr std::array<std::string_view, 25> kHonoured = {
     "Xjit",
     "Xjit-threshold",
     "Xjit-memory-limit",
+    "Xjit-max-recompiles",
+    "Xjit-recompile-threshold",
     "Xes6-proxy",
     "Xes6-block-scoping",
     "Xasync-generators",
@@ -94,7 +96,7 @@ constexpr std::array<std::string_view, 25> kHonoured = {
 ///     which this runtime uses.
 /// Supporting any of the three means deciding where its output goes, which
 /// is a feature in its own right and out of scope here.
-constexpr std::array<std::string_view, 13> kConsoleHostOnly = {
+constexpr std::array<std::string_view, 14> kConsoleHostOnly = {
     "sample-profiling",
     "sample-profiling-freq",
     "gc-print-stats",
@@ -106,6 +108,7 @@ constexpr std::array<std::string_view, 13> kConsoleHostOnly = {
     "Xperf-prof-dir",
     "Xjit-crash-on-error",
     "Xjit-emit-asserts",
+    "Xjit-emit-type-asserts",
     "Xjit-emit-counters",
     "Xjit-hc-id-limit",
 };
@@ -282,7 +285,7 @@ bool buildVmRuntimeConfig(
     return false;
   }
 
-  // The mapping mirrors hermes/tools/hermes/hermes.cpp:110-141, which is
+  // The mapping mirrors hermes/tools/hermes/hermes.cpp:114-151, which is
   // what the hermes binary itself uses. Diff against that function when
   // Hermes moves; the with...() calls below are kept in that function's
   // order for exactly that purpose.
@@ -379,6 +382,10 @@ bool buildVmRuntimeConfig(
     rtBuilder.withJITThreshold(flags.JITThreshold);
   if (wasGiven(flags.JITMemoryLimit))
     rtBuilder.withJITMemoryLimit(flags.JITMemoryLimit);
+  if (wasGiven(flags.JITMaxRecompiles))
+    rtBuilder.withJITMaxRecompiles(flags.JITMaxRecompiles);
+  if (wasGiven(flags.JITRecompileThreshold))
+    rtBuilder.withJITRecompileThreshold(flags.JITRecompileThreshold);
   if (wasGiven(flags.EnableEval))
     rtBuilder.withEnableEval(flags.EnableEval);
   if (wasGiven(flags.VerifyIR))

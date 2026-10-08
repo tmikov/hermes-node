@@ -34,6 +34,9 @@ TEST(VmOptionsTest, HonouredFlagsAreHonoured) {
   EXPECT_EQ(classifyVmOption("gc-sanitize-handles"), VmOptionStatus::kHonoured);
   EXPECT_EQ(classifyVmOption("max-register-stack"), VmOptionStatus::kHonoured);
   EXPECT_EQ(classifyVmOption("Xjit"), VmOptionStatus::kHonoured);
+  EXPECT_EQ(classifyVmOption("Xjit-max-recompiles"), VmOptionStatus::kHonoured);
+  EXPECT_EQ(
+      classifyVmOption("Xjit-recompile-threshold"), VmOptionStatus::kHonoured);
   EXPECT_EQ(classifyVmOption("Xes6-block-scoping"), VmOptionStatus::kHonoured);
   EXPECT_EQ(classifyVmOption("Xasync-generators"), VmOptionStatus::kHonoured);
   EXPECT_EQ(classifyVmOption("enable-eval"), VmOptionStatus::kHonoured);
@@ -46,6 +49,8 @@ TEST(VmOptionsTest, ConsoleHostFlagsAreRefused) {
       classifyVmOption("Xjit-crash-on-error"), VmOptionStatus::kConsoleHost);
   EXPECT_EQ(
       classifyVmOption("Xjit-emit-asserts"), VmOptionStatus::kConsoleHost);
+  EXPECT_EQ(
+      classifyVmOption("Xjit-emit-type-asserts"), VmOptionStatus::kConsoleHost);
   EXPECT_EQ(
       classifyVmOption("Xjit-emit-counters"), VmOptionStatus::kConsoleHost);
   EXPECT_EQ(classifyVmOption("Xjit-hc-id-limit"), VmOptionStatus::kConsoleHost);
@@ -77,7 +82,7 @@ TEST(VmOptionsTest, UnknownFlagsAreUnknown) {
 
 TEST(VmOptionsTest, HonouredListMatchesClassifier) {
   auto names = honouredVmOptionNames();
-  EXPECT_EQ(names.size(), 25u);
+  EXPECT_EQ(names.size(), 27u);
   for (const auto &n : names)
     EXPECT_EQ(classifyVmOption(n), VmOptionStatus::kHonoured) << n;
 }
@@ -101,6 +106,18 @@ TEST(VmOptionsTest, HonouredFlagChangesTheConfig) {
   EXPECT_FALSE(config.getES6Proxy());
   // Untouched fields keep hermes-node's defaults.
   EXPECT_TRUE(config.getES6BlockScoping());
+}
+
+TEST(VmOptionsTest, JITRecompileFlagsChangeTheConfig) {
+  hermes::vm::RuntimeConfig config;
+  std::string error;
+  ASSERT_TRUE(buildVmRuntimeConfig(
+      {"-Xjit-max-recompiles=5", "-Xjit-recompile-threshold=7"},
+      &config,
+      &error))
+      << error;
+  EXPECT_EQ(config.getJITMaxRecompiles(), 5u);
+  EXPECT_EQ(config.getJITRecompileThreshold(), 7u);
 }
 
 TEST(VmOptionsTest, HermesNodeDefaultsCanBeOverridden) {
@@ -248,7 +265,7 @@ TEST(VmOptionsTest, EveryRefusedNameIsRegisteredWithHermes) {
 
 TEST(VmOptionsTest, RefusedListMatchesClassifier) {
   auto names = refusedVmOptionNames();
-  EXPECT_EQ(names.size(), 13u);
+  EXPECT_EQ(names.size(), 14u);
   for (const auto &n : names)
     EXPECT_EQ(classifyVmOption(n), VmOptionStatus::kConsoleHost) << n;
 }
@@ -292,6 +309,9 @@ TEST(VmOptionsTest, EmptyOptionsMatchHardcodedBuilderFieldByField) {
   EXPECT_EQ(actual.getForceJIT(), expected.getForceJIT());
   EXPECT_EQ(actual.getJITThreshold(), expected.getJITThreshold());
   EXPECT_EQ(actual.getJITMemoryLimit(), expected.getJITMemoryLimit());
+  EXPECT_EQ(actual.getJITMaxRecompiles(), expected.getJITMaxRecompiles());
+  EXPECT_EQ(
+      actual.getJITRecompileThreshold(), expected.getJITRecompileThreshold());
   EXPECT_EQ(actual.getEnableEval(), expected.getEnableEval());
   EXPECT_EQ(actual.getVerifyEvalIR(), expected.getVerifyEvalIR());
   EXPECT_EQ(actual.getOptimizedEval(), expected.getOptimizedEval());

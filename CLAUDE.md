@@ -327,7 +327,7 @@ on by default. Built-in JS is unaffected (already embedded as bytecode).
   static-initialisation time, before `main`. hermes-node compiles JavaScript
   through the Hermes runtime API rather than through `CompilerDriver`, which
   is what makes the delegation possible at all.
-- **25 flags are honoured, 13 are refused by name** (`kHonoured` and
+- **27 flags are honoured, 14 are refused by name** (`kHonoured` and
   `kConsoleHostOnly` in `lib/vm-options/vm_options.cpp`). The dividing line
   is not editorial: it is whether hermes-node can actually deliver the
   flag's effect, which for most of the refused set means whether the
@@ -358,7 +358,7 @@ on by default. Built-in JS is unaffected (already embedded as bytecode).
 - **`hermes::cli::buildRuntimeConfig()` is deliberately not called.** It
   omits `ES6BlockScoping`, `EnableAsyncGenerators`, `Test262` and every JIT
   field, and the `hermes` binary does not call it either -- it builds its
-  config inline at `hermes/tools/hermes/hermes.cpp:110-141`, which is the
+  config inline at `hermes/tools/hermes/hermes.cpp:114-151`, which is the
   complete mapping. Ours mirrors that inline mapping in the same order, for
   the sole purpose of being diffable against it when Hermes moves.
 - **Two `llvh::cl` facts the design got wrong, both found in
