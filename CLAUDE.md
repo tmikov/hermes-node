@@ -2120,6 +2120,12 @@ plan `docs/superpowers/plans/2026-10-08-native-wasm.md`, progress
   compiled natively is visible at build time. A **v1** recording carries no
   module bytes and is refused first thing in `buildNativeExecutable`, before
   the kit is read, naming both ways out: re-record, or `--bytecode-wasm`.
+  The bake step re-hashes each module's bytes and refuses the build when
+  they do not match the digest recorded beside them, naming the file and the
+  digest: the unit is registered under that digest, so a file altered after
+  it was written would otherwise yield a unit served for a module it was not
+  compiled from. A build-time check only -- `--build-bundle --bake-wasm`
+  never reads the module bytes, and nothing on the run path hashes them.
 - **`--bytecode-wasm` is the opt-out**, mirroring `--bytecode-builtins` and
   independent of it: the recording's bytecode entries are baked into the
   container as `--build-bundle --bake-wasm` bakes them, nothing is compiled
@@ -2264,7 +2270,8 @@ plan `docs/superpowers/plans/2026-10-08-native-wasm.md`, progress
   the native module; and `--bytecode-wasm`), `test/build-native-wasm-entry.js` (every entry point,
   and a recording made entirely from a warm disk cache),
   `test/build-native-wasm-test262.js` (baked and overridden `-test262`
-  both ways), `test/test-wasm-record-v2.js` (v2 recordings through
+  both ways), `test/build-native-wasm-tampered.js` (a recording whose module
+  bytes no longer match their digest), `test/test-wasm-record-v2.js` (v2 recordings through
   `--build-bundle` and `--build-exe`), the v1 refusal in
   `test/build-native-errors.js`, and `test/build-native-wasm.js` under
   `--bytecode-wasm`; plus `WasmRecordTest`, the commit-boundary cases in

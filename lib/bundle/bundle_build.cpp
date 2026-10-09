@@ -1847,13 +1847,34 @@ int buildBundleImpl(
       }
       for (uint32_t i = 0; i < record->sourceCount(); ++i) {
         std::string_view digest = record->sourceDigest(i);
+        std::string_view source = record->source(i);
+        // The digest is what the artifact registers the native unit under,
+        // and the unit is compiled from these bytes, so the two must agree:
+        // a file altered after it was written would otherwise produce a
+        // unit served for a module it was never compiled from. The reader
+        // validates structure only, as the format does everywhere; this is
+        // the one place the bytes and their key meet before they become
+        // code. Build time only -- the bytecode path below never reads the
+        // source entries, and nothing on the run path hashes them.
+        if (sha256Digest(
+                reinterpret_cast<const uint8_t *>(source.data()),
+                source.size()) != digest) {
+          std::fprintf(
+              stderr,
+              "error: %s: the WebAssembly module bytes recorded under %s do "
+              "not hash to that digest\n"
+              "       Re-record it with --record-wasm.\n",
+              recordPath.c_str(),
+              nativeDigestToHex(digest).substr(0, 16).c_str());
+          return 1;
+        }
         if (!bakedWasmDigests.insert(std::string(digest)).second) {
           reporter.wasmSkippedDuplicate(
               nativeDigestToHex(digest).substr(0, 16), recordPath);
           continue;
         }
         products->wasmSources.push_back(
-            {std::string(digest), std::string(record->source(i))});
+            {std::string(digest), std::string(source)});
       }
       continue;
     }
