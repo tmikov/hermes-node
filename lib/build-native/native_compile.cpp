@@ -161,7 +161,6 @@ std::vector<std::string> buildCompileCommand(
   argv.push_back("-x");
   argv.push_back("c");
   argv.push_back("-std=gnu11");
-  argv.push_back(ccOptFlag(opt));
   argv.push_back("-c");
   // The driver flags SELECT A TARGET: -arch on a universal macOS kit, a
   // --target or -isysroot on a cross-compiling one. Compile without them
@@ -174,6 +173,15 @@ std::vector<std::string> buildCompileCommand(
     argv.push_back(flag);
   for (const std::string &flag : manifest.ccFlags)
     argv.push_back(flag);
+  // The per-build level goes AFTER both lists, because the driver honours
+  // the last -O it sees and a Release kit records `driverflag: -O3`: placed
+  // before them, -O0/-O1/-O2/-Os were silently compiled at -O3 (dz
+  // 01a11df9-3c0f). Reordering is chosen over filtering -O* out of the
+  // forwarded lists: it leaves every target-selecting flag exactly as the
+  // manifest recorded it, with no rule here about which spellings are
+  // optimisation levels (-O, -Ofast, -Og, -Oz...) to get wrong. -O is not
+  // order-sensitive against -arch, --target or -isysroot.
+  argv.push_back(ccOptFlag(opt));
   argv.push_back(cPath);
   argv.push_back("-o");
   argv.push_back(objPath);

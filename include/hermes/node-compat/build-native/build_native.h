@@ -138,6 +138,9 @@ std::vector<std::string> buildShermesWasmCommand(
 /// the same suppression buildAssembleCommand() uses and for the same
 /// reason: forwarding the whole driverFlags list means link-only flags
 /// reach a compile that has no use for them.
+///
+/// \p opt is emitted after both forwarded lists, so it is the last -O on the
+/// line and wins over any -O the kit recorded (a Release kit records -O3).
 std::vector<std::string> buildCompileCommand(
     const KitManifest &manifest,
     const std::string &driver,

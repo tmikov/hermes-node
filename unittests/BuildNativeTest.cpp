@@ -191,6 +191,40 @@ TEST(BuildNativeTest, CompileOptLevelMapping) {
   EXPECT_EQ("-Os", level(OptLevel::Os));
 }
 
+/// A Release kit records `driverflag: -O3` (and a kit's ccflags could carry
+/// an -O of their own). The driver honours the LAST -O on the line, so the
+/// per-build level has to come after both lists or -O0/-O1/-O2/-Os are
+/// silently compiled at -O3. dz 01a11df9-3c0f.
+TEST(BuildNativeTest, CompileOptLevelWinsOverTheKitsOwnOptFlags) {
+  KitManifest m;
+  m.cc = "/usr/bin/clang++";
+  m.driverFlags = {"-arch", "arm64", "-O3", "-isysroot", "/SDK"};
+  m.ccFlags = {"-O2", "-I/kit/include"};
+  auto lastO = [&m](OptLevel o) {
+    auto argv = buildCompileCommand(
+        m, "/usr/bin/clang++", /*driverIsClang=*/true, "a.c", "a.o", o);
+    std::string last = "<none>";
+    for (const std::string &a : argv)
+      if (a.rfind("-O", 0) == 0)
+        last = a;
+    // The target-selecting flags still arrive, and in their own order.
+    int arch = at(argv, "-arch");
+    EXPECT_GE(arch, 0);
+    if (arch >= 0)
+      EXPECT_EQ("arm64", argv[arch + 1]);
+    EXPECT_LT(at(argv, "-arch"), at(argv, "-isysroot"));
+    EXPECT_TRUE(has(argv, "/SDK"));
+    // ...and the level still precedes the input it applies to.
+    EXPECT_LT(at(argv, last), at(argv, "a.c"));
+    return last;
+  };
+  EXPECT_EQ("-O0", lastO(OptLevel::O0));
+  EXPECT_EQ("-O1", lastO(OptLevel::O1));
+  EXPECT_EQ("-O2", lastO(OptLevel::O2));
+  EXPECT_EQ("-O3", lastO(OptLevel::O3));
+  EXPECT_EQ("-Os", lastO(OptLevel::Os));
+}
+
 TEST(BuildNativeTest, StagedPathsAreFlatAndDistinct) {
   EXPECT_EQ("/tmp/b/000017.js", stagedSourcePath("/tmp/b", 17));
   EXPECT_EQ("/tmp/b/000017.c", stagedCPath("/tmp/b", 17));

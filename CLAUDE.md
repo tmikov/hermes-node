@@ -1847,10 +1847,11 @@ Hermes bytecode. Design
   `-O3`; measured, it was about 10% faster on tetris, because build time
   there is dominated by one large file's C-frontend cost and by small
   files' fixed per-process `shermes`/`cc` overhead, neither of which an
-  optimization level touches. (A Release kit's own `driverflag: -O3`
-  overrides the per-build `-O` flag at the `cc` step, so that comparison
-  may not have compiled anything at `-O0` -- see dz `01a11df9-3c0f`.)
-  Full detail, plus the disabled
+  optimization level touches. That comparison was made while a Release
+  kit's own `driverflag: -O3` still came after the per-build `-O` on the
+  `cc` line and won, so it may not have compiled anything at `-O0`; it has
+  not been re-measured. The per-build level is now emitted last and always
+  wins (dz `01a11df9-3c0f`). Full detail, plus the disabled
   full-GC-pause-versus-unit-count benchmark (linear in unit count, about
   0.8 ms of extra pause per 1,000 realistically-sized units), is in the
   spec's Measurements section and the progress file above.
@@ -1954,13 +1955,12 @@ underneath it was still bytecode. Design
   **`-O0`/`-Os` no longer reach the whole program**, and the flag's scope
   shrank quietly when this landed. The 187 built-ins are compiled once, into
   the kit, at `shermes -O` and the kit's own C flags; a `build-native -O0`
-  artifact therefore has `-O0` user modules and `-O3` built-ins -- in
-  intent: with a Release kit the user modules get `-O3` too, because the
-  kit's `driverflag: -O3` lands after the per-build flag (dz
-  `01a11df9-3c0f`). That is the
-  only sane design -- the alternative is recompiling 187 modules per build,
-  which is what shipping them prebuilt exists to avoid -- but the flag no
-  longer means what its name suggests.
+  artifact therefore has `-O0` user modules and `-O3` built-ins, whatever
+  `-O` the kit's own driver flags record, since the per-build level is the
+  last one on the `cc` line. That is the only sane design -- the
+  alternative is recompiling 187 modules per build, which is what shipping
+  them prebuilt exists to avoid -- but the flag no longer means what its
+  name suggests.
   `--bytecode-builtins` declines it, costs nothing to offer (both archives
   ship in the kit either way) and earns its place twice: a size-sensitive
   build can take the smaller binary, and when a test fails only under native
@@ -2247,8 +2247,7 @@ plan `docs/superpowers/plans/2026-10-08-native-wasm.md`, progress
   cannot carry native code. **MSVC is unsupported**: Wasm unit
   self-registration is unimplemented there, and the native tier depends on
   registration. A Wasm unit is compiled at the same `-O` as a JavaScript
-  one, which a Release kit's own `-O3` currently overrides (dz
-  `01a11df9-3c0f`).
+  one -- the per-build level, which wins over any `-O` the kit records.
 - **Measured** on `examples/hermes-parser-ast-wasm` (Release, x86_64 Linux,
   one 768,303-byte module): the native artifact is 45,678,736 bytes against
   29,723,064 under `--bytecode-wasm`, and builds in 177.87 s against 6.24 s

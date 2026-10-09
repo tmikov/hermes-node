@@ -13,21 +13,21 @@ plan) and its companion design doc
 | module (.wasm) | 768,303 bytes |
 | generated C | 32,697,631 bytes |
 | shermes -emit-c -O | 4.66 s, 222,568 KiB (217 MiB) |
-| cc "-O0" as `build-native -O0` runs it -- really the kit manifest's `-O3` compile (see below) | 2:56.35 (176 s), 1,448,580 KiB (1.38 GiB), object 25,068,984 bytes |
+| cc "-O0" as `build-native -O0` ran it when measured -- really the kit manifest's `-O3` compile (see below) | 2:56.35 (176 s), 1,448,580 KiB (1.38 GiB), object 25,068,984 bytes |
 | cc -O3 | 2:56.19 (176 s), 1,448,044 KiB (1.38 GiB), object 25,068,984 bytes |
 | cc true -O0 (manifest `-O3` removed) | 0:18.07 (18 s), 1,170,200 KiB (1.12 GiB), object 25,606,184 bytes |
 
-The "-O0" and "-O3" rows are the same compile. The Release kit's manifest
-records `driverflag: -O3`, and `buildCompileCommand()` emits the per-build
-optimization flag *before* forwarding the whole driver-flag list, so the
-manifest's `-O3` comes later on the command line and wins: the two objects
-are byte-for-byte the same size. The last row is what a real `-O0` costs once
-that `-O3` is filtered out. This is an observation about the existing
-`build-native` compile step (its `-O0`/`-O1`/`-O2`/`-Os` flags are overridden
-by a Release kit's `-O3`), not something this task changes; it matters to the
-design only because, with a Release kit, a user cannot currently make a Wasm
-unit compile faster by asking for `-O0`. (An ASAN/Debug kit records `-g` and
-no `-O`, so there the flag does reach `cc`.) Filed as dz `01a11df9-3c0f`.
+The "-O0" and "-O3" rows are the same compile: the two objects are
+byte-for-byte the same size. The Release kit's manifest records
+`driverflag: -O3`, and when this was measured `buildCompileCommand()` put the
+per-build optimization flag *before* the forwarded driver-flag list, so the
+manifest's `-O3` came later on the command line and won. The last row is what
+a real `-O0` costs. `buildCompileCommand()` now emits the per-build level
+after both forwarded lists, so it is the last `-O` on the line whatever the
+kit records, and `build-native -O0` with a Release kit compiles as the last
+row does; `BuildNativeTest.CompileOptLevelWinsOverTheKitsOwnOptFlags` pins
+it. (dz `01a11df9-3c0f`, closed.) The first row was not re-measured after
+that change.
 
 `cc` compiles the 32.7 MB of C for hermes-parser's module in about three
 minutes and 1.4 GiB at the kit's `-O3`, well under the gate (8 GiB / 15
@@ -88,7 +88,7 @@ prints 31,705,430 bytes of JSON, identical from both artifacts, so a good part
 of either figure is `JSON.stringify` rather than the parse.
 
 What it shows. Build time is the one `cc` compile Task 1 measured (176 s at
-the Release kit's `-O3`, dz `01a11df9-3c0f`) and nothing else: the
+`-O3`, `build-native`'s default) and nothing else: the
 `--bytecode-wasm` build of the same 33 modules takes 6.24 s. The artifact grows
 by 16 MB, less than the 25 MB object: the native build carries no
 2,050,672-byte bytecode entry, and an object file also holds relocation and
@@ -138,6 +138,6 @@ running this module under Hermes, not something this plan changes.
   (Task 9), `46f277c` (Task 10), `afa5e02` (Task 11), `c25ef65` (Task 12), the
   dz issues `9ec7dec`, and the Task 13 documentation commit.
 - Filed during this work: dz `01a11df9-3c0f` (a Release kit's `-O3`
-  overrides `build-native -O<n>`), `01a11df9-3c69` (`StaticHUnitTest` under
+  overrode `build-native -O<n>`; fixed and closed), `01a11df9-3c69` (`StaticHUnitTest` under
   native InternalJavaScript), `01a11df9-3cc6` (`check-hermes` in this build
   tree).
