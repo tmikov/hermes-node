@@ -106,28 +106,41 @@ cmake --build cmake-build-release --target hermes-node hermes-node-kit
 ./examples/flow-bundler/check-artifacts.sh         # build, then verify
 ```
 
-`build-bundle.sh` produces three artifacts, each carrying the WebAssembly
-`hermes-parser` with its compiled bytecode baked in, and `build.config.js`:
+`build-bundle.sh` produces four artifacts, each carrying the WebAssembly
+`hermes-parser` and `build.config.js`. They differ in how the parser's Wasm
+module reaches the run without being compiled there: the first two and
+`flow-bundler-native-bcwasm` carry its compiled bytecode baked in, while
+`flow-bundler-native` compiles the module itself to native code at build
+time, like the JavaScript around it. The two native executables are
+otherwise identical, so the last two rows are the cost and the gain of
+native WebAssembly alone:
 
-| artifact | from | size | build | run |
-| --- | --- | --- | --- | --- |
-| `dist/flow-bundler.hbb` | `--build-bundle` (1,317 modules) | 11.2 MB | 3.2 s | 1.29 s |
-| `dist/flow-bundler` | `--build-exe` | 26.3 MB | 0.4 s link | 1.27 s |
-| `dist/flow-bundler-native` | `build-native` (1,229 native modules) | 69.8 MB | 53 s | 1.20 s |
+| artifact | from | size | build | run | peak RSS |
+| --- | --- | --- | --- | --- | --- |
+| `dist/flow-bundler.hbb` | `--build-bundle` (1,317 modules) | 11.2 MB | 3.2 s | 1.26 s | 98 MB |
+| `dist/flow-bundler` | `--build-exe` | 26.3 MB | 0.4 s link | 1.26 s | 98 MB |
+| `dist/flow-bundler-native` | `build-native` (1,229 modules + the Wasm module) | 85.8 MB | 226 s | 1.08 s | 133 MB |
+| `dist/flow-bundler-native-bcwasm` | `build-native --bytecode-wasm` | 69.8 MB | 53 s | 1.16 s | 125 MB |
 
-Measured on Linux x86-64, Release, 16 cores, `build-native` at its default
-`--jobs`; all of `build-bundle.sh` takes 60 s wall. Run times are the
-middle of three runs of the whole fixture build. Unbaked, the container
-takes about 6 s: the difference is compiling the parser's Wasm module at
-launch. The two
-executables are skipped, with a note, when the kit (or, for
-`build-native`, `shermes` in it) is missing.
+So native WebAssembly costs 15,955,600 bytes (85,769,976 against
+69,814,376) and 173 s of build (226.1 s against 52.7 s, almost all of it
+one `cc` process on the C generated from the 768 KB module), and saves
+about 0.08 s, 7%, of a 1.16 s run. Measured on Linux x86-64 (Xeon
+E-2288G), Release, 16 cores, `build-native` at its default `--jobs`; all of
+`build-bundle.sh` takes 4 min 55 s wall. Run times and peak RSS are the
+middle of five runs of the whole fixture build with the compile cache
+disabled. Unbaked, the container takes about 6 s: the difference is
+compiling the parser's Wasm module at launch. The executables are skipped,
+with a note, when the kit (or, for `build-native`, `shermes` in it) is
+missing.
 
 `check-artifacts.sh` runs each artifact **alone** -- copied into an empty
 directory with only `fixture/src` beside it, no `node_modules`, no
 `bundler/`, no `build.config.js`, compile cache disabled -- and requires the
-six bundles in `expected/`, exactly one `wasm container hit` and no `wasm
-store` in the compile-cache trace. It also checks with `--dump` that the
+six bundles in `expected/` and, in the compile-cache trace, exactly one
+hit from the tier that should serve the parser -- `wasm native hit` for
+`flow-bundler-native`, `wasm container hit` for the other three -- with no
+hit from the other tier, no `wasm store` and no fallback warning. It also checks with `--dump` that the
 container holds `HermesParserWASM.js` and no native addon. It is not part
 of `run.sh`, and so not of `check-hermes-node-examples`, because
 `build-native` alone takes minutes here.
@@ -139,6 +152,7 @@ cd examples/flow-bundler/dist
 hermes-node --bundle=flow-bundler.hbb -- -c build.config.js
 ./flow-bundler -c build.config.js
 ./flow-bundler-native -c build.config.js
+./flow-bundler-native-bcwasm -c build.config.js
 ```
 
 The input is read from `<artifact dir>/fixture/src` and the output written
@@ -243,7 +257,7 @@ machine, same three-run method:
 | --- | --- | --- |
 | `.hbb` | 19.7 MB, built in 15 s | 11.2 MB, 3.2 s |
 | `--build-exe` | 34.8 MB | 26.3 MB |
-| `build-native` | 122.7 MB (96.3 MB `.text`), 216 s compile | 69.8 MB (50.5 MB `.text`), 53 s |
+| `build-native` (Wasm baked as bytecode, today's `--bytecode-wasm`) | 122.7 MB (96.3 MB `.text`), 216 s compile | 69.8 MB (50.5 MB `.text`), 53 s |
 | run (`.hbb` / exe / native) | 1.32 / 1.30 / 1.21 s | 1.29 / 1.27 / 1.20 s |
 
 The native compile time fell by three quarters where the size fell by

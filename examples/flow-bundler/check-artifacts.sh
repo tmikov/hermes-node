@@ -9,9 +9,12 @@
 # node_modules, no bundler/, no build.config.js -- and checks it produces
 # the six bundles in expected/.
 #
-# It also checks that the WebAssembly parser was baked rather than compiled
-# (from compile-cache tracing, never from timing), and that the container
-# holds the WebAssembly parser and not the native one.
+# It also checks how each artifact got the WebAssembly parser without
+# compiling it -- from compile-cache tracing, never from timing: baked
+# bytecode (one `wasm container hit`) for the container, the --build-exe
+# executable and flow-bundler-native-bcwasm; a natively compiled unit (one
+# `wasm native hit`, no container hit) for flow-bundler-native. And that the
+# container holds the WebAssembly parser and not the native one.
 #
 # Not part of run.sh, and so not part of check-hermes-node-examples:
 # build-native alone takes minutes here. run.sh is the cheap check.
@@ -60,12 +63,13 @@ echo "ok: flow-bundler.hbb holds the prettier stub"
 
 failed=0
 
-# check_one <label> <artifact file> <command...>
+# check_one <label> <artifact file> <container|native> <command...>
 # The command runs inside the artifact's directory; @DIR@ in it is replaced
-# by that directory.
+# by that directory. The third argument is the tier that must serve the
+# parser's Wasm module.
 check_one() {
-  local label="$1" artifact="$2"
-  shift 2
+  local label="$1" artifact="$2" tier="$3"
+  shift 3
   local dir="$WORK/run-$label"
   mkdir -p "$dir/fixture"
   cp "$artifact" "$dir/"
@@ -88,15 +92,23 @@ check_one() {
       problems+=("$name differs from expected/")
     fi
   done
-  local hits stores
-  hits="$(grep -c 'wasm container hit' "$log" || true)"
+  local hits other stores warnings
+  if [ "$tier" = native ]; then
+    hits="$(grep -c 'wasm native hit' "$log" || true)"
+    other="$(grep -c 'wasm container hit' "$log" || true)"
+  else
+    hits="$(grep -c 'wasm container hit' "$log" || true)"
+    other="$(grep -c 'wasm native hit' "$log" || true)"
+  fi
   stores="$(grep -c 'wasm store' "$log" || true)"
-  if [ "$hits" -ne 1 ] || [ "$stores" -ne 0 ]; then
-    problems+=("expected 1 wasm container hit and 0 wasm store, got $hits and $stores")
+  warnings="$(grep -c '^warning: WebAssembly module' "$log" || true)"
+  if [ "$hits" -ne 1 ] || [ "$other" -ne 0 ] || [ "$stores" -ne 0 ] ||
+      [ "$warnings" -ne 0 ]; then
+    problems+=("expected 1 wasm $tier hit and no other hit, store or warning; got $hits, $other, $stores, $warnings")
   fi
 
   if [ "${#problems[@]}" -eq 0 ]; then
-    echo "ok: $label -- 6 bundles match expected/, Wasm parser baked"
+    echo "ok: $label -- 6 bundles match expected/, Wasm parser from the $tier tier"
   else
     echo "FAIL: $label" 1>&2
     printf '  %s\n' "${problems[@]}" 1>&2
@@ -105,12 +117,14 @@ check_one() {
   fi
 }
 
-check_one hbb "$OUT/flow-bundler.hbb" \
+check_one hbb "$OUT/flow-bundler.hbb" container \
   "$HERMES_NODE" --bundle=@DIR@/flow-bundler.hbb -- -c @DIR@/build.config.js
 
-for exe in flow-bundler flow-bundler-native; do
+for exe in flow-bundler flow-bundler-native flow-bundler-native-bcwasm; do
+  tier=container
+  [ "$exe" = flow-bundler-native ] && tier=native
   if [ -f "$OUT/$exe" ]; then
-    check_one "$exe" "$OUT/$exe" @DIR@/"$exe" -c @DIR@/build.config.js
+    check_one "$exe" "$OUT/$exe" "$tier" @DIR@/"$exe" -c @DIR@/build.config.js
   else
     echo "skipped: $exe (not built; see build-bundle.sh's notes above)"
   fi

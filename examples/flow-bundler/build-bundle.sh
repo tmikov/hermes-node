@@ -4,14 +4,18 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 #
-# Builds the Flow bundler into three artifacts, in ./dist by default:
+# Builds the Flow bundler into four artifacts, in ./dist by default:
 #
-#   flow-bundler.hbb      AOT container        (hermes-node --build-bundle)
-#   flow-bundler          standalone executable (--build-exe; needs the kit)
-#   flow-bundler-native   native executable    (build-native; needs shermes)
+#   flow-bundler.hbb             AOT container        (--build-bundle)
+#   flow-bundler                 standalone executable (--build-exe; needs the kit)
+#   flow-bundler-native          native executable    (build-native; needs shermes)
+#   flow-bundler-native-bcwasm   the same, --bytecode-wasm
 #
-# Each carries the WebAssembly hermes-parser, its compiled bytecode baked in,
-# and build.config.js. An artifact reads <its dir>/fixture/src and writes
+# Each carries the WebAssembly hermes-parser and build.config.js. The first
+# two and flow-bundler-native-bcwasm carry the parser's compiled bytecode
+# baked in; flow-bundler-native compiles the parser itself to native code,
+# like everything else in it. The two native executables differ in nothing
+# else, so they measure what native WebAssembly costs and buys. An artifact reads <its dir>/fixture/src and writes
 # <its dir>/out, so the out-dir gets a fixture/src link and runs in place:
 #
 #   hermes-node --bundle=dist/flow-bundler.hbb -- -c dist/build.config.js
@@ -145,19 +149,25 @@ else
   echo "      cmake --build $BUILD_DIR --target hermes-node-kit"
 fi
 
-# Minutes, not seconds: about 1,250 modules through shermes and cc.
+# Minutes, not seconds: about 1,250 modules through shermes and cc, and, in
+# the first build, the parser's 768 KB Wasm module through them too.
 if [ -x "$KIT_DIR/shermes" ]; then
   echo "hermes-node build-native:"
   "$HERMES_NODE" build-native bundler/buildBundleCLI.js \
     -o "$OUT_DIR/flow-bundler-native" --kit="$KIT_DIR" \
     --bake-wasm="$STAGE/parser.wasmrec" "${INCLUDES[@]}"
+  echo "hermes-node build-native --bytecode-wasm:"
+  "$HERMES_NODE" build-native bundler/buildBundleCLI.js \
+    -o "$OUT_DIR/flow-bundler-native-bcwasm" --kit="$KIT_DIR" \
+    --bake-wasm="$STAGE/parser.wasmrec" --bytecode-wasm "${INCLUDES[@]}"
 elif [ -f "$KIT_DIR/kit.manifest" ]; then
   echo "note: no shermes in $KIT_DIR, so no native executable was built."
 fi
 
 echo
 echo "wrote to $OUT_DIR:"
-for f in flow-bundler.hbb flow-bundler flow-bundler-native; do
+for f in flow-bundler.hbb flow-bundler flow-bundler-native \
+  flow-bundler-native-bcwasm; do
   if [ -f "$OUT_DIR/$f" ]; then
     printf "  %-24s %8.1f MB\n" "$f" "$(echo "scale=1; $(wc -c < "$OUT_DIR/$f") / 1000000" | bc)"
   fi
