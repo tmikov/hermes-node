@@ -36,9 +36,10 @@ differ in what the parser is, and therefore in what a bundle of them holds:
 
 The first and third look alike from outside and are not alike inside. This
 one carries a 665 KB wasm module, base64-encoded into an ordinary JavaScript
-file, which hermes-node compiles to Hermes bytecode at run time -- so the
-artifact is a single file the way the pure-JavaScript one is, while the code
-doing the parsing is the same C++ the native addon runs.
+file, which hermes-node compiles to Hermes bytecode at run time (a native
+build compiles it at build time instead; see below) -- so the artifact is a
+single file the way the pure-JavaScript one is, while the code doing the
+parsing is the same C++ the native addon runs.
 
 That makes the packaging story the exact inverse of the native sibling's.
 There, `hermes-parser`'s loader reaches its `.node` through three computed

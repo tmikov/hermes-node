@@ -510,23 +510,22 @@ WebAssembly section above), and that compile is cached too. Design
 - **The Hermes side is an embedder hook, not a format change.**
   `hermes_set_wasm_cache` (declared in `hermes/API/napi/hermes_napi.h`,
   implemented in `hermes_napi_wasm_cache.cpp`) installs
-  `lookup`/`store`/`discard`, consulted in `createModuleFromBytes` -- the
-  one place Wasm bytes become a bytecode provider. `lookup` always sets a
-  store token, on hit and miss alike, and Hermes calls exactly one of
-  `store` or `discard` for it. Two further callbacks are **optional** and
-  appended after `discard`: `lookup_native`, consulted before `lookup` (see
-  "Native Wasm" under Native Compilation), and `accepted`, called when
-  Hermes has taken the bytecode a `lookup` hit returned -- after that hit's
-  finalizer and immediately before its `discard`, so an embedder that wants
-  the bytes then must have copied them at `lookup`. `struct_size`'s minimum
-  is the size the struct had **before** those two were appended, and each is
-  read only when `struct_size` covers it, so a caller compiled against the
-  older header still installs and simply has no native tier and no
-  acceptance notice. Returned bytes take the **trusted**
-  precompiled path, so no trust gate moves: `EnableUntrustedBytecodeFromJS`
-  and `EnableWasmBytecodeContentSniffing` stay off, exactly as for any other
-  `.hbc` an embedder ships. hermes-node's adapter is
-  `lib/compile-cache/wasm_cache_hooks.cpp`, installed from
+  `lookup`/`store`/`discard`, consulted in `createModuleFromBytes` -- the one
+  place Wasm bytes become a bytecode provider. `lookup` always sets a store
+  token, on hit and miss alike, and Hermes calls exactly one of `store` or
+  `discard` for it. Two further callbacks are **optional** and appended after
+  `discard`: `lookup_native`, consulted before `lookup` (see "Native Wasm"
+  under Native Compilation), and `accepted`, called when Hermes has taken the
+  bytecode a `lookup` hit returned -- after that hit's finalizer and
+  immediately before its `discard`, so an embedder that wants the bytes then
+  must have copied them at `lookup`. `struct_size`'s minimum is the size the
+  struct had **before** those two were appended, and each is read only when
+  `struct_size` covers it, so a caller compiled against the older header still
+  installs and simply has no native tier and no acceptance notice. Returned
+  bytes take the **trusted** precompiled path, so no trust gate moves:
+  `EnableUntrustedBytecodeFromJS` and `EnableWasmBytecodeContentSniffing` stay
+  off, exactly as for any other `.hbc` an embedder ships. hermes-node's
+  adapter is `lib/compile-cache/wasm_cache_hooks.cpp`, installed from
   `hermes_node_runtime.cpp` and guarded by `#ifdef HERMES_ENABLE_WASM`.
 - **A null cache installs nothing**, which is how `--no-compile-cache` and
   `--inspect` end up uncached without a second decision: both already make
@@ -1187,18 +1186,18 @@ mechanism.
   against 100,000 characters over 0x00-0xFF -> 200,552. Carrying only
   bytecode needs a token where the bytes were, which is not built.
 - **Two steps, because the producer never executes the program.** It cannot
-  see a byte string decoded or a `.wasm` file read, so it cannot obtain
-  Wasm bytes; only a run can. `--record-wasm=<file>` on an ordinary run (a
-  plain script, `-e`, or a `--bundle=` run -- anything that runs) writes a
+  see a byte string decoded or a `.wasm` file read, so it cannot obtain Wasm
+  bytes; only a run can. `--record-wasm=<file>` on an ordinary run (a plain
+  script, `-e`, or a `--bundle=` run -- anything that runs) writes a
   self-contained record file holding, for every Wasm module Hermes accepted
   during the run, its bytecode, keyed by the same SHA-256 content digest the
   disk cache uses, and its source bytes, which `build-native` compiles (see
-  "Native Wasm" under Native Compilation). `--build-bundle --bake-wasm=<file>` (repeatable) copies
-  those entries into the container's new Wasm table. Two `--bake-wasm` files
-  naming the same digest: the first wins, and `--verbose` says so.
-  `--record-wasm` is refused with `--build-bundle` (the producer compiles
-  and never runs, so the file would always be empty) and with any tool verb
-  (a verb creates no runtime).
+  "Native Wasm" under Native Compilation). `--build-bundle --bake-wasm=<file>`
+  (repeatable) copies those entries into the container's new Wasm table. Two
+  `--bake-wasm` files naming the same digest: the first wins, and `--verbose`
+  says so. `--record-wasm` is refused with `--build-bundle` (the producer
+  compiles and never runs, so the file would always be empty) and with any
+  tool verb (a verb creates no runtime).
 - **The record file is its own format** (`HNWASMRC` magic,
   `include/hermes/node-compat/bundle/wasm_record.h`,
   `lib/bundle/wasm_record.cpp`), not tar: the deciding argument was the read
@@ -1224,22 +1223,22 @@ mechanism.
   ever read from a v1 header. `--build-bundle --bake-wasm` reads only the
   bytecode table and bakes from either version; a reader from before v2
   rejects a v2 file by its version, which is the safe outcome.
-- **Recording commits at `store` or `accepted`, never at `lookup`.** A
-  module is recorded only once Hermes has taken it: at `store` (a compile
-  succeeded) or at `accepted` (Hermes loaded the bytecode a container or
-  disk hit returned). Committing at `lookup` would record a hit before
-  knowing whether Hermes accepts it, and a rejected hit whose recompile then
-  fails -- reachable without OOM, since `verifyIR` sits outside the cache
-  key -- would leave a module in the recording that the run never had. That
-  case ends in a bare `discard` and commits nothing, as does a miss whose
-  compile fails. So a feature-detection probe that hands Hermes bad bytes never
-  reaches a recording. Two copies make the deferral work: the module bytes
-  are copied into the store token at `lookup`, because they are valid only
-  for that call, and so is a hit's bytecode, because the disk adapter hands
-  its mapping to a finalizer that Hermes runs **before** `accepted`. Without
-  `--record-wasm`, nothing is copied and a hit costs what it always did. A
-  commit is not proof the source is valid Wasm: `accepted` says a bytecode
-  provider was accepted, not that it was compiled from these bytes.
+- **Recording commits at `store` or `accepted`, never at `lookup`.** A module
+  is recorded only once Hermes has taken it: at `store` (a compile succeeded)
+  or at `accepted` (Hermes loaded the bytecode a container or disk hit
+  returned). Committing at `lookup` would record a hit before knowing whether
+  Hermes accepts it, and a rejected hit whose recompile then fails --
+  reachable without OOM, since `verifyIR` sits outside the cache key -- would
+  leave a module in the recording that the run never had. That case ends in a
+  bare `discard` and commits nothing, as does a miss whose compile fails. So a
+  feature-detection probe that hands Hermes bad bytes never reaches a
+  recording. Two copies make the deferral work: the module bytes are copied
+  into the store token at `lookup`, because they are valid only for that call,
+  and so is a hit's bytecode, because the disk adapter hands its mapping to a
+  finalizer that Hermes runs **before** `accepted`. Without `--record-wasm`,
+  nothing is copied and a hit costs what it always did. A commit is not proof
+  the source is valid Wasm: `accepted` says a bytecode provider was accepted,
+  not that it was compiled from these bytes.
 - **Format v6** adds a Wasm table to the container -- `wasmTableOffset` and
   `wasmCount` on `BundleHeader`, `BundleWasmRecord[wasmCount]` sorted by
   digest so a lookup binary-searches it with `memcmp`. `BundleWasmRecord`
@@ -1282,13 +1281,12 @@ mechanism.
   digest computed once in the callback. A container miss falls through to
   exactly the path this run would have taken with no container. (A
   `build-native` artifact puts its native tier in front of all three; see
-  "Native Wasm".) A hit hands
-  Hermes a pointer straight into the container's own mapping with
-  `finalize_cb` NULL -- the mapping outlives the run, so nothing needs
-  releasing. That is not the same as allocation-free: the store token and
-  the digest still allocate, and Hermes copies the returned bytes into a
-  `MemoryBuffer` before building a provider, so this sits inside the same
-  OOM caveat the disk cache's Wasm hooks already carry (see "The contract
+  "Native Wasm".) A hit hands Hermes a pointer straight into the container's
+  own mapping with `finalize_cb` NULL -- the mapping outlives the run, so
+  nothing needs releasing. That is not the same as allocation-free: the store
+  token and the digest still allocate, and Hermes copies the returned bytes
+  into a `MemoryBuffer` before building a provider, so this sits inside the
+  same OOM caveat the disk cache's Wasm hooks already carry (see "The contract
   excludes allocation failure" above), not outside it.
 - **A container hit that comes back to `store` means Hermes refused this
   container's own bytecode, and that terminates the run.**
@@ -1331,38 +1329,37 @@ mechanism.
   at every launch.
 - **The recorder's own file write is the one loud failure in a feature whose
   neighbour swallows everything on purpose** (see "Every failure in here is
-  swallowed on purpose" above) -- deliberately, because a silently
-  incomplete recording produces a container that silently compiles forever.
-  It is written once, at runtime creation, before user code runs (so
-  `--record-wasm=app.js app.js` is caught by the same-file refusal before
-  anything is overwritten), and rewritten atomically after every commit
-  that adds or changes an entry,
+  swallowed on purpose" above) -- deliberately, because a silently incomplete
+  recording produces a container that silently compiles forever. It is written
+  once, at runtime creation, before user code runs (so `--record-wasm=app.js
+  app.js` is caught by the same-file refusal before anything is overwritten),
+  and rewritten atomically after every commit that adds or changes an entry,
   so that a program ending in `process.exit()` -- both exit paths call
   `_exit()` on purpose, see the Bootstrap Sequence section -- still leaves a
   complete file. `--record-wasm` naming the same file as the running
   `--bundle` container or the script being executed is refused the same way
   `--extract-module --out` already guards its own overwrite, by
-  `st_dev`/`st_ino` (`isSameFile()`), because the recorder's write is a
-  rename over the destination the run is still mapping. A produced
-  executable gets no way to record at all: `bundle_main.cpp` parses no
-  flags, so every argument belongs to the program, and the workflow does
-  not need it -- the recording run is an ordinary script or `--bundle=` run,
-  built into an executable only afterwards.
+  `st_dev`/`st_ino` (`isSameFile()`), because the recorder's write is a rename
+  over the destination the run is still mapping. A produced executable gets no
+  way to record at all: `bundle_main.cpp` parses no flags, so every argument
+  belongs to the program, and the workflow does not need it -- the recording
+  run is an ordinary script or `--bundle=` run, built into an executable only
+  afterwards.
 - **Tracing distinguishes the tiers**, under
   `HERMES_NODE_DEBUG_NATIVE=COMPILE_CACHE`: `wasm container hit`/`wasm
   container miss` for the new tier, `wasm hit`/`wasm miss` for the disk tier
-  (unchanged), `wasm store` for bytes arriving from a compile, `wasm
-  container refused` traced just before the fatal exit above so a trace
-  explains the exit instead of stopping mid-story, and `wasm record
-  container`/`wasm record disk`/`wasm record compile` naming which tier fed
-  the recorder. The `wasm record` lines are printed at **commit** time --
-  `wasm record compile` at `store`, the other two at `accepted` -- so in a
-  recording run, a `wasm container hit` or `wasm hit` with no `wasm record`
-  line after it is a hit Hermes did not accept. As with the disk tier, hits and misses are asserted from
-  this tracing and never from timing -- the suite runs 16-way parallel. A
+  (unchanged), `wasm store` for bytes arriving from a compile, `wasm container
+  refused` traced just before the fatal exit above so a trace explains the
+  exit instead of stopping mid-story, and `wasm record container`/`wasm record
+  disk`/`wasm record compile` naming which tier fed the recorder. The `wasm
+  record` lines are printed at **commit** time -- `wasm record compile` at
+  `store`, the other two at `accepted` -- so in a recording run, a `wasm
+  container hit` or `wasm hit` with no `wasm record` line after it is a hit
+  Hermes did not accept. As with the disk tier, hits and misses are asserted
+  from this tracing and never from timing -- the suite runs 16-way parallel. A
   case that needs a *live* disk cache (to prove the container tier answers
-  first) must run through `%hermes-node-cc`, because the suite-wide disable
-  is an environment variable checked before `--compile-cache=`.
+  first) must run through `%hermes-node-cc`, because the suite-wide disable is
+  an environment variable checked before `--compile-cache=`.
 - **Scope is the compile, not the packaging.** A `.wasm` file read from disk
   with `fs` still has to ship beside a bundle exactly as it does today --
   nothing here teaches the container to answer that read. It still gets
@@ -1696,34 +1693,31 @@ Hermes bytecode. Design
 `docs/superpowers/plans/2026-09-13-native-compilation.md`, progress
 `docs/superpowers/plans/progress-native-compilation.md`.
 
-- **It is a subcommand, dispatched before the ordinary parse loop**, the
-  same way `cache` is (`build-exe` and the other diagnostic verbs are
-  ordinary flags, not subcommands). `hermes-node build-native` in
-  `argv[1]` always means this subcommand, whether or not a file named
-  `build-native` exists in the working directory; run `./build-native` to
-  execute a script so named. It parses its own argv from `i=2` and joins
-  none of `checkToolOptions()`'s flag-conflict matrix, which is the whole
-  reason it is a subcommand rather than one more tool flag: it takes more
-  options than any flag-shaped verb (`--include`, `--preload`, `--vm=`,
-  `--allow-vm-options-override`, `--bake-wasm=`, `--bytecode-wasm`,
-  `--bytecode-builtins`, `--jobs=`,
+- **It is a subcommand, dispatched before the ordinary parse loop**, the same
+  way `cache` is (`build-exe` and the other diagnostic verbs are ordinary
+  flags, not subcommands). `hermes-node build-native` in `argv[1]` always
+  means this subcommand, whether or not a file named `build-native` exists in
+  the working directory; run `./build-native` to execute a script so named. It
+  parses its own argv from `i=2` and joins none of `checkToolOptions()`'s
+  flag-conflict matrix, which is the whole reason it is a subcommand rather
+  than one more tool flag: it takes more options than any flag-shaped verb
+  (`--include`, `--preload`, `--vm=`, `--allow-vm-options-override`,
+  `--bake-wasm=`, `--bytecode-wasm`, `--bytecode-builtins`, `--jobs=`,
   `-O0`/`-O1`/`-O2`/`-O3`/`-Os`, `--kit=`, `--cc=`, `--shermes=`,
-  `--keep-temp`, `--verbose`), with no position restriction on any of
-  them.
+  `--keep-temp`, `--verbose`), with no position restriction on any of them.
 - **A native build is an AOT bundle whose JavaScript module payloads are
-  empty, plus a linked table of native unit functions**, produced by the
-  same discovery/resolution/classification code the bytecode bundle
-  producer uses (`buildBundleImpl` in `lib/bundle/bundle_build.cpp` gained
-  a native mode rather than a parallel copy). Everything else --
-  the closed world, the resolver and its two backends, addon sidecars,
-  preloads, baked VM options, and baked Wasm entries under
-  `--bytecode-wasm` -- is exactly the same code the bytecode
-  `--build-bundle`/`--build-exe` path uses. Only the native-specific pieces
-  are new: staging each module's wrapped source, invoking `shermes` then
-  `cc` per module (`lib/build-native/`, VM-free), the job pool that
-  parallelizes those invocations, the unit table emitted into the generated
-  assembly, and the native Wasm units and their table (see "Native Wasm"
-  below).
+  empty, plus a linked table of native unit functions**, produced by the same
+  discovery/resolution/classification code the bytecode bundle producer uses
+  (`buildBundleImpl` in `lib/bundle/bundle_build.cpp` gained a native mode
+  rather than a parallel copy). Everything else -- the closed world, the
+  resolver and its two backends, addon sidecars, preloads, baked VM options,
+  and baked Wasm entries under `--bytecode-wasm` -- is exactly the same code
+  the bytecode `--build-bundle`/`--build-exe` path uses. Only the
+  native-specific pieces are new: staging each module's wrapped source,
+  invoking `shermes` then `cc` per module (`lib/build-native/`, VM-free), the
+  job pool that parallelizes those invocations, the unit table emitted into
+  the generated assembly, and the native Wasm units and their table (see
+  "Native Wasm" below).
 - **Cross-module calls are structurally safe from the inliner; a module's
   own internal helper is not.** `shermes -exported-unit=` compiles each
   module as its own separate compilation unit, so there is no callee IR to
@@ -1869,13 +1863,13 @@ Hermes bytecode. Design
   which supersedes that row rather than extending it.
 - Tests:
   `test/build-native{,-errors,-container,-natives,-escapes,-smoke,-wasm,-parity,-tolerant}.js`
-  and `test/build-native-wasm-{native,fallback,entry,test262}.js` (see
-  "Native Wasm" below) plus `BuildNativeTest`. `build-native-errors.js` is deliberately **not**
-  gated on `linker-available`/`shermes-available`: every case in it is
-  refused before either toolchain is reached, matching
+  and `test/build-native-wasm-{native,fallback,entry,test262,tampered}.js`
+  (see "Native Wasm" below) plus `BuildNativeTest`. `build-native-errors.js` is
+  deliberately **not** gated on `linker-available`/`shermes-available`: every
+  case in it is refused before either toolchain is reached, matching
   `build-exe-errors.js`'s convention. `BuildNativeTest` links no VM and no
-  compiler, so it runs under `check-hermes-node-unit` even on a checkout
-  with no kit.
+  compiler, so it runs under `check-hermes-node-unit` even on a checkout with
+  no kit.
 - **Two worked examples, and they cover different ground.**
   `examples/tetris/run.sh` and `examples/ditz2/run.sh` each gained a
   `build-native` arm beside their `--build-exe` one, checked with the source
@@ -1945,29 +1939,26 @@ underneath it was still bytecode. Design
 
   Two runs of the hello-world case differ by a few hundred bytes, since the
   entry's path and the build metadata land in the binary; quoting one run's
-  absolutes beside another run's delta would give a reader a subtraction
-  that does not close, which is worse than either number alone.
-  The `-Wl,-u` roots one symbol in a
-  translation unit that statically references all 187 units, so the whole
-  registry is pulled in whether the program requires two built-ins or forty.
-  Absolute growth is constant to within 1,632 bytes across those two; only
-  the ratio improves with program size.
-  **`-O0`/`-Os` no longer reach the whole program**, and the flag's scope
-  shrank quietly when this landed. The 187 built-ins are compiled once, into
-  the kit, at `shermes -O` and the kit's own C flags; a `build-native -O0`
-  artifact therefore has `-O0` user modules and `-O3` built-ins, whatever
-  `-O` the kit's own driver flags record, since the per-build level is the
-  last one on the `cc` line. That is the only sane design -- the
-  alternative is recompiling 187 modules per build, which is what shipping
-  them prebuilt exists to avoid -- but the flag no longer means what its
-  name suggests.
-  `--bytecode-builtins` declines it, costs nothing to offer (both archives
-  ship in the kit either way) and earns its place twice: a size-sensitive
-  build can take the smaller binary, and when a test fails only under native
-  built-ins it is the lever that separates a fault in a built-in from a
-  fault in a user module. A kit cut before this feature has no
-  `nativebuiltins:` line, and that is a **refusal before anything is
-  compiled**, naming both the re-cut command and the flag.
+  absolutes beside another run's delta would give a reader a subtraction that
+  does not close, which is worse than either number alone. The `-Wl,-u` roots
+  one symbol in a translation unit that statically references all 187 units,
+  so the whole registry is pulled in whether the program requires two
+  built-ins or forty. Absolute growth is constant to within 1,632 bytes across
+  those two; only the ratio improves with program size. **`-O0`/`-Os` no
+  longer reach the whole program**, and the flag's scope shrank quietly when
+  this landed. The 187 built-ins are compiled once, into the kit, at `shermes
+  -O` and the kit's own C flags; a `build-native -O0` artifact therefore has
+  `-O0` user modules and `-O3` built-ins, whatever `-O` the kit's own driver
+  flags record, since the per-build level is the last one on the `cc` line.
+  That is the only sane design -- the alternative is recompiling 187 modules
+  per build, which is what shipping them prebuilt exists to avoid -- but the
+  flag no longer means what its name suggests. `--bytecode-builtins` declines
+  it, costs nothing to offer (both archives ship in the kit either way) and
+  earns its place twice: a size-sensitive build can take the smaller binary,
+  and when a test fails only under native built-ins it is the lever that
+  separates a fault in a built-in from a fault in a user module. A kit cut
+  before this feature has no `nativebuiltins:` line, and that is a **refusal
+  before anything is compiled**, naming both the re-cut command and the flag.
 - Compiling the 187 modules takes 8.2 s wall (47.6 s CPU, `-j16` on a
   16-core macOS arm64) with no failure and no warning, and a plain
   `hermes-node` build does not pay it: the archive reaches only
@@ -2101,31 +2092,30 @@ plan `docs/superpowers/plans/2026-10-08-native-wasm.md`, progress
 `docs/superpowers/plans/progress-native-wasm.md`.
 
 - **The bytes come from the recording run, so this is two steps.**
-  `--record-wasm` sees every module the program hands to
-  `WebAssembly` -- bytes decoded from a string inside a JavaScript file (the
-  common npm shape: hermes-parser holds its module as a string literal) as
-  well as bytes read from a `.wasm` file -- and record format v2 carries
-  them (see "Baked Wasm entries" above). Nothing static could: the producer
-  never runs the program. In `build-native`, `--bake-wasm=<rec>`
-  (repeatable) therefore means **compile natively**: each recorded module is
-  written to `<tmp>/w<hex>.wasm`, compiled by `shermes -emit-c
-  --exported-unit=w<hex>` and `cc -x c -c` as a job in the same pool, under
-  the same `--jobs`, as the JavaScript units, and linked beside them. The
-  unit name is `w` plus the 64 lowercase hex digits of SHA-256 over the
-  module bytes **alone**, so one module recorded under two configurations,
-  or in two `--bake-wasm` files, is one unit and one `wasm: native` line.
-  The container gets **no** bytecode entry for it,
-  since a native hit never reads one. The producer prints `wasm: native
-  <first 16 hex digits> (<n> bytes)` per module, on stdout, so what was
+  `--record-wasm` sees every module the program hands to `WebAssembly` --
+  bytes decoded from a string inside a JavaScript file (the common npm shape:
+  hermes-parser holds its module as a string literal) as well as bytes read
+  from a `.wasm` file -- and record format v2 carries them (see "Baked Wasm
+  entries" above). Nothing static could: the producer never runs the program.
+  In `build-native`, `--bake-wasm=<rec>` (repeatable) therefore means
+  **compile natively**: each recorded module is written to
+  `<tmp>/w<hex>.wasm`, compiled by `shermes -emit-c --exported-unit=w<hex>`
+  and `cc -x c -c` as a job in the same pool, under the same `--jobs`, as the
+  JavaScript units, and linked beside them. The unit name is `w` plus the 64
+  lowercase hex digits of SHA-256 over the module bytes **alone**, so one
+  module recorded under two configurations, or in two `--bake-wasm` files, is
+  one unit and one `wasm: native` line. The container gets **no** bytecode
+  entry for it, since a native hit never reads one. The producer prints `wasm:
+  native <first 16 hex digits> (<n> bytes)` per module, on stdout, so what was
   compiled natively is visible at build time. A **v1** recording carries no
   module bytes and is refused first thing in `buildNativeExecutable`, before
-  the kit is read, naming both ways out: re-record, or `--bytecode-wasm`.
-  The bake step re-hashes each module's bytes and refuses the build when
-  they do not match the digest recorded beside them, naming the file and the
-  digest: the unit is registered under that digest, so a file altered after
-  it was written would otherwise yield a unit served for a module it was not
-  compiled from. A build-time check only -- `--build-bundle --bake-wasm`
-  never reads the module bytes, and nothing on the run path hashes them.
+  the kit is read, naming both ways out: re-record, or `--bytecode-wasm`. The
+  bake step re-hashes each module's bytes and refuses the build when they do
+  not match the digest recorded beside them, naming the file and the digest:
+  the unit is registered under that digest, so a file altered after it was
+  written would otherwise yield a unit served for a module it was not compiled
+  from. A build-time check only -- `--build-bundle --bake-wasm` never reads
+  the module bytes, and nothing on the run path hashes them.
 - **`--bytecode-wasm` is the opt-out**, mirroring `--bytecode-builtins` and
   independent of it: the recording's bytecode entries are baked into the
   container as `--build-bundle --bake-wasm` bakes them, nothing is compiled
@@ -2133,7 +2123,7 @@ plan `docs/superpowers/plans/2026-10-08-native-wasm.md`, progress
   separates a fault in native Wasm codegen from anything else, and the way
   to ship when a module will not compile. `test/build-native-wasm.js` runs
   under it, because what that test pins -- caching and baking inside a
-  native artifact -- is now the opt-out's behaviour.
+  native artifact -- is the opt-out's behaviour.
 - **A plain `new WebAssembly.Module(bytes)` reaches the unit through a Hermes
   hook**, so every entry point -- `new Module`, `compile`, `instantiate` over
   bytes -- takes it with no JavaScript change. `cacheLookupNative`
@@ -2215,7 +2205,7 @@ plan `docs/superpowers/plans/2026-10-08-native-wasm.md`, progress
   from -- and the message names the digest, the failing command and
   `--bytecode-wasm`. A `shermes` built without Wasm support takes the same
   path: there is no probe, it refuses `.wasm` input itself.
-- **The Hermes side is three changes, and all three are public ABI.**
+- **The Hermes side is four changes, three of them public ABI.**
   `hermes_wasm_cache_callbacks` gains `lookup_native` and `accepted` (see
   "Wasm entries" under Compile Cache for the `struct_size` rule). A Wasm
   unit's static registration, `SHWasmUnitReg`, carries the codegen
@@ -2260,19 +2250,22 @@ plan `docs/superpowers/plans/2026-10-08-native-wasm.md`, progress
   -- essentially all of it one `cc` process on the 32.7 MB of C `shermes`
   generates from that module, which `--jobs` cannot split. A cold run over
   the example's small input is 55.4 ms against 57.4 ms, and over a
-  316,194-byte input 719.0 ms against 944.6 ms. The rest, with the commands,
-  is in the progress file.
+  316,194-byte input 719.0 ms against 944.6 ms -- but that input prints
+  31,705,430 bytes of JSON, identical from both artifacts, so a good part of
+  either figure is `JSON.stringify` rather than the parse, and the gap is not
+  a measure of the parse alone. The rest, with the commands, is in the
+  progress file.
 - Tests: `test/build-native-wasm-native.js` (record, build, run with the
   source tree gone: `wasm native hit`, no store, no container lookup, no
-  warning), `test/build-native-wasm-fallback.js` (an unrecorded module and
-  a feature-detection probe, cold and with a warm disk cache; the
-  intermediate container, kept with `--keep-temp`, carrying no bytecode for
-  the native module; and `--bytecode-wasm`), `test/build-native-wasm-entry.js` (every entry point,
-  and a recording made entirely from a warm disk cache),
-  `test/build-native-wasm-test262.js` (baked and overridden `-test262`
-  both ways), `test/build-native-wasm-tampered.js` (a recording whose module
-  bytes no longer match their digest), `test/test-wasm-record-v2.js` (v2 recordings through
-  `--build-bundle` and `--build-exe`), the v1 refusal in
+  warning), `test/build-native-wasm-fallback.js` (an unrecorded module and a
+  feature-detection probe, cold and with a warm disk cache; the intermediate
+  container, kept with `--keep-temp`, carrying no bytecode for the native
+  module; and `--bytecode-wasm`), `test/build-native-wasm-entry.js` (every
+  entry point, and a recording made entirely from a warm disk cache),
+  `test/build-native-wasm-test262.js` (baked and overridden `-test262` both
+  ways), `test/build-native-wasm-tampered.js` (a recording whose module bytes
+  no longer match their digest), `test/test-wasm-record-v2.js` (v2 recordings
+  through `--build-bundle` and `--build-exe`), the v1 refusal in
   `test/build-native-errors.js`, and `test/build-native-wasm.js` under
   `--bytecode-wasm`; plus `WasmRecordTest`, the commit-boundary cases in
   `CompileCacheRunTest`, and the Wasm cases in `BuildNativeTest`,

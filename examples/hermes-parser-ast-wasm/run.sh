@@ -20,9 +20,11 @@
 #
 # The first and third look alike from outside and are not alike inside: this
 # one carries a 665 KB wasm module, base64-encoded inside an ordinary
-# JavaScript file, which hermes-node compiles to Hermes bytecode at run time.
-# So the bundle is one file the way the pure-JavaScript one is, while the
-# thing doing the parsing is the same C++ that the native addon runs.
+# JavaScript file. From disk and from the bundle, hermes-node compiles that
+# module to Hermes bytecode at run time; a build-native executable has it
+# compiled to native code at build time instead, from a recording. So the
+# bundle is one file the way the pure-JavaScript one is, while the thing
+# doing the parsing is the same C++ that the native addon runs.
 #
 # When the sibling hermes-parser-ast example is installed too, the last
 # check compares the two parsers' output directly. That is the assertion
