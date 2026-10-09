@@ -1,8 +1,10 @@
 # hermes-parser-ast-wasm
 
 Parses a file with the WebAssembly build of the Hermes parser
-(`hermes-parser`) and prints its ESTree AST as JSON, run from disk and then
-from an AOT bundle.
+(`hermes-parser`) and prints its ESTree AST as JSON, run four ways: from
+disk, from an AOT bundle, as a `build-native` executable whose WebAssembly
+module is compiled to native code, and -- when the sibling example is
+installed -- against the native addon build of the same parser.
 
 ```sh
 npm install
@@ -48,6 +50,36 @@ afterwards. `run.sh` asserts the difference rather than describing it --
 that the output directory holds exactly one file, and that the container
 records no native addons.
 
+## The native build
+
+`run.sh` also builds the program with `hermes-node build-native`, when the
+build directory has a kit with `shermes` in it, and skips that arm
+otherwise. It is two steps, because the producer never runs the program and
+so cannot see the module: hermes-parser decodes it from a string at run
+time. A recording run sees it:
+
+```sh
+mkdir -p out-native
+hermes-node --no-compile-cache --record-wasm=out-native/ast.wasmrec ast.js sample.js
+hermes-node build-native ast.js -o out-native/ast \
+  --bake-wasm=out-native/ast.wasmrec --kit=<build dir>/kit
+```
+
+The build compiles the recorded module with `shermes` and prints one
+`wasm: native <digest> (768303 bytes)` line for it. `run.sh` then runs the
+executable with `node_modules` moved away and the compile cache off, and
+checks three things: the AST is byte-identical to the unbundled run, the
+module was served by its native unit (`wasm native hit` under
+`HERMES_NODE_DEBUG_NATIVE=COMPILE_CACHE`), and nothing warned -- a warning
+there would be the artifact saying it fell back to bytecode.
+
+This arm is slow to build: the module becomes about 33 MB of C, and `cc`
+spends a few minutes on it, alone, at the kit's optimization level.
+`--bytecode-wasm` builds the same artifact with the module baked as
+bytecode instead. The progress file
+`docs/superpowers/plans/progress-native-wasm.md` has the measured sizes and
+times of both.
+
 ## The cross-check
 
 When `examples/hermes-parser-ast` is also installed, `run.sh` finishes by
@@ -65,9 +97,10 @@ that directory's README, the short version being that the wasm binary
 carries a serializer fix that npm's 0.37.0 predates and that this
 repository's `hermes/` submodule does not have either.
 
-The parse itself is not fast. Compiling the module costs several seconds on
-the first `parse()` call, because Hermes compiles wasm ahead of time to
-bytecode rather than tiering it up lazily, and nothing caches the result
-between runs. That is a real property of running wasm here and this example
-is a good place to notice it; the native sibling is the comparison that
-makes it legible.
+The parse itself is not fast from disk. Compiling the module costs several
+seconds on the first `parse()` call, because Hermes compiles wasm ahead of
+time to bytecode rather than tiering it up lazily. The disk compile cache
+removes that cost from the second run on, and the `build-native` executable
+never pays it, because its module is already native code. That is a real
+property of running wasm here and this example is a good place to notice
+it; the native sibling is the comparison that makes it legible.
