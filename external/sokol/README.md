@@ -12,16 +12,17 @@ API wrapper (`sokol_gfx.h`). The UI compositor is built on them -- see
 `sokol/` is untouched upstream source, per this repo's `external/$lib/$lib`
 convention; this directory holds only the wrapper CMake and this file.
 
-## Why only five files
+## Why only six files
 
 Upstream is a collection of independent single-file headers, not a library
 with a build. Vendoring the whole repository would bring in a dozen headers
 nothing here includes (audio, fetch, time, debug UI, ...), each of which
 would then be a file a future reader has to check for local edits. So the
 vendored set is the part of Sokol this compositor is built on, and it grows
-a file at a time.
+a file at a time. Upstream's directory layout is kept (`util/` for the
+utility headers), so a re-sync is the same relative path on both sides.
 
-Two of the five are here ahead of their first `#include`: nothing yet
+Two of the six are here ahead of their first `#include`: nothing yet
 includes `sokol_glue.h` or `sokol_log.h`. They are vendored now because
 they belong to this pin and to the presenting path being built out around
 it -- fetching them later from a different commit is exactly the drift the
@@ -33,12 +34,14 @@ pin exists to prevent.
 | `sokol_app.h` | Window and event loop; the main thread's. |
 | `sokol_glue.h` | `sapp_*` -> `sg_*` translation for the presenting instance. |
 | `sokol_log.h` | Reference logger. Used as the *shape* of ours, not called directly -- ours terminates on a panic item (spec: "Failure splits in two"). |
+| `util/sokol_gl.h` | OpenGL 1.x-style immediate drawing on top of `sokol_gfx`. Not used by the compositor itself: the reference addon (`test/fixtures/hnui-demo/demo_visual.c`) compiles its implementation in, against the `sg_*` symbols the host exports, to draw its triangle -- which is also the check that the host's `sg_setup` environment suits a stock Sokol renderer. |
 | `LICENSE` | Required by the license itself. |
 
 ## Re-syncing to a new pin
 
 ```bash
-for f in LICENSE sokol_app.h sokol_gfx.h sokol_glue.h sokol_log.h; do
+for f in LICENSE sokol_app.h sokol_gfx.h sokol_glue.h sokol_log.h \
+         util/sokol_gl.h; do
   curl -sS -o external/sokol/sokol/$f \
     https://raw.githubusercontent.com/floooh/sokol/<new-sha>/$f
 done
@@ -76,6 +79,7 @@ edc40eb40e16a6d79017c27de9d3e5fed5480a1f843618d3befebe172fc6c6e4  sokol_app.h
 94719c2c6cf2b64ef2f60b14868c392b26c547de75e45ab3e3a57afbf0c799a1  sokol_gfx.h
 6207d08f7ea5da43154f980c7fe314429eafb75922c6b41108ce2936f8240753  sokol_glue.h
 a8d55de21694410740e752ea8e57c4103d5951d20339ba9712e24232adef9a42  sokol_log.h
+5d85b5ee5edcb2c00d4de304e37d1834f4eb0a7cafbf56a05ba907583558cee3  util/sokol_gl.h
 ```
 
 ## Two copies of `sokol_gfx`
