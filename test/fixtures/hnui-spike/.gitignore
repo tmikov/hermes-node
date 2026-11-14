@@ -1,0 +1,4 @@
+# Build output from the hardware probe; see
+# docs/notes/2026-09-21-linux-hardware-spike-instructions.md
+glx_share
+*.o
