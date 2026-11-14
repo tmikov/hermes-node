@@ -10,6 +10,7 @@
 
 #include <hermes/node-compat/compositor/surface_table.h>
 
+#include <cstdint>
 #include <mutex>
 #include <optional>
 
@@ -137,6 +138,48 @@ class TickMachine {
   ///   frame is treated as dropped and the caller must reclaim() the slot.
   bool publishFrame(SurfaceTable &table, SurfaceRef ref);
 
+  /// The publication id of the frame that has been published and not yet
+  /// taken, or of the last one published if it has been. **0 before
+  /// anything has ever been published**, and ids start at 1.
+  ///
+  /// **Why this counter exists, and why it is not a GenerationId** (spec:
+  /// "Testing": capture "is keyed to a publication id and acknowledged,
+  /// never to an absolute frame number, because blits can precede any
+  /// publication"). A generation spans many publications, so two
+  /// publications of the same generation drawn from the same input state
+  /// are otherwise indistinguishable -- and a **re-blit of the
+  /// still-presenting surface**, which is no publication at all, would
+  /// report a tuple identical to the publication it is re-showing. A
+  /// capture keyed without this field would be satisfied by that re-blit,
+  /// which is a picture of the previous frame answering a request for the
+  /// next one.
+  ///
+  /// **Here rather than in `SurfaceTable`, and starting at 1, for the same
+  /// reason its generation ids do.** `publishFrame()`'s success branch is
+  /// the one point at which a publication is linearized -- it runs under
+  /// the table's lock and this machine's, and is the only transition into
+  /// kPublishedAwaitingTake -- so a counter incremented there cannot count
+  /// a publication that did not happen or miss one that did. Starting at 1
+  /// keeps 0 meaning "never", so a caller that forgets to propagate the id
+  /// compares 0 against 0, and that is a wiring bug that shows up as a
+  /// capture matching everything rather than as a silent pass.
+  uint64_t readyPublicationId() const;
+
+  /// The publication id of the frame the presenter is **showing**: the one
+  /// assigned to the publication that the last successful `takeFrame()`
+  /// returned. 0 before any take.
+  ///
+  /// A `takeFrame()` that finds nothing ready leaves this alone, which is
+  /// exactly what makes the re-blit case above work: the presenter keeps
+  /// re-showing the same surface and keeps reporting the same id, so a
+  /// request naming the *next* publication does not match until that
+  /// publication actually happens.
+  ///
+  /// Reports the id this machine assigned, so it is meaningful only where
+  /// this machine is the thing that publishes into \p table -- which is
+  /// the arrangement the compositor has (one producer, one machine).
+  uint64_t presentingPublicationId() const;
+
   /// Take the ready surface and record the transition, likewise in one
   /// critical section. Empty when no frame is ready, which leaves the
   /// machine's state alone: the producer has not published yet, and the next
@@ -155,6 +198,12 @@ class TickMachine {
   /// One bit rather than a count: requests coalesce.
   bool pending_ = false;
   bool minimized_ = false;
+  /// Monotonic; the source of the two ids below. Incremented in exactly
+  /// one place -- publishFrame()'s success branch -- so that the id and
+  /// the publication cannot get out of step. See readyPublicationId().
+  uint64_t publicationCounter_ = 0;
+  uint64_t readyPublicationId_ = 0;
+  uint64_t presentingPublicationId_ = 0;
 };
 
 } // namespace node_compat

@@ -75,6 +75,29 @@ class UiHost {
   /// finished (a no-op then: run() has nothing left to wait for).
   void requestWindow();
 
+  /// What run() calls, on this (the platform) thread, when the window half
+  /// of its predicate comes back true. Returns a process exit code; on
+  /// macOS it will never return at all, because `sapp_run()` there is
+  /// `[NSApp run]`.
+  using WindowRunner = int (*)();
+
+  /// Install the window runner. Called by main() before run(), and only in
+  /// a build that has one -- Task 8's `uiRunPlatformLoop()`.
+  ///
+  /// **A function pointer rather than a direct call**, and that is a build
+  /// constraint rather than a taste: `uiRunPlatformLoop()` lives in
+  /// `ui_module.cpp`, which is compiled into the hermes-node-ui executable
+  /// and not into `hermesNodeUiHost`. `unittests/UiHostTest.cpp` links that
+  /// library, so a direct call from here would leave the test with an
+  /// undefined symbol -- and satisfying it would mean dragging sokol_app,
+  /// a GL backend and the X11 libraries into a GTest whose whole subject is
+  /// a condition-variable predicate.
+  ///
+  /// Unset is a supported state, not a missing case: a build without window
+  /// support (macOS until Task 16) leaves it null, and run() then reports
+  /// and terminates exactly as it did before Task 8.
+  void setWindowRunner(WindowRunner runner);
+
  private:
   static void jsThreadMain(void *arg);
 
@@ -88,6 +111,11 @@ class UiHost {
   int runtimeExitCode_ = 0;
 
   uv_thread_t jsThread_{};
+
+  /// Null in a build with no window support. Written by main() before the
+  /// JS thread starts and read by run() on the same thread, so it needs no
+  /// synchronisation of its own.
+  WindowRunner windowRunner_ = nullptr;
 };
 
 } // namespace node_compat

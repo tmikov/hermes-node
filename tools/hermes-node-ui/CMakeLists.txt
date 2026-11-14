@@ -39,3 +39,70 @@ target_link_libraries(hermes-node-ui hermesNodeUiHost)
 # hermesNodeRuntime, and both need a dlopen'd addon to resolve the same NAPI
 # surface, so the two link recipes must not be allowed to drift apart.
 hermes_node_link_setup(hermes-node-ui)
+
+# main.cpp builds an EmbedderModule entry, which needs the NAPI declarations
+# hermesNodeRuntime keeps PRIVATE (lib/runtime/CMakeLists.txt). Same line,
+# and the same reason, as tools/hermes-node/CMakeLists.txt.
+#
+# OUTSIDE the backend guard below, where it used to live: main.cpp registers
+# `hermes-node:ui` in every build now, and so the no-window module that
+# answers for it needs these declarations too.
+target_include_directories(hermes-node-ui PRIVATE
+  ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi
+)
+
+# Window support, when a GPU backend was built for this platform.
+#
+# if(TARGET ...) rather than if(HERMES_NODE_ENABLE_UI): lib/compositor-gpu
+# returns early where there is no backend yet -- macOS until Task 16 -- and
+# there the option is on while this target does not exist. Without window
+# support hermes-node-ui keeps exactly the behaviour Task 6 gave it, which
+# is a real, tested configuration rather than a degraded one: a script that
+# never asks for a window runs to completion either way.
+#
+# ui_module.cpp holds both halves of the window -- the NAPI surface the JS
+# thread calls and the sokol_app callbacks the platform thread runs -- and
+# sokol_app_impl.cpp is the single compilation of sokol_app's
+# implementation. Both go into the EXECUTABLE rather than into
+# hermesNodeUiHost, deliberately: that library is what unittests/
+# UiHostTest.cpp links, and pulling sokol_app and a GL backend into a GTest
+# that only exercises a condition-variable predicate would make the test
+# need a display to link. UiHost reaches the window through a function
+# pointer main() sets (see setWindowRunner) precisely so that stays true.
+if(TARGET hermesNodeCompositorGpu)
+  # hnui_api.cpp implements the public C entry points an addon calls. It
+  # lives in the EXECUTABLE rather than in a library for the reason the
+  # comment above gives for ui_module.cpp -- and for one of its own: the
+  # symbols are exported from this binary (hermes_node_link_setup's
+  # -rdynamic) so a dlopen'd addon resolves them, which only works if they
+  # are linked into the binary rather than left in an archive member
+  # nothing references.
+  target_sources(hermes-node-ui PRIVATE
+    ui_module.cpp
+    hnui_api.cpp
+    sokol_app_impl.cpp
+  )
+  # Plain signature, matching the call above -- CMake refuses to mix plain
+  # and keyword forms on one target, and hermes_node_link_setup() already
+  # links this one plainly.
+  target_link_libraries(hermes-node-ui hermesNodeCompositorGpu)
+  # Guards the window half of main.cpp and ui_host.cpp. A compile
+  # definition rather than a bare reliance on the CMake option, for the
+  # reason tools/hermes-node/CMakeLists.txt gives for its own: the option
+  # decides what gets built, and this decides what a particular source file
+  # compiles, which on a platform without a backend are different answers.
+  target_compile_definitions(hermes-node-ui PRIVATE HERMES_NODE_UI_HAVE_WINDOW)
+else()
+  # No GPU backend for this platform (macOS until Task 16). The module is
+  # registered there too -- see main.cpp -- so something has to implement
+  # it, and this is that: a createWindow that rejects with the sentence
+  # UiHost::run() prints, rather than a `hermes-node:ui` that cannot be
+  # required at all. MODULE_NOT_FOUND is indistinguishable from a misspelled
+  # module name, which is what this configuration used to produce.
+  #
+  # Compiled ONLY here, so a Linux build never sees it: after touching it,
+  # check it by hand with
+  #   clang++ -fsyntax-only -Iinclude -Ihermes/include/hermes/napi \
+  #       -Itools/hermes-node-ui tools/hermes-node-ui/ui_module_nowindow.cpp
+  target_sources(hermes-node-ui PRIVATE ui_module_nowindow.cpp)
+endif()

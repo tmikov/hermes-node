@@ -136,14 +136,33 @@ if(HERMES_NODE_ENABLE_UI)
   # build notices a C++-only construct creeping into that header. Its C
   # standard is set independently of HnuiAbiTest.cpp's C++17, which
   # CXX_STANDARD below leaves untouched.
+  # sokol is an INTERFACE target carrying one include path, added at the
+  # top level before this directory. Linking it here is what lets
+  # HnuiAbiTest.cpp include sokol_gfx.h's declarations and assert
+  # hnui_gpu_view against the real sg_view on EVERY platform the UI option
+  # is on for -- including macOS, where lib/compositor-gpu (and so the
+  # RULING 45 copy of those asserts) is not built at all. See RULING 46 and
+  # the comment at those assertions.
   add_node_compat_unittest(HnuiAbiTest HnuiAbiTest.cpp HnuiAbiCProbe.c)
-  target_link_libraries(HnuiAbiTest hermesNodeCompositor)
+  target_link_libraries(HnuiAbiTest hermesNodeCompositor sokol)
   set_target_properties(HnuiAbiTest PROPERTIES
     C_STANDARD 99
     C_STANDARD_REQUIRED ON
     C_EXTENSIONS OFF
   )
   set_source_files_properties(HnuiAbiCProbe.c PROPERTIES COMPILE_OPTIONS "-pedantic")
+
+  # test_hooks.{h,cpp} (lib/compositor-gpu/, Task 9) has no GL or X11
+  # dependency of its own -- it only touches SurfaceTable and UiEvent -- but
+  # it is compiled into hermesNodeCompositorGpu, which is Linux-only until
+  # Task 16's Metal backend (see that directory's CMakeLists.txt). Guarded
+  # the same way tools/hermes-node-ui/CMakeLists.txt guards its own window
+  # sources: if(TARGET ...), not if(HERMES_NODE_ENABLE_UI), because the
+  # option is on while this target does not exist on macOS.
+  if(TARGET hermesNodeCompositorGpu)
+    add_node_compat_unittest(TestHooksTest TestHooksTest.cpp)
+    target_link_libraries(TestHooksTest hermesNodeCompositorGpu)
+  endif()
 endif()
 
 add_subdirectory(HermesParserNative)

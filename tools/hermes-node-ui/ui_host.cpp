@@ -80,6 +80,10 @@ void UiHost::jsThreadMain(void *arg) {
   uv_cond_signal(&self->cond_);
 }
 
+void UiHost::setWindowRunner(WindowRunner runner) {
+  windowRunner_ = runner;
+}
+
 void UiHost::requestWindow() {
   uv_mutex_lock(&mutex_);
   windowRequested_ = true;
@@ -120,11 +124,39 @@ int UiHost::run() {
   uv_mutex_unlock(&mutex_);
 
   if (windowRequested && !runtimeFinished) {
-    // Nothing can reach this branch in this build: requestWindow() has no
-    // caller until a future task's NAPI addon exists (Task 8+). Documented
-    // rather than silently falling through to the windowless join below,
-    // which would report the runtime's eventual exit code as the answer to
-    // a window request nothing ever serviced.
+    if (windowRunner_ != nullptr) {
+      // The platform thread now belongs to the windowing system. On Linux
+      // this returns when the window closes; on macOS it never returns.
+      //
+      // Its exit code is deliberately NOT what this function reports. Two
+      // reasons, and they point the same way: the program's own
+      // process.exitCode reconciliation lives in runHermesNode() (CLAUDE.md,
+      // Bootstrap Sequence) and must not be re-derived here, and every path
+      // that ends a UI process normally goes through process.exit() on the
+      // JS thread, which _exit()s before this line is reached. So the
+      // runner's value matters only on the paths where the JS thread is
+      // still running and will answer for itself.
+      windowRunner_();
+
+      // Orderly shutdown of the JS thread after the window is gone --
+      // CLOSING, the pre-cleanup lifecycle hook that closes the UI handle
+      // so UvEventLoop::close() can finish -- is Task 15. Until it exists
+      // this join is what keeps the process alive long enough for the JS
+      // thread to observe a rejected createWindow and exit with its own
+      // status, which is the one path through here that this build
+      // actually exercises.
+      uv_thread_join(&jsThread_);
+      uv_mutex_lock(&mutex_);
+      const int exitCode = runtimeExitCode_;
+      uv_mutex_unlock(&mutex_);
+      return exitCode;
+    }
+
+    // No window runner: a build without window support (macOS until Task
+    // 16 lands the Metal backend). Reported rather than silently falling
+    // through to the windowless join below, which would report the
+    // runtime's eventual exit code as the answer to a window request
+    // nothing ever serviced.
     //
     // This does NOT join jsThread_ first. A joinable JS thread here is, by
     // definition, one still waiting for a window this build cannot create

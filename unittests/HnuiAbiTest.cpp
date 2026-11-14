@@ -9,9 +9,17 @@
 #include <hermes/node-compat/compositor/hnui_event_convert.h>
 #include <hermes/node-compat/ui/hnui_abi.h>
 
+// Declarations only -- no SOKOL_GFX_IMPL, and deliberately no backend
+// define either. sokol_gfx.h's "pick a backend" #error lives inside
+// `#ifdef SOKOL_GFX_IMPL`, so the declaration half compiles anywhere, which
+// is what lets this TU carry the ABI checks below on EVERY platform that
+// builds the UI rather than only on the ones with a GPU backend.
+#include <sokol_gfx.h>
+
 #include "gtest/gtest.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <set>
 #include <type_traits>
 #include <utility>
@@ -43,6 +51,71 @@ static_assert(
     "hnui_event::type must be declared int32_t, not hnui_event_type -- a "
     "struct read at fixed byte offsets cannot depend on an enum's "
     "implementation-defined underlying-type width");
+
+//===========================================================================
+// RULING 46: hnui_gpu_view really is sg_view -- checked on EVERY platform
+// that builds the UI, not just the ones with a GPU backend.
+//===========================================================================
+//
+// The same assertions live in lib/compositor-gpu/gl_backend.cpp, where
+// RULING 45 first put them, and they are duplicated here rather than moved
+// for a reason worth stating: that file is built ONLY where a GL backend
+// is (Linux in v1), while HERMES_NODE_ENABLE_UI is turned on for macOS as
+// well -- CI does exactly that. So on macOS the Ruling 45 copy is not
+// compiled at all, and `hnui_gpu_view` would go unchecked against the real
+// `sg_view` until Task 16 lands a Metal backend.
+//
+// This translation unit has no such restriction: unittests/CMakeLists.txt
+// builds it under plain `if(HERMES_NODE_ENABLE_UI)`, and `sokol_gfx.h`'s
+// declarations need no backend. Keeping both copies costs nothing and buys
+// locality where the handles are actually used; this one buys coverage
+// today instead of after Task 16.
+static_assert(
+    sizeof(hnui_gpu_view) == sizeof(sg_view),
+    "hnui_gpu_view must be the same size as Sokol's sg_view: hnui_target "
+    "carries Sokol view handles across the C ABI and addons convert between "
+    "the two by value.");
+
+static_assert(
+    alignof(hnui_gpu_view) == alignof(sg_view),
+    "hnui_gpu_view and sg_view must have the same alignment, or they "
+    "disagree about where they sit inside any struct that embeds them.");
+
+static_assert(
+    offsetof(hnui_gpu_view, id) == offsetof(sg_view, id),
+    "hnui_gpu_view::id must sit at the same offset as sg_view::id.");
+
+static_assert(
+    sizeof(hnui_gpu_view::id) == sizeof(sg_view::id),
+    "hnui_gpu_view::id and sg_view::id must be the same width.");
+
+static_assert(
+    static_cast<long long>(_SG_PIXELFORMAT_FORCE_U32) ==
+        static_cast<long long>(INT32_MAX),
+    "sg_pixel_format's terminator is no longer INT32_MAX, so its values may "
+    "no longer fit in hnui_target::color_format's int32_t. Widening that "
+    "field is an ABI break (HNUI_ABI_VERSION).");
+
+// The static_asserts above fail the BUILD, which is the strongest form this
+// pin can take. This test exists alongside them so the property also has a
+// name in the run output -- a build that silently stopped compiling these
+// (the header dropped, the target unlinked from sokol) would otherwise
+// leave nothing behind that says the check used to happen.
+TEST(HnuiSokolAbi, GpuViewMatchesSokolsRealView) {
+  EXPECT_EQ(sizeof(hnui_gpu_view), sizeof(sg_view));
+  EXPECT_EQ(alignof(hnui_gpu_view), alignof(sg_view));
+  EXPECT_EQ(offsetof(hnui_gpu_view, id), offsetof(sg_view, id));
+  EXPECT_EQ(sizeof(hnui_gpu_view::id), sizeof(sg_view::id));
+
+  // The conversion hnui_abi.h tells addons to use: by value, never a
+  // pointer cast. Exercised rather than described, so that a layout the
+  // asserts somehow admitted would still have to carry a value correctly.
+  sg_view fromSokol;
+  fromSokol.id = 4242u;
+  hnui_gpu_view toAbi;
+  toAbi.id = fromSokol.id;
+  EXPECT_EQ(toAbi.id, 4242u);
+}
 
 // No test in this file can block: every one of them is a plain
 // construction-and-assertion over POD data, with no lock, no thread and no

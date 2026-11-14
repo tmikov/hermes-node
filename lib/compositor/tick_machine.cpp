@@ -94,6 +94,16 @@ TickState TickMachine::state() const {
   return state_;
 }
 
+uint64_t TickMachine::readyPublicationId() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return readyPublicationId_;
+}
+
+uint64_t TickMachine::presentingPublicationId() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return presentingPublicationId_;
+}
+
 bool TickMachine::publishFrame(SurfaceTable &table, SurfaceRef ref) {
   // One critical section for both halves. See the header: splitting these is
   // precisely the defect the composed entry point exists to prevent.
@@ -107,6 +117,13 @@ bool TickMachine::publishFrame(SurfaceTable &table, SurfaceRef ref) {
       // The successful publication is the linearization point: from here the
       // frame belongs to the presenter until it takes it.
       state_ = TickState::kPublishedAwaitingTake;
+      // And it is therefore also the one place a publication id may be
+      // assigned (see readyPublicationId()). Both locks are held here --
+      // the table's, taken by withLock() above, and this machine's -- so
+      // the id and the state move together with the publication itself.
+      // Ids start at 1, leaving 0 to mean "nothing has ever been
+      // published".
+      readyPublicationId_ = ++publicationCounter_;
     } else if (state_ == TickState::kGpuPending) {
       // Refused -- retired generation, or the window is closing. The frame is
       // over, exactly as for publicationDropped().
@@ -127,6 +144,12 @@ std::optional<SurfaceRef> TickMachine::takeFrame(SurfaceTable &table) {
           // frame this machine is not tracking.
           if (state_ == TickState::kPublishedAwaitingTake)
             state_ = TickState::kIdle;
+          // The taken frame is now the presenting one, so its publication
+          // id is what the presenter reports for every frame it shows --
+          // including the re-blits that follow, which take nothing and so
+          // leave this untouched. That is the whole point of the field:
+          // see readyPublicationId().
+          presentingPublicationId_ = readyPublicationId_;
         }
         // Nothing ready: the producer has not published yet. The state is
         // deliberately left alone -- the next frame callback finds the frame.

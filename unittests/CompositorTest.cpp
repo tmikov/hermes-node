@@ -1508,6 +1508,128 @@ TEST(TickMachineTest, PublishFrameUpdatesTheMachineWithinTheTablesTransaction) {
 // kGpuPending; fails deterministically, with no threads involved.
 
 //===========================================================================
+// Publication ids (spec "Testing"; plan Ruling 49)
+//
+// Capture is keyed to a publication id, never to a frame number, "because
+// blits can precede any publication". These three tests are what stop that
+// key from shipping as a constant zero -- the failure mode being silent,
+// since 0 == 0 matches and every capture test stays green.
+//===========================================================================
+
+TEST(TickMachineTest, PublicationIdsStartAtOneAndAdvanceOncePerPublication) {
+  SurfaceTable table([](GenerationId) {});
+  table.newGeneration(64, 64);
+  TickMachine m;
+
+  // Nothing published yet. Zero is reserved for exactly this, so that a
+  // caller who forgets to propagate the id is comparing "never" against
+  // "never" rather than a real value against itself.
+  EXPECT_EQ(m.readyPublicationId(), 0u);
+  EXPECT_EQ(m.presentingPublicationId(), 0u);
+
+  for (uint64_t expected = 1; expected <= 3; ++expected) {
+    m.requestFrame();
+    ASSERT_TRUE(m.shouldSendTick(true));
+    m.beginCallbacks();
+    m.endCallbacksDrew(true);
+    SurfaceRef ref = mustAcquire(table);
+    ASSERT_TRUE(m.publishFrame(table, ref));
+    EXPECT_EQ(m.readyPublicationId(), expected)
+        << "ids must advance by exactly one per successful publication";
+    ASSERT_TRUE(m.takeFrame(table).has_value());
+  }
+}
+// Mutation: start the counter so the first id is 0 (readyPublicationId_ =
+// publicationCounter_++), or stop incrementing it altogether. Either fails
+// the first iteration.
+
+TEST(TickMachineTest, ARefusedPublicationAssignsNoPublicationId) {
+  // The id is assigned in publishFrame's SUCCESS branch only. A refused
+  // publication -- here, one against a generation that has retired -- is
+  // not a publication, and must not consume an id: if it did, the next
+  // real publication would be numbered for a frame nobody can ever see.
+  SurfaceTable table([](GenerationId) {});
+  table.newGeneration(64, 64);
+  TickMachine m;
+
+  m.requestFrame();
+  ASSERT_TRUE(m.shouldSendTick(true));
+  m.beginCallbacks();
+  m.endCallbacksDrew(true);
+  SurfaceRef ref = mustAcquire(table);
+  table.newGeneration(64, 64); // retires ref's generation
+
+  EXPECT_FALSE(m.publishFrame(table, ref));
+  EXPECT_EQ(m.readyPublicationId(), 0u)
+      << "a refused publication must not have been given an id";
+  table.reclaim(ref);
+
+  // And the next real one is still id 1, not 2.
+  m.requestFrame();
+  ASSERT_TRUE(m.shouldSendTick(true));
+  m.beginCallbacks();
+  m.endCallbacksDrew(true);
+  SurfaceRef good = mustAcquire(table);
+  ASSERT_TRUE(m.publishFrame(table, good));
+  EXPECT_EQ(m.readyPublicationId(), 1u);
+}
+// Mutation: move the increment above publishFrame's `if (published)`, so
+// every attempt consumes an id. Both assertions fail.
+
+TEST(TickMachineTest, AReblitDoesNotSatisfyARequestForTheNextPublication) {
+  // **The case the field was added for** (spec: capture "is keyed to a
+  // publication id and acknowledged, never to an absolute frame number,
+  // because blits can precede any publication").
+  //
+  // The presenter re-blits the still-presenting surface on every frame
+  // callback, publication or not. Each of those frames reports the SAME
+  // publication id -- the one it is re-showing -- so a capture request
+  // naming the NEXT publication cannot be satisfied by any of them. This
+  // test is the unit-level half of that property; test/ui-present.js
+  // asserts it end to end, through the real presenter.
+  SurfaceTable table([](GenerationId) {});
+  table.newGeneration(64, 64);
+  TickMachine m;
+
+  m.requestFrame();
+  ASSERT_TRUE(m.shouldSendTick(true));
+  m.beginCallbacks();
+  m.endCallbacksDrew(true);
+  SurfaceRef first = mustAcquire(table);
+  ASSERT_TRUE(m.publishFrame(table, first));
+  ASSERT_TRUE(m.takeFrame(table).has_value());
+  ASSERT_EQ(m.presentingPublicationId(), 1u);
+
+  // Ten frame callbacks in which the producer published nothing. Each one
+  // takes nothing and re-blits what is already presenting.
+  for (int frame = 0; frame < 10; ++frame) {
+    EXPECT_FALSE(m.takeFrame(table).has_value());
+    EXPECT_EQ(m.presentingPublicationId(), 1u)
+        << "a re-blit shows the same publication and must keep reporting "
+           "its id -- frame "
+        << frame;
+    EXPECT_NE(m.presentingPublicationId(), 2u)
+        << "a re-blit must never answer for the next publication";
+  }
+
+  // Only a real publication, taken, advances what the presenter reports.
+  m.requestFrame();
+  ASSERT_TRUE(m.shouldSendTick(true));
+  m.beginCallbacks();
+  m.endCallbacksDrew(true);
+  SurfaceRef second = mustAcquire(table);
+  ASSERT_TRUE(m.publishFrame(table, second));
+  EXPECT_EQ(m.presentingPublicationId(), 1u)
+      << "published but not yet taken: the presenter is still showing the "
+         "first frame";
+  ASSERT_TRUE(m.takeFrame(table).has_value());
+  EXPECT_EQ(m.presentingPublicationId(), 2u);
+}
+// Mutation: assign presentingPublicationId_ unconditionally in takeFrame
+// (outside `if (taken)`), or set it from a frame counter incremented per
+// frame callback. The loop then reports a changing id for a re-blit.
+
+//===========================================================================
 // Channels
 //===========================================================================
 

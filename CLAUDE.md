@@ -1156,6 +1156,72 @@ plan `docs/superpowers/plans/2026-08-23-single-executable-plan.md`, progress
   feature list does not reach at all -- it links `hermesNodeBuildExe`, which
   is VM-free, and never runs a toolchain.
 
+## UI Compositor (`hermes-node-ui`)
+
+A second embedder binary in which `sokol_app` owns the process main thread
+and presents, while a spawned thread runs `runHermesNode()` and performs
+every drawing GPU call into offscreen surfaces handed back for presentation.
+Design `docs/superpowers/specs/2026-09-18-ui-compositor-design.md`, plan
+`docs/superpowers/plans/2026-09-21-ui-compositor.md`, progress
+`docs/superpowers/plans/progress-ui-compositor.md`. Slices A and B are done;
+C and D are not.
+
+- **All of it is behind `HERMES_NODE_ENABLE_UI`, default OFF.** As of the
+  embedder-module work that option is a real **preprocessor define**, not
+  just a switch deciding which subdirectories build — it was only the latter
+  until a task needed `--test-embedder-module` to be genuinely absent from a
+  binary built without it.
+- **`sg_*` calls happen only on the thread owning that instance's context.**
+  There is one `_sg` global per process, so `sokol_gfx` is compiled **twice**:
+  normally for the JS thread, and again under renamed `sgp_*` symbols for the
+  presenting thread. `utils/gen-sokol-rename.py` generates the renames and
+  `utils/check-sgp-isolation.py` proves the two objects share no symbols —
+  that check is load-bearing, because dropping the rename header from the
+  presenting TU still links and still builds, and only the symbol table shows
+  it.
+- **Four lit features, and the names mislead.** `ui-enabled` probes the
+  *plain* `hermes-node` binary for `--test-embedder-module` and really means
+  "the CMake option was compiled in" — it is the one that sounds like it
+  means the UI and is the one that does not. `ui` probes the separate
+  `hermes-node-ui` binary. `ui-gpu` is `ui-enabled` **and** a backend
+  platform, mirroring `if(NOT (UNIX AND NOT APPLE))` in
+  `lib/compositor-gpu/CMakeLists.txt` rather than testing for the artifacts,
+  so a missing header still fails loudly. `display` starts a real Xvfb in the
+  RUN line rather than merely detecting `xvfb-run`.
+- **Every one of those features is decided by running something**, never by
+  trusting a CMake param. A param lit believes rather than verifies can be
+  deleted and leave the tests it gates reporting UNSUPPORTED forever, in the
+  only job that can run them — which is why `test/ui-binary-exists.js` exists
+  and why an absent param registers a substitution that *cannot resolve*
+  rather than being left unregistered (an unregistered `%hermes-node-ui` is
+  matched by the shorter `%hermes-node` and silently rewritten into something
+  that accidentally works).
+- **Environment variables**: `HERMES_NODE_UI_TEST_HOOKS` enables the test
+  hooks (frame capture, synthetic event injection, controllable completion),
+  `HERMES_NODE_UI_GL_ROUTE` forces the GL context route,
+  `HERMES_NODE_UI_GL_COMPLETION` overrides the completion mode, and
+  `HERMES_NODE_DEBUG_NATIVE=UI` turns on tracing. `test/lit.cfg` replaces the
+  environment for ShTest, so an exported value cannot reach a lit test — that
+  is load-bearing, because one run of `test/ui-present.js` depends on the
+  completion variable being *unset* so the startup probe actually runs.
+- **Assertions come from tracing, never from timing.** The suite runs 16-way
+  parallel. `xvfb-run` merges the child's stderr into stdout, so a test that
+  asserts on trace output under a display needs its redirection inside
+  `sh -c` or it reads an empty file and passes vacuously.
+- **The presented-pixel test compares exactly — 0 or 255, no tolerance.**
+  That is stronger than a threshold, not weaker, and it is affordable because
+  the capture's agreement rule forces target size to equal framebuffer size:
+  the blit is then 1:1, linear filtering degenerates to a copy, the pattern is
+  flat-shaded, and nothing on the path converts colour (the swapchain is
+  RGBA8, not sRGB). The presenter's own clear is `32/255`, deliberately a
+  value the pattern never produces, so a missing blit is legible rather than
+  ambiguous. Samples stay 8px from any edge, which is what pays for the
+  exactness. **A capture is keyed to a publication id, not a generation** — a
+  generation spans many publications, and a re-blit of the still-presenting
+  surface would otherwise answer a request for the next frame with a picture
+  of the previous one.
+- Known defects and limitations live in `dz/`, not here — `dz list`.
+
 ## Test Infrastructure
 
 JS tests use LLVM Lit (`test/lit.cfg`), run in parallel via `check-hermes-node-js` target.

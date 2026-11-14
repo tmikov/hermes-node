@@ -128,6 +128,11 @@ if(HERMES_NODE_ENABLE_UI)
   # entirely is the fact.
   add_subdirectory(external/sokol)
   add_subdirectory(lib/compositor)
+  # The GPU half. This one returns early on any platform without a backend
+  # -- v1 GL is Linux-only and Metal is Task 16 -- so a target from it must
+  # be tested for rather than assumed; see the `if(TARGET ...)` guards
+  # below and in tools/hermes-node-ui.
+  add_subdirectory(lib/compositor-gpu)
 endif()
 
 # CLI tools
@@ -158,6 +163,53 @@ if(APPLE)
   target_link_options(hello_addon PRIVATE -undefined dynamic_lookup)
 endif()
 
+# The UI compositor's reference addon (spec: The reference addon). It is a
+# TEST FIXTURE rather than an examples/ entry, and deliberately so:
+# examples/run-examples.sh skips any directory without a node_modules, so a
+# dependency-free addon placed there would be permanently reported as not
+# installed. The precedent it follows is hello_addon just above -- a .node
+# addon built by our own CMake from test/fixtures/ -- and like that one its
+# built path is passed to the entry script rather than resolved by
+# require() from a package.
+#
+# if(TARGET ...) as well as the option, matching every other guard around
+# this feature: lib/compositor-gpu returns early on a platform with no GPU
+# backend (macOS until Task 16), where the option is on and there is
+# nothing for an addon to draw into.
+if(HERMES_NODE_ENABLE_UI AND TARGET hermesNodeCompositorGpu)
+  add_library(hnui_demo_addon SHARED
+    test/fixtures/hnui-demo/demo_addon.c
+  )
+  target_include_directories(hnui_demo_addon PRIVATE
+    ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi
+    # BOTH, and the pair is the point. An addon writes `#include <hnui.h>`
+    # -- flat, the way it would against a shipped SDK directory holding
+    # hnui.h, hnui_abi.h and sokol_gfx.h side by side -- so the directory
+    # containing hnui.h is on the path. But hnui.h itself includes
+    # <hermes/node-compat/ui/hnui_abi.h>, by its in-tree path, so the
+    # include root has to be there too. Dropping either one breaks a
+    # different half of the same include.
+    ${PROJECT_SOURCE_DIR}/include/hermes/node-compat/ui
+    ${PROJECT_SOURCE_DIR}/include
+  )
+  # sokol is the INTERFACE target carrying the vendored include path. The
+  # addon compiles sokol_gfx.h's DECLARATIONS only; the sg_* symbols it
+  # calls are exported by hermes-node-ui itself and resolved at dlopen
+  # time, exactly as the NAPI surface already is.
+  target_link_libraries(hnui_demo_addon PRIVATE sokol)
+  # The same backend define the host is built with. Two translation units
+  # of the same Sokol configured differently would disagree about struct
+  # layouts while linking perfectly -- see lib/compositor-gpu/sokol_config.h.
+  target_compile_definitions(hnui_demo_addon PRIVATE SOKOL_GLCORE)
+  set_target_properties(hnui_demo_addon PROPERTIES
+    PREFIX ""
+    SUFFIX ".node"
+  )
+  if(APPLE)
+    target_link_options(hnui_demo_addon PRIVATE -undefined dynamic_lookup)
+  endif()
+endif()
+
 # JS tests (Lit-based)
 set(LLVH_LIT_ARGS "-sv")
 # No enable_ui (or similar) param here for HERMES_NODE_ENABLE_UI: a param
@@ -185,6 +237,20 @@ set(HERMES_NODE_LIT_PARAMS
   # feature from what actually happens, the same way `linker-available` is
   # decided by a real kit.manifest rather than a flag saying one was built.
   hermes_node_ui=${HERMES_TOOLS_OUTPUT_DIR}/hermes-node-ui
+  # The interpreter CMake found, not whatever `python3` a RUN line would
+  # pick off PATH. Two tests run repo scripts (utils/check-sgp-isolation.py),
+  # and a suite that silently used a different interpreter from the build is
+  # the same class of drift as a lit param the suite trusts rather than
+  # verifies.
+  python=${Python_EXECUTABLE}
+  # The generated rename header and the directory holding the two compiled
+  # sokol_gfx objects, for test/sokol-rename.js and test/sokol-isolation.js.
+  # Passed unconditionally and as plain paths, exactly like hermes_node_ui
+  # and kit_dir above: in a build with the option off they simply name files
+  # that do not exist, and the `ui-enabled` feature -- decided by running
+  # the binary -- is what gates the tests.
+  sgp_rename_h=${CMAKE_CURRENT_BINARY_DIR}/lib/compositor-gpu/generated/sgp_rename.h
+  sgp_objdir=${CMAKE_CURRENT_BINARY_DIR}/lib/compositor-gpu/CMakeFiles/hermesNodeCompositorGpu.dir
 )
 
 # hermes-node-kit is EXCLUDE_FROM_ALL (see tools/hermes-node/CMakeLists.txt:
@@ -205,6 +271,30 @@ set(HERMES_NODE_JS_TEST_DEPENDS hermes hermes-node hello_addon hermes-node-kit)
 # than failing for its stated reason.
 if(HERMES_NODE_ENABLE_UI)
   list(APPEND HERMES_NODE_JS_TEST_DEPENDS hermes-node-ui)
+endif()
+# The reference addon, and the lit param naming it. Appended conditionally
+# because the target only exists where a GPU backend was built -- unlike
+# hermes_node_ui above, which is always a path because the BINARY always
+# exists when the option is on. A $<TARGET_FILE:> generator expression
+# cannot name a target that was never defined, so there is no "always a
+# path" form available here; test/lit.cfg's _register_path_param() closes
+# the gap from the other side, registering something that provably does
+# not exist when the param is absent, so a test needing it fails loudly
+# rather than silently running against a stale file.
+if(TARGET hnui_demo_addon)
+  list(APPEND HERMES_NODE_JS_TEST_DEPENDS hnui_demo_addon)
+  list(APPEND HERMES_NODE_LIT_PARAMS
+    hnui_demo_addon=$<TARGET_FILE:hnui_demo_addon>)
+endif()
+# test/sokol-rename.js reads the generated sgp_rename.h and
+# test/sokol-isolation.js reads the two compiled sokol_gfx objects, so both
+# artifacts have to exist before the suite runs -- the same reasoning that
+# makes the suite DEPEND on hermes-node-kit above. if(TARGET ...) rather
+# than if(HERMES_NODE_ENABLE_UI): lib/compositor-gpu returns early on a
+# platform with no backend yet (macOS until Task 16), where the option is
+# on and this target still does not exist.
+if(TARGET hermesNodeCompositorGpu)
+  list(APPEND HERMES_NODE_JS_TEST_DEPENDS hermesNodeCompositorGpu)
 endif()
 add_lit_testsuite(check-hermes-node-js "Running hermes-node JS tests"
   ${CMAKE_CURRENT_SOURCE_DIR}/test

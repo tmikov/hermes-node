@@ -18,8 +18,14 @@ Upstream is a collection of independent single-file headers, not a library
 with a build. Vendoring the whole repository would bring in a dozen headers
 nothing here includes (audio, fetch, time, debug UI, ...), each of which
 would then be a file a future reader has to check for local edits. So the
-vendored set is exactly what the compositor compiles against, and grows by
-one file at a time as a task needs one.
+vendored set is the part of Sokol this compositor is built on, and it grows
+a file at a time.
+
+Two of the five are here ahead of their first `#include`: nothing yet
+includes `sokol_glue.h` or `sokol_log.h`. They are vendored now because
+they belong to this pin and to the presenting path being built out around
+it -- fetching them later from a different commit is exactly the drift the
+pin exists to prevent.
 
 | File | Why it is here |
 |---|---|

@@ -45,7 +45,26 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake python3 ccache \
-                                  clang-18 lld-18
+                                  clang-18 lld-18 \
+                                  libgl1-mesa-dev libx11-dev libxi-dev \
+                                  libxcursor-dev libgl1-mesa-dri xvfb
+
+      # The four -dev packages above are what lib/compositor-gpu needs to
+      # configure at all: it find_package()s OpenGL and X11 as REQUIRED, and
+      # sokol_app links X11, Xi and Xcursor. They are installed for BOTH
+      # Linux configurations rather than only the asan one that sets
+      # HERMES_NODE_ENABLE_UI, because apt is a step and the option is a
+      # later one -- and an unused development package costs a runner
+      # nothing.
+      #
+      # libgl1-mesa-dri and xvfb are for running rather than building, and
+      # they are the pair that decides whether the window tests execute or
+      # report UNSUPPORTED. xvfb provides the display the `display` lit
+      # feature probes for and the RUN lines start; libgl1-mesa-dri provides
+      # the llvmpipe software renderer that gives that display a GL 4.3 core
+      # context. Without the DRI package the display starts, the feature
+      # turns on, and the tests fail for want of a renderer -- which is the
+      # loud outcome, and the right one, but it is worth not arranging.
 
       - name: Install toolchain (macOS)
         if: runner.os == 'macOS'
