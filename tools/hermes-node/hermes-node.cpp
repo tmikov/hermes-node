@@ -14,6 +14,10 @@
 #include <hermes/node-compat/version.h>
 #include <hermes/node-compat/vm-options/vm_options.h>
 
+#ifdef HERMES_NODE_ENABLE_UI
+#include <node_api.h>
+#endif
+
 #include <uv.h>
 
 #include <climits>
@@ -27,6 +31,24 @@
 
 using hermes::node_compat::HermesNodeConfig;
 using hermes::node_compat::runHermesNode;
+
+#ifdef HERMES_NODE_ENABLE_UI
+namespace {
+/// EmbedderModule::init for --test-embedder-module: require('hermes-node:test')
+/// returns { ok: true }. Exists solely so test/embedder-module.js and
+/// test/bundle-embedder-module.js can exercise the "hermes-node:" resolution
+/// path end to end without needing hermes-node:ui itself to exist yet -- see
+/// finding 21 in the plan this task implements.
+napi_value initTestEmbedderModule(napi_env env, napi_value exports) {
+  napi_value trueValue;
+  if (napi_get_boolean(env, true, &trueValue) != napi_ok)
+    return nullptr;
+  if (napi_set_named_property(env, exports, "ok", trueValue) != napi_ok)
+    return nullptr;
+  return exports;
+}
+} // namespace
+#endif
 
 /// The read-only verbs: they describe a file rather than running one.
 ///
@@ -687,6 +709,20 @@ int main(int argc, char **argv) {
       return 0;
     } else if (std::strcmp(argv[i], "--allow-vm-options-override") == 0) {
       config.allowVmOptionsOverride = true;
+#ifdef HERMES_NODE_ENABLE_UI
+    } else if (std::strcmp(argv[i], "--test-embedder-module") == 0) {
+      // Registers a fixed "hermes-node:test" module for
+      // test/embedder-module.js and test/bundle-embedder-module.js. Adding
+      // this flag first, before either test could pass, was deliberate: it
+      // is what turns the first failure from an "unknown option" into a
+      // real module-resolution question -- see finding 21 in the plan.
+      if (!hermes::node_compat::registerEmbedderModule(
+              config,
+              {std::string(hermes::node_compat::kEmbedderModulePrefix) + "test",
+               initTestEmbedderModule})) {
+        return 1;
+      }
+#endif
     } else if (std::strcmp(argv[i], "--verbose") == 0) {
       config.verbose = true;
     } else if (std::strncmp(argv[i], "--bundle=", 9) == 0) {

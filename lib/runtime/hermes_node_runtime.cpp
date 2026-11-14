@@ -465,6 +465,30 @@ static std::string generateSessionId() {
 namespace hermes {
 namespace node_compat {
 
+bool registerEmbedderModule(HermesNodeConfig &config, EmbedderModule module) {
+  if (module.name.compare(
+          0, kEmbedderModulePrefix.size(), kEmbedderModulePrefix) != 0) {
+    std::fprintf(
+        stderr,
+        "Error: embedder module name '%s' does not start with \"%.*s\"\n",
+        module.name.c_str(),
+        static_cast<int>(kEmbedderModulePrefix.size()),
+        kEmbedderModulePrefix.data());
+    return false;
+  }
+  for (const EmbedderModule &existing : config.embedderModules) {
+    if (existing.name == module.name) {
+      std::fprintf(
+          stderr,
+          "Error: embedder module '%s' is already registered\n",
+          module.name.c_str());
+      return false;
+    }
+  }
+  config.embedderModules.push_back(std::move(module));
+  return true;
+}
+
 namespace {
 
 /// Build and enable the compile cache for this runtime, or return nullptr.
@@ -1066,7 +1090,9 @@ int runHermesNode(const HermesNodeConfig &config) {
   ModuleLoader loader;
 
   if (exitCode == 0) {
-    if (loader.init(env, primordials, internalBindingFn) != napi_ok) {
+    if (loader.init(
+            env, primordials, internalBindingFn, config.embedderModules) !=
+        napi_ok) {
       std::fprintf(stderr, "Error: failed to initialize module loader\n");
       printAndClearException(env);
       exitCode = 1;

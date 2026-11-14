@@ -6,6 +6,7 @@
  */
 
 #include <hermes/node-compat/bundle/bundle_resolve.h>
+#include <hermes/node-compat/runtime/embedder_module_prefix.h>
 
 #include <cctype>
 #include <filesystem>
@@ -404,6 +405,22 @@ std::optional<std::string> resolveSpecifier(
 }
 
 bool isBuiltinSpecifier(std::string_view specifier) {
+  // An embedder module ("hermes-node:ui" and the like) is never on disk and
+  // never scanned into the edge table, exactly like a real builtin -- so it
+  // takes the same skip here. kEmbedderModulePrefix (embedder_module_prefix.h)
+  // is the one C++ copy, shared with hermes-node.cpp; libjs/loader.js and
+  // libjs/bundle-loader.js keep their own JS copies in sync by hand.
+  //
+  // Tested against the RAW specifier, deliberately BEFORE stripNodeScheme
+  // runs below: RULING 36 says "hermes-node:" is a distinct scheme from
+  // Node's "node:", not an alternate spelling that stacks with it, so
+  // "node:hermes-node:x" must not be recognized here. Stripping first and
+  // testing second -- the order the builtin check below uses for a REAL
+  // "node:"-scheme name -- would accept exactly the doubled spelling the
+  // ruling rejects.
+  if (specifier.substr(0, kEmbedderModulePrefix.size()) ==
+      kEmbedderModulePrefix)
+    return true;
   return builtinIds().count(stripNodeScheme(specifier)) != 0;
 }
 

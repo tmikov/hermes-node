@@ -8,7 +8,11 @@
 #ifndef HERMES_NODE_COMPAT_MODULE_LOADER_H
 #define HERMES_NODE_COMPAT_MODULE_LOADER_H
 
+#include <hermes/node-compat/runtime/hermes_node_runtime.h>
+
 #include <node_api_types.h>
+
+#include <vector>
 
 namespace hermes {
 namespace node_compat {
@@ -43,9 +47,18 @@ class ModuleLoader {
   /// \param env The NAPI environment.
   /// \param primordials The primordials object (from primordials.js).
   /// \param internalBindingFn The internalBinding JS function.
+  /// \param embedderModules Native modules requirable under a
+  ///     "hermes-node:" specifier (see EmbedderModule). The vector must
+  ///     outlive this ModuleLoader: only its address is captured, as the
+  ///     native lookup function's callback data -- deliberately no default
+  ///     argument, since one would bind to a temporary destroyed before any
+  ///     JS could call back into it.
   /// \return napi_ok on success.
-  napi_status
-  init(napi_env env, napi_value primordials, napi_value internalBindingFn);
+  napi_status init(
+      napi_env env,
+      napi_value primordials,
+      napi_value internalBindingFn,
+      const std::vector<EmbedderModule> &embedderModules);
 
   /// Require a module by name. Returns the module's exports object.
   /// The name follows Node's internal convention:

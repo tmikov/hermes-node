@@ -377,6 +377,20 @@ TEST(IsBuiltinSpecifierTest, RejectsNonBuiltin) {
   EXPECT_FALSE(isBuiltinSpecifier("node:dep"));
 }
 
+// Pins the producer half of embedder-module resolution with no bundle
+// round-trip: an embedder module must be skipped by the discovery walk
+// exactly like a real builtin (see the call site in bundle_build.cpp), and
+// RULING 36 says "node:" does not stack with "hermes-node:" -- a doubled
+// scheme is rejected, not an alternate spelling of the single-scheme form.
+TEST(IsBuiltinSpecifierTest, RecognizesEmbedderModulePrefix) {
+  EXPECT_TRUE(isBuiltinSpecifier("hermes-node:ui"));
+  EXPECT_TRUE(isBuiltinSpecifier("hermes-node:test"));
+}
+
+TEST(IsBuiltinSpecifierTest, RejectsDoubledSchemeForEmbedderModule) {
+  EXPECT_FALSE(isBuiltinSpecifier("node:hermes-node:ui"));
+}
+
 TEST(CommonAncestorTest, SharedPrefixOfTwoPaths) {
   EXPECT_EQ("/a/b", commonAncestor({"/a/b/c.js", "/a/b/d/e.js"}));
 }

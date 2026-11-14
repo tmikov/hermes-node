@@ -66,6 +66,13 @@ std::optional<std::string> resolveSpecifier(
 /// remains the source of truth; it deliberately excludes that file's
 /// separate `vendoredIds` (e.g. "ws"), which are ordinary node_modules
 /// resolutions, not embedded builtins.
+///
+/// Also true for any "hermes-node:"-prefixed specifier (an embedder
+/// module, e.g. "hermes-node:ui"): like a builtin, it is never on disk and
+/// must never be scanned into the edge table. Tested against the specifier
+/// text before any "node:" stripping (RULING 36: "node:hermes-node:x" is
+/// rejected, not an alternate spelling). See kEmbedderModulePrefix in
+/// include/hermes/node-compat/runtime/embedder_module_prefix.h.
 bool isBuiltinSpecifier(std::string_view specifier);
 
 /// True if \p specifier names one of hermes-node's vendored packages, with

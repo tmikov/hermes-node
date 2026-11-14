@@ -146,6 +146,15 @@ endif()
 
 # JS tests (Lit-based)
 set(LLVH_LIT_ARGS "-sv")
+# No enable_ui (or similar) param here for HERMES_NODE_ENABLE_UI: a param
+# lit trusts rather than verifies has already produced a silent green suite
+# once (RULING 37) -- deleting the param, or a future param whose value
+# stops matching the binary lit was actually pointed at, would make
+# test/embedder-module.js and test/bundle-embedder-module.js quietly report
+# UNSUPPORTED forever instead of failing loudly. test/lit.cfg instead runs
+# hermes_node itself and asks it, the same way `linker-available` is decided
+# by the presence of a real kit.manifest rather than a flag saying one was
+# built.
 set(HERMES_NODE_LIT_PARAMS
   hermes_node=${HERMES_TOOLS_OUTPUT_DIR}/hermes-node
   hermes=${HERMES_TOOLS_OUTPUT_DIR}/hermes

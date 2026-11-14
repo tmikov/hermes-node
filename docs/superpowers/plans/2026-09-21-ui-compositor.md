@@ -473,7 +473,13 @@ std::optional<SurfaceRef> takeFrame(SurfaceTable &table);
 
 ### Task 8: Window, shared context, and the startup requirements
 
-**Files:** create `lib/compositor-gpu/{CMakeLists.txt,backend.h,gl_backend.cpp}`, `tools/hermes-node-ui/ui_module.cpp`; modify `CMakeLists.txt`; create `test/ui-create-window.js`.
+**Files:** create `lib/compositor-gpu/{CMakeLists.txt,backend.h,gl_backend.cpp}`, `tools/hermes-node-ui/ui_module.cpp`; modify `CMakeLists.txt`; create `test/ui-create-window.js`. Also, per **Ruling 33 (execution)**, create `external/sokol/{README.md,CMakeLists.txt}` and vendor upstream into `external/sokol/sokol`; per **Ruling 34 (execution)**, modify `test/lit.cfg`.
+
+**Ruling 33 (execution): this task vendors Sokol.** The Global Constraints assume `external/sokol/sokol` exists, but no task created it and none did — `external/` holds ten other dependencies and nothing in CMake references sokol. This is the first task that needs it, so it vendors it here, at the pinned `c0db757`, following this repo's convention for unmodified dependencies: outer `external/sokol/` holds a README and the wrapper CMake, inner `external/sokol/sokol/` is untouched upstream source. Network reachability was confirmed before this ruling was made.
+
+**Ruling 34 (execution): the `display` lit feature is introduced HERE, not in Task 17.** Step 4 is the first test that needs a window, and this plan's own Global Constraints say a new substitution is added in the task that first needs it. Deferring it to Task 17 would make `ui-create-window.js` silently UNSUPPORTED rather than failing for its stated reason — the same defect finding 16 names for the `ui` feature, and the same class of hole as the CI gap that let Slice A's 45 tests never run. The RUN line must actually start Xvfb rather than merely detect that `xvfb-run` exists. Verified available on the development machine: `Xvfb`, `xvfb-run`, `glxinfo`, and llvmpipe reporting GL 4.5 core — above the 4.3 core v1 requires.
+
+**Ruling 35 (execution): Step 3 writes the rename generator from scratch.** It says "fix and write"; there is nothing to fix. No such generator exists in `utils/` (which holds only `build-portable.sh`, `format.sh` and `make-kit.py`).
 
 - [ ] **Step 1: Define the backend interface** (`backend.h`) that **both** GL and Metal implement: `createSharedContext`, `makeCurrentOnWorker`, `createGenerationSurfaces`, `wrapForPresenting`, `blit`, `submitAndTrackCompletion`, `releaseWrappers`, `presentInvalid`. Metal fills it in Task 16; defining it now prevents the previous plan's defect of a "Metal task" that implemented only completion (finding 15).
 - [ ] **Step 2: Define the real GPU CMake target** — `hermesNodeCompositorGpu`, its sources, the generated rename header, `${Python_EXECUTABLE}`, X11/GL libraries, and the `check-sgp-isolation` target. (Finding 10: the previous plan consumed this target without creating it.)

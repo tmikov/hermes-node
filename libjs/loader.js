@@ -23,9 +23,19 @@
   //   compileAndRun(source, sourceUrl, enableTS) -> value  (native: compile+run)
   //   primordials         -> object  (the primordials object)
   //   internalBinding     -> function (the internalBinding function)
-  return function setup(loadBytecodeModule, readFileSync, compileAndRun, primordials, internalBinding) {
+  //   requireEmbedderModule(name) -> object|undefined  (native: look up an
+  //     EmbedderModule by exact name and run its init, or answer undefined)
+  return function setup(loadBytecodeModule, readFileSync, compileAndRun, primordials, internalBinding, requireEmbedderModule) {
     // Module cache: moduleId -> { exports, loaded }
     var cache = Object.create(null);
+
+    // The specifier prefix that names an embedder module (e.g.
+    // 'hermes-node:ui') rather than a compiled-in Node builtin or a file on
+    // disk. Kept in sync by hand with the identical literal in
+    // include/hermes/node-compat/runtime/hermes_node_runtime.h
+    // (kEmbedderModulePrefix), lib/bundle/bundle_resolve.cpp's
+    // isBuiltinSpecifier and libjs/bundle-loader.js.
+    var kEmbedderModulePrefix = 'hermes-node:';
 
     // Load vendored package data (generated at build time from vendored/*/).
     var vendoredDataFn = loadBytecodeModule('vendored-packages');
@@ -219,8 +229,56 @@
       return base; // will error at loadModule time
     }
 
+    // True for a raw specifier naming an embedder module. Checked against
+    // the RAW name, never one that has already had a leading 'node:'
+    // stripped from it -- RULING 36: 'hermes-node:' is a distinct scheme
+    // from Node's own 'node:', not an alternate spelling that stacks with
+    // it, so 'node:hermes-node:x' does not count. There is also no bare
+    // (unprefixed) form: unlike 'node:', this scheme is not optional.
+    function isEmbedderModuleName(name) {
+      return typeof name === 'string' &&
+        name.substring(0, kEmbedderModulePrefix.length) === kEmbedderModulePrefix;
+    }
+
+    // Resolves an embedder module by its full (already-validated-by-prefix)
+    // name: cache hit, or the native lookup, or MODULE_NOT_FOUND. The one
+    // place that knows how to answer 'hermes-node:x', shared by requireModule
+    // below and by the require.resolve() support in __initCJS -- which is
+    // also why require.resolve() ends up running this module's init if it
+    // has not already run: there is no cheaper existence check than the
+    // lookup itself, the same tradeoff internalBinding() makes for a native
+    // binding (BindingRegistry has no "is this registered" query that skips
+    // calling its init function either).
+    function requireEmbedderModuleExports(name) {
+      if (cache[name]) {
+        return cache[name].exports;
+      }
+      var embedderExports = requireEmbedderModule(name);
+      if (embedderExports === undefined) {
+        var notFound = new Error("Cannot find module '" + name + "'");
+        notFound.code = 'MODULE_NOT_FOUND';
+        throw notFound;
+      }
+      cache[name] = {
+        id: name,
+        exports: embedderExports,
+        loaded: true,
+        filename: name,
+      };
+      return embedderExports;
+    }
+
     // The main require implementation.
     function requireModule(name) {
+      // Embedder modules (e.g. 'hermes-node:ui') are resolved here, ahead of
+      // the 'node:' stripping below, the vendored-package check and
+      // loadModule()'s disk fallback: their specifiers do not name a file or
+      // an embedded-bytecode ID, so no filesystem probe or bytecode lookup
+      // could ever satisfy one.
+      if (isEmbedderModuleName(name)) {
+        return requireEmbedderModuleExports(name);
+      }
+
       // Strip 'node:' prefix so require('node:fs') === require('fs').
       var bareName = name;
       if (name.substring(0, 5) === 'node:')
@@ -355,6 +413,17 @@
         // modules used in tests and during bootstrap).
         var origLoad = CJSModule._load;
         CJSModule._load = function(request, parent, isMain) {
+          // Embedder modules short-circuit before origLoad ever runs, not
+          // after it throws: origLoad's own resolution (Module._resolveFilename)
+          // would otherwise probe the filesystem for a specifier that can
+          // never name a file, which is exactly the filesystem lookup this
+          // prefix is meant to skip. requireModule() is the single place
+          // that knows how to answer it (or throw MODULE_NOT_FOUND), so
+          // both entry points -- this one and a direct bootstrap-loader
+          // require -- share its cache.
+          if (isEmbedderModuleName(request)) {
+            return requireModule(request);
+          }
           try {
             return origLoad(request, parent, isMain);
           } catch (e) {
@@ -372,6 +441,28 @@
             }
             throw e;
           }
+        };
+
+        // require.resolve() must agree with require(): for a real builtin,
+        // require.resolve('fs') === 'fs' with no filesystem lookup, because
+        // Module._resolveFilename answers a builtin on its own first line.
+        // Without this wrapper an embedder module got no such line, so
+        // require.resolve('hermes-node:test') fell all the way through to
+        // the ordinary node_modules walk -- silently returning a decoy
+        // package's path if one happened to be installed under that name,
+        // while require() of the same specifier loaded the real embedder
+        // module. requireEmbedderModuleExports() is called for its
+        // existence check (MODULE_NOT_FOUND on a miss) and its side effect
+        // of populating the same cache require() reads, not for its return
+        // value: resolve() answers with the specifier text itself, exactly
+        // like a builtin.
+        var origResolveFilename = CJSModule._resolveFilename;
+        CJSModule._resolveFilename = function(request, parent, isMain, options) {
+          if (isEmbedderModuleName(request)) {
+            requireEmbedderModuleExports(request);
+            return request;
+          }
+          return origResolveFilename(request, parent, isMain, options);
         };
 
         // Register .ts extension handler. Our compileAndRun native

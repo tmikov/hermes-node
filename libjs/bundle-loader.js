@@ -65,6 +65,32 @@
   var BuiltinModule =
     globalThis.require('internal/bootstrap/realm').BuiltinModule;
 
+  // The specifier prefix that names an embedder module (e.g.
+  // 'hermes-node:ui') rather than a compiled-in Node builtin or a bundled
+  // file. Kept in sync by hand with the identical literal in
+  // include/hermes/node-compat/runtime/embedder_module_prefix.h
+  // (kEmbedderModulePrefix), lib/bundle/bundle_resolve.cpp's
+  // isBuiltinSpecifier and libjs/loader.js.
+  //
+  // BuiltinModule.normalizeRequirableId() does not answer for this prefix
+  // (an embedder module is not in realm.js's static list, on purpose --
+  // it is registered at run time, not compiled in), so it needs its own
+  // check wherever normalizeRequirableId() is checked below: the producer
+  // never gave one of these an edge (isBuiltinSpecifier skips it exactly
+  // like a builtin), so treating it as an ordinary specifier here would
+  // report a false "not in the bundle. Add it with --include=" instead of
+  // forwarding it to the loader that actually resolves it.
+  //
+  // Checked against the RAW request, never one with a leading 'node:'
+  // already stripped: RULING 36 rejects 'node:hermes-node:x' as a doubled,
+  // meaningless scheme rather than accepting it as a spelling of
+  // 'hermes-node:x'. Every call site below passes the request unstripped.
+  var kEmbedderModulePrefix = 'hermes-node:';
+  function isEmbedderModuleSpecifier(request) {
+    return typeof request === 'string' &&
+      request.substring(0, kEmbedderModulePrefix.length) === kEmbedderModulePrefix;
+  }
+
   // The same factory Node's own loader uses to build the `require` it hands
   // a module (Module.prototype._compile calls it). Reusing it is what keeps
   // require.cache, require.extensions, require.resolve.paths and
@@ -167,6 +193,15 @@
     // line saying where --include resolves from, so the message stays
     // truthful even where it isn't automatic.
     function includeSuggestion(request, importer, importerIsIdentity) {
+      // An embedder module can never be packaged -- the producer's
+      // isBuiltinSpecifier skips it exactly like a real builtin, so no
+      // --include value would ever resolve to it -- and none of the three
+      // resolve paths above should ever reach notInBundle() with one in the
+      // first place (each forwards it to the loader that actually answers
+      // it). This is the defensive copy: if one of those three checks ever
+      // regresses, the resulting error must not recommend a remedy that
+      // cannot work.
+      if (isEmbedderModuleSpecifier(request)) return undefined;
       if (request.charAt(0) !== '.') return request;
       // A request relative to an importer this loader cannot place in the
       // tree has no correct value; the caller says where --include
@@ -385,6 +420,7 @@
           options.paths !== undefined;
         var pathsUsable = !hasPaths || Array.isArray(options.paths);
         if (typeof request !== 'string' || !pathsUsable ||
+            isEmbedderModuleSpecifier(request) ||
             BuiltinModule.normalizeRequirableId(request) !== undefined) {
           return baseResolve(request, options);
         }
@@ -615,6 +651,15 @@
       if (typeof request !== 'string')
         return originalLoad.call(this, request, parent, isMain);
 
+      // Embedder modules ('hermes-node:ui') are decided before anything
+      // else, for the same reason builtins are: the producer never gave one
+      // an edge (isBuiltinSpecifier skips it exactly like a builtin), so
+      // there is nothing here to look up. originalLoad is libjs/loader.js's
+      // own wrapped Module._load, which resolves the prefix itself with no
+      // filesystem lookup -- see its __initCJS.
+      if (isEmbedderModuleSpecifier(request))
+        return originalLoad.call(this, request, parent, isMain);
+
       // Builtins are decided before anything else, because they must win
       // over the bundle: normalizeRequirableId() is the same predicate
       // Node's own _load uses, and it is exactly the list the producer
@@ -692,12 +737,17 @@
     // resolution off the disk either, and an answer naming a real path
     // outside the container is one a caller will act on.
     //
-    // The four passthroughs are makeRequire()'s, for its reasons: a builtin
-    // (which _resolveFilename answers on its own first line), a non-string
-    // request, a malformed options.paths (ERR_INVALID_ARG_VALUE is Node's
-    // to construct), and a request the binary carries. The embedded
-    // forwards this loader makes elsewhere never reach here at all --
-    // Module._load short-circuits a 'node:' request before resolution --
+    // The five passthroughs are makeRequire()'s, for its reasons: a builtin
+    // (which _resolveFilename answers on its own first line), an embedder
+    // module (which loader.js's own wrapped _resolveFilename answers with no
+    // filesystem lookup -- see isEmbedderModuleSpecifier() above; finding 1
+    // in the Task 5 review was exactly this passthrough missing, so
+    // require.resolve('hermes-node:x') fell through to the ordinary
+    // node_modules walk below and could return a decoy package's path), a
+    // non-string request, a malformed options.paths (ERR_INVALID_ARG_VALUE
+    // is Node's to construct), and a request the binary carries. The
+    // embedded forwards this loader makes elsewhere never reach here at all
+    // -- Module._load short-circuits a 'node:' request before resolution --
     // so wrapping this cannot affect them.
     var originalResolveFilename = Module._resolveFilename;
     Module._resolveFilename = function(request, parent, isMain, options) {
@@ -705,6 +755,7 @@
         options.paths !== undefined;
       if (typeof request !== 'string' ||
           (hasPaths && !Array.isArray(options.paths)) ||
+          isEmbedderModuleSpecifier(request) ||
           BuiltinModule.normalizeRequirableId(request) !== undefined) {
         return originalResolveFilename.call(
           this, request, parent, isMain, options);

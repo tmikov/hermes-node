@@ -220,10 +220,69 @@ static napi_value compileAndRunCallback(napi_env env, napi_callback_info info) {
   return result;
 }
 
+/// Native callback for requireEmbedderModule(name) -> exports|undefined.
+/// Looks \p name up by exact match in the EmbedderModule vector passed as
+/// callback data (see ModuleLoader::init) and, on a hit, runs its init
+/// function to produce the exports object. Undefined on a miss: the JS side
+/// (libjs/loader.js's requireModule) is what turns that into the
+/// MODULE_NOT_FOUND a caller sees, matching how loadBytecodeModule's own
+/// undefined-on-miss return is handled one level up.
+static napi_value requireEmbedderModuleCallback(
+    napi_env env,
+    napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  void *data = nullptr;
+  napi_status status = napi_get_cb_info(env, info, &argc, argv, nullptr, &data);
+  if (status != napi_ok || argc < 1) {
+    napi_throw_type_error(
+        env, nullptr, "requireEmbedderModule requires a name argument");
+    return nullptr;
+  }
+
+  size_t nameLen = 0;
+  status = napi_get_value_string_utf8(env, argv[0], nullptr, 0, &nameLen);
+  if (status != napi_ok) {
+    napi_throw_type_error(
+        env, nullptr, "requireEmbedderModule: name must be a string");
+    return nullptr;
+  }
+  std::string name(nameLen, '\0');
+  status =
+      napi_get_value_string_utf8(env, argv[0], &name[0], nameLen + 1, nullptr);
+  if (status != napi_ok)
+    return nullptr;
+
+  napi_value undef;
+  status = napi_get_undefined(env, &undef);
+  if (status != napi_ok)
+    return nullptr;
+
+  const auto *modules = static_cast<const std::vector<EmbedderModule> *>(data);
+  if (!modules)
+    return undef;
+
+  for (const EmbedderModule &module : *modules) {
+    if (module.name == name) {
+      napi_value exports;
+      status = napi_create_object(env, &exports);
+      if (status != napi_ok)
+        return nullptr;
+      // Same contract as a binding's init function or a native addon's
+      // napi_register_module_v1: mutate and return the given exports, or
+      // return a different value to replace it. A null return means the
+      // callee already threw.
+      return module.init(env, exports);
+    }
+  }
+  return undef;
+}
+
 napi_status ModuleLoader::init(
     napi_env env,
     napi_value primordials,
-    napi_value internalBindingFn) {
+    napi_value internalBindingFn,
+    const std::vector<EmbedderModule> &embedderModules) {
   // Execute the loader from embedded bytecode.
   napi_value setupFn;
   napi_status status = runEmbeddedModule(env, "loader", &setupFn);
@@ -282,8 +341,23 @@ napi_status ModuleLoader::init(
   if (status != napi_ok)
     return status;
 
+  // Create the requireEmbedderModule native function. Its callback data is
+  // the address of the caller's embedderModules vector, which the caller
+  // (runHermesNode's HermesNodeConfig) keeps alive for the whole run -- see
+  // the lifetime note on the \p embedderModules parameter above.
+  napi_value requireEmbedderModuleFn;
+  status = napi_create_function(
+      env,
+      "requireEmbedderModule",
+      NAPI_AUTO_LENGTH,
+      requireEmbedderModuleCallback,
+      const_cast<std::vector<EmbedderModule> *>(&embedderModules),
+      &requireEmbedderModuleFn);
+  if (status != napi_ok)
+    return status;
+
   // Call setup(loadBytecodeModule, readFileSync, compileAndRun, primordials,
-  // internalBinding). Returns the require function.
+  // internalBinding, requireEmbedderModule). Returns the require function.
   napi_value global;
   status = napi_get_global(env, &global);
   if (status != napi_ok)
@@ -294,10 +368,11 @@ napi_status ModuleLoader::init(
       readFileSyncFn,
       compileAndRunFn,
       primordials,
-      internalBindingFn};
+      internalBindingFn,
+      requireEmbedderModuleFn};
 
   napi_value requireFn;
-  status = napi_call_function(env, global, setupFn, 5, args, &requireFn);
+  status = napi_call_function(env, global, setupFn, 6, args, &requireFn);
   if (status != napi_ok)
     return status;
 

@@ -26,7 +26,21 @@ function(hermes_node_link_setup target)
 
   target_include_directories(${target} PRIVATE
     ${CMAKE_BINARY_DIR}/generated
+    # hermes-node.cpp constructs EmbedderModule entries directly (behind
+    # HERMES_NODE_ENABLE_UI below), which needs the NAPI type and function
+    # declarations that hermesNodeRuntime's own PUBLIC include dirs do not
+    # forward (they are PRIVATE there -- see lib/runtime/CMakeLists.txt).
+    ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi
   )
+
+  # Guards --test-embedder-module in hermes-node.cpp. A compile definition
+  # rather than relying on the CMake option alone: the option only decides
+  # whether lib/compositor is built, and this is the one CLI-visible surface
+  # from Slice B that exists ahead of the compositor itself, so it needs its
+  # own guard at the point that actually parses the flag.
+  if(HERMES_NODE_ENABLE_UI)
+    target_compile_definitions(${target} PRIVATE HERMES_NODE_ENABLE_UI)
+  endif()
 
   # version.h is re-derived on every build (see cmake/version.cmake); this
   # orders that ahead of the compile that includes it.

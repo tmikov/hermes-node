@@ -7,6 +7,10 @@
 
 #pragma once
 
+#include <hermes/node-compat/runtime/embedder_module_prefix.h>
+
+#include <node_api_types.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -14,6 +18,36 @@
 
 namespace hermes {
 namespace node_compat {
+
+/// A native module the embedder (rather than a compiled-in Node builtin or
+/// a file on disk) makes available under a "hermes-node:" specifier (see
+/// kEmbedderModulePrefix, embedder_module_prefix.h).
+///
+/// Resolved by libjs/loader.js's requireModule() before any vendored-package
+/// check or disk fallback, and by its __initCJS wrapper before Module._load
+/// ever calls the real loader -- so a request for one of these never
+/// performs a filesystem lookup, matched or not. The same holds for
+/// require.resolve(): __initCJS also wraps Module._resolveFilename, and
+/// makeRequireFunction's own resolve() is covered by the wrapped _load it
+/// calls through, so require() and require.resolve() agree the way they do
+/// for a real builtin.
+struct EmbedderModule {
+  /// Full specifier a user script requires, e.g. "hermes-node:ui". Must
+  /// start with kEmbedderModulePrefix; there is no bare (unprefixed) form,
+  /// unlike a real Node builtin's optional "node:" scheme, and no
+  /// "node:"-doubled form either (RULING 36: "node:hermes-node:x" is
+  /// rejected, not accepted as a spelling of "hermes-node:x"). Validated at
+  /// registration -- see registerEmbedderModule() below.
+  std::string name;
+
+  /// Populates and returns the module's exports object. Follows the same
+  /// napi_addon_register_func convention as BindingRegistry's bindings and
+  /// process.dlopen's native addons: given an empty exports object, either
+  /// mutate and return it, or return a different value to replace it
+  /// entirely. Returning null leaves a pending JS exception, exactly like a
+  /// binding's init function.
+  napi_addon_register_func init;
+};
 
 /// Settings that describe the process rather than any one runtime, shared by
 /// every runtime hermes-node starts -- including the second runtime that
@@ -150,6 +184,15 @@ struct HermesNodeConfig {
   /// order given. Resolved like require() from the current directory.
   std::vector<std::string> requireModules;
 
+  /// Native modules the embedder exposes under a "hermes-node:" specifier,
+  /// resolved by the module loader ahead of any filesystem lookup. Empty by
+  /// default; guarded end to end by HERMES_NODE_ENABLE_UI in the CLI that
+  /// populates this (--test-embedder-module today, hermes-node:ui later).
+  /// Not inherited by the inspector runtime -- see HermesNodeProcessConfig
+  /// for why a per-runtime field like this one stays here rather than
+  /// there.
+  std::vector<EmbedderModule> embedderModules;
+
   /// Start the REPL when no scriptPath and no evalCode are provided.
   bool enableRepl = false;
 
@@ -174,6 +217,22 @@ struct HermesNodeConfig {
   /// runtime is the inspector runtime running on the IO thread.
   void *inspectorBridgeContext = nullptr;
 };
+
+/// Validates \p module and appends it to \p config.embedderModules.
+///
+/// A module registered under a name that does not start with
+/// kEmbedderModulePrefix would be a module nothing can ever require -- a
+/// silent no-op registration, the swallow-and-continue pattern this
+/// codebase removes on sight elsewhere -- so that is refused outright, with
+/// a message on stderr naming the bad value. A second registration under a
+/// name already taken is refused the same way rather than silently
+/// replacing or shadowing the first: registration order becoming
+/// load-bearing, unannounced, is worse than an embedder finding out at
+/// startup that two of its own modules collided.
+///
+/// \return true and appends on success; false (config unchanged) on either
+///     validation failure, having already printed why.
+bool registerEmbedderModule(HermesNodeConfig &config, EmbedderModule module);
 
 /// Run a complete hermes-node instance. Blocks until the event loop exits.
 /// Thread-safe: can be called from any thread; each invocation is fully
