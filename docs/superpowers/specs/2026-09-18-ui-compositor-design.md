@@ -196,7 +196,7 @@ once, in the presenting unit, or not at all.
 | Main -> JS | Input and window events | Mutex-protected queue + `uv_async` |
 | Main -> JS | Frame tick, with timestamp | `uv_async` |
 | Main -> JS | Synchronous clipboard reply | Per-request slot, mutex + condition variable |
-| JS -> main | Frame requested; surface published; slot state | Atomics, polled in `frame_cb` |
+| JS -> main | Frame requested; surface published; slot state | The mutex-guarded surface table, polled in `frame_cb` |
 | JS -> main | Platform commands | Mutex-protected queue, drained in `frame_cb` |
 
 **No queue lock is ever held while dispatching a native or JS listener, or
@@ -442,22 +442,49 @@ signalled transition -- while radeonsi took **94,603 timeout-0 polls over
 differ**; the probe exists so that it need not be. Measured 2026-09-19 and
 2026-09-21; see `docs/notes/2026-09-21-linux-hardware-spike-results.md`.
 
-### The atomic protocol
+### The lock protocol
 
-Slot states and the published index live in one atomic word, with
-`static_assert(std::atomic<...>::is_always_lock_free)`. Transitions use a
-**CAS retry loop**, not a single attempt, with acquire/release ordering. The
-initial state is: all slots FREE, no presenting image, "never published" set
--- while that flag is set the main thread presents a clear colour and samples
-nothing, because attachment contents are initially undefined
-(`sokol_gfx.h:3714`).
+Slot states, the ready and presenting references, the per-generation
+reference counts and the closing flag are guarded by **one mutex**, and every
+operation holds it for the whole of its transition. The initial state is: all
+slots FREE, no presenting image, "never published" set -- while that flag is
+set the main thread presents a clear colour and samples nothing, because
+attachment contents are initially undefined (`sokol_gfx.h:3714`).
+
+This replaces an earlier version of this section, which put slot states and
+the published index in one atomic word and moved them with a CAS retry loop;
+the change is recorded as a deviation in
+`docs/superpowers/plans/2026-09-21-ui-compositor.md`. What defeats separate
+atomics is that the transitions are **compound**. Displacement has to read
+the outgoing slot's read count and store its new state *together*: read them
+apart, and a completion landing in between decrements the count to zero,
+finds the slot still PRESENTING rather than RETIRING, and so frees nothing --
+after which displacement stores RETIRING over a slot that has no reads left
+and nobody to free it. One word could hold both fields, but only by packing
+read counts into bitfields, which trades a rule that can be stated for one
+that has to be maintained.
+
+**The cost is real, and it is not "one uncontended lock".** Three threads
+reach this table -- the JS producer, the presenting thread, and whichever
+thread a GPU completion handler runs on -- so these are several short but
+genuinely contended critical sections per frame per thread, not a lock taken
+by one thread at a time. What is bounded is their content: each is a handful
+of field updates over a fixed-size table, with no allocation, no I/O and no
+GPU call inside, and generation destruction is handed to the owner dispatcher
+**after** the lock is released rather than run under it.
 
 **Publication is one synchronized decision with retirement and closing.** A
 completion handler cannot test "is my generation still live?" and then
 publish, because the generation can retire in between. The test and the state
-change happen in the same CAS (or under the same lock); a publication that
-loses drops the frame and releases its captured ownership through the normal
-completion path, exactly as a successful one would.
+change happen under the same lock; a publication that loses drops the frame
+and releases its captured ownership through the normal completion path,
+exactly as a successful one would.
+
+An operation spanning two of these transitions -- publishing a frame and
+moving the tick state machine together, say -- runs inside a single critical
+section through a transaction entry point, rather than by calling two
+operations in turn, which would reopen exactly the gap this section exists to
+close.
 
 ### Generations and texture lifetime
 
@@ -603,8 +630,13 @@ lock, custom cursor images, clipboard write, quit.
 - **It takes a deadline and can return a timeout error.** The main thread can
   itself block in presentation (Metal waits on a semaphore), so an
   unqualified "interruptible" promise would have no one left to deliver the
-  interruption. The request slot outlives cancellation, so a late reply has
-  somewhere to land.
+  interruption. A reply that arrives after the waiter has given up is
+  **discarded**, not delivered. The registry holds its slots weakly, so an
+  abandoned slot does not stay addressable; what makes a late reply safe is
+  that the reply path takes a strong reference under the registry lock
+  before writing, so it either lands in storage that is still alive or is
+  dropped without touching anything. Nothing downstream may assume a
+  cancelled request's slot is still there.
 - Shutdown and setup failure complete outstanding requests with an error.
 - `clipboard_size` is set well above Sokol's 8 KB default.
 

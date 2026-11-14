@@ -90,10 +90,23 @@ jobs:
           fi
           case "${{ matrix.config }}" in
             asan-debug-o1)
+              # HERMES_NODE_ENABLE_UI is ON here and nowhere else, on
+              # purpose. unittests/CMakeLists.txt guards CompositorTest on
+              # this option, so without it the target is never created and
+              # the whole compositor -- every test in it -- can regress
+              # green indefinitely. The ASAN job is the one that should
+              # carry it: the surface protocol's tests are concurrent, and
+              # several of them exist to catch a use-after-free.
+              #
+              # The release job deliberately stays without it, which is what
+              # keeps the plan's Global Constraint -- a build WITHOUT the
+              # option is unaffected -- an actually exercised configuration
+              # rather than an assumption.
               common_args+=(
                 -DCMAKE_BUILD_TYPE=Debug
                 -DHERMES_ENABLE_ADDRESS_SANITIZER=ON
                 -DHERMESVM_SANITIZE_HANDLES=ON
+                -DHERMES_NODE_ENABLE_UI=ON
                 -DCMAKE_C_FLAGS_DEBUG_INIT="-g -O1"
                 -DCMAKE_CXX_FLAGS_DEBUG_INIT="-g -O1"
               )

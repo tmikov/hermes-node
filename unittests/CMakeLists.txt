@@ -110,4 +110,9 @@ target_compile_definitions(HermesParserKindHashSyncTest PRIVATE
   HPN_KIND_HASH_DIST_JS="${PROJECT_SOURCE_DIR}/external/hermes-parser-native/package/dist/HermesParserKindHash.js"
 )
 
+if(HERMES_NODE_ENABLE_UI)
+  add_node_compat_unittest(CompositorTest CompositorTest.cpp)
+  target_link_libraries(CompositorTest hermesNodeCompositor)
+endif()
+
 add_subdirectory(HermesParserNative)

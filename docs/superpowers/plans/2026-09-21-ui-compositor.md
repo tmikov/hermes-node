@@ -28,7 +28,7 @@
 
 The spec says slot states and the published index "live in one atomic word" with a CAS retry loop (`spec:445`). **This plan implements them under a single mutex instead**, because the transitions are compound — displacement must read the read-count and set the state *together*, or a completion that lands in between leaves a slot stranded in RETIRING with nobody left to free it. Separate atomics cannot express that; one word could, but only by packing read counts into bitfields, which trades a provable rule for a fragile one.
 
-The cost is one uncontended lock per frame per thread, not per pixel. **Task 2 includes a step that corrects the spec**, so the two documents do not disagree.
+The cost is not one uncontended lock: three threads reach this table — the JS producer, the presenting thread, and whichever thread a GPU completion handler runs on — so these are several short but genuinely contended critical sections per frame per thread. What is bounded is their content, not their contention: each is a handful of field updates over a fixed-size table, with no allocation, no I/O and no GPU call inside, and generation destruction is handed to the owner dispatcher after the lock is released rather than run under it. **Task 2 includes a step that corrects the spec**, so the two documents do not disagree.
 
 ---
 
@@ -59,6 +59,8 @@ The tasks are grouped so that **each slice ends with something that runs**, and 
 - **Slice C (Tasks 11–14): the rest of the surface area.** Input and commands, clipboard with a real status, full rAF semantics, the full C API and conformance mode.
 - **Slice D (Tasks 15–17): lifecycle, Metal, suite.** CLOSING on every exit path, the Metal backend against the same interface, the full gated suite.
 
+**Slice A complete (2026-09-22): 45 tests in `unittests/CompositorTest.cpp`** (49 after the whole-branch review's fixes). Tasks 1–4 are ticked below. Rulings made while executing them are written into the task they belong to, marked **Ruling N (execution)**; the ones that bind later work are Ruling 16 (Task 3 Step 5, carried to Tasks 8/10) and Ruling 9 (Task 2's `take()` behaviour, which Task 4 relies on).
+
 ---
 
 ### Task 1: Build scaffolding and an empty unit test that runs
@@ -69,7 +71,7 @@ The tasks are grouped so that **each slice ends with something that runs**, and 
 - Modify: `CMakeLists.txt` (option + subdirectories), `unittests/CMakeLists.txt`
 - Create: `lib/compositor/CMakeLists.txt`, `unittests/CompositorTest.cpp`
 
-- [ ] **Step 1: Add the option and wire the subdirectory**
+- [x] **Step 1: Add the option and wire the subdirectory**
 
 ```cmake
 # CMakeLists.txt, beside the other options
@@ -81,13 +83,17 @@ endif()
 
 ```cmake
 # lib/compositor/CMakeLists.txt
-add_library(hermesNodeCompositor STATIC
+# add_hermes_library, not plain add_library: every sibling under lib/ uses
+# the macro (hermes/cmake/modules/Hermes.cmake:106), and it carries Hermes's
+# compile flags and scope-local defines -- the GC and sanitizer ones among
+# them, which miscompile rather than fail to link when they are missing.
+add_hermes_library(hermesNodeCompositor STATIC
   surface_table.cpp
 )
 target_include_directories(hermesNodeCompositor PUBLIC ${PROJECT_SOURCE_DIR}/include)
 ```
 
-- [ ] **Step 2: Register the test target the way this repo does**
+- [x] **Step 2: Register the test target the way this repo does**
 
 ```cmake
 # unittests/CMakeLists.txt, beside the others
@@ -97,7 +103,7 @@ if(HERMES_NODE_ENABLE_UI)
 endif()
 ```
 
-- [ ] **Step 3: Write a placeholder test and an empty implementation file**
+- [x] **Step 3: Write a placeholder test and an empty implementation file**
 
 ```cpp
 // unittests/CompositorTest.cpp
@@ -107,7 +113,7 @@ TEST(CompositorScaffold, TargetBuildsAndRuns) { SUCCEED(); }
 
 Create `lib/compositor/surface_table.cpp` containing only the licence header and `// Task 2 fills this in.`
 
-- [ ] **Step 4: Configure, build and run — the full commands**
+- [x] **Step 4: Configure, build and run — the full commands**
 
 ```bash
 cmake -B cmake-build-asan -G Ninja -DHERMES_NODE_ENABLE_UI=ON
@@ -117,7 +123,7 @@ cmake-build-asan/unittests/CompositorTest
 
 Expected: `1 test from 1 test suite ran. [  PASSED  ] 1 test.` **A run reporting zero tests is a failure**, not a pass — check the count every time.
 
-- [ ] **Step 5: Format and commit**
+- [x] **Step 5: Format and commit**
 
 ```bash
 ./utils/format.sh -f
@@ -148,23 +154,41 @@ enum class SlotState { kFree, kWriting, kReady, kPresenting, kRetiring };
 
 class SurfaceTable {
  public:
+  /// Proof that the caller holds the lock; only SurfaceTable can make one.
+  class LockToken;
+
   explicit SurfaceTable(std::function<void(GenerationId)> destroyOnOwnerThread);
 
   GenerationId newGeneration(int width, int height);  ///< retires the previous
   std::optional<SurfaceRef> acquire();                ///< FREE -> WRITING, current gen only
   bool publish(SurfaceRef ref);                       ///< WRITING -> READY; false if retired/closing
-  void reclaim(SurfaceRef ref);                       ///< WRITING -> FREE
+  void reclaim(SurfaceRef ref);                       ///< WRITING -> FREE, or RETIRING if GPU work is in flight
   std::optional<SurfaceRef> take();                   ///< READY -> PRESENTING, displaces atomically
   void addRead(SurfaceRef ref);
   void releaseRead(SurfaceRef ref);
+  void addWrapper(GenerationId gen);                  ///< Ruling 1: an explicit counted owner
+  void releaseWrappers(GenerationId gen);
+  void beginGpuWork(SurfaceRef ref);                  ///< Ruling 1: acquired BEFORE submission
+  void endGpuWork(SurfaceRef ref);                    ///< gates slot reuse as reads do
   bool wrappersReleasable(GenerationId gen) const;
   void beginClosing();
-  bool anyFreeSlot() const;
+  bool anyFreeSlot() const;                           ///< a snapshot, not a promise
   SlotState state(SurfaceRef ref) const;              ///< test-only accessor
+
+  /// Run several transitions as one critical section. The callback gets a
+  /// token and must call only the *Locked helpers with it; calling a public
+  /// method would re-enter the non-recursive mutex and deadlock.
+  template <typename Fn> auto withLock(Fn &&fn);
+  GenerationId newGenerationLocked(LockToken &, int width, int height);
+  /* ... one *Locked helper per transition above ... */
 };
 ```
 
-- [ ] **Step 1: Write the failing tests, including the race that broke the previous plan**
+**Ruling 1 (execution) — the interface above is what was built.** `addWrapper`/`releaseWrappers` and `beginGpuWork`/`endGpuWork` are explicit because spec:465 lists producer GPU work, pending completion handlers and presenting-copy wrappers as generation owners, and **none of them can be inferred from slot state** — a slot can be FREE while its completion handler still has work outstanding.
+
+**`withLock()` plus the `*Locked` helpers and `LockToken` are the transaction mechanism** Task 4's integration rule needs (see Task 4's `publishFrame`/`takeFrame`), and the same mechanism composes the frame-tick gate: `anyFreeSlot()` answers about an instant, so a caller must not read it and then move tick state under a second lock. `TickMachine::shouldSendTick(SurfaceTable &)` is the composed form.
+
+- [x] **Step 1: Write the failing tests, including the race that broke the previous plan**
 
 ```cpp
 TEST(SurfaceTableTest, DisplacementAndLastReadCompletionCannotStrandASlot) {
@@ -324,7 +348,7 @@ TEST(SurfaceTableTest, ProducerConsumerStressCompletesRealCycles) {
 }
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 ```bash
 cmake --build cmake-build-asan --target CompositorTest && \
@@ -333,9 +357,13 @@ cmake --build cmake-build-asan --target CompositorTest && \
 
 Expected: compilation failure — `surface_table.h` does not exist. (The build must be part of the command; running a stale binary proves nothing.)
 
-- [ ] **Step 3: Implement** — one `std::mutex` guards a `Slot[3]` array (state, read count, generation), the ready/presenting indices, the generation table (reference counts, current flag, per-generation presenting-or-retiring count) and the closing flag. Every public method takes that lock for its whole compound transition. `take()` moves READY→PRESENTING **and** displaces the previous slot in the same critical section. `releaseRead()` frees only from RETIRING. Destruction is never called with the lock held and never inline: it is handed to the owner dispatcher (Task 3), which Task 2 accepts as a `std::function` so it can be tested with a fake.
+- [x] **Step 3: Implement** — one `std::mutex` guards **a slot array per generation** (state, read count, GPU-work count), the ready/presenting references, the generation table (reference counts, current flag) and the closing flag.
 
-- [ ] **Step 4: Run to verify they pass**
+  **Ruling 6 (execution) — per-generation slot storage, not one global `Slot[3]`.** The resize tests require an old PRESENTING or RETIRING slot to coexist with three slots of the new generation (spec:464), which a single flat array cannot express. This plan's original "one `std::mutex` guards a `Slot[3]` array" described the lock correctly and the arity wrongly; the arity follows the spec. Generations are held in a `std::map`, whose node stability is load-bearing — several transitions hold a `Generation *` across a call that can erase a *different* generation.
+
+  **Ruling 9 (execution) — `take()` still accepts a retired generation's READY frame.** A frame published just before a resize is shown rather than dropped: the producer's work is already done and the presenter stretches it. The cost is paid in `wrappersReleasable()`, which must therefore count **READY** as well as PRESENTING and RETIRING, or the presenting instance destroys a wrapper the very next `take()` needs. Refusing the frame instead would drop finished work to solve a wrapper-lifetime problem that a conservative count solves for free. Task 4 may rely on this behaviour. Every public method takes that lock for its whole compound transition. `take()` moves READY→PRESENTING **and** displaces the previous slot in the same critical section. `releaseRead()` frees only from RETIRING. Destruction is never called with the lock held and never inline: it is handed to the owner dispatcher (Task 3), which Task 2 accepts as a `std::function` so it can be tested with a fake.
+
+- [x] **Step 4: Run to verify they pass**
 
 ```bash
 cmake --build cmake-build-asan --target CompositorTest && \
@@ -344,11 +372,13 @@ cmake --build cmake-build-asan --target CompositorTest && \
 
 Expected: PASS, 8 tests, `[  PASSED  ] 8 tests.`
 
-- [ ] **Step 5: Verify each mutation actually breaks its test** — make the mutation named under each test, confirm that test fails, revert. A test that passes under its mutation is not a test.
+- [x] **Step 5: Verify each mutation actually breaks its test** — make the mutation named under each test, confirm that test fails, revert. A test that passes under its mutation is not a test.
 
-- [ ] **Step 6: Correct the spec's atomic-word paragraph** — replace `spec:445`'s "one atomic word ... CAS retry loop" with the mutex rule and the reason (compound transitions), citing this plan's "Recorded deviation" section.
+  **Ruling 13 (execution) — timing sweeps do not work in this suite; assert end states under load instead.** Measured, not assumed: a sweep that fires one release at one displacement caught a *yield-widened* split twice and then let the identical mutation through after unrelated timing shifts, and never caught a bare split (two critical sections back to back, tens of nanoseconds) in 4000 rounds. Thread wake-up latency is orders of magnitude larger than the window being swept, so where a round lands is luck rather than aim. The replacement — let threads drift under load and assert an **end state** that a defect makes permanent (a stranded slot stays stranded; a releasable generation stays releasable) — catches the bare split. The two sweeps stay as cheap single-shot regression checks, with comments saying they pin nothing and naming the load test that does, and with round counts trimmed to match what they actually buy. **Write no new test that tries to hit a narrow window by aiming at it.**
 
-- [ ] **Step 7: Format and commit**
+- [x] **Step 6: Correct the spec's atomic-word paragraph** — replace `spec:445`'s "one atomic word ... CAS retry loop" with the mutex rule and the reason (compound transitions), citing this plan's "Recorded deviation" section.
+
+- [x] **Step 7: Format and commit**
 
 ```bash
 ./utils/format.sh -f
@@ -363,15 +393,19 @@ git commit -m "Add the compositor surface protocol under one lock"
 
 **Files:** create `include/hermes/node-compat/compositor/owner_dispatch.h`, `lib/compositor/owner_dispatch.cpp`; modify `lib/compositor/CMakeLists.txt`, `unittests/CompositorTest.cpp`.
 
-**Interfaces produced:** `class OwnerDispatch { OwnerDispatch(uv_loop_t *loop); void post(std::function<void()> fn); void drainForTest(); void close(); }` — `post` is callable from **any** thread (`uv_async_send`), the function runs on the loop thread.
+**Interfaces produced:** `class OwnerDispatch { OwnerDispatch(uv_loop_t *loop); bool post(std::function<void()> fn); void drainForTest(); void close(); }` — `post` is callable from **any** thread (`uv_async_send`), the function runs on the loop thread.
 
-- [ ] **Step 1: Write the failing test** — post from three threads, assert every function ran **on the loop thread** (compare `std::this_thread::get_id()` captured inside against the loop thread's id), that none ran inline on the posting thread, and that `close()` after posts still drains or discards deterministically without leaking.
+**Ruling 4 (execution) — `post()` returns `bool`, not `void`.** It returns false, having enqueued nothing, once `close()` has run: queued work is GPU-resource destruction, so a caller whose work is destruction-critical has to be able to find out that it will not run rather than have it silently dropped. `close()` is owner-thread-only, and **drains to a fixpoint rather than discarding** — a function it runs may itself post another (a cascading generation destruction), and that post must still be accepted. The extraction rule applies here exactly as in `SurfaceTable`: take the lock, move the work out, unlock, *then* invoke — never call a callback with a lock held (precedent: `lib/event-loop/uv_event_loop.cpp:241`).
+
+- [x] **Step 1: Write the failing test** — post from three threads, assert every function ran **on the loop thread** (compare `std::this_thread::get_id()` captured inside against the loop thread's id), that none ran inline on the posting thread, and that `close()` after posts still drains or discards deterministically without leaking.
   *Mutation that must break it:* call `fn()` directly inside `post()`.
-- [ ] **Step 2: Run to verify it fails** (full build + run command, as Task 1).
-- [ ] **Step 3: Implement** with `uv_async_t` plus a mutex-protected queue; `uv_async_send` is the one libuv call that is safe from any thread.
-- [ ] **Step 4: Run to verify it passes.**
-- [ ] **Step 5: Wire it into `SurfaceTable`** — Task 2's `destroyOnOwnerThread` becomes `[&](GenerationId g){ dispatch.post([g]{ ... }); }` in production code; the unit tests keep their fake.
-- [ ] **Step 6: Format and commit** (`git commit -m "Post generation destruction to the owner thread"`).
+- [x] **Step 2: Run to verify it fails** (full build + run command, as Task 1).
+- [x] **Step 3: Implement** with `uv_async_t` plus a mutex-protected queue; `uv_async_send` is the one libuv call that is safe from any thread.
+- [x] **Step 4: Run to verify it passes.**
+- [x] **Step 5: Wire it into `SurfaceTable`** — Task 2's `destroyOnOwnerThread` becomes `[&](GenerationId g){ dispatch.post([g]{ ... }); }` in production code; the unit tests keep their fake.
+
+  **Ruling 16 (execution) — this step was deliberately left UNDONE, and its obligation transfers to Slice B.** Nothing in this repository constructs a `SurfaceTable` outside `unittests/CompositorTest.cpp`; the first production call site arrives with the UI module (Task 8/10). Writing the wiring here would have meant fabricating a production site — dead code that later has to be found and undone. **The Slice B task that first constructs a `SurfaceTable` owns this step**, and must pass `dispatch.post(...)` as the destruction callback rather than a fake. Destruction frees GPU textures, and the thread that drops a generation's last reference is whichever one happened to run a completion handler, so an inline callback would free textures off the owner thread.
+- [x] **Step 6: Format and commit** (`git commit -m "Post generation destruction to the owner thread"`).
 
 ---
 
@@ -389,11 +423,15 @@ bool publishFrame(SurfaceTable &table, SurfaceRef ref);   // false -> dropped
 std::optional<SurfaceRef> takeFrame(SurfaceTable &table);
 ```
 
-- [ ] **Step 1: Write the failing tests** — the seven from the previous plan **plus**: a dropped publication with a request recorded during GPU_PENDING still ticks afterwards (*mutation: clear pending requests in `publicationDropped()`*); a request made during `kTickQueued` and during `kGpuPending` both survive (the old test covered only `kCallbacksRunning`); `publishFrame` followed immediately by `takeFrame` on another thread never leaves the machine in `kPublishedAwaitingTake`.
-- [ ] **Step 2–4: fail, implement, pass** as before.
-- [ ] **Step 5: Channels** — `InputQueue` with mouse-move coalescing (position latest, deltas summed, non-move events break the run); `CommandQueue` carrying a `Command` variant whose payloads are owned (`std::string` for title, RGBA vector for cursor images); **`ClipboardRequest` as a retained, reference-counted per-request slot** carrying an id, so a late reply to a timed-out request A cannot satisfy a later request B and cannot touch freed storage.
+**Ruling 5 (execution) — "the seven from the previous plan" was an unrecoverable reference and is replaced by the list below.** That text lived only in the first version of this plan, which the slice-based rewrite replaced, and no fresh executor could reach it. The seven are: an idle app receives no ticks; requests coalesce; the tick is withheld while no slot is free; an empty tick returns to idle immediately; a dropped publication returns to idle rather than awaiting a take; a callback registered inside a callback runs next tick; no ticks while minimized. They were reproduced in Task 4's dispatch brief and are implemented as the `TickMachineTest` cases of those names.
+
+- [x] **Step 1: Write the failing tests** — the seven listed in Ruling 5 above **plus**: a dropped publication with a request recorded during GPU_PENDING still ticks afterwards (*mutation: clear pending requests in `publicationDropped()`*); a request made during `kTickQueued` and during `kGpuPending` both survive (the old test covered only `kCallbacksRunning`); `publishFrame` followed immediately by `takeFrame` on another thread never leaves the machine in `kPublishedAwaitingTake`.
+- [x] **Step 2–4: fail, implement, pass** as before.
+- [x] **Step 5: Channels** — `InputQueue` with mouse-move coalescing (position latest, deltas summed, non-move events break the run); `CommandQueue` carrying a `Command` variant whose payloads are owned (`std::string` for title, RGBA vector for cursor images); **`ClipboardRequest` as a retained, reference-counted per-request slot** carrying an id, so a late reply to a timed-out request A cannot satisfy a later request B and cannot touch freed storage.
   *Test that must exist:* A requests and times out, B requests, A's reply arrives — B must still be pending, and nothing must leak or crash under ASAN.
-- [ ] **Step 6: Format and commit.**
+
+**Ruling 21 (execution) — the composition rule is pinned by a deterministic test, not by the threaded one.** `PublishThenImmediateTakeNeverStrandsAwaitingTake` does **not** catch its own named mutation: splitting `publishFrame` into `table.publish()` plus a separate state store was applied, confirmed present in the source, and survived all iterations — the window between the two halves is a few instructions while `std::thread` startup is tens of microseconds, so the consumer always arrives after both. (Same dead end as Ruling 13.) What pins the rule is `PublishFrameUpdatesTheMachineWithinTheTablesTransaction`, which uses no threads at all: `SurfaceTable` hands a dead generation to the destroy function at the *end* of a transaction, so that callback is a deterministic observation point sitting exactly where a split implementation leaves its gap — composed observes `kPublishedAwaitingTake`, split observes `kGpuPending`. The threaded test stays for its end-state invariant over both orderings; its comment says what it is and is not worth.
+- [x] **Step 6: Format and commit.**
 
 ---
 
@@ -441,6 +479,7 @@ std::optional<SurfaceRef> takeFrame(SurfaceTable &table);
 - [ ] **Step 2: Define the real GPU CMake target** — `hermesNodeCompositorGpu`, its sources, the generated rename header, `${Python_EXECUTABLE}`, X11/GL libraries, and the `check-sgp-isolation` target. (Finding 10: the previous plan consumed this target without creating it.)
 - [ ] **Step 3: Fix and write the rename generator** — sorted output, and the lit test checks **`CHECK-DAG`** for two representative names plus a count of the whole file, not ordered `CHECK`s that contradict the sort (finding 11). The count assertion is `>= 156` so Task 16's added accessor does not break it.
 - [ ] **Step 4: Write the failing window test** — `createWindow` resolves, `framebufferWidth > 0`, a second `createWindow` **throws**, and the process exits 0.
+- [ ] **Step 0 (carried from Task 3, Ruling 16): wire `OwnerDispatch` into the `SurfaceTable` this task constructs.** If this is the first task to construct a production `SurfaceTable`, its `destroyOnOwnerThread` argument **must** be `[&](GenerationId g){ dispatch.post([g]{ ...free the generation's textures... }); }` — never a fake, never an inline free. Task 3 Step 5 was deliberately left undone because no production call site existed then; this is where that debt is paid. If Task 10 constructs one first, the step belongs there instead.
 - [ ] **Step 5: Implement the startup requirements in full** (finding 13): take the referenced libuv handle **when `createWindow` is called**; install the Sokol logger that **terminates non-zero** on a panic item; stage 1 decides the context route **before `sapp_run()`** (Sokol ranks its config and creates its context there, `sokol_app.h:14272-14274`); on shared-context failure, post the rejection and **keep the main loop running until JS has observed it**; refuse an unsupported route with a message rather than degrading.
 - [ ] **Step 6: Run, format, commit.**
 
@@ -462,7 +501,7 @@ std::optional<SurfaceRef> takeFrame(SurfaceTable &table);
 
 **This is Slice B's payoff: the first task whose gate is a picture.**
 
-- [ ] **Step 1: Implement the minimal C API subset** — only what the fixed-pattern addon needs. The full surface comes in Task 14.
+- [ ] **Step 1: Implement the minimal C API subset** — only what the fixed-pattern addon needs. The full surface comes in Task 14. **If Task 8 did not already construct the production `SurfaceTable`, Ruling 16's carried obligation lands here**: the destruction callback is `dispatch.post(...)`, not a fake. Gate the frame tick through `TickMachine::shouldSendTick(SurfaceTable &)` — the composed overload — rather than `anyFreeSlot()` followed by `shouldSendTick(bool)`.
 - [ ] **Step 2: Write the fixed-pattern addon and `demo.js`.**
 - [ ] **Step 3: Implement surfaces and presenting** — immutable storage (`glTexStorage2D`), wrappers created once per generation via `gl_textures[0]`, a full-screen triangle with linear filtering, stretching when sizes differ, and a clear colour while nothing has ever been published.
 - [ ] **Step 4: Write the capture test** using Task 9's hook, with the agreement rule and tolerance policy.

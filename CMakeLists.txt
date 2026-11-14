@@ -118,6 +118,11 @@ add_subdirectory(lib/bindings)
 add_subdirectory(lib/inspector)
 add_subdirectory(lib/runtime)
 
+option(HERMES_NODE_ENABLE_UI "Build the hermes-node-ui compositor" OFF)
+if(HERMES_NODE_ENABLE_UI)
+  add_subdirectory(lib/compositor)
+endif()
+
 # CLI tools
 add_subdirectory(tools/hermes-node)
 
