@@ -102,11 +102,28 @@ Time gLastConversionTime = CurrentTime;
 /// SelectionNotify. Server time is in milliseconds, so two reads in the
 /// same millisecond would otherwise share one; another append a moment
 /// later gets a later time.
+///
+/// **Earlier reads' notifies are drained first.** A read that timed out
+/// inside this function left its append's PropertyNotify behind -- queued,
+/// or still on its way -- and taking that one would hand this read the
+/// previous read's timestamp: a strict owner that took the selection in
+/// between then refuses the conversion as predating its ownership. The
+/// XSync makes "on its way" impossible (every event a processed request
+/// generated arrives before the sync's reply), so after the drain the
+/// first scratch notify in the queue is the one this read's append causes.
 bool fetchServerTime(
     Display *display,
     Match *match,
     Clock::time_point deadline,
     Time *out) {
+  XSync(display, False);
+  XEvent stale;
+  int drained = 0;
+  while (XCheckIfEvent(
+      display, &stale, isScratchNotify, reinterpret_cast<XPointer>(match)))
+    ++drained;
+  if (drained > 0)
+    uiTrace("clipboard read: discarded %d stale timestamp notify(s)", drained);
   for (;;) {
     XChangeProperty(
         display,
@@ -135,8 +152,11 @@ bool fetchServerTime(
 /// late writes the property that conversion named, and if that were the
 /// property the current read is about to read, a late WRITE could land
 /// between the current owner's write and our XGetWindowProperty. With
-/// rotation that needs a reply exactly a multiple of 8 foreign reads late
-/// and racing the current owner's write; it is narrowed, not closed.
+/// rotation that needs a reply exactly a multiple of 8 conversions late
+/// and racing the current owner's write; it is narrowed, not closed. (The
+/// counter advances once per XConvertSelection, not per read: a read that
+/// finds no owner, or times out before it has a timestamp, converts
+/// nothing and names no property.)
 /// Rotated rather than unique per read because X never frees an interned
 /// atom. Platform thread only.
 Atom nextProperty(Display *display) {

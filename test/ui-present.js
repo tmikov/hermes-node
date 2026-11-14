@@ -76,16 +76,18 @@
 // fallback. Both modes of both mechanisms therefore have a caller, which
 // is what the plan's Step 6 asks for.
 //
-// **The redirections are INSIDE `sh -c`, and that is load-bearing rather
-// than a style choice: `xvfb-run` merges its child's stderr into stdout.**
-// Measured, not assumed -- `xvfb-run -a sh -c 'echo A; echo B >&2'` with
-// the two streams sent to different files puts both lines in the stdout
-// file and leaves the stderr file empty. Written the obvious way, with
-// `> %t.out 2> %t.err` outside, the trace assertions below would run
-// against an EMPTY file and pass without reading anything, which is the
-// silent-green failure this suite keeps being bitten by. Redirecting
-// inside the inner shell attaches the files to the binary's own fds
-// before xvfb-run's merge can reach them.
+// **The redirections are INSIDE `sh -c`, and that was load-bearing rather
+// than a style choice under `xvfb-run`, which merges its child's stderr
+// into stdout.** Measured, not assumed -- `xvfb-run -a sh -c 'echo A; echo
+// B >&2'` with the two streams sent to different files put both lines in
+// the stdout file and left the stderr file empty. Written the obvious way,
+// with `> %t.out 2> %t.err` outside, the trace assertions below would have
+// run against an EMPTY file and passed without reading anything, which is
+// the silent-green failure this suite keeps being bitten by. `%with-xvfb`
+// (utils/with-xvfb.py), which replaced xvfb-run because its choice of
+// display is not atomic, does not merge -- but the shape is kept: with the
+// files attached to the binary's own fds by the inner shell, no wrapper
+// sitting between lit and the binary can empty them.
 //
 // `timeout` is load-bearing too, for the same reason it is in
 // ui-create-window.js: the interesting mutations here do not print
@@ -94,13 +96,13 @@
 // so without the bound such a mutation would stall a worker slot instead
 // of failing. With it, a hang exits 124 and the EXITCODE check goes red.
 //
-// RUN: timeout 300 xvfb-run -a sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI HERMES_NODE_UI_GL_COMPLETION=poll %hermes-node-ui %s %hnui_demo_addon js %t.poll.ppm > %t.poll.out 2> %t.poll.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=POLLCODE %s
+// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI HERMES_NODE_UI_GL_COMPLETION=poll %hermes-node-ui %s %hnui_demo_addon js %t.poll.ppm > %t.poll.out 2> %t.poll.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=POLLCODE %s
 // RUN: %FileCheck --check-prefix=POLL %s < %t.poll.out
-// RUN: %FileCheck --check-prefix=POLLERR %s < %t.poll.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=POLLERR %s < %t.poll.err
 
-// RUN: timeout 300 xvfb-run -a sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI HERMES_NODE_UI_GL_COMPLETION=block %hermes-node-ui %s %hnui_demo_addon native %t.block.ppm > %t.block.out 2> %t.block.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=BLOCKCODE %s
+// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI HERMES_NODE_UI_GL_COMPLETION=block %hermes-node-ui %s %hnui_demo_addon native %t.block.ppm > %t.block.out 2> %t.block.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=BLOCKCODE %s
 // RUN: %FileCheck --check-prefix=BLOCK %s < %t.block.out
-// RUN: %FileCheck --check-prefix=BLOCKERR %s < %t.block.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=BLOCKERR %s < %t.block.err
 
 // --- A third run with NO override, so the stage-2 PROBE runs. --------
 //
@@ -111,9 +113,9 @@
 // while being exactly what a real user's run performs. This run leaves
 // the variable unset and lets the probe decide.
 //
-// RUN: timeout 300 xvfb-run -a sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon js %t.probe.ppm > %t.probe.out 2> %t.probe.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=PROBECODE %s
+// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon js %t.probe.ppm > %t.probe.out 2> %t.probe.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=PROBECODE %s
 // RUN: %FileCheck --check-prefix=PROBE %s < %t.probe.out
-// RUN: %FileCheck --check-prefix=PROBEERR %s < %t.probe.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=PROBEERR %s < %t.probe.err
 
 'use strict';
 
@@ -232,9 +234,8 @@ async function main() {
 
   // The agreement fields every request below shares. The generation is 1
   // because nothing in this test resizes and SurfaceTable's ids start
-  // there; the input serial is 0 because no input path exists until Task
-  // 11. Both are stated rather than read back from the runtime, so that a
-  // change in either is a test failure rather than a silently updated
+  // there. It is stated rather than read back from the runtime, so that a
+  // change in it is a test failure rather than a silently updated
   // expectation.
   const agreement = {
     generation: 1,
@@ -243,7 +244,6 @@ async function main() {
     framebufferWidth: win.framebufferWidth,
     framebufferHeight: win.framebufferHeight,
     dpiScale: win.dpiScale,
-    inputSerial: 0,
   };
 
   const capture = (publicationId, path, giveUpAfterFrames) =>
@@ -353,10 +353,10 @@ main().catch((e) => {
 // **The publication-id assertion.** `matched=false` after 240 presented
 // frames is the whole point: every one of those frames re-blitted the
 // surface that was still presenting and agreed with the request on
-// generation, both sizes, DPI scale and input serial -- and was refused,
-// because its publication id was the one already shown rather than the
-// one asked for. Remove `publicationId` from CaptureRequest's comparison
-// and this line reads `matched=true framesObserved=1`.
+// generation, both sizes and DPI scale -- and was refused, because its
+// publication id was the one already shown rather than the one asked for.
+// Remove `publicationId` from CaptureRequest's comparison and this line
+// reads `matched=true framesObserved=1`.
 // POLL-NEXT: REBLIT matched=false framesObserved=240
 // POLL-NEXT: RESUMED matched=true publicationId=2
 // POLL-NEXT: DONE

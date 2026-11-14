@@ -193,8 +193,15 @@ typedef enum hnui_event_type {
 #define HNUI_BUTTON_MIDDLE 1
 #define HNUI_BUTTON_RIGHT 2
 
-/// Limits on a `HNUI_EVENT_FILE_DROP`: at most this many paths are
-/// delivered, each at most this many bytes.
+/// Limits on a `HNUI_EVENT_FILE_DROP`. At most `HNUI_DROP_MAX_FILES` paths
+/// are delivered; a drop of more delivers the first that many and silently
+/// leaves out the rest. Each path holds at most `HNUI_DROP_MAX_PATH_BYTES -
+/// 1` bytes after percent-decoding, plus its terminator, and **one
+/// oversized path discards the entire drop**: no `HNUI_EVENT_FILE_DROP` is
+/// delivered at all, for any of its files. That is what Sokol does on X11
+/// (`_sapp_x11_parse_dropped_files_list` clears the whole drop buffer and
+/// reports failure, logging `DROPPED_FILE_PATH_TOO_LONG` to stderr), and a
+/// drop with a URI that is not `file://` is discarded the same way.
 #define HNUI_DROP_MAX_FILES 32
 #define HNUI_DROP_MAX_PATH_BYTES 4096
 
@@ -206,6 +213,27 @@ typedef enum hnui_event_type {
 /// size `sapp_desc::clipboard_size` is given, so the two cannot disagree.
 #define HNUI_CLIPBOARD_MAX_BYTES (1u << 20)
 
+/// Which fields of an `hnui_event` mean something, by `type`. Every field
+/// not listed for a type is zero (NULL for the pointers).
+///
+///   MOUSE_MOVE, MOUSE_ENTER, MOUSE_LEAVE
+///                 x, y, dx, dy (pointer movement), modifiers
+///   MOUSE_DOWN, MOUSE_UP
+///                 x, y, dx, dy, modifiers, button
+///   MOUSE_WHEEL   x, y, modifiers; dx, dy carry the SCROLL distance, as
+///                 Sokol reports it and unscaled -- a quantity, not a
+///                 position, so not in logical pixels -- rather than
+///                 pointer movement
+///   KEY_DOWN, KEY_UP
+///                 key_code, modifiers, repeat
+///   TEXT_INPUT    text (one character), modifiers, repeat
+///   PASTE         text
+///   FILE_DROP     x, y, modifiers, paths, path_count
+///   RESIZE, FOCUS, BLUR, MINIMIZE, RESTORE, CLOSE_REQUESTED
+///                 none: the state they change is read with
+///                 `hnui_get_window_state`, which already reports it when
+///                 the listener runs
+///
 /// The public, flat counterpart of the internal `UiEvent`
 /// (`channels.h`). `UiEvent` owns its payloads (`std::string`,
 /// `std::vector`) because it is queued on the platform thread and drained
@@ -244,8 +272,14 @@ typedef struct hnui_event {
   double dx;
   double dy;
 
+  /// `HNUI_BUTTON_*`, DOM numbering.
   int32_t button;
+  /// `HNUI_MOD_*` bits.
   int32_t modifiers;
+  /// `HNUI_EVENT_KEY_DOWN` / `KEY_UP` only: Sokol's `sapp_keycode` value,
+  /// which is GLFW's key numbering (`GLFW_KEY_A` is 65, `GLFW_KEY_F1`
+  /// 290). A physical key, not a character: what the key produces arrives
+  /// as `HNUI_EVENT_TEXT_INPUT`.
   int32_t key_code;
 
   /// `HNUI_EVENT_TEXT_INPUT` (the character) and `HNUI_EVENT_PASTE` (the
@@ -286,9 +320,11 @@ typedef struct hnui_event {
 #define HNUI_EVENT_MIN_SIZE \
   ((uint32_t)(offsetof(hnui_event, repeat) + sizeof(uint32_t)))
 
-/// Delivered to `hnui_event_cb`. Window state changes travel with the
-/// event that caused them and are also mirrored here for polling via
-/// `hnui_get_window_state`.
+/// The window's state, read with `hnui_get_window_state` -- it is not part
+/// of an `hnui_event`. Window state changes travel with the event that
+/// caused them and are applied before any listener for that event runs, so
+/// a `HNUI_EVENT_RESIZE` (or FOCUS, BLUR, ...) listener that calls
+/// `hnui_get_window_state` reads the new state.
 typedef struct hnui_window_state {
   /// See `hnui_event::size`.
   uint32_t size;
@@ -318,23 +354,18 @@ typedef struct hnui_window_state {
 /// Mirrors the layout Sokol uses for every public handle type it declares
 /// (`typedef struct sg_X { uint32_t id; } sg_X;`) -- `sg_view` included: a
 /// single opaque id. Declared here, rather than borrowed from
-/// `sokol_gfx.h` directly, because this header must stay includable
-/// before Sokol is vendored -- Task 8 of this same plan vendors it, at the
-/// pinned commit `c0db757`, into `external/sokol/sokol/` -- and must stay
-/// includable by an addon that has not included `sokol_gfx.h` at all, such
-/// as one that only ever forwards this id back into calls it makes through
-/// the exported `sg_*` symbols.
+/// `sokol_gfx.h` directly, because this header must stay includable by an
+/// addon that has not included `sokol_gfx.h` at all, such as one that only
+/// ever forwards this id back into calls it makes through the exported
+/// `sg_*` symbols.
 ///
-/// This is an inference from Sokol's own naming convention, not a copy
-/// checked against the real `sg_view`: the one Sokol copy present in this
-/// tree (`hermes/benchmarks/lib/libgui/sokol`) does not declare `sg_view`
-/// at all -- it predates Sokol's unified view API -- and the name appears
-/// nowhere else here either. Task 8 carries the
-/// obligation to add a `static_assert(sizeof(sg_view) ==
-/// sizeof(hnui_gpu_view), ...)` (and the equivalent range check for
-/// `hnui_target::color_format` against `sg_pixel_format`) once the real
-/// header is in the tree, so this inference is checked rather than trusted
-/// indefinitely.
+/// **Checked against the vendored `sg_view`, not assumed.** Static
+/// assertions in `lib/compositor-gpu/gl_backend.cpp` and
+/// `unittests/HnuiAbiTest.cpp` compare this type's size, alignment and
+/// field offset with `sokol_gfx.h`'s (pinned commit `c0db757`), and
+/// `HnuiAbiTest` checks that `sg_pixel_format`'s values fit
+/// `hnui_target::color_format`, so a Sokol bump that changes either fails
+/// the build.
 ///
 /// An addon that has included `sokol_gfx.h` converts **by value**, never
 /// by pointer cast: the two types have identical layout, but reinterpreting
@@ -391,8 +422,9 @@ typedef struct hnui_target {
 
 /// Named after the standard cursor taxonomy shared by CSS's `cursor`
 /// property and Sokol's own `sapp_mouse_cursor` -- not required to share
-/// either one's numeric values, since the mapping to the platform's actual
-/// cursor is the implementation's job, in a later task, not this header's.
+/// either one's numeric values: the host maps each to Sokol's cursor through
+/// an explicit table (`sappCursorFor` in tools/hermes-node-ui/
+/// ui_module.cpp), never a cast.
 /// `HNUI_CURSOR_DEFAULT` is zero because it is a legitimate steady state (a
 /// window that never calls `hnui_set_cursor` still has one), unlike
 /// `HNUI_EVENT_INVALID` above, whose zero exists to flag data nobody wrote.

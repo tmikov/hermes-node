@@ -47,9 +47,10 @@
 // forwarded at all (PASTE-MUTE: a marker key injected after it arrives,
 // and no paste before it).
 //
-// Each lit run starts its own Xvfb (xvfb-run -a picks a free display
-// number), and a selection belongs to one X server, so parallel runs of
-// this test do not share a CLIPBOARD. Were they to, another run's owner
+// Each lit run starts its own Xvfb (%with-xvfb lets `Xvfb -displayfd`
+// claim a free display atomically, which `xvfb-run -a` did not), and a
+// selection belongs to one X server, so parallel runs of this test do not
+// share a CLIPBOARD. Were they to, another run's owner
 // would break OWN, FOREIGN or NONE here.
 //
 // Mutations (each must turn a named line below red):
@@ -72,19 +73,21 @@
 // REQUIRES: ui, ui-gpu
 // REQUIRES: display
 //
-// RUN-line shape as in ui-events.js: redirections inside `sh -c` because
-// xvfb-run merges its child's stderr into stdout, and `timeout` because lit
-// has no per-test timeout (dz 01a0d797-e326). Ends through process.exit()
-// (Ruling 59): closing the window still hangs (dz 01a0d88a-6518).
+// RUN-line shape as in ui-events.js: redirections inside `sh -c`, so the
+// trace file is the binary's own stderr whatever the display wrapper does,
+// and `timeout` because lit has no per-test timeout (dz 01a0d797-e326). Ends
+// through process.exit() (Ruling 59): closing the window still hangs (dz
+// 01a0d88a-6518).
 //
-// RUN: timeout 300 xvfb-run -a sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon %x11_selection_owner > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon %x11_selection_owner > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --check-prefix=TRACE %s < %t.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=TRACE %s < %t.err
 
 // CODE: EXITCODE 0
 
 // CHECK: NO-WINDOW ok
 // CHECK: OWN promise ok
+// CHECK: REPLY ok
 // CHECK: OWN sync ok
 // CHECK: PASTE-OWN ok
 // CHECK: FOREIGN promise ok
@@ -104,6 +107,7 @@
 // CHECK: NONE sync ok
 // CHECK: ABANDONED sync ok
 // CHECK: ABANDONED after ok
+// CHECK: BOUNDARY ok
 // CHECK: DONE
 
 // What the platform thread actually did, in order. `#N` is the request id
@@ -149,6 +153,8 @@
 // TRACE: clipboard read sync #6: {{deadline passed; skipped|waiter gone; reply discarded}}
 // TRACE: clipboard read: own selection
 // TRACE: clipboard read sync #7: status=ok bytes=5
+// TRACE: clipboard read: own selection
+// TRACE: clipboard read promise #11: status=ok bytes=1048575
 
 'use strict';
 
@@ -264,8 +270,37 @@ async function main() {
 
   // OWN
   ui.writeClipboard('first');
+  addon.startEventLog();
+  addon.takeEventLog();
+  const focusedBefore = win.focused;
   let p = await readPromise();
   report('OWN promise', p.resolved && p.value === 'first', show(p));
+
+  // REPLY: a Promise read's answer travels the input queue, but it is not
+  // an input event. Its window snapshot is a default one -- width 0,
+  // focused false -- because nothing sampled it, so delivering it as an
+  // event would overwrite the mirror with that, and show an addon an event
+  // of no public type. Checked a loop turn after the read, from both
+  // halves of the mirror, with a native listener registered.
+  // (Mutation: remove deliver()'s kClipboardReply early return.)
+  await new Promise((resolve) => setImmediate(resolve));
+  const nativeState = addon.getWindowState();
+  const replyEvents =
+      addon.takeEventLog().filter((line) => line.startsWith('native:unknown'));
+  report(
+      'REPLY',
+      win.width === 160 && win.framebufferWidth === 160 &&
+          win.focused === focusedBefore && nativeState !== null &&
+          nativeState.width === 160 && nativeState.focused === win.focused &&
+          replyEvents.length === 0,
+      show({
+        width: win.width,
+        framebufferWidth: win.framebufferWidth,
+        focused: win.focused,
+        focusedBefore,
+        nativeState,
+        replyEvents,
+      }));
   let s = addon.readClipboardSync(SYNC_TIMEOUT_MS);
   report('OWN sync', s.status === 'HNUI_OK' && s.text === 'first', show(s));
   let pastes = await injectPaste(win);
@@ -282,13 +317,15 @@ async function main() {
   await owner.stop();
 
   // MUTE: the one the spec names. A failed read must not hand back an
-  // earlier read's text, ours or anyone's.
+  // earlier read's text, ours or anyone's. The REJECTION is what shows it:
+  // a rejected read carries no text at all, and a read that fell back to a
+  // previous buffer would resolve instead -- which is how the fallback
+  // mutation turns this line red. (Comparing the value against 'first'
+  // here would compare `undefined`, and could never fail.)
   owner = await startOwner(['mute']);
   p = await readPromise();
   report(
-      'MUTE promise',
-      !p.resolved && p.code === 'ERR_CLIPBOARD_TIMEOUT' &&
-          p.value !== 'first' && p.value !== 'second',
+      'MUTE promise', !p.resolved && p.code === 'ERR_CLIPBOARD_TIMEOUT',
       show(p));
   // FAIL-PENDING: a read the platform thread will answer (with a timeout,
   // a second from now) is failed first. The sync read below waits behind it
@@ -312,12 +349,12 @@ async function main() {
           failSettled === 1,
       show(failed));
 
+  // `text === null` is what excludes a stale answer: the reference addon
+  // reports any text the read returned, so a stale 'first' would be
+  // non-null.
   s = addon.readClipboardSync(MUTE_SYNC_TIMEOUT_MS);
   report(
-      'MUTE sync',
-      s.status === 'HNUI_TIMEOUT' && s.text === null && s.text !== 'first' &&
-          s.text !== 'second',
-      show(s));
+      'MUTE sync', s.status === 'HNUI_TIMEOUT' && s.text === null, show(s));
   pastes = await injectPaste(win);
   report('PASTE-MUTE', pastes.length === 0, show(pastes));
   await owner.stop();
@@ -327,11 +364,13 @@ async function main() {
   p = await readPromise();
   report(
       'LATE first', !p.resolved && p.code === 'ERR_CLIPBOARD_TIMEOUT', show(p));
+  // Rejected with a TIMEOUT, which is what shows it was not answered by
+  // read N's reply: a read that takes that reply fails on N's property
+  // instead (see the mutation list above), and does not time out.
+  // (Comparing the value against 'reply-1' would compare `undefined`.)
   p = await readPromise();
   report(
-      'LATE second',
-      !p.resolved && p.code === 'ERR_CLIPBOARD_TIMEOUT' &&
-          p.value !== 'reply-1',
+      'LATE second', !p.resolved && p.code === 'ERR_CLIPBOARD_TIMEOUT',
       show(p));
   await owner.stop();
 
@@ -381,6 +420,27 @@ async function main() {
   report(
       'ABANDONED after', s.status === 'HNUI_OK' && s.text === 'third',
       show(s));
+
+  // BOUNDARY: the largest text the ABI allows, written and read back from
+  // our own selection, arrives whole. An own-selection read returns Sokol's
+  // buffer, whose size is `desc.clipboard_size`; left at Sokol's 8 KB
+  // default, this write landed as its first 8191 bytes with nothing but a
+  // `[sapp:error]` line to say so -- which is why every window test's
+  // stderr check now refuses that prefix as well. The text varies along
+  // its length, so a truncated or shifted copy cannot compare equal.
+  // (ui-abi-sizes.js's `bytes=1048575` is the size of the REQUEST, not of
+  // what landed.)
+  const boundaryLength = 1048575; // HNUI_CLIPBOARD_MAX_BYTES - 1
+  let boundary = '';
+  for (let i = 0; boundary.length < boundaryLength; ++i)
+    boundary += (i % 100000).toString(36) + '.';
+  boundary = boundary.slice(0, boundaryLength);
+  ui.writeClipboard(boundary);
+  p = await readPromise();
+  report(
+      'BOUNDARY',
+      p.resolved && p.value.length === boundaryLength && p.value === boundary,
+      p.resolved ? 'length=' + p.value.length : show(p));
 
   console.log('DONE');
   process.exit(0);

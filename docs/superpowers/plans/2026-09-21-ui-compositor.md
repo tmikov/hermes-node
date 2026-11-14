@@ -63,6 +63,8 @@ The tasks are grouped so that **each slice ends with something that runs**, and 
 
 **Slice B complete (2026-09-25): 33 commits and 75 files before the branch was squashed.** Tasks 5–10 are ticked below. The suite stands at 414 unit tests and 201 JS tests. The slice's gate is met: `hermes-node-ui` opens a real window, the reference addon draws a fixed pattern into a compositor surface on the JS thread, the platform thread blits it, and `test/ui-present.js` compares the presented pixels **exactly** — 0 or 255, no tolerance, samples kept 8px from any edge. Obligations this slice carried forward, each written into the task that discharges it rather than into any external note: the `sapp_event` → `UiEvent` conversion's coverage and the dispatch loop's address-stability constraint (Task 11), a backend-local copy of the `sg_view` asserts (Task 16, optional — `HnuiAbiTest` already covers every platform), and the first real execution of the posted destroy callback (Task 17). Progress notes and the newcomer's orientation live in `docs/superpowers/plans/progress-ui-compositor.md`; known defects live in `dz/`, not here.
 
+**Slice C complete (2026-11-13): eight tasks (11a-11d, 12, 13, 14a, 14b), a whole-slice review and one fix wave.** Tasks 11a-14b are ticked below. The slice's gate is met: real key, resize and close events reach native listeners and JavaScript; commands, the clipboard in both directions, full `requestAnimationFrame` semantics and the whole `hnui` C API exist; a resize starts a new generation and the old one is destroyed on the owner thread; and the reference addon has its visual and conformance modes. **What the whole-slice review found is the thing to remember:** no defect in the shipped path, but six mutations of load-bearing lines left every window test green, because every event test injected *below* Sokol and so executed nothing above the injection point. `test/ui-real-events.js`, driven by a second X client (`test/fixtures/hnui-demo/x11_window_driver.c`), is what closed that, and it is the model for Task 15's close handshake. Rulings 60-69, made during execution, are recorded where they bind: in the task text below, in the spec, or in Tasks 15-17. Known defects live in `dz/`.
+
 ---
 
 ### Task 1: Build scaffolding and an empty unit test that runs
@@ -620,7 +622,7 @@ const char *domCodeForKey(int keyCode);
 
 The converter and its helpers go in a new static library **`hermesNodeUiEvents`** (`tools/hermes-node-ui/CMakeLists.txt`; links `hermesNodeCompositor` and the `sokol` INTERFACE target for declarations only), which `hermes-node-ui` links and which the unit test links without dragging in the `sokol_app` implementation. It is not Linux-only: it must build wherever `HERMES_NODE_ENABLE_UI` is on.
 
-- [ ] **Step 1: Write the failing tests** in `unittests/UiEventsTest.cpp`, registered as `add_node_compat_unittest(UiEventsTest UiEventsTest.cpp)` linking `hermesNodeUiEvents`, under `if(HERMES_NODE_ENABLE_UI)`:
+- [x] **Step 1: Write the failing tests** in `unittests/UiEventsTest.cpp`, registered as `add_node_compat_unittest(UiEventsTest UiEventsTest.cpp)` linking `hermesNodeUiEvents`, under `if(HERMES_NODE_ENABLE_UI)`:
   - `SappEventConvertTest.EveryEventTypeIsEitherForwardedOrRefused` — loops `0 .. _SAPP_EVENTTYPE_NUM`; each value must appear in exactly one of the test's two tables. Forwarded: `KEY_DOWN→kKeyDown`, `KEY_UP→kKeyUp`, `CHAR→kTextInput`, `MOUSE_DOWN→kMouseDown`, `MOUSE_UP→kMouseUp`, `MOUSE_SCROLL→kMouseWheel`, `MOUSE_MOVE→kMouseMove`, `MOUSE_ENTER→kMouseEnter`, `MOUSE_LEAVE→kMouseLeave`, `RESIZED→kResize`, `ICONIFIED→kMinimize`, `RESTORED→kRestore`, `FOCUSED→kFocus`, `UNFOCUSED→kBlur`, `QUIT_REQUESTED→kCloseRequested`, `CLIPBOARD_PASTED→kPaste`, `FILES_DROPPED→kFileDrop`. Refused (returns false): `INVALID`, the four `TOUCHES_*`, `SUSPENDED`, `RESUMED`. *Mutation: return true for `TOUCHES_BEGAN`.* A Sokol bump that adds a type fails this test until someone decides which table it belongs in.
   - `...ButtonsUseDomNumbering` — `LEFT→0`, `RIGHT→2`, `MIDDLE→1`. *Mutation: pass `mouse_button` through.*
   - `...ModifiersMapBitByBit` — each of the seven `SAPP_MODIFIER_*` bits alone, then all together.
@@ -631,15 +633,15 @@ The converter and its helpers go in a new static library **`hermesNodeUiEvents`*
   - `...PasteCarriesTheClipboardAndAFailedReadIsRefused` — `readClipboard` returning true with `"clip"` gives `kPaste`, `text == "clip"`; returning false makes `convertSappEvent` return false.
   - `...DropCarriesPathsAndPosition`.
   - `DomCodeTest.RepresentativeNames` — `A→"KeyA"`, `1→"Digit1"`, `ESCAPE→"Escape"`, `LEFT→"ArrowLeft"`, `LEFT_SHIFT→"ShiftLeft"`, `KP_ENTER→"NumpadEnter"`, `F12→"F12"`, `-1→nullptr`.
-  - `DomCodeTest.EveryKeyHasAName` — counts non-null results over `0..400` and compares against the number of real enumerators in `sapp_keycode` (121 at `c0db757`: 122 lines carrying `SAPP_KEYCODE_`, less `INVALID`; recount and write the number in the test).
+  - `DomCodeTest.EveryKeyHasAName` — counts non-null results over `0..400` and compares against the number of real enumerators in `sapp_keycode` (**120** at `c0db757`: 122 lines carrying `SAPP_KEYCODE_`, less `INVALID` and `_SAPP_KEYCODE_FORCE_U32`. This plan first said 121; the implementer recounted, which is why the step said to).
   - In `CompositorTest.cpp`: `InputQueueTest.CoalescedMoveKeepsTheLatestWindowSnapshot`.
   - In `HnuiAbiTest.cpp`: the enum-mirroring test extended to the five new values, `repeat` round-trips, and `kPaste` exposes its text through `hnui_event::text`.
-- [ ] **Step 2: Run to verify they fail** — compilation failure, `sapp_event_convert.h` does not exist.
-- [ ] **Step 3: Implement** the types, the converter, `domCodeForKey` and the library.
-- [ ] **Step 4: Run to verify they pass**, then the `HnuiAbiTest` and `CompositorTest` binaries too.
-- [ ] **Step 5: Make each named mutation, watch its test fail, revert.**
-- [ ] **Step 6: Correct the spec** — remove the four touch events from "The JS API" and add "**No touch events.** `sokol_app` produces them only on iOS, Android and Emscripten." to "What this does not do". The other event names are already listed there and stay.
-- [ ] **Step 7: Format, run `check-hermes-node`, commit** (`Add the full event model and the sapp_event converter`).
+- [x] **Step 2: Run to verify they fail** — compilation failure, `sapp_event_convert.h` does not exist.
+- [x] **Step 3: Implement** the types, the converter, `domCodeForKey` and the library.
+- [x] **Step 4: Run to verify they pass**, then the `HnuiAbiTest` and `CompositorTest` binaries too.
+- [x] **Step 5: Make each named mutation, watch its test fail, revert.**
+- [x] **Step 6: Correct the spec** — remove the four touch events from "The JS API" and add "**No touch events.** `sokol_app` produces them only on iOS, Android and Emscripten." to "What this does not do". The other event names are already listed there and stay.
+- [x] **Step 7: Format, run `check-hermes-node`, commit** (`Add the full event model and the sapp_event converter`).
 
 ---
 
@@ -714,15 +716,15 @@ void uiRunTickCallback(napi_env env);
 
 `ui.__injectEvent(desc)` exists only under `HERMES_NODE_UI_TEST_HOOKS`. `desc.type` is the `SAPP_EVENTTYPE_` name without the prefix; the rest are `keyCode`, `repeat`, `modifiers`, `mouseX`, `mouseY`, `mouseDx`, `mouseDy`, `scrollX`, `scrollY`, `button` (Sokol numbering — it is a platform event), `charCode`, `clipboard`, `paths`, `window`. **This discharges Ruling 48 the preferred way**: a synthetic event is now the converter's input rather than its output. `EventInjector` in `lib/compositor-gpu/test_hooks` is deleted, with its tests.
 
-- [ ] **Step 1: Write the failing unit tests.**
+- [x] **Step 1: Write the failing unit tests.**
   - `EventDispatcherTest.DeliversInPushOrder`.
   - `EventDispatcherTest.NestedDispatchLeavesABorrowedEventInPlace` — **the address-stability obligation carried from Task 7 (Ruling 45).** Push a kTextInput with `text = "a"` (short, so the bytes live inside the `UiEvent`) and one more event. The sink, on the first event, builds an `HnuiEventConverter`, keeps `const char *p = converter.event().text`, pushes 64 more events onto the queue, calls `dispatch()` again, and then reads `*p`. Expect `'a'`, no ASAN report, and all 66 events delivered once each in push order. *Mutation: delete the already-dispatching guard, so the nested call drains into the buffer the outer call is iterating. It must report heap-use-after-free under ASAN.* If it does not, the test is not pinning the constraint; fix the test, not the claim.
   - `EventDispatcherTest.DispatchingIsTrueOnlyInsideASink`.
   - In `UiEventsTest.cpp`: `PlatformEventInjectorTest.PreservesInjectionOrder`.
-- [ ] **Step 2: Run to verify they fail.**
-- [ ] **Step 3: Implement `EventDispatcher` and `PlatformEventInjector`; run; make the mutation; revert.**
-- [ ] **Step 4: Extend the addon** with an ordered in-memory log shared by both sides — `startEventLog()` registers a native listener that appends `native:<type>` (plus the fields under test), `logLine(s)` appends a string from JavaScript, `takeEventLog()` returns and clears it. One log, because `printf` and `console.log` reach the pipe by different routes and their relative order is not preserved.
-- [ ] **Step 5: Write the failing lit test** `test/ui-events.js` (`REQUIRES: ui, ui-gpu` and `display`; RUN line modelled on `ui-present.js`, test hooks on). Inject, in one script: `KEY_DOWN` A with shift, `CHAR` `a`, three `MOUSE_MOVE`s with `mouseDx` 1, 2, 3, `MOUSE_DOWN` right, `MOUSE_SCROLL`, `UNFOCUSED`, `FOCUSED`, `CLIPBOARD_PASTED` with `clipboard: 'clip'`, `FILES_DROPPED` with two paths, `QUIT_REQUESTED`. Assert:
+- [x] **Step 2: Run to verify they fail.**
+- [x] **Step 3: Implement `EventDispatcher` and `PlatformEventInjector`; run; make the mutation; revert.**
+- [x] **Step 4: Extend the addon** with an ordered in-memory log shared by both sides — `startEventLog()` registers a native listener that appends `native:<type>` (plus the fields under test), `logLine(s)` appends a string from JavaScript, `takeEventLog()` returns and clears it. One log, because `printf` and `console.log` reach the pipe by different routes and their relative order is not preserved.
+- [x] **Step 5: Write the failing lit test** `test/ui-events.js` (`REQUIRES: ui, ui-gpu` and `display`; RUN line modelled on `ui-present.js`, test hooks on). Inject, in one script: `KEY_DOWN` A with shift, `CHAR` `a`, three `MOUSE_MOVE`s with `mouseDx` 1, 2, 3, `MOUSE_DOWN` right, `MOUSE_SCROLL`, `UNFOCUSED`, `FOCUSED`, `CLIPBOARD_PASTED` with `clipboard: 'clip'`, `FILES_DROPPED` with two paths, `QUIT_REQUESTED`. Assert:
   - for every event, `native:<type>` precedes `js:<name>`, and the sequence across events is the injection order. *Mutation: emit to JavaScript before the native listeners.*
   - `keydown` reports `code === 'KeyA'`, `shiftKey === true`; `mousedown` reports `button === 2`; the `dx` of all `mousemove`s received sums to 6 (their count is not asserted — whether they coalesce depends on which thread runs first); `paste.text === 'clip'`; `drop.paths.length === 2`.
   - inside the `blur` listener `win.focused === false`, and inside `focus` it is `true` again. *Mutation: update the mirror after `emit`.*
@@ -730,10 +732,10 @@ void uiRunTickCallback(napi_env env);
   - `close` is emitted and the process is still running afterwards (the script then exits 0 itself).
   - `hnui_get_window_state` from the addon agrees with `win.width`/`win.framebufferWidth`.
   - **Minimized means no ticks:** inject `ICONIFIED`; in the `minimize` listener call `requestAnimationFrame(cb)` and inject a marker `KEY_DOWN`; on that marker inject a second; on the second assert `cb` has not run, then inject `RESTORED`; `cb` runs after `restore`. Two marker round trips guarantee a platform frame went past with the request pending. *Mutation: remove the `setMinimized` call.*
-- [ ] **Step 6: Run to verify it fails**, then implement the platform half, `ui_events.cpp`, the window object and the two entry points.
-- [ ] **Step 7: Run to verify it passes; make each mutation; revert.**
-- [ ] **Step 8: Record the interim close behaviour** — `dz comment 01a0d88a -m "..."` saying that the close button now emits `close` and no longer closes the window, and that the default action is still Task 15's.
-- [ ] **Step 9: Format, run `check-hermes-node`, commit** (`Deliver input events to native listeners and to JavaScript`).
+- [x] **Step 6: Run to verify it fails**, then implement the platform half, `ui_events.cpp`, the window object and the two entry points.
+- [x] **Step 7: Run to verify it passes; make each mutation; revert.**
+- [x] **Step 8: Record the interim close behaviour** — `dz comment 01a0d88a -m "..."` saying that the close button now emits `close` and no longer closes the window, and that the default action is still Task 15's.
+- [x] **Step 9: Format, run `check-hermes-node`, commit** (`Deliver input events to native listeners and to JavaScript`).
 
 ---
 
@@ -766,12 +768,12 @@ JS surface: `win.title` (accessor; the getter returns the last value set), `win.
 
 **Each application traces the value read back, not the value requested** — `sapp_is_fullscreen()`, `sapp_mouse_shown()`, `sapp_mouse_locked()`, `sapp_get_mouse_cursor()`, and for the title an `XFetchName` on `sapp_x11_get_window()` (Linux; the trace is the only caller). A trace that prints the request passes with the `sapp_*` call deleted, which is the hole Slice B found three times.
 
-- [ ] **Step 1: Write the failing unit tests** — `CommandTest.EachKindOwnsItsPayload` (build from a temporary, destroy the temporary, read back) for the six new kinds.
-- [ ] **Step 2: Fail, implement, pass.**
-- [ ] **Step 3: Write the failing lit test** `test/ui-commands.js` — issue every command, then inject a marker `KEY_DOWN` and exit 0 when it arrives (commands are drained before the injector, so the marker cannot overtake them). FileCheck the trace: title readback equals what was set, fullscreen readback, cursor readback equals the mapped `sapp_mouse_cursor`, cursor-shown readback, pointer-lock readback (assert what Xvfb actually reports and say so in the test if the grab is refused), custom cursor selected, clipboard written. Plus: an unknown cursor name throws, an oversized clipboard write throws.
+- [x] **Step 1: Write the failing unit tests** — `CommandTest.EachKindOwnsItsPayload` (build from a temporary, destroy the temporary, read back) for the six new kinds.
+- [x] **Step 2: Fail, implement, pass.**
+- [x] **Step 3: Write the failing lit test** `test/ui-commands.js` — issue every command, then inject a marker `KEY_DOWN` and exit 0 when it arrives (commands are drained before the injector, so the marker cannot overtake them). FileCheck the trace: title readback equals what was set, fullscreen readback, cursor readback equals the mapped `sapp_mouse_cursor`, cursor-shown readback, pointer-lock readback (assert what Xvfb actually reports and say so in the test if the grab is refused), custom cursor selected, clipboard written. Plus: an unknown cursor name throws, an oversized clipboard write throws.
   *Mutations: delete the `sapp_set_window_title` call; map `pointer` to `SAPP_MOUSECURSOR_IBEAM`.*
-- [ ] **Step 4: Fail, implement, pass, mutate, revert.**
-- [ ] **Step 5: Format, run `check-hermes-node`, commit** (`Apply platform commands from JavaScript`).
+- [x] **Step 4: Fail, implement, pass, mutate, revert.**
+- [x] **Step 5: Format, run `check-hermes-node`, commit** (`Apply platform commands from JavaScript`).
 
 ---
 
@@ -787,17 +789,17 @@ JS surface: `win.title` (accessor; the getter returns the last value set), `win.
 
 **This is where Ruling 16's destroy callback first executes**, so the obligation Task 17 carried lands here: the destroy trace must say which thread ran it (`owner=1` when `std::this_thread::get_id()` equals `hnui_window::ownerThread`), and the test asserts it. Task 17 keeps the case this task cannot reach — a resize of the real framebuffer, which event injection does not perform.
 
-- [ ] **Step 1: Extend the addon** — `lastTarget()` returns the `generation`, `width` and `height` of the most recent `hnui_frame_target`.
-- [ ] **Step 2: Write the failing lit test** `test/ui-resize-generation.js` (window 640x480, test hooks and tracing on). Draw and capture one frame of generation 1. Inject `RESIZED` with `window.framebufferWidth: 320, framebufferHeight: 240`. Assert:
+- [x] **Step 1: Extend the addon** — `lastTarget()` returns the `generation`, `width` and `height` of the most recent `hnui_frame_target`.
+- [x] **Step 2: Write the failing lit test** `test/ui-resize-generation.js` (window 640x480, test hooks and tracing on). Draw and capture one frame of generation 1. Inject `RESIZED` with `window.framebufferWidth: 320, framebufferHeight: 240`. Assert:
   - the `resize` event reports 320x240 and `win.framebufferWidth === 320`;
   - the next frame's `lastTarget()` is generation 2, 320x240. *Mutation: skip `newGeneration`.*
   - a capture requesting generation 2, target 320x240, framebuffer 640x480 matches, and interior samples at least 16 px from any pattern edge are exact — the stretched case the spec asks to be asserted on its own;
   - the trace shows generation 1 destroyed with `owner=1`, after generation 2 was created. *Mutation: call `destroyGenerationSurfaces` inline from the `SurfaceTable` callback instead of posting it; the trace must then say `owner=0`.* If it still says `owner=1`, the last reference was dropped on the owner thread in this run and the test is not exercising the case — arrange the sequence so a platform-thread take drops it.
   - a `RESIZED` to `0x0` starts no generation;
   - rendering continues: a further frame is published in generation 2.
-- [ ] **Step 3: Fail, implement, pass, mutate, revert.**
-- [ ] **Step 4: Amend Task 17's paragraph** to say the first execution and the owner-thread assertion were discharged here, and that the real-framebuffer resize remains.
-- [ ] **Step 5: Format, run `check-hermes-node`, commit** (`Start a new surface generation on resize`).
+- [x] **Step 3: Fail, implement, pass, mutate, revert.**
+- [x] **Step 4: Amend Task 17's paragraph** to say the first execution and the owner-thread assertion were discharged here, and that the real-framebuffer resize remains.
+- [x] **Step 5: Format, run `check-hermes-node`, commit** (`Start a new surface generation on resize`).
 
 ---
 
@@ -843,18 +845,18 @@ JS: `ui.readClipboard()` returns a Promise — the request goes out as a command
 
 `x11_selection_owner <mode>` is a ~80-line C fixture built under the same condition as the GL backend, passed to lit as `%x11_selection_owner`. It takes ownership of `CLIPBOARD`, prints `READY`, and then: `text <s>` answers `UTF8_STRING` requests with `<s>`; `mute` never answers; `incr` answers with type `INCR`. It exits on stdin EOF.
 
-- [ ] **Step 1: Write the failing unit tests** in `CompositorTest.cpp`: `ClipboardRequestTest.AnswerCarriesItsStatus`; `...WaitReportsTimeoutAsAStatus`; `...FailAllCompletesEveryWaiterAndALaterAnswerIsRefused`; and the existing late-reply test (A times out, B requests, A's reply arrives, B still pending) ported to the new signatures. *Mutation: make `answer()` ignore the id and fulfil the oldest request.*
-- [ ] **Step 2: Fail, implement, pass.**
-- [ ] **Step 3: Extend the addon** — `readClipboardSync(timeoutMs)` returns `{status, text}` and frees through `hnui_free`.
-- [ ] **Step 4: Write the failing lit test** `test/ui-clipboard.js`. Each case reads both ways, Promise and sync:
+- [x] **Step 1: Write the failing unit tests** in `CompositorTest.cpp`: `ClipboardRequestTest.AnswerCarriesItsStatus`; `...WaitReportsTimeoutAsAStatus`; `...FailAllCompletesEveryWaiterAndALaterAnswerIsRefused`; and the existing late-reply test (A times out, B requests, A's reply arrives, B still pending) ported to the new signatures. *Mutation: make `answer()` ignore the id and fulfil the oldest request.*
+- [x] **Step 2: Fail, implement, pass.**
+- [x] **Step 3: Extend the addon** — `readClipboardSync(timeoutMs)` returns `{status, text}` and frees through `hnui_free`.
+- [x] **Step 4: Write the failing lit test** `test/ui-clipboard.js`. Each case reads both ways, Promise and sync:
   - OWN: `writeClipboard('first')` then read gives `'first'`.
   - FOREIGN: spawn the owner in `text second`, wait for `READY`, read gives `'second'`.
   - MUTE: replace it with a `mute` owner; the Promise rejects with `ERR_CLIPBOARD_TIMEOUT`, the sync read returns `HNUI_TIMEOUT` with a null string, **and neither yields `'first'` or `'second'`**. *Mutation: on timeout, fall back to `sapp_get_clipboard_string()`.* This is the test the spec names.
   - INCR: `ERR_CLIPBOARD_TOO_LARGE` / `HNUI_TOO_LARGE`.
   - NONE: with no owner, `''` / `HNUI_UNAVAILABLE`.
   - ABANDONED: a sync read with `timeout_ms = 0` returns `HNUI_TIMEOUT`, the trace shows the platform thread skipping or discarding that request's reply, and the following read still works.
-- [ ] **Step 5: Fail, implement, pass, mutate, revert.**
-- [ ] **Step 6: Format, run `check-hermes-node`, commit** (`Read the clipboard with a real status`).
+- [x] **Step 5: Fail, implement, pass, mutate, revert.**
+- [x] **Step 6: Format, run `check-hermes-node`, commit** (`Read the clipboard with a real status`).
 
 ---
 
@@ -894,10 +896,10 @@ void hnui_cancel_animation_frame(hnui_window *w, int id);
 
 **`runFrameTick`, rewritten around the list:** `beginBatch()`; for each `next()`, invoke it — native directly, JS through `napi_call_function` — then call `process._tickCallback()`. An exception from a JS callback or from the tick callback goes through `handleCallbackException`: handled, the batch continues; unhandled, it does not return and the process ends with status 1 after `'exit'` runs. What follows the batch is unchanged, so a handled exception cannot skip the frame's submission or its reclaim. The timestamp is `(uv_hrtime() - originNs) / 1e6`, with `originNs` computed once when the window becomes ready as `uv_hrtime() - process.uptime() * 1e9` (Ruling 56).
 
-- [ ] **Step 1: Write the failing unit tests** (`FrameCallbackListTest`): `RunsInRegistrationOrderAcrossKinds`; `RegisteredDuringABatchRunsInTheNext`; `CancellingALaterCallbackOfTheRunningBatchPreventsIt` (*mutation: have `next()` ignore cancellation*); `CancellingOneThatAlreadyRanReportsFalse`; `CancellingANextBatchCallbackRemovesIt`; `IdsAreSharedAndNeverReused`.
-- [ ] **Step 2: Fail, implement, pass, mutate, revert.**
-- [ ] **Step 3: Extend the addon** — `requestNativeFrame(tag)` registers a native callback that appends `native:<tag>` to the shared log and returns its id; `cancelNativeFrame(id)`.
-- [ ] **Step 4: Write the failing lit test** `test/ui-raf.js`, one RUN per group where the exit status differs:
+- [x] **Step 1: Write the failing unit tests** (`FrameCallbackListTest`): `RunsInRegistrationOrderAcrossKinds`; `RegisteredDuringABatchRunsInTheNext`; `CancellingALaterCallbackOfTheRunningBatchPreventsIt` (*mutation: have `next()` ignore cancellation*); `CancellingOneThatAlreadyRanReportsFalse`; `CancellingANextBatchCallbackRemovesIt`; `IdsAreSharedAndNeverReused`.
+- [x] **Step 2: Fail, implement, pass, mutate, revert.**
+- [x] **Step 3: Extend the addon** — `requestNativeFrame(tag)` registers a native callback that appends `native:<tag>` to the shared log and returns its id; `cancelNativeFrame(id)`.
+- [x] **Step 4: Write the failing lit test** `test/ui-raf.js`, one RUN per group where the exit status differs:
   - ORDER: register js1, native1, js2, native2 in that order; the log reads the same. *Mutation: run all native callbacks first.*
   - CHECKPOINT: cb1 queues a `process.nextTick` and a promise callback; the log reads cb1, tick, micro, cb2. *Mutation: remove the `_tickCallback` call.*
   - TIME: every callback of one tick receives the same timestamp; with `before = process.uptime() * 1000` read before registering and `after` read inside the callback, `before - 1 <= ts <= after + 1`. *Mutation: use `uv_hrtime()` without the origin.* A callback registered inside a callback runs on a later tick with a larger timestamp.
@@ -905,10 +907,10 @@ void hnui_cancel_animation_frame(hnui_window *w, int id);
   - HANDLED: with an `uncaughtException` listener installed, cb0 draws, cb1 throws, cb2 runs; the listener received the error; the frame cb0 drew is published (asserted through a capture); a later tick runs. Same for an exception thrown from a promise callback between callbacks.
   - FATAL (its own RUN line): no listener; a callback throws; exit status 1, the error is on stderr, and an `'exit'` listener's output is present. *Mutation: restore the print-and-continue block.*
   - GLOBALS: `typeof requestAnimationFrame` and `typeof cancelAnimationFrame` are both `'function'` once the window exists.
-- [ ] **Step 5: Fail, implement, pass, mutate, revert.**
-- [ ] **Step 6: Remove the three "not yet" comments this task discharges** in `ui_module.cpp` (the timestamp origin, native-before-JS ordering, the interim exception print) and the "id is returnable and not yet usable" note in `hnui.h`.
-- [ ] **Step 7: Correct the spec** — in "Frames", replace "sharing `performance.now()`'s origin" with `process.uptime()`'s and the reason (Ruling 56).
-- [ ] **Step 8: Format, run `check-hermes-node`, commit** (`Give requestAnimationFrame its full semantics`).
+- [x] **Step 5: Fail, implement, pass, mutate, revert.**
+- [x] **Step 6: Remove the three "not yet" comments this task discharges** in `ui_module.cpp` (the timestamp origin, native-before-JS ordering, the interim exception print) and the "id is returnable and not yet usable" note in `hnui.h`.
+- [x] **Step 7: Correct the spec** — in "Frames", replace "sharing `performance.now()`'s origin" with `process.uptime()`'s and the reason (Ruling 56).
+- [x] **Step 8: Format, run `check-hermes-node`, commit** (`Give requestAnimationFrame its full semantics`).
 
 ---
 
@@ -939,13 +941,13 @@ void hnui_write_clipboard(hnui_window *w, const char *utf8);
 
 **Three obligations carried from Task 7 (Ruling 45), all discharged here:**
 
-- [ ] **Step 1: Write the failing lit test** `test/ui-abi-sizes.js`. Through an addon function `probeSizes()`, for each writer — `hnui_frame_target` inside a frame callback and `hnui_get_window_state`: fill a buffer larger than the struct with `0xA5`, set `size` to exactly the `HNUI_*_MIN_SIZE`, call, and assert every byte from `size` onward is still `0xA5`; then set `size` one below the minimum and assert the call refuses and **no byte** changed. *Mutation: `memcpy(out, &filled, sizeof filled)`.*
-- [ ] **Step 2: Write the failing checks for the enum direction** — in the same test, `hnui_set_cursor(w, (hnui_cursor)999)` produces the refusal message and a trace shows no command was pushed. *Mutation: index the cursor table without the range check — under ASAN this is a global-buffer-overflow.*
-- [ ] **Step 3: Write the failing lit test** `test/ui-version-check.js` — the addon built normally passes `HNUI_CHECK_VERSION`; a second build of the same source with `-DHNUI_SOKOL_COMMIT_OVERRIDE=\"deadbee\"` throws a JS error whose message contains both `deadbee` and the host's commit. (Add that second addon target beside `hnui_demo_addon`, with its own lit param.) Also `test/sokol-pin.js`: the CMake variable, passed to lit as a param, equals the commit `external/sokol/README.md` names. *Mutation: change the variable.*
-- [ ] **Step 4: Write the failing removal checks** in `test/ui-events.js`: listener A removes listener B during event 1; B still receives event 1 and does not receive event 2; `hnui_event_dispatch_quiescent` is false inside A and true in the next frame callback. *Mutation: erase immediately.*
-- [ ] **Step 5: Fail, implement, pass, mutate, revert.**
-- [ ] **Step 6: Add `hnui_event_dispatch_quiescent` and `hnui_sokol_commit` to the spec's prototype list**, and replace the "minimal subset" preamble of `hnui.h` with a description of the whole API.
-- [ ] **Step 7: Format, run `check-hermes-node`, commit** (`Complete the hnui C API and add the version check`).
+- [x] **Step 1: Write the failing lit test** `test/ui-abi-sizes.js`. Through an addon function `probeSizes()`, for each writer — `hnui_frame_target` inside a frame callback and `hnui_get_window_state`: fill a buffer larger than the struct with `0xA5`, set `size` to exactly the `HNUI_*_MIN_SIZE`, call, and assert every byte from `size` onward is still `0xA5`; then set `size` one below the minimum and assert the call refuses and **no byte** changed. *Mutation: `memcpy(out, &filled, sizeof filled)`.*
+- [x] **Step 2: Write the failing checks for the enum direction** — in the same test, `hnui_set_cursor(w, (hnui_cursor)999)` produces the refusal message and a trace shows no command was pushed. *Mutation: index the cursor table without the range check — under ASAN this is a global-buffer-overflow.*
+- [x] **Step 3: Write the failing lit test** `test/ui-version-check.js` — the addon built normally passes `HNUI_CHECK_VERSION`; a second build of the same source with `-DHNUI_SOKOL_COMMIT_OVERRIDE=\"deadbee\"` throws a JS error whose message contains both `deadbee` and the host's commit. (Add that second addon target beside `hnui_demo_addon`, with its own lit param.) Also `test/sokol-pin.js`: the CMake variable, passed to lit as a param, equals the commit `external/sokol/README.md` names. *Mutation: change the variable.*
+- [x] **Step 4: Write the failing removal checks** in `test/ui-events.js`: listener A removes listener B during event 1; B still receives event 1 and does not receive event 2; `hnui_event_dispatch_quiescent` is false inside A and true in the next frame callback. *Mutation: erase immediately.*
+- [x] **Step 5: Fail, implement, pass, mutate, revert.**
+- [x] **Step 6: Add `hnui_event_dispatch_quiescent` and `hnui_sokol_commit` to the spec's prototype list**, and replace the "minimal subset" preamble of `hnui.h` with a description of the whole API.
+- [x] **Step 7: Format, run `check-hermes-node`, commit** (`Complete the hnui C API and add the version check`).
 
 ---
 
@@ -961,18 +963,18 @@ void hnui_write_clipboard(hnui_window *w, const char *utf8);
 - The existing fixed pattern stays as mode `pattern`, which is what the capture tests use.
 - **Conformance mode**: `demo.js <addon> conformance` calls each entry point the visual demo does not and prints one line per observation — `hnui_api_version`, `hnui_cancel_animation_frame`, `hnui_remove_event_listener` and `hnui_event_dispatch_quiescent`, `hnui_get_window_state`, `hnui_set_cursor`, `hnui_show_cursor`, `hnui_lock_pointer`, `hnui_write_clipboard`, `hnui_read_clipboard_sync` (a normal read and a timeout), `hnui_free` — and renders one frame through the **resolve view** with an MSAA image of its own.
 
-- [ ] **Step 1: Vendor `util/sokol_gl.h`** at the pinned commit, unmodified, and record it in the README.
-- [ ] **Step 2: Write the failing lit test** `test/ui-demo-visual.js` — both `js` and `native` modes publish frames (trace); with the triangle's rotation frozen by a test-only addon call, a capture's clear-colour samples in the corners are exact; after an injected `KEY_DOWN` the next capture's corner samples are the second clear colour, exactly. *Mutation: do not register the event listener.*
-- [ ] **Step 3: Write the failing lit test** `test/ui-conformance.js` — FileCheck the printed lines in order, and capture the MSAA frame: a flat colour cleared into the addon's own 4x image and resolved into the slot, compared exactly. *Mutation: attach the colour view where the resolve view belongs; Sokol's validation must reject it or the capture must differ.*
-- [ ] **Step 4: Fail, implement, pass, mutate, revert.**
-- [ ] **Step 5: Update `demo.js`'s header comment** so the by-hand smoke test is described as it now is.
-- [ ] **Step 6: Format, run `check-hermes-node`, commit** (`Add the reference addon's visual and conformance modes`).
+- [x] **Step 1: Vendor `util/sokol_gl.h`** at the pinned commit, unmodified, and record it in the README.
+- [x] **Step 2: Write the failing lit test** `test/ui-demo-visual.js` — both `js` and `native` modes publish frames (trace); with the triangle's rotation frozen by a test-only addon call, a capture's clear-colour samples in the corners are exact; after an injected `KEY_DOWN` the next capture's corner samples are the second clear colour, exactly. *Mutation: do not register the event listener.*
+- [x] **Step 3: Write the failing lit test** `test/ui-conformance.js` — FileCheck the printed lines in order, and capture the MSAA frame: a flat colour cleared into the addon's own 4x image and resolved into the slot, compared exactly. *Mutation: attach the colour view where the resolve view belongs; Sokol's validation must reject it or the capture must differ.*
+- [x] **Step 4: Fail, implement, pass, mutate, revert.**
+- [x] **Step 5: Update `demo.js`'s header comment** so the by-hand smoke test is described as it now is.
+- [x] **Step 6: Format, run `check-hermes-node`, commit** (`Add the reference addon's visual and conformance modes`).
 
 ---
 
 ### After Slice C
 
-A whole-branch review of the slice, its fix wave, then: tick the steps above, add a Slice C completion paragraph beside Slice B's, update `docs/superpowers/plans/progress-ui-compositor.md` and CLAUDE.md's UI Compositor section.
+Done: the whole-slice review, its one fix wave (F1-F17, nine commits) and that wave's re-review; the steps above are ticked, the completion paragraph is beside Slice B's, and `docs/superpowers/plans/progress-ui-compositor.md` and CLAUDE.md's UI Compositor section are updated.
 
 ---
 
@@ -980,9 +982,9 @@ A whole-branch review of the slice, its fix wave, then: tick the steps above, ad
 
 Each follows the same shape — failing test naming its mutation, full build-and-run commands, implementation, verification, format, commit — and each is written out in the same detail as the tasks above when its slice begins. Their scope and the findings they answer:
 
-- **Task 15 — Lifecycle and CLOSING** (finding 14). CLOSING must be entered **before** `'exit'` listeners run on all three paths: `win.close()`, explicit `process.exit()` (listeners emit at `node_process.cpp:649`), and the fatal-exception path (`process-events.js:82`). Includes the cancelable `QUIT_REQUESTED` handshake, which no task previously owned, and the pre-cleanup lifecycle hook that closes the UI handle so `UvEventLoop::close()`'s `uv_run(UV_RUN_DEFAULT)` can finish.
-- **Task 16 — The Metal backend**, implementing **all** of `backend.h`: device and environment setup, surface allocation, `mtl_textures[0]` injection, the presenting pipeline, invalid-swapchain handling that releases read references without a blit, the required command-buffer accessor patch, completion handlers on Sokol's own buffer, `@autoreleasepool` around all worker work, and module-internal maintenance commits. Backend-aware tests: the GL polling/blocking assertions do not apply here. **Ruling 46 (execution) — add the `hnui_gpu_view` / `sg_view` static_asserts to `metal_backend.mm` as well, but they are no longer the only copy.** Task 8 first placed them in `gl_backend.cpp`, which is compiled only on Linux, while CI enables `HERMES_NODE_ENABLE_UI` on macOS too — so the check that the ABI struct still matches upstream would not have existed on the one platform this task is about. That gap is closed *before* this task rather than by it: the asserts also live in `unittests/HnuiAbiTest.cpp`, which is already UI-gated and links the `sokol` INTERFACE target, so every UI platform is covered today. Add the backend-local copy anyway — it costs nothing and keeps the check next to the code that depends on it — but the platform hole is not this task's to close. **Stated honestly, this is now a suggestion rather than an obligation:** `unittests/HnuiAbiTest.cpp` carries the same asserts under a plain `HERMES_NODE_ENABLE_UI` guard and links Sokol's declarations, so every UI platform is already covered and omitting the Metal copy fails nothing. It is listed because locality is worth having, not because anything breaks without it — do not let it read as a debt that was paid by doing nothing.
-- **Task 17 — The full gated suite.** `display` feature that actually starts Xvfb in the RUN line rather than merely detecting `xvfb-run`; macOS gating that does not silently skip; resize-generation, lifecycle and conformance assertions. **Ruling 16's destroy callback: first execution and the owner-thread assertion were discharged in Task 11d.** An injected `RESIZED` starts generation 2 there, and `test/ui-resize-generation.js` asserts from tracing that generation 1's last reference is dropped on the platform thread (`owner=0`) and that the posted destruction then runs on the owner thread (`owner=1`), after generation 2 was created; destroying inline from the callback instead turns it red. **What remains here is a resize of the REAL framebuffer**, which event injection does not perform: an injected event overrides the reported window state while the swapchain stays its original size. Note also that a refused `post()` is reported only through `uiTrace`, which is gated on `HERMES_NODE_DEBUG_NATIVE=UI`: acceptable because a refusal can only follow `close()`, at shutdown, but it means a test looking for that report must enable tracing. Separately, do not assume Task 9's `CompletionGate` can be driven from a script: it is wired into production under `uiTestHooksEnabled()`, but `holdProducer`/`holdConsumer` have no JS surface and no C entry point, so on the real pipeline it is a pass-through. Deterministic lifecycle assertions here need one added, or must work through the unit-test level.
+- **Task 15 — Lifecycle and CLOSING** (finding 14). CLOSING must be entered **before** `'exit'` listeners run on all three paths: `win.close()`, explicit `process.exit()` (listeners emit at `node_process.cpp:649`), and the fatal-exception path (`process-events.js:82`). Includes the cancelable `QUIT_REQUESTED` handshake, which no task previously owned, and the pre-cleanup lifecycle hook that closes the UI handle so `UvEventLoop::close()`'s `uv_run(UV_RUN_DEFAULT)` can finish. **Carried from Slice C, each of which this task must discharge by name:** (1) **Split `tools/hermes-node-ui/ui_module.cpp` by thread as this slice's FIRST commit, before any behaviour changes** (Ruling 68). It is about 2,500 lines holding both threads' halves, the test hooks, `__injectEvent` parsing, the clipboard command logic and the frame clock; thread ownership there is enforced by comments, one of which was already false when the whole-slice review read it, and this task edits both halves. A pure move, reviewed as one: platform-thread callbacks and state in one file, the JS-thread module surface in another, test hooks in a third. (2) On entering CLOSING, call `ClipboardRequests::failAll()` **and** `uiFailPendingClipboardReads()` (`ui_events.h`) -- the first completes blocked synchronous reads, the second rejects outstanding `readClipboard()` Promises -- and drain ticks afterwards (`uiRunTickCallback`), because `uiFailPendingClipboardReads()` does not. (3) Call `FrameCallbackList::releaseAll()` while the `napi_env` is still alive; it exists and is unit-tested, and has no caller. (4) `win.close()` does not exist yet, and the close button today emits `close` and leaves the window open (Ruling 54); every window-opening lit test therefore ends through `process.exit()`, and each of them must be revisited once closing works. `test/fixtures/hnui-demo/demo.js` ends itself from a `close` listener for the same reason. (5) **The close handshake must be tested with a REAL `WM_DELETE_WINDOW`**, sent by `test/fixtures/hnui-demo/x11_window_driver.c` the way `test/ui-real-events.js` does: an injected `QUIT_REQUESTED` never sets Sokol's own quit flag, so a test built on injection cannot fail (the whole-slice review demonstrated it). (6) Decide, before writing the cancelable `close` event, **how a NATIVE listener cancels it**: `hnui_event` was frozen by Ruling 51, so it has to be an entry point rather than a field. (7) The refused-`post()` edges recorded only in comments -- the frame tick in `onFrame`, the capture posts, `postEventDispatch`, and `openEventDelivery` (whose refusal is not even traced) -- all become reachable once something closes the dispatcher, which this task does. (8) A named test for a case the review demonstrated: `process.exit()` called inside an event listener lets a pending frame callback run **after** `'exit'` listeners have run. CLOSING is what prevents it.
+- **Task 16 — The Metal backend**, implementing **all** of `backend.h`: device and environment setup, surface allocation, `mtl_textures[0]` injection, the presenting pipeline, invalid-swapchain handling that releases read references without a blit, the required command-buffer accessor patch, completion handlers on Sokol's own buffer, `@autoreleasepool` around all worker work, and module-internal maintenance commits. Backend-aware tests: the GL polling/blocking assertions do not apply here. **Ruling 46 (execution) — add the `hnui_gpu_view` / `sg_view` static_asserts to `metal_backend.mm` as well, but they are no longer the only copy.** Task 8 first placed them in `gl_backend.cpp`, which is compiled only on Linux, while CI enables `HERMES_NODE_ENABLE_UI` on macOS too — so the check that the ABI struct still matches upstream would not have existed on the one platform this task is about. That gap is closed *before* this task rather than by it: the asserts also live in `unittests/HnuiAbiTest.cpp`, which is already UI-gated and links the `sokol` INTERFACE target, so every UI platform is covered today. Add the backend-local copy anyway — it costs nothing and keeps the check next to the code that depends on it — but the platform hole is not this task's to close. **Stated honestly, this is now a suggestion rather than an obligation:** `unittests/HnuiAbiTest.cpp` carries the same asserts under a plain `HERMES_NODE_ENABLE_UI` guard and links Sokol's declarations, so every UI platform is already covered and omitting the Metal copy fails nothing. It is listed because locality is worth having, not because anything breaks without it — do not let it read as a debt that was paid by doing nothing. **Carried from Slice C (Ruling 55):** the clipboard read on macOS is `sapp_get_clipboard_string()` as it stands -- it reads `NSPasteboard` directly and has no stale-buffer path, unlike the X11 getter that `x11_clipboard.cpp` replaces -- behind the same `ClipboardResult` interface; and `ui_module_nowindow.cpp`'s five refusing exports go away with it. The reference addon passes `depth_format = SG_PIXELFORMAT_NONE` to `sokol_gl`; check the Metal environment needs the same.
+- **Task 17 — The full gated suite.** `display` feature that actually starts Xvfb in the RUN line rather than merely detecting `xvfb-run`; macOS gating that does not silently skip; resize-generation, lifecycle and conformance assertions. **Ruling 16's destroy callback: first execution and the owner-thread assertion were discharged in Task 11d.** An injected `RESIZED` starts generation 2 there, and `test/ui-resize-generation.js` asserts from tracing that generation 1's last reference is dropped on the platform thread (`owner=0`) and that the posted destruction then runs on the owner thread (`owner=1`), after generation 2 was created; destroying inline from the callback instead turns it red. **What remains here is a resize of the REAL framebuffer**, which event injection does not perform: an injected event overrides the reported window state while the swapchain stays its original size. Note also that a refused `post()` is reported only through `uiTrace`, which is gated on `HERMES_NODE_DEBUG_NATIVE=UI`: acceptable because a refusal can only follow `close()`, at shutdown, but it means a test looking for that report must enable tracing. Separately, do not assume Task 9's `CompletionGate` can be driven from a script: it is wired into production under `uiTestHooksEnabled()`, but `holdProducer`/`holdConsumer` have no JS surface and no C entry point, so on the real pipeline it is a pass-through. Deterministic lifecycle assertions here need one added, or must work through the unit-test level. **Changed by Slice C's fix wave:** the resize of the REAL framebuffer is now asserted by `test/ui-real-events.js` (an `XResizeWindow` from a second client, a new generation of the new size, a frame published in it), so that case is discharged; and window tests no longer use `xvfb-run -a`, whose display allocation is not atomic and collided at about 1-4% under 16-way load -- they run under `utils/with-xvfb.py` (`%with-xvfb`), which claims a display with `Xvfb -displayfd` and tears it down. What remains here: macOS gating that does not silently skip, the lifecycle assertions that need Task 15, and a sweep of the stderr checks -- `test/ui-create-window.js`, the DEMO run of `test/ui-real-events.js`, `test/ui-sokol-panic.js` and `test/ui-sokol-validation.js` do not yet exclude `[sapp:error`. Also still open: a ten-line test that `hnui_get_window()` is NULL after a late `createWindow` rejection (provokable by clearing `globalThis.require` between the call and its `await`).
 
 ---
 

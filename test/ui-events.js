@@ -24,8 +24,15 @@
 //  TICKS      a promise callback queued by the keydown listener runs
 //             before the char event reaches anyone.
 //             (Mutation: remove the _tickCallback call.)
-//  CLOSE      `close` is emitted, and the process is still running after
-//             it -- QUIT_REQUESTED is cancelled (Ruling 54).
+//  CLOSE      an injected QUIT_REQUESTED is converted and emitted as
+//             `close`, exactly once. That is ALL it shows. It does not show
+//             that the quit is cancelled: Sokol acts on its own
+//             `_sapp.quit_requested`, which only a real close request
+//             sets, so an injected event leaves nothing to cancel and this
+//             line (and the TRACE line) stays green with the
+//             sapp_cancel_quit() call removed. test/ui-real-events.js,
+//             whose close request is a real WM_DELETE_WINDOW, pins the
+//             cancellation.
 //  STATE      hnui_get_window_state agrees with the JS object.
 //  MINIMIZED  a frame requested while minimized does not run until the
 //             window is restored. (Mutation: remove setMinimized.)
@@ -36,20 +43,28 @@
 //             true in the next frame callback. (Mutations: make removal a
 //             no-op; skip a removed listener within the event it was
 //             removed during; return true from the quiescent query.)
+//  TRACKED    after UNFOCUSED and ICONIFIED, a later unrelated key event
+//             still says focused=false minimized=true, in the JS mirror and
+//             in hnui_get_window_state. The converter changes only the
+//             fields its event is about and copies the rest from the
+//             platform thread's tracked state, so that state has to be
+//             stored back after each event (Ruling 52). (Mutation: remove
+//             `gTracked = converted.window` in uiHandlePlatformEvent.)
 //
 // REQUIRES: ui, ui-gpu
 // REQUIRES: display
 //
 // The RUN-line shape is ui-present.js's, for the reasons given there:
-// redirections INSIDE `sh -c` because xvfb-run merges its child's stderr
-// into stdout, and `timeout` because lit has no per-test timeout (dz
-// 01a0d797-e326) and a mutation here typically waits forever for an event
-// that never arrives. The test ends through process.exit() (Ruling 59):
-// closing the window still hangs (dz 01a0d88a-6518).
+// redirections INSIDE `sh -c`, so the trace file is the binary's own stderr
+// whatever the display wrapper does, and `timeout` because lit has no
+// per-test timeout (dz 01a0d797-e326) and a mutation here typically waits
+// forever for an event that never arrives. The test ends through
+// process.exit() (Ruling 59): closing the window still hangs (dz
+// 01a0d88a-6518).
 //
-// RUN: timeout 300 xvfb-run -a sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --check-prefix=TRACE %s < %t.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=TRACE %s < %t.err
 
 // CODE: EXITCODE 0
 
@@ -61,9 +76,12 @@
 // CHECK: STATE ok
 // CHECK: MINIMIZED ok
 // CHECK: REMOVAL ok
+// CHECK: TRACKED ok
 // CHECK: DONE
 
-// The cancellation is traced where it is APPLIED, on the platform thread.
+// The QUIT_REQUESTED branch ran on the platform thread. For an injected
+// event, "cancelled" is the call having been made, not proof that it
+// mattered -- see CLOSE above.
 // TRACE: quit requested: cancelled, forwarded as close
 
 'use strict';
@@ -77,6 +95,7 @@ const SAPP_KEYCODE_F1 = 290;
 const SAPP_KEYCODE_F2 = 291;
 const SAPP_KEYCODE_F4 = 293;
 const SAPP_KEYCODE_F5 = 294;
+const SAPP_KEYCODE_F6 = 295;
 const SAPP_MODIFIER_SHIFT = 0x1;
 const SAPP_MOUSEBUTTON_RIGHT = 1;
 
@@ -182,8 +201,11 @@ async function main() {
   ui.__injectEvent({type: 'QUIT_REQUESTED'});
 
   await closed;
-  // A turn of the loop after `close`: the process is still running, which
-  // is the half of CLOSE an uncancelled quit would break.
+  // A turn of the loop after `close`, so that anything else the dispatch
+  // delivered has been delivered. (Not evidence that the quit was
+  // cancelled: an injected QUIT_REQUESTED never asks Sokol to quit, and an
+  // uncancelled real one would not stop this thread either -- the process
+  // stays up without its window, dz 01a0d88a-6518.)
   await new Promise((resolve) => setImmediate(resolve));
 
   const log = addon.takeEventLog();
@@ -314,6 +336,32 @@ async function main() {
   report(
       'REMOVAL', JSON.stringify(removalLog) === JSON.stringify(removalExpected),
       removalLog.join('|'));
+
+  // --- Phase four: tracked state survives unrelated events. -----------
+  //
+  // Last, because it leaves the window minimized, and a minimized window
+  // is sent no frame ticks.
+  const tracked = await new Promise((resolve) => {
+    win.on('keydown', (e) => {
+      if (e.keyCode !== SAPP_KEYCODE_F6)
+        return;
+      const native = addon.getWindowState();
+      resolve({
+        focused: win.focused,
+        minimized: win.minimized,
+        nativeFocused: native && native.focused,
+        nativeMinimized: native && native.minimized,
+      });
+    });
+    ui.__injectEvent({type: 'UNFOCUSED'});
+    ui.__injectEvent({type: 'ICONIFIED'});
+    ui.__injectEvent({type: 'KEY_DOWN', keyCode: SAPP_KEYCODE_F6});
+  });
+  report(
+      'TRACKED',
+      tracked.focused === false && tracked.minimized === true &&
+          tracked.nativeFocused === false && tracked.nativeMinimized === true,
+      JSON.stringify(tracked));
 
   console.log('DONE');
   process.exit(0);

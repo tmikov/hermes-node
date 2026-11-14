@@ -29,12 +29,12 @@
 // xvfb). Without CI in the environment this file reports UNSUPPORTED, which
 // is the correct answer there and the reason a developer is not punished.
 //
-// **It reads lit.cfg's own verdict, not a second opinion.**
-// `%display-state` expands to the feature this configuration actually
-// computed, so a probe that goes wrong for ANY reason -- a missing package,
-// an xvfb-run that changed its behaviour, a 90-second timeout under 16-way
-// load -- is what fails here. Re-running the probe from this file would only
-// ask the same question twice.
+// **It reads lit.cfg's own verdict, not a second opinion.** `%display-state`
+// expands to the feature this configuration actually computed, so a probe
+// that goes wrong for ANY reason -- a missing package, an Xvfb or wrapper
+// that changed its behaviour, a 90-second timeout under 16-way load -- is
+// what fails here. Re-running the probe from this file would only ask the
+// same question twice.
 //
 // THE MUTATION THIS MUST BREAK: make lit.cfg's `_can_start_a_display()`
 // return False (equivalently: remove `xvfb` from the CI apt line). With CI

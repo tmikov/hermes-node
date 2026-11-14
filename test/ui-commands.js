@@ -46,14 +46,15 @@
 // REQUIRES: ui, ui-gpu
 // REQUIRES: display
 //
-// RUN-line shape as in ui-events.js: redirections inside `sh -c` because
-// xvfb-run merges its child's stderr into stdout, and `timeout` because lit
-// has no per-test timeout (dz 01a0d797-e326). Ends through process.exit()
-// (Ruling 59): closing the window still hangs (dz 01a0d88a-6518).
+// RUN-line shape as in ui-events.js: redirections inside `sh -c`, so the
+// trace file is the binary's own stderr whatever the display wrapper does,
+// and `timeout` because lit has no per-test timeout (dz 01a0d797-e326). Ends
+// through process.exit() (Ruling 59): closing the window still hangs (dz
+// 01a0d88a-6518).
 //
-// RUN: timeout 300 xvfb-run -a sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --check-prefix=TRACE %s < %t.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=TRACE %s < %t.err
 
 // CODE: EXITCODE 0
 

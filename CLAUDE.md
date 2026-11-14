@@ -1163,8 +1163,9 @@ and presents, while a spawned thread runs `runHermesNode()` and performs
 every drawing GPU call into offscreen surfaces handed back for presentation.
 Design `docs/superpowers/specs/2026-09-18-ui-compositor-design.md`, plan
 `docs/superpowers/plans/2026-09-21-ui-compositor.md`, progress
-`docs/superpowers/plans/progress-ui-compositor.md`. Slices A and B are done;
-C and D are not.
+`docs/superpowers/plans/progress-ui-compositor.md`. Slices A, B and C are
+done; D (lifecycle and closing, the Metal backend, the full gated suite) is
+not.
 
 - **All of it is behind `HERMES_NODE_ENABLE_UI`, default OFF.** As of the
   embedder-module work that option is a real **preprocessor define**, not
@@ -1179,15 +1180,20 @@ C and D are not.
   that check is load-bearing, because dropping the rename header from the
   presenting TU still links and still builds, and only the symbol table shows
   it.
-- **Four lit features, and the names mislead.** `ui-enabled` probes the
+- **Five lit features, and the names mislead.** `ui-enabled` probes the
   *plain* `hermes-node` binary for `--test-embedder-module` and really means
   "the CMake option was compiled in" — it is the one that sounds like it
   means the UI and is the one that does not. `ui` probes the separate
   `hermes-node-ui` binary. `ui-gpu` is `ui-enabled` **and** a backend
   platform, mirroring `if(NOT (UNIX AND NOT APPLE))` in
   `lib/compositor-gpu/CMakeLists.txt` rather than testing for the artifacts,
-  so a missing header still fails loudly. `display` starts a real Xvfb in the
-  RUN line rather than merely detecting `xvfb-run`.
+  so a missing header still fails loudly. `display` starts a real Xvfb
+  through the same wrapper the tests use. `sokol-validation` is read from the
+  second line of `hermes-node-ui --version` and means the drawing thread's
+  `sokol_gfx` was compiled with its validation layer (a Debug build), which
+  the one test that provokes a real validation failure needs. A sixth, `ci`,
+  is not about the UI: it only narrows the canaries below to machines that
+  promised to have what they check.
 - **Every one of those features is decided by running something**, never by
   trusting a CMake param. A param lit believes rather than verifies can be
   deleted and leave the tests it gates reporting UNSUPPORTED forever, in the
@@ -1195,7 +1201,11 @@ C and D are not.
   and why an absent param registers a substitution that *cannot resolve*
   rather than being left unregistered (an unregistered `%hermes-node-ui` is
   matched by the shorter `%hermes-node` and silently rewritten into something
-  that accidentally works).
+  that accidentally works). **A feature that can only ever turn a test
+  UNSUPPORTED also needs a forcing function**, or it can be lost with nothing
+  going red: `test/ui-display-feature.js` is `display`'s, and
+  `test/ui-sokol-validation-feature.js` plus `-ci.js` are
+  `sokol-validation`'s. Add one with any new feature.
 - **Environment variables**: `HERMES_NODE_UI_TEST_HOOKS` enables the test
   hooks (frame capture, synthetic event injection, controllable completion),
   `HERMES_NODE_UI_GL_ROUTE` forces the GL context route,
@@ -1205,9 +1215,22 @@ C and D are not.
   is load-bearing, because one run of `test/ui-present.js` depends on the
   completion variable being *unset* so the startup probe actually runs.
 - **Assertions come from tracing, never from timing.** The suite runs 16-way
-  parallel. `xvfb-run` merges the child's stderr into stdout, so a test that
-  asserts on trace output under a display needs its redirection inside
-  `sh -c` or it reads an empty file and passes vacuously.
+  parallel. A trace must print what was **executed or read back**, never what
+  was requested or selected: a line that prints the request passes with the
+  call it describes deleted, and that hole was found five separate times.
+- **Window tests run under `utils/with-xvfb.py` (`%with-xvfb`), not
+  `xvfb-run -a`.** `xvfb-run -a` picks a display number and then starts the
+  server, which is not atomic: under 16-way load two runs were handed the
+  same display about 1-4% of the time, failing before any of our code ran —
+  or, worse, sharing one server, which corrupts a clipboard test because a
+  selection belongs to the server. The wrapper has Xvfb claim its own display
+  (`-displayfd`) and tears it down, `timeout` included. RUN lines keep their
+  redirections inside `sh -c '...'`.
+- **Every test that opens a window ends through `process.exit()`, and every
+  RUN line keeps `timeout <n>`.** Closing the window is Slice D's: today the
+  close button emits a `close` event and leaves the window open, and a
+  script ends itself from that listener (the reference demo does). An
+  uncancelled quit still hangs the process.
 - **The presented-pixel test compares exactly — 0 or 255, no tolerance.**
   That is stronger than a threshold, not weaker, and it is affordable because
   the capture's agreement rule forces target size to equal framebuffer size:
@@ -1220,6 +1243,58 @@ C and D are not.
   generation spans many publications, and a re-blit of the still-presenting
   surface would otherwise answer a request for the next frame with a picture
   of the previous one.
+- **Input travels platform thread -> `InputQueue` -> JS thread**, and each
+  event carries a `WindowState` snapshot taken when it was produced; the JS
+  thread assigns that to its mirror (`win.width`, `win.focused`, ...) before
+  any listener runs, native listeners first, then the JS `emit`, then
+  `process._tickCallback()`. `sapp_event` never leaves
+  `tools/hermes-node-ui/sapp_event_convert.cpp`, so Sokol's ABI cannot break
+  ours. Nothing is delivered until one loop turn after `createWindow()`
+  resolves, so listeners attached synchronously after the `await` see every
+  event from the window's creation.
+- **`__injectEvent` enters BELOW Sokol, so an injected event proves nothing
+  about anything above it** — `event_cb` itself, Sokol's own event
+  production, `sapp_cancel_quit()`. The whole-slice review of Slice C
+  removed `desc.event_cb = onEvent` and every window test stayed green.
+  `test/ui-real-events.js` is the answer: a second X client
+  (`test/fixtures/hnui-demo/x11_window_driver.c`) sends a real KeyPress,
+  `XResizeWindow` and `WM_DELETE_WINDOW`. Use injection for what happens
+  after the converter and a real event for anything that involves Sokol or
+  the window system — an injected `QUIT_REQUESTED` in particular never sets
+  Sokol's quit flag, so a close test built on it cannot fail.
+- **A resize starts a new surface generation**, switched on the JS thread
+  before that event's listeners run. The old generation's last reference is
+  its presenting wrappers, which only the platform thread releases, so its
+  destruction is always *posted* to the owner thread — the trace's
+  `owner=0` then `owner=1` pair is structural, not luck.
+- **The clipboard read is our own X11 read** (`x11_clipboard.cpp`), not
+  Sokol's, which returns its previous buffer on timeout, INCR or oversize.
+  A reply is accepted only if it echoes the server timestamp this read
+  converted with, so a late reply to an earlier read can never answer the
+  current one; an owner that does not echo it (an ICCCM violation) is
+  reported as a timeout rather than trusted. JS gets a Promise answered
+  through the input queue; native code gets `hnui_read_clipboard_sync`,
+  which blocks the JS thread on a slot the platform thread writes directly.
+- **Frame callbacks are one registration-ordered list** shared by native and
+  JS callbacks, with one id space. A tick takes its timestamp once (origin:
+  `process.uptime()`'s — this runtime has no `performance` global), runs
+  each callback followed by `process._tickCallback()`, and routes an
+  exception through `handleCallbackException`; whatever follows the batch —
+  reclaiming the slot or submitting the frame — runs exactly once either
+  way.
+- **A Sokol panic terminates the process on all three loggers** (the
+  `sokol_app` one and both `sokol_gfx` instances), through one function,
+  `uiSokolLog`. Sokol's code after a panic assumes no return; before this a
+  rejected pass was logged and its frame published black.
+- **The `hnui` C API is complete** (`include/hermes/node-compat/ui/hnui.h`),
+  and `test/fixtures/hnui-demo/` is its worked example: `demo_visual.c`
+  (a `sokol_gl` triangle — note it must pass `depth_format =
+  SG_PIXELFORMAT_NONE`, because `sokol_gl` does not take that from the
+  environment), `demo_conformance.c` (every other entry point, printing
+  what it observed), and `demo_addon.c` (the fixed pattern and the test
+  probes). The vendored Sokol commit is single-sourced as
+  `HNUI_SOKOL_COMMIT_PINNED` in `hnui.h`; CMake reads it from there and
+  `test/sokol-pin.js` checks the README agrees.
 - Known defects and limitations live in `dz/`, not here — `dz list`.
 
 ## Test Infrastructure

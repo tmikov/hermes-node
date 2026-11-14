@@ -39,6 +39,20 @@
 
 const ui = require('hermes-node:ui');
 
+// The real module's other four functions exist here too, and each refuses
+// with the same sentence -- not a TypeError about calling undefined.
+for (const name of ['requestAnimationFrame', 'cancelAnimationFrame',
+                    'writeClipboard', 'readClipboard']) {
+  let message = typeof ui[name];
+  try {
+    ui[name](name === 'writeClipboard' ? 'x' : 1);
+    message = 'returned';
+  } catch (e) {
+    message = 'threw ' + (e && e.message);
+  }
+  console.log(name + ' ' + message);
+}
+
 // A rejected Promise rather than a synchronous throw, matching the shape a
 // real createWindow has: a program that awaits it sees a failed request,
 // which is what this is, rather than a misuse of the API.
@@ -55,5 +69,9 @@ ui.createWindow({width: 320, height: 240, title: 'no window support'}).then(
 // The sentence UiHost::run() prints for the same situation. Matched loosely
 // enough that the surrounding explanation can be reworded, and tightly
 // enough that a rejection about something else does not satisfy it.
+// OUT: requestAnimationFrame threw {{.*}}no window support
+// OUT: cancelAnimationFrame threw {{.*}}no window support
+// OUT: writeClipboard threw {{.*}}no window support
+// OUT: readClipboard threw {{.*}}no window support
 // OUT: REJECTED {{.*}}no window support
 // CODE: EXITCODE 0

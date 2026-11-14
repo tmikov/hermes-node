@@ -236,11 +236,15 @@ int hnui_add_event_listener(hnui_window *w, hnui_event_cb cb, void *user);
 /// wrong-thread call on a real window aborts.
 void hnui_remove_event_listener(hnui_window *w, int id);
 
-/// True when no native event listener is on the stack: the window is not
-/// delivering an event, so the `user` data of a listener already removed
-/// may be freed. False inside a listener; true inside a frame callback.
-/// True for a NULL \p w, which has no listeners. A wrong-thread call on a
-/// real window aborts.
+/// True when the window is not delivering events, so the `user` data of a
+/// listener already removed may be freed. **False for the whole dispatch
+/// pass**, not only inside a native listener: a pass delivers every queued
+/// event in turn -- native listeners, then the JavaScript `emit`, then the
+/// nextTick and promise callbacks that queued, per event -- and a removed
+/// listener may still be in the copy of the list the pass is walking. So it
+/// is false inside a JavaScript listener or a tick callback reached from
+/// one, too; true inside a frame callback. True for a NULL \p w, which has
+/// no listeners. A wrong-thread call on a real window aborts.
 bool hnui_event_dispatch_quiescent(hnui_window *w);
 
 /// Fill \p out with the window's current state, as of the last event
@@ -283,6 +287,16 @@ void hnui_write_clipboard(hnui_window *w, const char *utf8);
 /// (in presentation, or in another client's slow selection transfer). A
 /// reply that arrives after the deadline is discarded. A \p timeout_ms of
 /// zero or less always returns `HNUI_TIMEOUT`.
+///
+/// **Two limits \p timeout_ms does not override**, both from the X11
+/// reader. The platform thread waits at most 2000 ms for another client to
+/// answer, whatever \p timeout_ms says, because it is the thread that
+/// presents and handles input, and a slow owner must not freeze the
+/// window; a longer \p timeout_ms then gets `HNUI_TIMEOUT` at about two
+/// seconds. And an owner that does not echo the request's timestamp in its
+/// reply -- which ICCCM 2.2 requires, and which is how a reply is told
+/// apart from a late one to an earlier read -- has its reply discarded, and
+/// the read is reported as `HNUI_TIMEOUT`.
 ///
 /// \return `HNUI_OK` with `*out` set to a NUL-terminated, `malloc`ed copy
 ///   of the text, to be freed with `hnui_free`. Every other status leaves

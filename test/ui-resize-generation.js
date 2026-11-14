@@ -10,12 +10,20 @@
 // The resize is INJECTED: a RESIZED platform event carrying a `window`
 // override of 320x240, while the real framebuffer stays 640x480. That is
 // what makes the stretched case reachable at all -- the presenter blits a
-// 320x240 surface into a 640x480 swapchain -- and it is also why nothing
-// here may assume that no other event arrives. Any REAL platform event
-// refreshes the tracked state from sapp_* and reports 640x480 again, which
-// would legitimately start yet another generation. So every assertion names
-// the generation and publication it is about, and the frames it captures
-// are keyed by those, never by "the latest".
+// 320x240 surface into a 640x480 swapchain. (The resize of the REAL
+// framebuffer is test/ui-real-events.js's GEN.)
+//
+// **What the assertions assume: that no real platform event arrives once
+// the window is up.** Any real event refreshes the tracked state from
+// sapp_* and reports 640x480 again, which starts generation 3; TARGET,
+// ZERO and CONTINUES name generation 2 and would then fail. They hold here
+// because the display is a private Xvfb with no window manager and no
+// other client, and nothing in this file causes an X event. Should one
+// ever arrive, the failure is loud -- a wrong generation -- rather than a
+// pass for the wrong reason. Every capture is keyed by generation and
+// publication, never by "the latest", and the reference addon zeroes its
+// last target when hnui_frame_target refuses, so a refused frame reads as
+// generation 0 rather than as the previous frame's answer.
 //
 // What is asserted, each line of output naming one property:
 //
@@ -58,16 +66,16 @@
 // REQUIRES: ui, ui-gpu
 // REQUIRES: display
 //
-// The RUN-line shape is ui-present.js's: redirections INSIDE `sh -c`
-// because xvfb-run merges its child's stderr into stdout, and `timeout`
-// because lit has no per-test timeout (dz 01a0d797-e326). The test ends
-// through process.exit() (Ruling 59): closing the window still hangs (dz
-// 01a0d88a-6518). Polling completion is forced so that producer fences are
-// completed on the platform thread, the path a real run takes.
+// The RUN-line shape is ui-present.js's: redirections INSIDE `sh -c`, so the
+// trace file is the binary's own stderr whatever the display wrapper does,
+// and `timeout` because lit has no per-test timeout (dz 01a0d797-e326). The
+// test ends through process.exit() (Ruling 59): closing the window still
+// hangs (dz 01a0d88a-6518). Polling completion is forced so that producer
+// fences are completed on the platform thread, the path a real run takes.
 //
-// RUN: timeout 300 xvfb-run -a sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI HERMES_NODE_UI_GL_COMPLETION=poll %hermes-node-ui %s %hnui_demo_addon %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI HERMES_NODE_UI_GL_COMPLETION=poll %hermes-node-ui %s %hnui_demo_addon %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --check-prefix=INFLIGHT %s < %t.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=INFLIGHT %s < %t.err
 // RUN: %FileCheck --check-prefix=LIFETIME %s < %t.err
 // RUN: %FileCheck --check-prefix=NOZERO %s < %t.err
 
@@ -96,12 +104,14 @@
 
 // Generation 1's end. The last reference goes on the platform thread --
 // its wrappers are the last owner, and only that thread holds them -- and
-// the destruction runs on the owner thread all the same.
+// the destruction runs on the owner thread all the same. The last two
+// lines are consecutive on the JS thread, but not -NEXT here: both threads
+// write this file, and a platform-thread line may land between them.
 // LIFETIME: [ui] generation 2: 3 surfaces at 320x240
 // LIFETIME: [ui] generation 2: started at 320x240, replacing generation 1 at 640x480
 // LIFETIME: [ui] generation 1: last reference dropped (owner=0)
 // LIFETIME: [ui] generation 1: surfaces destroyed
-// LIFETIME-NEXT: [ui] generation 1: destroyed (owner=1)
+// LIFETIME: [ui] generation 1: destroyed (owner=1)
 
 // NOZERO-NOT: at 0x0
 
@@ -228,7 +238,7 @@ async function main() {
   });
 
   const capture = (fields) => ui.__captureFrame(Object.assign(
-      {dpiScale, inputSerial: 0, framebufferWidth: realWidth,
+      {dpiScale, framebufferWidth: realWidth,
        framebufferHeight: realHeight},
       fields));
 

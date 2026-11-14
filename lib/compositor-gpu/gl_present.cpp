@@ -8,6 +8,7 @@
 #include "gl_present.h"
 
 #include "sokol_config.h"
+#include "sokol_log.h"
 #include "ui_trace.h"
 
 // THE RENAME COMES FIRST, and "first" means before sokol_gfx.h's
@@ -79,18 +80,16 @@ void presentLog(
     void *userData) {
   (void)tag;
   (void)userData;
-  static const char *const kLevels[] = {"panic", "error", "warning", "info"};
-  const char *level = logLevel < 4 ? kLevels[logLevel] : "?";
-  std::fprintf(
-      stderr,
-      "[sokol-present:%s] item %u%s%s (%s:%u)\n",
-      level,
+  // A panic terminates (uiSokolLog), as on the producing instance.
+  uiSokolLog(
+      "sokol-present",
+      logLevel,
       logItemId,
-      message ? ": " : "",
-      message ? message : "",
+      message,
+      lineNr,
       filename ? filename : "sokol_gfx.h",
-      lineNr);
-  std::fflush(stderr);
+      "hermes-node-ui: the presenting sokol_gfx instance panicked. This is "
+      "fatal: Sokol's code after a panic assumes it does not return.");
 }
 
 /// Drain whatever GL errors raw calls left behind.

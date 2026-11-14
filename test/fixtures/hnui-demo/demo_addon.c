@@ -19,14 +19,18 @@
  * C99 `-pedantic` probe translation unit (`unittests/HnuiAbiCProbe.c`).
  * An addon written in C++ would never exercise that claim.
  *
- * **It draws a FIXED pattern, not a rotating triangle.** The spec's demo
- * rotates; the spec's *tests* say "What draws in these tests is the
- * reference addon, in a mode that renders a fixed pattern rather than a
- * rotating one", and this task's gate is a picture. A rotating triangle
- * would make the captured pixels depend on elapsed time, which is the one
- * thing a capture keyed to a publication id must not depend on. The
- * rotating mode belongs with Task 14's fuller demo; what exists here is
- * the mode the tests need and a person can still look at.
+ * **This file is the fixed pattern and the test probes**; the demo proper
+ * -- the rotating `sokol_gl` triangle, and the worked example for `hnui.h`
+ * -- is demo_visual.c, and the conformance mode is demo_conformance.c (see
+ * demo_addon.h for why they are apart). The module init at the bottom of
+ * this file registers all three.
+ *
+ * The fixed pattern exists because the spec's tests say "What draws in
+ * these tests is the reference addon, in a mode that renders a fixed
+ * pattern rather than a rotating one": a rotating triangle makes captured
+ * pixels depend on elapsed time, which a capture keyed to a publication id
+ * must not depend on. demo.js shows it as its `pattern` mode, and
+ * test/ui-present.js captures it.
  *
  * # The pattern
  *
@@ -49,10 +53,13 @@
  * than failing gracefully when resources churn outside those points.
  */
 
+#include "demo_addon.h"
+
 #include <hnui.h>
 #include <node_api.h>
 #include <sokol_gfx.h>
 
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 /* memset: every sokol desc struct is zeroed before its fields are set,
@@ -104,8 +111,10 @@ static sg_pipeline g_pipeline;
 static bool g_resourcesReady = false;
 static int g_framesDrawn = 0;
 /* The most recent hnui_frame_target answer, for lastTarget(). Zero until
-   the first one: generation 0 is reserved for "no generation", so a test
-   cannot mistake "never asked" for an answer. */
+   the first one, and zeroed again by a refusal: generation 0 is reserved
+   for "no generation", so a test can mistake neither "never asked" nor
+   "asked and refused" for an answer -- a stale target from an earlier
+   frame would otherwise satisfy an assertion about this one. */
 static hnui_target g_lastTarget;
 
 /**
@@ -177,6 +186,7 @@ static bool drawPattern(hnui_window *w) {
     /* Outside a frame callback, or no slot was free. A legitimate answer,
        not an error -- and nothing was drawn, so the host reclaims the
        frame rather than publishing a surface with undefined contents. */
+    memset(&g_lastTarget, 0, sizeof(g_lastTarget));
     return false;
   }
   g_lastTarget = target;
@@ -580,6 +590,102 @@ static napi_value cancelNativeFrame(napi_env env, napi_callback_info info) {
     napi_get_value_int32(env, argv[0], &id);
   }
   hnui_cancel_animation_frame(hnui_get_window(env), id);
+  return NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Panics on the producing instance (test/ui-sokol-panic.js)            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Call the producing sokol_gfx instance's own logger with a panic item, the
+ * way `_SG_PANIC` does. Present in every build, which a real validation
+ * failure is not. Returns only if the logger returned -- which is the
+ * defect -- and says so.
+ */
+static napi_value panicThroughProducerLogger(
+    napi_env env,
+    napi_callback_info info) {
+  sg_desc desc = sg_query_desc();
+  napi_value result;
+
+  (void)info;
+  if (desc.logger.func != NULL) {
+    desc.logger.func(
+        "sg",
+        0,
+        (uint32_t)SG_LOGITEM_VALIDATION_FAILED,
+        "raised deliberately by hnui_demo_addon",
+        (uint32_t)__LINE__,
+        __FILE__,
+        desc.logger.user_data);
+  }
+  napi_create_string_utf8(env, "RETURNED", NAPI_AUTO_LENGTH, &result);
+  return result;
+}
+
+/**
+ * A frame callback that begins a pass with the target's two views swapped:
+ * the RESOLVE view where the colour attachment belongs and the colour view
+ * as its resolve. A validating sokol_gfx rejects it (VALIDATE_BEGINPASS_
+ * COLORATTACHMENTVIEW_TYPE among others) and panics; anything printed
+ * after sg_begin_pass means it did not.
+ */
+static void invalidPassFrame(hnui_window *w, void *user, double timestamp) {
+  hnui_target target;
+  sg_pass pass;
+
+  (void)user;
+  (void)timestamp;
+  memset(&target, 0, sizeof(target));
+  target.size = (uint32_t)sizeof(target);
+  if (!hnui_frame_target(w, &target))
+    return;
+  memset(&pass, 0, sizeof(pass));
+  pass.attachments.colors[0].id = target.resolve_view.id;
+  pass.attachments.resolves[0].id = target.color_view.id;
+  pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
+  sg_begin_pass(&pass);
+  printf("PASS BEGAN\n");
+  fflush(stdout);
+  sg_end_pass();
+}
+
+static napi_value requestInvalidPassFrame(
+    napi_env env,
+    napi_callback_info info) {
+  napi_value result;
+  (void)info;
+  napi_create_int32(
+      env,
+      hnui_request_animation_frame(hnui_get_window(env), invalidPassFrame, NULL),
+      &result);
+  return result;
+}
+
+/** The body of callStateOffThread()'s thread. */
+static void *getStateOffThread(void *arg) {
+  hnui_window_state state;
+  memset(&state, 0, sizeof(state));
+  state.size = sizeof(state);
+  hnui_get_window_state((hnui_window *)arg, &state);
+  return NULL;
+}
+
+/**
+ * Call `hnui_get_window_state` from a thread that is not the window's
+ * owner, and wait for it. The spec's answer (Errors) is an abort naming the
+ * function, so this returns only if the check is missing -- which
+ * test/ui-wrong-thread.js turns into a failure.
+ */
+static napi_value callStateOffThread(napi_env env, napi_callback_info info) {
+  hnui_window *w = hnui_get_window(env);
+  pthread_t thread;
+
+  (void)info;
+  if (w == NULL || pthread_create(&thread, NULL, getStateOffThread, w) != 0)
+    return NULL;
+  pthread_join(thread, NULL);
   return NULL;
 }
 
@@ -1041,6 +1147,30 @@ NAPI_MODULE_INIT() {
        NULL,
        napi_default,
        NULL},
+      {"panicThroughProducerLogger",
+       NULL,
+       panicThroughProducerLogger,
+       NULL,
+       NULL,
+       NULL,
+       napi_default,
+       NULL},
+      {"requestInvalidPassFrame",
+       NULL,
+       requestInvalidPassFrame,
+       NULL,
+       NULL,
+       NULL,
+       napi_default,
+       NULL},
+      {"callStateOffThread",
+       NULL,
+       callStateOffThread,
+       NULL,
+       NULL,
+       NULL,
+       napi_default,
+       NULL},
       {"getWindowState",
        NULL,
        getWindowState,
@@ -1140,5 +1270,7 @@ NAPI_MODULE_INIT() {
   };
   napi_define_properties(
       env, exports, sizeof(descs) / sizeof(descs[0]), descs);
+  demoDefineVisualExports(env, exports);
+  demoDefineConformanceExports(env, exports);
   return exports;
 }

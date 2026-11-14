@@ -177,9 +177,13 @@ endif()
 # backend (macOS until Task 16), where the option is on and there is
 # nothing for an addon to draw into.
 if(HERMES_NODE_ENABLE_UI AND TARGET hermesNodeCompositorGpu)
-  add_library(hnui_demo_addon SHARED
+  # Three files, by job -- see test/fixtures/hnui-demo/demo_addon.h.
+  set(HNUI_DEMO_ADDON_SOURCES
     test/fixtures/hnui-demo/demo_addon.c
+    test/fixtures/hnui-demo/demo_conformance.c
+    test/fixtures/hnui-demo/demo_visual.c
   )
+  add_library(hnui_demo_addon SHARED ${HNUI_DEMO_ADDON_SOURCES})
   target_include_directories(hnui_demo_addon PRIVATE
     ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi
     # BOTH, and the pair is the point. An addon writes `#include <hnui.h>`
@@ -195,8 +199,14 @@ if(HERMES_NODE_ENABLE_UI AND TARGET hermesNodeCompositorGpu)
   # sokol is the INTERFACE target carrying the vendored include path. The
   # addon compiles sokol_gfx.h's DECLARATIONS only; the sg_* symbols it
   # calls are exported by hermes-node-ui itself and resolved at dlopen
-  # time, exactly as the NAPI surface already is.
+  # time, exactly as the NAPI surface already is. sokol_gl's implementation
+  # IS compiled in (demo_visual.c), on top of those same exported symbols;
+  # it is a SYSTEM include there, so its warnings stay out of ours.
   target_link_libraries(hnui_demo_addon PRIVATE sokol)
+  # test/ui-wrong-thread.js calls an hnui_* entry point from a thread the
+  # addon spawns.
+  find_package(Threads REQUIRED)
+  target_link_libraries(hnui_demo_addon PRIVATE Threads::Threads)
   # The same backend define the host is built with. Two translation units
   # of the same Sokol configured differently would disagree about struct
   # layouts while linking perfectly -- see lib/compositor-gpu/sokol_config.h.
@@ -214,12 +224,10 @@ endif()
 # vendor, so test/ui-version-check.js can watch HNUI_CHECK_VERSION refuse it.
 # The override macro is honoured by hnui.h and by nothing else.
 if(TARGET hnui_demo_addon)
-  add_library(hnui_bad_version_addon SHARED
-    test/fixtures/hnui-demo/demo_addon.c
-  )
+  add_library(hnui_bad_version_addon SHARED ${HNUI_DEMO_ADDON_SOURCES})
   get_target_property(_demo_includes hnui_demo_addon INCLUDE_DIRECTORIES)
   target_include_directories(hnui_bad_version_addon PRIVATE ${_demo_includes})
-  target_link_libraries(hnui_bad_version_addon PRIVATE sokol)
+  target_link_libraries(hnui_bad_version_addon PRIVATE sokol Threads::Threads)
   target_compile_definitions(hnui_bad_version_addon PRIVATE
     SOKOL_GLCORE
     HNUI_SOKOL_COMMIT_OVERRIDE="deadbee")
@@ -246,6 +254,13 @@ if(HERMES_NODE_ENABLE_UI AND TARGET hermesNodeCompositorGpu AND UNIX AND
     test/fixtures/hnui-demo/x11_selection_owner.c
   )
   target_link_libraries(x11_selection_owner PRIVATE X11::X11)
+  # A second X client that sends real key, resize and close events to our
+  # window, for test/ui-real-events.js: the only test whose events come
+  # from Sokol rather than from the injection hook.
+  add_executable(x11_window_driver
+    test/fixtures/hnui-demo/x11_window_driver.c
+  )
+  target_link_libraries(x11_window_driver PRIVATE X11::X11)
 endif()
 
 # JS tests (Lit-based)
@@ -338,6 +353,11 @@ if(TARGET x11_selection_owner)
   list(APPEND HERMES_NODE_JS_TEST_DEPENDS x11_selection_owner)
   list(APPEND HERMES_NODE_LIT_PARAMS
     x11_selection_owner=$<TARGET_FILE:x11_selection_owner>)
+endif()
+if(TARGET x11_window_driver)
+  list(APPEND HERMES_NODE_JS_TEST_DEPENDS x11_window_driver)
+  list(APPEND HERMES_NODE_LIT_PARAMS
+    x11_window_driver=$<TARGET_FILE:x11_window_driver>)
 endif()
 # test/sokol-rename.js reads the generated sgp_rename.h and
 # test/sokol-isolation.js reads the two compiled sokol_gfx objects, so both

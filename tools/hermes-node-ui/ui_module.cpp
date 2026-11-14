@@ -18,6 +18,7 @@
 #endif
 
 #include <backend.h>
+#include <sokol_log.h>
 #include <test_hooks.h>
 #include <ui_trace.h>
 
@@ -102,7 +103,11 @@ WindowState gMetrics;
 std::string gStartupError;
 bool gStartupFailed = false;
 
-/// JS thread only.
+/// Created and closed on the JS thread, which is also the only thread its
+/// posted functions run on. **Posted to from both threads**: post() is the
+/// one OwnerDispatch operation callable from anywhere (owner_dispatch.h),
+/// and the platform thread uses it for the window's readiness and startup
+/// failure, the frame tick, event dispatch and a finished capture.
 OwnerDispatch *gDispatch = nullptr;
 napi_env gEnv = nullptr;
 napi_deferred gDeferred = nullptr;
@@ -545,8 +550,15 @@ void runFrameTick() {
   while (callbacks.next(&cb)) {
     ++ran;
     if (cb.kind == FrameCallback::Kind::kNative) {
-      // A native callback holds nothing of ours to release, and is C:
-      // there is no exception for it to throw.
+      // A native callback holds nothing of ours to release, and cannot
+      // throw in the C++ sense -- but it can leave a JavaScript exception
+      // PENDING through N-API (a napi_throw_*, or a napi_call_function
+      // into JavaScript that threw, left uncleared). The checkpoint below
+      // then routes it: uiRunTickCallback's own N-API calls refuse with
+      // napi_pending_exception, which sends it to handleCallbackException
+      // -- so it reaches `uncaughtException`, or exits 1, exactly as a
+      // JavaScript callback's throw would. (From reading the code; no test
+      // leaves one pending.)
       reinterpret_cast<hnui_frame_cb>(cb.fn)(gWindow, cb.user, timestamp);
     } else {
       runJsFrameCallback(cb, timestamp);
@@ -596,11 +608,42 @@ void runFrameTick() {
 // Event dispatch
 //===========================================================================
 
+/// Whether events may be delivered yet. **JS thread only.** Opened by
+/// openEventDelivery(), which onSharedContextReady() posts; until then a
+/// dispatch leaves everything queued.
+bool gEventDeliveryOpen = false;
+
 /// JS thread, posted by postEventDispatch(). Everything after the flag is
 /// ui_events.cpp's, reached through the window alone.
 void runEventDispatch() {
-  // Cleared BEFORE draining, never after: see gDispatchPosted.
+  // Cleared BEFORE draining, never after: see gDispatchPosted. Cleared
+  // while delivery is still closed too, so an event pushed meanwhile posts
+  // again rather than finding the flag stuck; that dispatch then also
+  // returns here, and openEventDelivery() drains what they left.
   gDispatchPosted.store(false);
+  if (!gEventDeliveryOpen)
+    return;
+  uiDispatchEvents(gWindow);
+}
+
+/// JS thread, posted by onSharedContextReady() once the window's Promise
+/// is resolved. Delivers everything that arrived since the window was
+/// created, in order, and from then on every dispatch delivers.
+///
+/// **Why a post, and why that is enough.** The Promise's continuation --
+/// where a script attaches its listeners, right after `await
+/// createWindow()` -- runs when the runtime drains microtasks, which it
+/// does in the loop's check and prepare phases, not between two functions
+/// of one OwnerDispatch drain pass. A dispatch the platform thread posted
+/// after init_cb lands in the SAME pass as onSharedContextReady whenever
+/// the JS thread was slow to wake, so it would run before the
+/// continuation and emit into an object with no listeners. A function
+/// posted from inside a pass runs in a later pass (owner_dispatch.h,
+/// "Ordering"), hence on a later loop turn, after the check phase has run
+/// the continuation. So listeners attached synchronously after the
+/// `await` see every event from the window's creation.
+void openEventDelivery() {
+  gEventDeliveryOpen = true;
   uiDispatchEvents(gWindow);
 }
 
@@ -711,10 +754,6 @@ void maybeCapture() {
   observed.framebufferWidth = sapp_width();
   observed.framebufferHeight = sapp_height();
   observed.dpiScale = gMetrics.dpiScale;
-  // Task 11's input path is what makes this ever non-zero. Stated rather
-  // than omitted: a test that asks for a non-zero serial today would
-  // never match, and that is the correct answer rather than a bug.
-  observed.inputSerial = 0;
 
   std::string path;
   int giveUpAfterFrames = 0;
@@ -888,20 +927,30 @@ void onSharedContextReady() {
   });
   gTick = new TickMachine();
 
-  gWindow = new hnui_window();
-  gWindow->ownerThread = std::this_thread::get_id();
-  gWindow->table = gTable;
-  gWindow->tick = gTick;
-  gWindow->backend = gBackend;
-  gWindow->env = gEnv;
+  // Built in a local and published to gWindow only once every step below
+  // has succeeded: a rejected createWindow leaves no window behind, which
+  // is what hnui_get_window()'s contract says (hnui.h, ui_module.h).
+  hnui_window *w = new hnui_window();
+  const auto abandon = [&](const std::string &why) {
+    if (w->jsWindow != nullptr)
+      napi_delete_reference(gEnv, w->jsWindow);
+    delete w;
+    napi_close_handle_scope(gEnv, scope);
+    rejectWith(why);
+  };
+  w->ownerThread = std::this_thread::get_id();
+  w->table = gTable;
+  w->tick = gTick;
+  w->backend = gBackend;
+  w->env = gEnv;
   // The mirror starts from init_cb's snapshot; every event after that
   // carries its own (Ruling 52).
-  gWindow->state = gMetrics;
+  w->state = gMetrics;
   {
     std::lock_guard<std::mutex> lock(gMutex);
-    gWindow->title = gRequest.title;
+    w->title = gRequest.title;
   }
-  gWindow->events = std::make_unique<EventDispatcher>(gInput);
+  w->events = std::make_unique<EventDispatcher>(gInput);
 
   // The other half of completion: the producer's arrives through the
   // callback submitAndTrackCompletion() takes, the consumer's through
@@ -917,20 +966,18 @@ void onSharedContextReady() {
   std::string surfaceError;
   if (!gBackend->createGenerationSurfaces(
           gGeneration, gGenerationWidth, gGenerationHeight, surfaceError)) {
-    napi_close_handle_scope(gEnv, scope);
-    rejectWith(surfaceError);
+    abandon(surfaceError);
     return;
   }
 
-  // The window object: an EventEmitter, kept current from gWindow->state
+  // The window object: an EventEmitter, kept current from w->state
   // by ui_events.cpp. Built before the store below, so that a failure
   // here, like the surface failure above, rejects with nothing yet
   // published to the platform thread.
   std::string objectError;
-  napi_value window = uiCreateWindowObject(gWindow, objectError);
+  napi_value window = uiCreateWindowObject(w, objectError);
   if (window == nullptr) {
-    napi_close_handle_scope(gEnv, scope);
-    rejectWith(objectError);
+    abandon(objectError);
     return;
   }
 
@@ -938,10 +985,11 @@ void onSharedContextReady() {
   // the first tick, and that tick reads the origin.
   std::string originError;
   if (!computeFrameOrigin(originError)) {
-    napi_close_handle_scope(gEnv, scope);
-    rejectWith(originError);
+    abandon(originError);
     return;
   }
+
+  gWindow = w;
 
   // Everything above is published to the platform thread by this store,
   // which its frame callback acquires. Nothing before it may be read
@@ -967,15 +1015,13 @@ void onSharedContextReady() {
   napi_close_handle_scope(gEnv, scope);
 
   // Events that arrived before the object existed are still queued, and
-  // any post made for them has already run and found nothing to deliver
-  // to. Posted rather than run here, so that the script's `await
-  // createWindow()` continuation -- where its listeners get attached --
-  // usually runs first. Not always: a dispatch the platform thread posted
-  // after init_cb and before the JS thread woke for this function is taken
-  // by the same OwnerDispatch drain pass and runs right after it, before
-  // the continuation. Such an event still updates the mirror; it is
-  // emitted before the script's listeners exist.
-  postEventDispatch();
+  // every dispatch posted for them -- including one the platform thread
+  // posted after init_cb that runs later in this same drain pass -- leaves
+  // them there until delivery opens. Opened from a post, so that the
+  // script's `await createWindow()` continuation has run first: see
+  // openEventDelivery().
+  if (gDispatch != nullptr)
+    gDispatch->post(openEventDelivery);
 }
 
 void onStartupFailed() {
@@ -1059,40 +1105,18 @@ void sokolLog(
     const char *filename,
     void *userData) {
   (void)userData;
-
-  static const char *const kLevels[] = {"panic", "error", "warning", "info"};
-  const char *level = logLevel < 4 ? kLevels[logLevel] : "?";
-
-  std::fprintf(
-      stderr,
-      "[%s:%s] item %u%s%s (%s:%u)\n",
+  // A panic does not return: uiSokolLog restores the terminal and exits,
+  // the same path both sokol_gfx instances' loggers take.
+  uiSokolLog(
       tag ? tag : "sokol",
-      level,
+      logLevel,
       logItemId,
-      message ? ": " : "",
-      message ? message : "",
-      filename ? filename : "sokol",
-      lineNr);
-  std::fflush(stderr);
-
-  if (logLevel != 0)
-    return;
-
-  std::fprintf(
-      stderr,
+      message,
+      lineNr,
+      filename,
       "hermes-node-ui: the windowing system could not be initialised. This "
       "is fatal: sokol_app panics from inside sapp_run(), before any "
-      "callback of ours runs, and offers no way to recover.\n");
-  std::fflush(stderr);
-
-  // Every _exit() path in this tree restores the terminal, and this is the
-  // fourth. See CLAUDE.md's Bootstrap Sequence section: raw mode is a
-  // libuv global, and leaving it set hands the user back a shell that no
-  // longer echoes. Nothing here flushes the JS thread's queued stdio the
-  // way processExit() does -- that thread is still live and owns the loop,
-  // so pumping it from here would be a data race rather than a fix.
-  uv_tty_reset_mode();
-  _exit(1);
+      "callback of ours runs, and offers no way to recover.");
 }
 
 /// Bring the tracked state's size, DPI scale and fullscreen flag up to date
@@ -1477,7 +1501,7 @@ void onInit() {
 /// The presenting half, once per platform frame: take a newly published
 /// surface if there is one, blit it or the previous one, release completed
 /// reads, and send the frame tick if one is due (spec: Architecture,
-/// `frame_cb`). Draining the command queue joins this list in Task 11.
+/// `frame_cb`), and drain the command queue and the clipboard reads.
 void onFrame() {
   if (gBackend == nullptr)
     return;
@@ -1776,8 +1800,8 @@ void installFrameGlobals() {
 ///
 /// **The caller supplies every agreement field**, and that is the point
 /// rather than an inconvenience: the capture is taken only when the
-/// generation, the publication id, the target size, the framebuffer size,
-/// the DPI scale and the input serial all match what the presenter
+/// generation, the publication id, the target size, the framebuffer size
+/// and the DPI scale all match what the presenter
 /// actually drew, so a test that wants a capture has to state which frame
 /// it means. A hook that worked out the fields for itself would agree
 /// with the presenter by construction and would test nothing.
@@ -1835,7 +1859,6 @@ napi_value captureFrame(napi_env env, napi_callback_info info) {
   int framebufferWidth = 0;
   int framebufferHeight = 0;
   double dpiScale = 0;
-  double inputSerial = 0;
   int giveUpAfterFrames = 0;
   std::string path;
 
@@ -1846,7 +1869,6 @@ napi_value captureFrame(napi_env env, napi_callback_info info) {
   readInt(env, argv[0], "framebufferWidth", &framebufferWidth);
   readInt(env, argv[0], "framebufferHeight", &framebufferHeight);
   readDouble(env, argv[0], "dpiScale", &dpiScale);
-  readDouble(env, argv[0], "inputSerial", &inputSerial);
   readInt(env, argv[0], "giveUpAfterFrames", &giveUpAfterFrames);
   readString(env, argv[0], "path", &path);
 
@@ -1857,7 +1879,6 @@ napi_value captureFrame(napi_env env, napi_callback_info info) {
   want.framebufferWidth = framebufferWidth;
   want.framebufferHeight = framebufferHeight;
   want.dpiScale = dpiScale;
-  want.inputSerial = static_cast<uint64_t>(inputSerial);
 
   {
     std::lock_guard<std::mutex> lock(gCaptureMutex);

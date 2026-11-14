@@ -338,7 +338,6 @@ CaptureRequest sampleRequest() {
   r.framebufferWidth = 320;
   r.framebufferHeight = 240;
   r.dpiScale = 1.0;
-  r.inputSerial = 42;
   return r;
 }
 
@@ -409,13 +408,6 @@ TEST(FrameCaptureTest, MatchesOnlyWhenEveryFieldAgrees) {
     capture.request(want);
     CaptureRequest wrong = want;
     wrong.dpiScale = 2.0;
-    EXPECT_FALSE(capture.tryMatch(wrong));
-  }
-  {
-    FrameCapture capture;
-    capture.request(want);
-    CaptureRequest wrong = want;
-    wrong.inputSerial = 43;
     EXPECT_FALSE(capture.tryMatch(wrong));
   }
   {

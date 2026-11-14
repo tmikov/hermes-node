@@ -9,6 +9,7 @@
 
 #include "gl_present.h"
 #include "sokol_config.h"
+#include "sokol_log.h"
 #include "ui_trace.h"
 
 // Declarations only -- the implementation lives in sokol_gfx_impl.cpp and
@@ -636,7 +637,10 @@ bool GlBackend::makeCurrentOnWorker(std::string &error) {
 
 /// Sokol's logger for the PRODUCING instance. Its twin lives in
 /// gl_present.cpp; the two are separate so that a message says which
-/// instance produced it.
+/// instance produced it. A panic terminates (uiSokolLog): this instance's
+/// panics are raised on the JS thread, from inside an addon's sg_* call --
+/// a validation failure, typically -- and Sokol's code after one assumes
+/// the logger did not return.
 void producerLog(
     const char *tag,
     uint32_t logLevel,
@@ -647,26 +651,28 @@ void producerLog(
     void *userData) {
   (void)tag;
   (void)userData;
-  static const char *const kLevels[] = {"panic", "error", "warning", "info"};
-  const char *level = logLevel < 4 ? kLevels[logLevel] : "?";
-  std::fprintf(
-      stderr,
-      "[sokol-produce:%s] item %u%s%s (%s:%u)\n",
-      level,
+  uiSokolLog(
+      "sokol-produce",
+      logLevel,
       logItemId,
-      message ? ": " : "",
-      message ? message : "",
+      message,
+      lineNr,
       filename ? filename : "sokol_gfx.h",
-      lineNr);
-  std::fflush(stderr);
+      "hermes-node-ui: the producing sokol_gfx instance -- the one addons "
+      "draw with -- panicked. This is fatal: Sokol's code after a panic "
+      "assumes it does not return.");
 }
 
 bool GlBackend::setupProducerInstance(std::string &error) {
   sg_desc desc = {};
-  // Spec, The native C API: "sg_setup uses environment defaults of the
-  // surface color format, depth_format = NONE, sample_count = 1, so
-  // default pipelines in sokol_imgui and sokol_gl match with no
-  // configuration." All three are stated here rather than defaulted,
+  // Spec, The native C API: sg_setup uses environment defaults of the
+  // surface color format, depth_format = NONE and sample_count = 1. A
+  // default pipeline picks colour format and sample count up from these;
+  // sokol_gl's does NOT take depth from here -- it enables depth writes
+  // unless the depth format IT was given is NONE, so every sokol_gl user
+  // on this host passes `depth_format = SG_PIXELFORMAT_NONE` itself (see
+  // test/fixtures/hnui-demo/demo_visual.c). All three are stated here
+  // rather than defaulted,
   // because an addon's pipeline inherits them and a mismatch surfaces as a
   // format error inside the addon.
   desc.environment.defaults.color_format =

@@ -22,18 +22,18 @@ vendored set is the part of Sokol this compositor is built on, and it grows
 a file at a time. Upstream's directory layout is kept (`util/` for the
 utility headers), so a re-sync is the same relative path on both sides.
 
-Two of the six are here ahead of their first `#include`: nothing yet
-includes `sokol_glue.h` or `sokol_log.h`. They are vendored now because
-they belong to this pin and to the presenting path being built out around
-it -- fetching them later from a different commit is exactly the drift the
-pin exists to prevent.
+`sokol_log.h` is here ahead of any `#include`: nothing includes it, since
+ours is the logger (below). `sokol_glue.h` is included by
+`lib/compositor-gpu/gl_present.cpp`, the presenting unit. Both are vendored
+at this pin because fetching one later from a different commit is exactly
+the drift the pin exists to prevent.
 
 | File | Why it is here |
 |---|---|
 | `sokol_gfx.h` | The 3D API wrapper. Compiled **twice** (see below). |
 | `sokol_app.h` | Window and event loop; the main thread's. |
 | `sokol_glue.h` | `sapp_*` -> `sg_*` translation for the presenting instance. |
-| `sokol_log.h` | Reference logger. Used as the *shape* of ours, not called directly -- ours terminates on a panic item (spec: "Failure splits in two"). |
+| `sokol_log.h` | Reference logger. Used as the *shape* of ours, not called directly. All three of ours -- sokol_app's and both sokol_gfx instances' -- share one body, `lib/compositor-gpu/sokol_log.cpp`, which terminates on a panic item as `slog_func` does (spec: "Failure splits in two"). |
 | `util/sokol_gl.h` | OpenGL 1.x-style immediate drawing on top of `sokol_gfx`. Not used by the compositor itself: the reference addon (`test/fixtures/hnui-demo/demo_visual.c`) compiles its implementation in, against the `sg_*` symbols the host exports, to draw its triangle -- which is also the check that the host's `sg_setup` environment suits a stock Sokol renderer. |
 | `LICENSE` | Required by the license itself. |
 

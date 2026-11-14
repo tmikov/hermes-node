@@ -737,7 +737,9 @@ The name carries a colon, so it cannot collide with an npm package.
 - **Events** (`win` is an EventEmitter): `keydown`, `keyup`, `char`;
   `mousedown`, `mouseup`, `mousemove`, `wheel`, `mouseenter`, `mouseleave`;
   `resize`, `focus`, `blur`, `minimize`, `restore`; `paste`, `drop`; `close`
-  (cancelable).
+  (cancelable). Nothing is delivered until one loop turn after the window's
+  Promise resolves, so listeners attached synchronously after `await
+  createWindow()` receive every event since the window's creation, in order.
 - **Field names follow the DOM where the meaning is identical**: `code` with
   `KeyboardEvent.code` names, `repeat`, `shiftKey`/`ctrlKey`/`altKey`/
   `metaKey`, DOM button numbering. Where Sokol differs, Sokol's shape wins: a
@@ -798,8 +800,14 @@ int   hnui_read_clipboard_sync(hnui_window *w, int timeout_ms, char **out);
 - Several renderers may draw one frame in turn; the first clears and the rest
   load.
 - `sg_setup` uses environment defaults of the surface color format,
-  `depth_format = NONE`, `sample_count = 1`, so default pipelines in
-  `sokol_imgui` and `sokol_gl` match with no configuration.
+  `depth_format = NONE`, `sample_count = 1`, so a default pipeline's colour
+  format and sample count match with no configuration. Its depth does not, for
+  `sokol_gl`: its default pipeline enables depth writes unless the
+  `depth_format` passed to `sgl_setup` is `SG_PIXELFORMAT_NONE`, and it never
+  consults the environment for that (`sokol_gl.h`, `_sgl_init_pipeline` and
+  the default pipeline in `_sgl_init_context`), so a pipeline left at the
+  default fails validation. A `sokol_gl` user passes
+  `depth_format = SG_PIXELFORMAT_NONE`.
 - **Native frame callbacks** share the tick and timestamp with JS ones and
   run in registration order among them. Cancellation takes effect
   immediately, including for a later callback in the current batch.
@@ -809,8 +817,9 @@ int   hnui_read_clipboard_sync(hnui_window *w, int timeout_ms, char **out);
   receives that event and no later one (including the next of the same
   batch); removing an unknown id, or the same id twice, is a no-op. A removed
   listener's user data may be freed once `hnui_event_dispatch_quiescent`
-  returns true: it is false inside a native listener and true inside a frame
-  callback.
+  returns true: it is false for the whole dispatch pass -- native listeners,
+  JavaScript listeners and the tick callbacks between events alike -- and
+  true inside a frame callback.
 - **The four command entry points are `void`**, so a refused argument
   (`hnui_set_cursor` outside `HNUI_CURSOR_DEFAULT..HNUI_CURSOR_NOT_ALLOWED`;
   `hnui_write_clipboard` with a NULL string or more than
@@ -859,8 +868,13 @@ reported as not installed. The precedent it follows instead is `hello_addon`
 `display` lit features, and the built addon's path is passed to the entry
 script rather than resolved by `require()` from a package.
 
-It is deliberately small -- on the order of 150 lines of C plus a short entry
-script -- and uses **`sokol_gl` only, never ImGui**:
+It is about 2,300 lines of C in three files, by job: `demo_addon.c` (module
+setup and the test-only functions the window tests call), `demo_visual.c`
+(the worked example a renderer author reads, about 370 lines on its own) and
+`demo_conformance.c` (one call to each entry point the visual demo does not
+make), plus a short entry script. It uses **`sokol_gl` only, never ImGui**,
+and passes `sgl_setup` a `depth_format` of `SG_PIXELFORMAT_NONE`, which
+`sokol_gl` needs to match the host's surface (see `sg_setup` above):
 
 - `demo.js` loads `hermes-node:ui`, calls `createWindow`, loads the addon,
   and runs an ordinary JS `requestAnimationFrame` loop that calls into it.
@@ -1003,8 +1017,12 @@ rather than a rotating one.
 deterministic**, because the same publication can be presented at a different
 framebuffer size, and the blit stretches with linear filtering when the sizes
 differ. So a capture request carries, and the capture is only taken when they
-agree: the target generation, the target's dimensions, the actual framebuffer
-dimensions and DPI scale, and the input state the frame was drawn from.
+agree: the target generation, the publication id, the target's dimensions,
+and the actual framebuffer dimensions and DPI scale. The publication id is
+also what ties a capture to the input state the frame was drawn from: it
+names exactly one drawn frame, and a test that injects events and then draws
+knows which publication followed them, so a separate input serial would only
+ever agree with it.
 Transitional stretching is asserted separately, as its own case, rather than
 being something the ordinary assertions have to tolerate.
 

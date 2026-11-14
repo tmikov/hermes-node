@@ -81,7 +81,10 @@ void uiFailPendingClipboardReads(napi_env env);
 /// **Does nothing until `w->jsWindow` exists**, and in particular does not
 /// drain: an event that arrived between `init_cb` and the window's Promise
 /// resolving stays queued, and is delivered -- updating the mirror -- by
-/// the first call after the object is built.
+/// the first call after the object is built. ui_module.cpp makes that
+/// first call one loop turn after the Promise resolves
+/// (`openEventDelivery`), so that listeners attached right after `await
+/// createWindow()` receive those events too.
 ///
 /// A call made while one is already delivering returns at once
 /// (`EventDispatcher`); that is reachable, since a listener calling

@@ -18,6 +18,10 @@
 
 #include <hermes/node-compat/runtime/embedder_module_prefix.h>
 
+#ifdef HERMES_NODE_UI_HAVE_WINDOW
+#include <sokol_log.h>
+#endif
+
 #include <cstdio>
 #include <cstring>
 #include <utility>
@@ -78,6 +82,15 @@ int main(int argc, char **argv) {
     if (std::strcmp(argv[i], "--version") == 0 ||
         std::strcmp(argv[i], "-v") == 0) {
       std::printf("hermes-node-ui %s\n", HERMES_NODE_VERSION_STRING);
+#ifdef HERMES_NODE_UI_HAVE_WINDOW
+      // A build fact a test needs before it can open a window:
+      // test/lit.cfg's `sokol-validation` feature reads this line, since
+      // only a validating build turns an addon's malformed pass into a
+      // panic.
+      std::printf(
+          "sokol_gfx validation: %s\n",
+          hermes::node_compat::producerSokolValidates() ? "on" : "off");
+#endif
       return 0;
     } else if (
         std::strcmp(argv[i], "--help") == 0 ||

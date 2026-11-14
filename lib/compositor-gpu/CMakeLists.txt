@@ -85,6 +85,8 @@ add_hermes_library(hermesNodeCompositorGpu STATIC
   # compiled "exactly once, in the presenting unit, or not at all".
   gl_present.cpp
   ui_trace.cpp
+  # The one body of all three Sokol loggers, sokol_app's included.
+  sokol_log.cpp
   test_hooks.cpp
   sokol_gfx_impl.cpp
   sokol_gfx_present_impl.cpp
@@ -95,7 +97,7 @@ add_hermes_library(hermesNodeCompositorGpu STATIC
 
 target_include_directories(hermesNodeCompositorGpu PUBLIC
   ${PROJECT_SOURCE_DIR}/include
-  # backend.h and ui_trace.h, for tools/hermes-node-ui.
+  # backend.h, ui_trace.h and sokol_log.h, for tools/hermes-node-ui.
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_include_directories(hermesNodeCompositorGpu PRIVATE

@@ -135,8 +135,13 @@ bool hnui_frame_target(hnui_window *w, hnui_target *out) {
   // struct nobody filled in. Read before anything else is written, so a
   // rejected call leaves the caller's buffer untouched.
   const uint32_t providedSize = out->size;
-  if (!hnui_size_ok(providedSize, HNUI_TARGET_MIN_SIZE))
+  if (!hnui_size_ok(providedSize, HNUI_TARGET_MIN_SIZE)) {
+    uiTrace(
+        "hnui_frame_target: size %u is below the minimum %u; refused.",
+        static_cast<unsigned>(providedSize),
+        static_cast<unsigned>(HNUI_TARGET_MIN_SIZE));
     return false;
+  }
 
   // Outside a frame callback this is a legitimate question with a
   // legitimate answer (spec: "returns false outside a frame callback; only
@@ -160,8 +165,8 @@ bool hnui_frame_target(hnui_window *w, hnui_target *out) {
   // whatever that addon put after the struct. Copying sizeof(hnui_target)
   // regardless would write over them -- which is the exact failure the
   // size prefix exists to prevent, so the clamp is the mechanism and not a
-  // formality. (Task 14 owns the behavioural test that a poisoned tail
-  // survives; this is the writer it needs.)
+  // formality. test/ui-abi-sizes.js (SIZES) is the behavioural test that a
+  // poisoned tail survives.
   const size_t writable =
       std::min(static_cast<size_t>(providedSize), sizeof(hnui_target));
   std::memcpy(out, &filled, writable);
@@ -320,8 +325,13 @@ void hnui_get_window_state(hnui_window *w, hnui_window_state *out) {
   // `size` first, refuse a value below the minimum without writing a byte,
   // and never write more than the caller said it has.
   const uint32_t providedSize = out->size;
-  if (!hnui_size_ok(providedSize, HNUI_WINDOW_STATE_MIN_SIZE))
+  if (!hnui_size_ok(providedSize, HNUI_WINDOW_STATE_MIN_SIZE)) {
+    uiTrace(
+        "hnui_get_window_state: size %u is below the minimum %u; refused.",
+        static_cast<unsigned>(providedSize),
+        static_cast<unsigned>(HNUI_WINDOW_STATE_MIN_SIZE));
     return;
+  }
 
   const hermes::node_compat::WindowState &state = w->state;
   hnui_window_state filled = {};

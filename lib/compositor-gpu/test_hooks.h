@@ -185,25 +185,32 @@ class CompletionGate {
 /// framebuffer size at present time, which can differ from the target
 /// during a resize; the blit stretches with linear filtering when they do,
 /// which is exactly the case a capture must not silently accept as if it
-/// were the steady-state pattern. `inputSerial` is the input-state serial
-/// the frame was **drawn from**, not the serial current when the frame is
-/// **presented** -- the two can differ because presentation happens later
-/// than drawing, and a capture keyed to the wrong one is a picture of the
-/// wrong frame even when every pixel it contains is correct.
+/// were the steady-state pattern.
+///
+/// **There is no input-state field, and that is deliberate.** The spec asks
+/// that a capture agree with "the input state the frame was drawn from"
+/// because presentation happens later than drawing, and a capture of the
+/// right pixels from the wrong frame is still the wrong frame. The
+/// publication id below already identifies exactly one drawn frame, and a
+/// test that injects events and then draws knows which publication followed
+/// which events -- test/ui-demo-visual.js's KEY case is that argument. An
+/// input serial was carried here until Slice C, permanently 0 on both
+/// sides: a second key that always agrees adds nothing but the appearance
+/// of a check.
 ///
 /// **`publicationId` (spec "Testing": "Capture is keyed to a publication id
 /// and acknowledged, never to an absolute frame number, because blits can
 /// precede any publication").** A `GenerationId` alone is not that key: a
 /// generation spans many publications, so two different publications of
-/// the same generation drawn from the same input serial are otherwise
-/// indistinguishable, and a re-blit of the still-presenting surface (no
-/// new publication at all) would report an identical tuple without one.
+/// the same generation are otherwise indistinguishable, and a re-blit of
+/// the still-presenting surface (no new publication at all) would report
+/// an identical tuple without one.
 /// That is benign for a fixed-pattern demo, where every publication draws
 /// the same pixels -- but the spec's binding rule is a property of the
 /// matching *mechanism*, not of any one demo's content, so it is not
-/// optional here. Expected to be a per-publication counter a future
-/// producer increments (Task 10); nothing in this module computes one yet,
-/// the same as `inputSerial` above.
+/// optional here. The presenter reports the presenting surface's id
+/// (`TickMachine::presentingPublicationId()`, read in ui_module.cpp); this
+/// module only compares it.
 struct CaptureRequest {
   GenerationId generation;
   uint64_t publicationId = 0;
@@ -212,15 +219,13 @@ struct CaptureRequest {
   int32_t framebufferWidth = 0;
   int32_t framebufferHeight = 0;
   double dpiScale = 0.0;
-  uint64_t inputSerial = 0;
 };
 
 inline bool operator==(const CaptureRequest &a, const CaptureRequest &b) {
   return a.generation == b.generation && a.publicationId == b.publicationId &&
       a.targetWidth == b.targetWidth && a.targetHeight == b.targetHeight &&
       a.framebufferWidth == b.framebufferWidth &&
-      a.framebufferHeight == b.framebufferHeight && a.dpiScale == b.dpiScale &&
-      a.inputSerial == b.inputSerial;
+      a.framebufferHeight == b.framebufferHeight && a.dpiScale == b.dpiScale;
 }
 inline bool operator!=(const CaptureRequest &a, const CaptureRequest &b) {
   return !(a == b);

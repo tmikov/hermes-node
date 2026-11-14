@@ -87,10 +87,14 @@ napi_value rejectNoWindow(napi_env env, napi_callback_info info) {
   return promise;
 }
 
-/// `requestAnimationFrame`: a synchronous throw, matching what the real
-/// module does when no window exists yet. Exported at all -- rather than
-/// left off the object -- so the failure names the situation instead of
-/// being a TypeError about calling undefined.
+/// `requestAnimationFrame`, `cancelAnimationFrame`, `writeClipboard` and
+/// `readClipboard`: a synchronous throw, matching what the real module's
+/// `requestAnimationFrame` and `readClipboard` do when no window exists yet.
+/// Exported at all -- rather than left off the object -- so the failure
+/// names the situation instead of being a TypeError about calling
+/// undefined, and so the module has the real one's five functions. (The
+/// real `cancelAnimationFrame` ignores an id it does not know; here there
+/// is nothing it could ever know, and refusing says why.)
 napi_value throwNoWindow(napi_env env, napi_callback_info info) {
   (void)info;
   napi_throw_error(env, nullptr, kNoWindowSupport);
@@ -118,8 +122,12 @@ bool exportFunction(
 napi_value initUiModule(napi_env env, napi_value exports) {
   if (!exportFunction(env, exports, "createWindow", rejectNoWindow))
     return nullptr;
-  if (!exportFunction(env, exports, "requestAnimationFrame", throwNoWindow))
+  if (!exportFunction(env, exports, "requestAnimationFrame", throwNoWindow) ||
+      !exportFunction(env, exports, "cancelAnimationFrame", throwNoWindow) ||
+      !exportFunction(env, exports, "writeClipboard", throwNoWindow) ||
+      !exportFunction(env, exports, "readClipboard", throwNoWindow)) {
     return nullptr;
+  }
   // No `__captureFrame`, with or without the test hooks: it captures a
   // presented frame, and this build presents none.
   return exports;

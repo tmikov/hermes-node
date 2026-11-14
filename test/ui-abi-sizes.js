@@ -38,12 +38,13 @@
 // RUN-line shape as in ui-events.js (redirections inside `sh -c`, `timeout`,
 // ends through process.exit()).
 //
-// RUN: timeout 300 xvfb-run -a sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --check-prefix=ERR %s < %t.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=ERR %s < %t.err
 // RUN: %FileCheck --check-prefix=APPLIED %s < %t.err
 // RUN: grep -c 'command cursor' %t.err | %FileCheck --check-prefix=NCURSOR %s
 // RUN: grep -c 'command clipboard' %t.err | %FileCheck --check-prefix=NCLIP %s
+// RUN: %FileCheck --check-prefix=SHORT %s < %t.err
 
 // CODE: EXITCODE 0
 
@@ -73,8 +74,15 @@
 // would sit after that match's start and never be seen. Exactly one cursor
 // command (the valid one) and one clipboard command (the boundary write)
 // must have been applied.
-// NCURSOR: 1
-// NCLIP: 1
+// Anchored: grep -c prints a bare number, and an unanchored `1` would also
+// accept 10, 11 or 21.
+// NCURSOR: {{^1$}}
+// NCLIP: {{^1$}}
+
+// The two short-size refusals say so under tracing, as a null window does,
+// naming the size given and the minimum.
+// SHORT-DAG: hnui_frame_target: size {{[0-9]+}} is below the minimum {{[0-9]+}}; refused.
+// SHORT-DAG: hnui_get_window_state: size {{[0-9]+}} is below the minimum {{[0-9]+}}; refused.
 
 'use strict';
 

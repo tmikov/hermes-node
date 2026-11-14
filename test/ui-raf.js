@@ -49,19 +49,19 @@
 // REQUIRES: display
 //
 // The RUN-line shape is ui-present.js's, for the reasons given there:
-// redirections INSIDE `sh -c` because xvfb-run merges its child's stderr
-// into stdout, and `timeout` because lit has no per-test timeout (dz
-// 01a0d797-e326) and several mutations here wait forever for a tick that
-// never comes. The main run ends through process.exit() (Ruling 59):
-// closing the window still hangs (dz 01a0d88a-6518).
+// redirections INSIDE `sh -c`, so the trace file is the binary's own stderr
+// whatever the display wrapper does, and `timeout` because lit has no
+// per-test timeout (dz 01a0d797-e326) and several mutations here wait forever
+// for a tick that never comes. The main run ends through process.exit()
+// (Ruling 59): closing the window still hangs (dz 01a0d88a-6518).
 //
-// RUN: timeout 300 xvfb-run -a sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon main %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon main %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --check-prefix=TRACE %s < %t.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=TRACE %s < %t.err
 //
-// RUN: timeout 300 xvfb-run -a sh -c 'HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon fatal > %t.fatal.out 2> %t.fatal.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=FATALCODE %s
+// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon fatal > %t.fatal.out 2> %t.fatal.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=FATALCODE %s
 // RUN: %FileCheck --check-prefix=FATAL %s < %t.fatal.out
-// RUN: %FileCheck --check-prefix=FATALERR %s < %t.fatal.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=FATALERR %s < %t.fatal.err
 
 'use strict';
 
@@ -258,7 +258,6 @@ async function main() {
     framebufferWidth: win.framebufferWidth,
     framebufferHeight: win.framebufferHeight,
     dpiScale: win.dpiScale,
-    inputSerial: 0,
   });
   requestAnimationFrame(() => log('afterEmpty'));
   await nextFrame();
@@ -294,7 +293,6 @@ async function main() {
     framebufferWidth: win.framebufferWidth,
     framebufferHeight: win.framebufferHeight,
     dpiScale: win.dpiScale,
-    inputSerial: 0,
   });
   requestAnimationFrame(() => {
     addon.drawFixedPattern();
