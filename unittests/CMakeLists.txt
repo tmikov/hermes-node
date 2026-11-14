@@ -113,6 +113,37 @@ target_compile_definitions(HermesParserKindHashSyncTest PRIVATE
 if(HERMES_NODE_ENABLE_UI)
   add_node_compat_unittest(CompositorTest CompositorTest.cpp)
   target_link_libraries(CompositorTest hermesNodeCompositor)
+
+  # hermesNodeUiHost (tools/hermes-node-ui/CMakeLists.txt) is the split
+  # RULING 41 introduced so this could link it directly. hermesNapi and
+  # hermesvm_a are added explicitly, the same way ModuleLoaderTest and
+  # NodeProcessTest do above: hermesNodeUiHost pulls in hermesNodeRuntime,
+  # which links hermesvm_a PUBLIC already, but a plain (non-whole-archive)
+  # link needs hermesNapi named too for the NAPI symbols runHermesNode()
+  # calls into -- this binary dlopens no addons of its own, so it does not
+  # need the whole-archive treatment hermes_node_link_setup() gives the
+  # real binaries, only the symbols it actually calls.
+  add_node_compat_unittest(UiHostTest UiHostTest.cpp)
+  target_link_libraries(UiHostTest
+    hermesNodeUiHost
+    hermesNapi
+    hermesvm_a
+  )
+
+  # HnuiAbiCProbe.c is compiled as C, not C++, and deliberately so: it is
+  # what enforces hnui_abi.h's "stays compilable as plain C" claim (see the
+  # header's own "C99 is the floor" comment) -- without it, nothing in this
+  # build notices a C++-only construct creeping into that header. Its C
+  # standard is set independently of HnuiAbiTest.cpp's C++17, which
+  # CXX_STANDARD below leaves untouched.
+  add_node_compat_unittest(HnuiAbiTest HnuiAbiTest.cpp HnuiAbiCProbe.c)
+  target_link_libraries(HnuiAbiTest hermesNodeCompositor)
+  set_target_properties(HnuiAbiTest PROPERTIES
+    C_STANDARD 99
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF
+  )
+  set_source_files_properties(HnuiAbiCProbe.c PROPERTIES COMPILE_OPTIONS "-pedantic")
 endif()
 
 add_subdirectory(HermesParserNative)

@@ -126,6 +126,13 @@ endif()
 # CLI tools
 add_subdirectory(tools/hermes-node)
 
+# hermes-node-ui: the UI compositor binary (Task 6 of the compositor plan).
+# Guarded the same way lib/compositor is above -- a build without the
+# option produces neither the library nor this binary.
+if(HERMES_NODE_ENABLE_UI)
+  add_subdirectory(tools/hermes-node-ui)
+endif()
+
 # Unit tests
 add_subdirectory(unittests)
 
@@ -164,6 +171,13 @@ set(HERMES_NODE_LIT_PARAMS
   test_exec_root=${CMAKE_CURRENT_BINARY_DIR}/test
   hello_addon=$<TARGET_FILE:hello_addon>
   kit_dir=${HERMES_NODE_KIT_DIR}
+  # Same shape as hermes_node and kit_dir above: always a path,
+  # never a flag lit is asked to trust. Passed unconditionally, even in a
+  # build with HERMES_NODE_ENABLE_UI off, where this path simply names a
+  # binary that does not exist -- test/lit.cfg runs it and decides the `ui`
+  # feature from what actually happens, the same way `linker-available` is
+  # decided by a real kit.manifest rather than a flag saying one was built.
+  hermes_node_ui=${HERMES_TOOLS_OUTPUT_DIR}/hermes-node-ui
 )
 
 # hermes-node-kit is EXCLUDE_FROM_ALL (see tools/hermes-node/CMakeLists.txt:
@@ -174,10 +188,21 @@ set(HERMES_NODE_LIT_PARAMS
 # and the version check inside --build-exe would fail every test the moment
 # the version string moved. Re-cutting is a few seconds; running against a
 # stale kit is a silent wrong answer.
+set(HERMES_NODE_JS_TEST_DEPENDS hermes hermes-node hello_addon hermes-node-kit)
+# hermes-node-ui only exists as a target when HERMES_NODE_ENABLE_UI is on
+# (see the guarded add_subdirectory above); naming it in DEPENDS
+# unconditionally would be a hard CMake configure error on every other
+# build. Guarded the same way the target itself is -- without this, a build
+# with the option on could run the JS suite against a stale or missing
+# binary and every `REQUIRES: ui` test would be silently UNSUPPORTED rather
+# than failing for its stated reason.
+if(HERMES_NODE_ENABLE_UI)
+  list(APPEND HERMES_NODE_JS_TEST_DEPENDS hermes-node-ui)
+endif()
 add_lit_testsuite(check-hermes-node-js "Running hermes-node JS tests"
   ${CMAKE_CURRENT_SOURCE_DIR}/test
   PARAMS ${HERMES_NODE_LIT_PARAMS}
-  DEPENDS hermes hermes-node hello_addon hermes-node-kit
+  DEPENDS ${HERMES_NODE_JS_TEST_DEPENDS}
 )
 
 # Unit tests (GTest, discovered and run by Lit)
