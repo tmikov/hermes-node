@@ -21,9 +21,12 @@ namespace node_compat {
 
 /// Whether HERMES_NODE_UI_TEST_HOOKS is set.
 ///
-/// Task 9 adds these hooks **before** the code that will call into them
-/// (frame capture and event injection reach the window in Task 10/11;
-/// `CompletionGate` is exercised directly against `SurfaceTable` today).
+/// Task 9 added these hooks **before** the code that calls into them
+/// (frame capture reached the window in Task 10; `CompletionGate` is also
+/// exercised directly against `SurfaceTable`). Event injection used to
+/// live here too and moved to `tools/hermes-node-ui/event_injector.h` in
+/// Task 11b, where it injects platform events -- the converter's input --
+/// rather than the `UiEvent`s it produces.
 /// Every future call site that could route through a hook is expected to
 /// check this first and take the ordinary, hook-free path when it is
 /// false -- the same shape `uiTracingEnabled()` (`ui_trace.h`) already
@@ -277,53 +280,6 @@ class FrameCapture {
   mutable std::mutex mutex_;
   bool pending_ = false;
   CaptureRequest want_{};
-};
-
-//===========================================================================
-// Synthetic event injection
-//===========================================================================
-
-/// Queues synthetic input events for the platform's event dispatch to pick
-/// up alongside whatever real events it converted, exercising the input
-/// path -- `InputQueue`, and everything downstream of it -- with no real
-/// window and no real input device (spec "Testing": "injecting synthetic
-/// ... events into event_cb -- which exercises the input path only, since
-/// it does not resize the real framebuffer").
-///
-/// **Injected as `UiEvent`, not as a platform `sapp_event`.** The
-/// conversion from a real platform event to `UiEvent` is Task 11's, does
-/// not exist yet, and belongs to `tools/hermes-node-ui/` (which links
-/// `sokol_app`); this library does not and must not start depending on a
-/// windowing header to synthesize one of its structs. Injecting `UiEvent`
-/// directly targets the exact point downstream of that conversion where a
-/// real one would land, so the rest of the pipeline -- coalescing,
-/// `InputQueue::drain()`, the JS-side `hnui_event_cb` dispatch -- runs
-/// unmodified and un-shortcut for a synthetic event exactly as it would
-/// for a real one.
-///
-/// Threading: `inject()` is called from the thread driving the test;
-/// `takeNext()` from whichever thread runs event dispatch (the platform
-/// thread, matching `InputQueue::push()`'s own caller).
-class EventInjector {
- public:
-  EventInjector() = default;
-
-  EventInjector(const EventInjector &) = delete;
-  EventInjector &operator=(const EventInjector &) = delete;
-
-  /// Queue \p event for the next `takeNext()` calls, preserving the order
-  /// `inject()` was called in.
-  void inject(UiEvent event);
-
-  /// Pop the oldest queued event into \p out.
-  /// \return false (leaving \p out untouched) if nothing is queued.
-  bool takeNext(UiEvent *out);
-
-  bool empty() const;
-
- private:
-  mutable std::mutex mutex_;
-  std::vector<UiEvent> queue_;
 };
 
 } // namespace node_compat

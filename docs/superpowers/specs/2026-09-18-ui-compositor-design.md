@@ -566,7 +566,10 @@ GPU_PENDING -> PUBLISHED_AWAITING_TAKE -> IDLE.
   or is explicitly discarded, before ownership is released; the machine never
   jumps straight to IDLE.
 - All callbacks in a tick receive the same timestamp: monotonic milliseconds
-  sharing `performance.now()`'s origin.
+  sharing `process.uptime()`'s origin. Not `performance.now()`'s: this
+  runtime has no `performance` global at all, and `process.uptime()` is
+  the monotonic clock it does have with a defined origin, so a callback can
+  compare its timestamp against `process.uptime() * 1000` directly.
 - A callback registered inside a callback runs on the next tick. Cancelling a
   later callback in the current batch prevents it.
 - No ticks while the window is minimized.
@@ -733,8 +736,8 @@ The name carries a colon, so it cannot collide with an npm package.
   because libraries test `typeof requestAnimationFrame`.
 - **Events** (`win` is an EventEmitter): `keydown`, `keyup`, `char`;
   `mousedown`, `mouseup`, `mousemove`, `wheel`, `mouseenter`, `mouseleave`;
-  `touchstart`, `touchmove`, `touchend`, `touchcancel`; `resize`, `focus`,
-  `blur`, `minimize`, `restore`; `paste`, `drop`; `close` (cancelable).
+  `resize`, `focus`, `blur`, `minimize`, `restore`; `paste`, `drop`; `close`
+  (cancelable).
 - **Field names follow the DOM where the meaning is identical**: `code` with
   `KeyboardEvent.code` names, `repeat`, `shiftKey`/`ctrlKey`/`altKey`/
   `metaKey`, DOM button numbering. Where Sokol differs, Sokol's shape wins: a
@@ -759,6 +762,7 @@ thread.
 
 ```c
 int   hnui_api_version(void);
+const char *hnui_sokol_commit(void);          /* the host's vendored Sokol commit */
 void  hnui_free(void *p);
 
 hnui_window *hnui_get_window(napi_env env);   /* NULL if this env has none */
@@ -769,6 +773,7 @@ void  hnui_cancel_animation_frame(hnui_window *w, int id);
 
 int   hnui_add_event_listener(hnui_window *w, hnui_event_cb cb, void *user);
 void  hnui_remove_event_listener(hnui_window *w, int id);
+bool  hnui_event_dispatch_quiescent(hnui_window *w);  /* no native listener on the stack */
 void  hnui_get_window_state(hnui_window *w, hnui_window_state *out);
 
 void  hnui_set_cursor(hnui_window *w, hnui_cursor c);
@@ -800,8 +805,17 @@ int   hnui_read_clipboard_sync(hnui_window *w, int timeout_ms, char **out);
   immediately, including for a later callback in the current batch.
 - **Event-listener removal is deferred** to after the current dispatch
   completes -- which is not the same rule as frame-callback cancellation, and
-  is stated separately. A removed listener's user data may be freed once the
-  window reports that dispatch quiescent.
+  is stated separately. A listener removed during an event's delivery still
+  receives that event and no later one (including the next of the same
+  batch); removing an unknown id, or the same id twice, is a no-op. A removed
+  listener's user data may be freed once `hnui_event_dispatch_quiescent`
+  returns true: it is false inside a native listener and true inside a frame
+  callback.
+- **The four command entry points are `void`**, so a refused argument
+  (`hnui_set_cursor` outside `HNUI_CURSOR_DEFAULT..HNUI_CURSOR_NOT_ALLOWED`;
+  `hnui_write_clipboard` with a NULL string or more than
+  `HNUI_CLIPBOARD_MAX_BYTES - 1` bytes) prints one line to stderr naming the
+  function and the value, and pushes nothing.
 - `hnui_event` and `hnui_window_state` begin with a `size` field set by the
   caller. A size below the stated minimum is **rejected**; otherwise the
   implementation writes at most `size` bytes and at least the minimum.
@@ -820,7 +834,11 @@ int   hnui_read_clipboard_sync(hnui_window *w, int timeout_ms, char **out);
 
 **Version check.** Sokol has no ABI stability, so `hnui.h` bakes in the
 vendored Sokol commit and the `hnui` API version, and
-`HNUI_CHECK_VERSION(env)` throws a JS error naming both on a mismatch. An
+`HNUI_CHECK_VERSION(env)` throws a JS error naming both pairs (the addon's
+and the host's, from `hnui_api_version()` and `hnui_sokol_commit()`) on a
+mismatch. The commit is written once, as `HNUI_SOKOL_COMMIT_PINNED` in
+`hnui.h`; the CMake variable is read from it and `test/sokol-pin.js` checks
+it against `external/sokol/README.md`. An
 `hnui` addon loaded into plain hermes-node fails to `dlopen`.
 
 ## The reference addon
@@ -1108,6 +1126,8 @@ and Intel Macs.
 - **No `--inspect` in UI mode**, pending the `exitLoop`/`processExiting`
   fix.
 - **No `--build-exe` for UI apps.** It needs a UI kit variant; its own round.
+- **No touch events.** `sokol_app` produces them only on iOS, Android and
+  Emscripten.
 - **No layering.** One full-window surface.
 - **No multi-window**, following `sokol_app`. The handle-based C API keeps
   that additive.

@@ -46,6 +46,20 @@ hnui_event_type toHnuiEventType(UiEventType type) {
       return HNUI_EVENT_CLOSE_REQUESTED;
     case UiEventType::kFileDrop:
       return HNUI_EVENT_FILE_DROP;
+    case UiEventType::kMouseEnter:
+      return HNUI_EVENT_MOUSE_ENTER;
+    case UiEventType::kMouseLeave:
+      return HNUI_EVENT_MOUSE_LEAVE;
+    case UiEventType::kMinimize:
+      return HNUI_EVENT_MINIMIZE;
+    case UiEventType::kRestore:
+      return HNUI_EVENT_RESTORE;
+    case UiEventType::kPaste:
+      return HNUI_EVENT_PASTE;
+    case UiEventType::kClipboardReply:
+      // Internal (channels.h): a clipboard read's answer, never an event an
+      // addon is shown. It has no public counterpart by design.
+      return HNUI_EVENT_INVALID;
   }
   // Unreachable for any value the compiler let through the switch above
   // (which covers every UiEventType enumerator); a value that bypassed the
@@ -72,10 +86,13 @@ HnuiEventConverter::HnuiEventConverter(const UiEvent &source) {
 
   // Borrowed directly from the source UiEvent's own std::string storage,
   // which std::string guarantees is NUL-terminated -- no copy. NULL for
-  // every event kind but kTextInput, matching the field's documented
+  // every event kind but kTextInput and kPaste, matching the field's documented
   // "NULL otherwise".
-  event_.text =
-      source.type == UiEventType::kTextInput ? source.text.c_str() : nullptr;
+  event_.text = (source.type == UiEventType::kTextInput ||
+                 source.type == UiEventType::kPaste)
+      ? source.text.c_str()
+      : nullptr;
+  event_.repeat = source.repeat ? 1 : 0;
 
   if (source.type == UiEventType::kFileDrop && !source.paths.empty()) {
     pathPointers_.reserve(source.paths.size());

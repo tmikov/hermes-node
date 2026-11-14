@@ -210,6 +210,44 @@ if(HERMES_NODE_ENABLE_UI AND TARGET hermesNodeCompositorGpu)
   endif()
 endif()
 
+# The same source again, built against a Sokol commit the host does not
+# vendor, so test/ui-version-check.js can watch HNUI_CHECK_VERSION refuse it.
+# The override macro is honoured by hnui.h and by nothing else.
+if(TARGET hnui_demo_addon)
+  add_library(hnui_bad_version_addon SHARED
+    test/fixtures/hnui-demo/demo_addon.c
+  )
+  get_target_property(_demo_includes hnui_demo_addon INCLUDE_DIRECTORIES)
+  target_include_directories(hnui_bad_version_addon PRIVATE ${_demo_includes})
+  target_link_libraries(hnui_bad_version_addon PRIVATE sokol)
+  target_compile_definitions(hnui_bad_version_addon PRIVATE
+    SOKOL_GLCORE
+    HNUI_SOKOL_COMMIT_OVERRIDE="deadbee")
+  set_target_properties(hnui_bad_version_addon PROPERTIES
+    PREFIX ""
+    SUFFIX ".node"
+  )
+  if(APPLE)
+    target_link_options(hnui_bad_version_addon PRIVATE
+      -undefined dynamic_lookup)
+  endif()
+endif()
+
+# A foreign X11 clipboard owner for test/ui-clipboard.js: it takes CLIPBOARD
+# and answers (or refuses to answer) the way the test asks, so the reader
+# in tools/hermes-node-ui/x11_clipboard.cpp can be checked against an owner
+# that is not our own window. Built under the condition the GL backend --
+# and with it X11 -- is built under. find_package(X11) again here because
+# lib/compositor-gpu's X11:: targets are scoped to that directory.
+if(HERMES_NODE_ENABLE_UI AND TARGET hermesNodeCompositorGpu AND UNIX AND
+   NOT APPLE)
+  find_package(X11 REQUIRED)
+  add_executable(x11_selection_owner
+    test/fixtures/hnui-demo/x11_selection_owner.c
+  )
+  target_link_libraries(x11_selection_owner PRIVATE X11::X11)
+endif()
+
 # JS tests (Lit-based)
 set(LLVH_LIT_ARGS "-sv")
 # No enable_ui (or similar) param here for HERMES_NODE_ENABLE_UI: a param
@@ -285,6 +323,21 @@ if(TARGET hnui_demo_addon)
   list(APPEND HERMES_NODE_JS_TEST_DEPENDS hnui_demo_addon)
   list(APPEND HERMES_NODE_LIT_PARAMS
     hnui_demo_addon=$<TARGET_FILE:hnui_demo_addon>)
+endif()
+if(TARGET hnui_bad_version_addon)
+  list(APPEND HERMES_NODE_JS_TEST_DEPENDS hnui_bad_version_addon)
+  list(APPEND HERMES_NODE_LIT_PARAMS
+    hnui_bad_version_addon=$<TARGET_FILE:hnui_bad_version_addon>)
+endif()
+# The vendored Sokol commit, for test/sokol-pin.js.
+if(HNUI_SOKOL_COMMIT)
+  list(APPEND HERMES_NODE_LIT_PARAMS sokol_commit=${HNUI_SOKOL_COMMIT})
+endif()
+# The clipboard owner fixture, conditional for the reason the addon is.
+if(TARGET x11_selection_owner)
+  list(APPEND HERMES_NODE_JS_TEST_DEPENDS x11_selection_owner)
+  list(APPEND HERMES_NODE_LIT_PARAMS
+    x11_selection_owner=$<TARGET_FILE:x11_selection_owner>)
 endif()
 # test/sokol-rename.js reads the generated sgp_rename.h and
 # test/sokol-isolation.js reads the two compiled sokol_gfx objects, so both

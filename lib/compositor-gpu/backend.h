@@ -151,6 +151,20 @@ class CompositorBackend {
   ///   refused rather than answered with a dangling handle.
   virtual bool frameTarget(SurfaceRef ref, hnui_target *out) = 0;
 
+  /// The pixel size \p gen's surfaces were allocated at. **Either thread**
+  /// -- the one method in this section that is not the worker's alone.
+  ///
+  /// It exists for the platform thread, which must learn a presented
+  /// surface's size from that surface's own `SurfaceRef::gen` and never
+  /// from a variable the JS thread rewrites on every resize. The answer is
+  /// read under the same lock that guards allocation and destruction, and
+  /// the platform thread asks only about a generation it holds wrappers
+  /// for, which therefore cannot be destroyed while it asks.
+  ///
+  /// \return false if \p gen has no surfaces (never allocated, or already
+  ///   destroyed).
+  virtual bool generationSize(GenerationId gen, int *width, int *height) = 0;
+
   /// The producer has finished issuing draw calls for \p ref. Commit, and
   /// arrange for \p onComplete to run **when the GPU has finished**, not
   /// when submission returns.

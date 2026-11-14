@@ -114,6 +114,14 @@ typedef enum hnui_status {
   HNUI_TIMEOUT = 2,
   /// Includes a `size` field that failed `hnui_size_ok()`.
   HNUI_INVALID_ARGUMENT = 3,
+  /// `hnui_read_clipboard_sync`: nothing owns the clipboard, or its owner
+  /// holds no text. Not an error, and deliberately not `HNUI_OK` with an
+  /// empty string either, so a caller can tell "nothing there" from "an
+  /// empty string there" when it cares to.
+  HNUI_UNAVAILABLE = 4,
+  /// `hnui_read_clipboard_sync`: the clipboard's owner offered more than
+  /// `HNUI_CLIPBOARD_MAX_BYTES - 1` bytes, or offered it incrementally.
+  HNUI_TOO_LARGE = 5,
   /// Never a real value. Standard C leaves an enum's underlying type
   /// implementation-defined (commonly `int`, but not guaranteed); this
   /// terminator forces every conforming compiler to pick one wide enough
@@ -155,6 +163,11 @@ typedef enum hnui_event_type {
   HNUI_EVENT_BLUR,
   HNUI_EVENT_CLOSE_REQUESTED,
   HNUI_EVENT_FILE_DROP,
+  HNUI_EVENT_MOUSE_ENTER,
+  HNUI_EVENT_MOUSE_LEAVE,
+  HNUI_EVENT_MINIMIZE,
+  HNUI_EVENT_RESTORE,
+  HNUI_EVENT_PASTE,
   /// Never a real value. See `HNUI_STATUS_FORCE_I32` above for why this
   /// terminator exists on every public `hnui_*` enum; it matters more here
   /// than there, because `hnui_event::type` below is declared as a plain
@@ -163,6 +176,35 @@ typedef enum hnui_event_type {
   /// this terminator is the belt to that field's suspenders.
   HNUI_EVENT_TYPE_FORCE_I32 = 0x7FFFFFFF,
 } hnui_event_type;
+
+/// Bits of `hnui_event::modifiers`. These are this ABI's own values, not
+/// Sokol's: the host maps them bit by bit, so a renumbering inside Sokol
+/// cannot change what an addon compiled against this header sees.
+#define HNUI_MOD_SHIFT 0x1
+#define HNUI_MOD_CTRL 0x2
+#define HNUI_MOD_ALT 0x4
+#define HNUI_MOD_META 0x8
+#define HNUI_MOD_LMB 0x100
+#define HNUI_MOD_RMB 0x200
+#define HNUI_MOD_MMB 0x400
+
+/// Values of `hnui_event::button`, in DOM `MouseEvent.button` numbering.
+#define HNUI_BUTTON_LEFT 0
+#define HNUI_BUTTON_MIDDLE 1
+#define HNUI_BUTTON_RIGHT 2
+
+/// Limits on a `HNUI_EVENT_FILE_DROP`: at most this many paths are
+/// delivered, each at most this many bytes.
+#define HNUI_DROP_MAX_FILES 32
+#define HNUI_DROP_MAX_PATH_BYTES 4096
+
+/// The size of the clipboard buffer, terminator included: a UTF-8 string of
+/// at least this many bytes cannot be written to the clipboard. The limit
+/// is enforced where a write is accepted (`ui.writeClipboard` throws a
+/// `RangeError`), because handing Sokol a string that does not fit makes it
+/// take ownership of the selection with an empty buffer. Also the buffer
+/// size `sapp_desc::clipboard_size` is given, so the two cannot disagree.
+#define HNUI_CLIPBOARD_MAX_BYTES (1u << 20)
 
 /// The public, flat counterpart of the internal `UiEvent`
 /// (`channels.h`). `UiEvent` owns its payloads (`std::string`,
@@ -206,7 +248,8 @@ typedef struct hnui_event {
   int32_t modifiers;
   int32_t key_code;
 
-  /// `HNUI_EVENT_TEXT_INPUT` only; NULL otherwise. Borrowed from the
+  /// `HNUI_EVENT_TEXT_INPUT` (the character) and `HNUI_EVENT_PASTE` (the
+  /// clipboard text); NULL otherwise. Borrowed from the
   /// `UiEvent` this was converted from -- specifically from that
   /// `UiEvent`'s own `std::string` storage -- and valid only while both the
   /// converter that produced this event AND that source `UiEvent` are
@@ -222,6 +265,12 @@ typedef struct hnui_event {
   /// this event was built for, and no longer.
   const char *const *paths;
   uint32_t path_count;
+
+  /// Nonzero for an auto-repeated key event. Added after
+  /// `HNUI_ABI_VERSION` 1's first draft but before any release, so
+  /// `HNUI_EVENT_MIN_SIZE` moves to include it; from the first release on,
+  /// a field appended here gets a `HNUI_EVENT_MIN_SIZE_V<n>` of its own.
+  uint32_t repeat;
 } hnui_event;
 
 /// The minimum `size` an `hnui_event` must carry for every field above to
@@ -235,7 +284,7 @@ typedef struct hnui_event {
 /// `HNUI_EVENT_MIN_SIZE_V<n>` alongside it, one constant per version,
 /// never a redefinition of an earlier one.
 #define HNUI_EVENT_MIN_SIZE \
-  ((uint32_t)(offsetof(hnui_event, path_count) + sizeof(uint32_t)))
+  ((uint32_t)(offsetof(hnui_event, repeat) + sizeof(uint32_t)))
 
 /// Delivered to `hnui_event_cb`. Window state changes travel with the
 /// event that caused them and are also mirrored here for polling via

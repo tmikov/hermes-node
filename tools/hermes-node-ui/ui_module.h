@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <hermes/node-compat/compositor/channels.h>
+
 #include <node_api.h>
 
 /// At GLOBAL scope, deliberately, and this is not a stylistic choice.
@@ -18,10 +20,16 @@
 /// global one, would then not match this declaration at all.
 struct hnui_window;
 
+/// Global scope too: sokol_app.h declares `typedef struct sapp_event {...}
+/// sapp_event;`, and this is that struct's tag. Forward-declared rather
+/// than included so that this header stays free of sokol_app.h.
+struct sapp_event;
+
 namespace hermes {
 namespace node_compat {
 
 class UiHost;
+struct PlatformSource;
 
 /// The `hermes-node:ui` module, and the platform-thread half of the window
 /// it creates.
@@ -90,6 +98,64 @@ hnui_window *uiWindowForEnv(napi_env env);
 ///   which is why nothing downstream of this may rely on getting control
 ///   back.
 int uiRunPlatformLoop();
+
+/// Whether `createWindow` has been called. JS thread. What
+/// `ui.writeClipboard` checks: with no window ever requested nothing would
+/// drain the command queue, so an accepted call would silently do nothing.
+bool uiWindowRequested();
+
+/// Queue \p command for the platform thread, which applies it on its next
+/// frame (before that frame's injected events). The one entry both the
+/// JavaScript surface (`ui_events.cpp`) and the C entry points
+/// (`hnui_api.cpp`) push through, so a command means the same thing from
+/// either.
+///
+/// JS thread. Safe at any time, including before the window is ready: the
+/// queue is a process-lifetime object that exists from before `createWindow`
+/// is called, and a command pushed early is simply applied by the first
+/// frame that runs. Not safe to call from the platform thread (it would
+/// answer itself next frame, which is harmless but not what the queue is
+/// for).
+void uiPushCommand(Command command);
+
+/// The deadline a clipboard read gets when nobody names one: a JavaScript
+/// `readClipboard()`, and the read behind a `paste` event.
+constexpr int kClipboardReadDefaultTimeoutMs = 1000;
+
+/// The registry of synchronous clipboard reads (`hnui_read_clipboard_sync`).
+/// The JS thread creates a slot and blocks on it; the platform thread
+/// answers into it directly when it applies the `kReadClipboard` command
+/// that names the slot's id. Any thread; the registry carries its own lock.
+ClipboardRequests &uiClipboardReads();
+
+/// Start a new surface generation if \p state's framebuffer size differs
+/// from the current generation's and both dimensions are positive; do
+/// nothing otherwise. A failure to allocate ends the graphics session
+/// (`terminateGraphicsSession`).
+///
+/// **JS thread only**, and called by `ui_events.cpp` for every delivered
+/// event after the mirror is updated and before any listener runs, so a
+/// `resize` listener -- native or JS -- already sees a current generation of
+/// the new size, and the next `hnui_frame_target` reports it.
+void uiFollowFramebufferSize(const WindowState &state);
+
+/// The one entry both real and injected platform events go through.
+/// Platform thread only.
+///
+/// Converts \p event against \p source (`sapp_event_convert.h`), stores
+/// the result's window snapshot back as the platform thread's tracked
+/// state, tells the tick machine about a minimize or a restore, pushes the
+/// event onto the input queue, and posts the JS-thread dispatch -- at most
+/// one post outstanding. A `QUIT_REQUESTED` is cancelled first and
+/// forwarded as `close` (Ruling 54): what an uncancelled close does is
+/// Task 15's.
+///
+/// `onEvent` calls it with a source built over the real platform;
+/// `onFrame` calls it for each injected event (`event_injector.h`) with
+/// the injected clipboard, paths and window substituted where present.
+void uiHandlePlatformEvent(
+    const sapp_event &event,
+    const PlatformSource &source);
 
 } // namespace node_compat
 } // namespace hermes

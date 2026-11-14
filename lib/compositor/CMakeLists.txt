@@ -9,6 +9,8 @@ add_hermes_library(hermesNodeCompositor STATIC
   tick_machine.cpp
   channels.cpp
   hnui_event_convert.cpp
+  event_dispatcher.cpp
+  frame_callbacks.cpp
 )
 target_include_directories(hermesNodeCompositor PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(hermesNodeCompositor PUBLIC

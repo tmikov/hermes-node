@@ -22,6 +22,7 @@
  * both accept a header and still disagree about a struct's layout.
  */
 
+#include <hermes/node-compat/ui/hnui.h>
 #include <hermes/node-compat/ui/hnui_abi.h>
 
 #include <stddef.h>
@@ -48,4 +49,25 @@ size_t hnuiAbiCProbeOffsetofEventText(void) {
 
 size_t hnuiAbiCProbeOffsetofEventPaths(void) {
   return offsetof(hnui_event, paths);
+}
+
+/*
+ * hnui.h includes node_api.h and defines HNUI_CHECK_VERSION, a macro
+ * that must be plain C99 as well: it is used from addons written in C.
+ * This is the macro exactly as an addon's init function uses it; the test
+ * supplies stand-ins for hnui_api_version(), hnui_sokol_commit() and
+ * napi_throw_error() so that both outcomes can be driven and the message
+ * read back.
+ */
+const char *hnuiAbiCProbeSokolCommit(void) {
+  return HNUI_SOKOL_COMMIT;
+}
+
+int hnuiAbiCProbeAbiVersion(void) {
+  return HNUI_ABI_VERSION;
+}
+
+void *hnuiAbiCProbeCheckVersion(napi_env env) {
+  HNUI_CHECK_VERSION(env);
+  return (void *)env;
 }

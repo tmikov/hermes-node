@@ -22,12 +22,28 @@ add_hermes_library(hermesNodeUiHost STATIC ui_host.cpp)
 target_include_directories(hermesNodeUiHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(hermesNodeUiHost PUBLIC hermesNodeRuntime uv_a)
 
+# The platform-event converter (sapp_event -> UiEvent) and the test hook
+# that injects platform events into it are their own library for the same
+# reason UiHost is: unittests/UiEventsTest.cpp links it. It
+# includes sokol_app.h for declarations only and calls no sapp_* function,
+# so linking it drags in neither the sokol_app implementation nor a display.
+# ui_events.cpp, the JS-thread half of input, is NOT here: it calls into
+# NAPI and the runtime's error path, and lives in the executable beside
+# ui_module.cpp.
+# Not guarded by HAVE_WINDOW: it builds wherever the UI option is on.
+add_hermes_library(hermesNodeUiEvents STATIC
+  sapp_event_convert.cpp
+  event_injector.cpp
+)
+target_include_directories(hermesNodeUiEvents PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(hermesNodeUiEvents PUBLIC hermesNodeCompositor sokol)
+
 add_hermes_tool(hermes-node-ui main.cpp)
 # Plain signature, not PRIVATE: hermes_node_link_setup() below links this
 # same target with the plain form (matching Hermes.cmake:141's own plain
 # link of hermesNapi, per that file's comment), and CMake refuses to mix
 # keyword and plain target_link_libraries calls against one target.
-target_link_libraries(hermes-node-ui hermesNodeUiHost)
+target_link_libraries(hermes-node-ui hermesNodeUiHost hermesNodeUiEvents)
 
 # hermes_node_link_setup() is defined in tools/hermes-node/CMakeLists.txt.
 # CMake functions have ordinary (global) scope once defined -- unlike a
@@ -79,9 +95,17 @@ if(TARGET hermesNodeCompositorGpu)
   # nothing references.
   target_sources(hermes-node-ui PRIVATE
     ui_module.cpp
+    ui_events.cpp
     hnui_api.cpp
     sokol_app_impl.cpp
   )
+  # The trace's read-back of the title and icon from the X server, and the
+  # clipboard read that replaces Sokol's (Ruling 55). Under the condition
+  # the GL backend is built under, which is what provides X11.
+  if(UNIX AND NOT APPLE)
+    target_sources(hermes-node-ui PRIVATE x11_readback.cpp x11_clipboard.cpp)
+    target_compile_definitions(hermes-node-ui PRIVATE HERMES_NODE_UI_HAVE_X11)
+  endif()
   # Plain signature, matching the call above -- CMake refuses to mix plain
   # and keyword forms on one target, and hermes_node_link_setup() already
   # links this one plainly.

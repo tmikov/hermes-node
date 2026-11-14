@@ -303,6 +303,7 @@ class GlBackend final : public CompositorBackend {
       std::string &error) override;
   void destroyGenerationSurfaces(GenerationId gen) override;
   bool frameTarget(SurfaceRef ref, hnui_target *out) override;
+  bool generationSize(GenerationId gen, int *width, int *height) override;
   void submitAndTrackCompletion(
       SurfaceRef ref,
       void (*onComplete)(void *user, SurfaceRef ref, bool ok),
@@ -366,8 +367,8 @@ class GlBackend final : public CompositorBackend {
 
   /// Written by the worker (createGenerationSurfaces /
   /// destroyGenerationSurfaces), read by the platform thread
-  /// (wrapForPresenting). A generation is inserted strictly before
-  /// anything of it can be published, and erased strictly after the
+  /// (wrapForPresenting, generationSize). A generation is inserted strictly
+  /// before anything of it can be published, and erased strictly after the
   /// presenting side has released its wrappers -- but "strictly" there is
   /// an ordering argument about the protocol, not about memory, and two
   /// threads reaching a std::map need an actual lock either way.
@@ -969,6 +970,16 @@ bool GlBackend::frameTarget(SurfaceRef ref, hnui_target *out) {
   out->color_format = presenter_.colorFormat();
   out->sample_count = 1;
   out->generation = ref.gen.value;
+  return true;
+}
+
+bool GlBackend::generationSize(GenerationId gen, int *width, int *height) {
+  std::lock_guard<std::mutex> lock(surfacesMutex_);
+  auto it = surfaces_.find(gen.value);
+  if (it == surfaces_.end())
+    return false;
+  *width = it->second.width;
+  *height = it->second.height;
   return true;
 }
 

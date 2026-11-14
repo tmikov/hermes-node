@@ -7,6 +7,7 @@
 
 #include <hermes/node-compat/compositor/channels.h>
 #include <hermes/node-compat/compositor/hnui_event_convert.h>
+#include <hermes/node-compat/ui/hnui.h>
 #include <hermes/node-compat/ui/hnui_abi.h>
 
 // Declarations only -- no SOKOL_GFX_IMPL, and deliberately no backend
@@ -21,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <set>
+#include <string>
 #include <type_traits>
 #include <utility>
 
@@ -36,6 +38,33 @@ size_t hnuiAbiCProbeSizeofTarget(void);
 size_t hnuiAbiCProbeSizeofEventTypeField(void);
 size_t hnuiAbiCProbeOffsetofEventText(void);
 size_t hnuiAbiCProbeOffsetofEventPaths(void);
+const char *hnuiAbiCProbeSokolCommit(void);
+int hnuiAbiCProbeAbiVersion(void);
+void *hnuiAbiCProbeCheckVersion(napi_env env);
+}
+
+// Stand-ins for the host's half of the version check, and for the one NAPI
+// call HNUI_CHECK_VERSION makes, so a plain-C use of the macro can be
+// driven to both outcomes without a runtime.
+namespace {
+int gHostAbiVersion = 0;
+const char *gHostSokolCommit = "";
+std::string gThrownMessage;
+std::string gThrownCode;
+} // namespace
+
+extern "C" {
+int hnui_api_version(void) {
+  return gHostAbiVersion;
+}
+const char *hnui_sokol_commit(void) {
+  return gHostSokolCommit;
+}
+napi_status napi_throw_error(napi_env, const char *code, const char *msg) {
+  gThrownCode = code ? code : "";
+  gThrownMessage = msg ? msg : "";
+  return napi_ok;
+}
 }
 
 // hnui_event::type is declared int32_t, deliberately not hnui_event_type
@@ -171,7 +200,7 @@ TEST(HnuiAbiLayout, MinSizeConstantsAreComputedNotHandWritten) {
   // macro's anchor field -- EveryFieldLiesWithinItsStructsMinimumSize below
   // is what catches that.
   EXPECT_EQ(
-      HNUI_EVENT_MIN_SIZE, offsetof(hnui_event, path_count) + sizeof(uint32_t));
+      HNUI_EVENT_MIN_SIZE, offsetof(hnui_event, repeat) + sizeof(uint32_t));
   EXPECT_EQ(
       HNUI_WINDOW_STATE_MIN_SIZE,
       offsetof(hnui_window_state, minimized) + sizeof(bool));
@@ -226,6 +255,8 @@ TEST(HnuiAbiLayout, EveryFieldLiesWithinItsStructsMinimumSize) {
       HNUI_EVENT_MIN_SIZE);
   EXPECT_LE(
       offsetof(hnui_event, path_count) + sizeof(uint32_t), HNUI_EVENT_MIN_SIZE);
+  EXPECT_LE(
+      offsetof(hnui_event, repeat) + sizeof(uint32_t), HNUI_EVENT_MIN_SIZE);
 
   EXPECT_LE(
       offsetof(hnui_window_state, size) + sizeof(uint32_t),
@@ -394,6 +425,11 @@ TEST(HnuiEventConvert, EveryEventTypeMapsToItsOwnDistinctCounterpart) {
       {UiEventType::kBlur, HNUI_EVENT_BLUR},
       {UiEventType::kCloseRequested, HNUI_EVENT_CLOSE_REQUESTED},
       {UiEventType::kFileDrop, HNUI_EVENT_FILE_DROP},
+      {UiEventType::kMouseEnter, HNUI_EVENT_MOUSE_ENTER},
+      {UiEventType::kMouseLeave, HNUI_EVENT_MOUSE_LEAVE},
+      {UiEventType::kMinimize, HNUI_EVENT_MINIMIZE},
+      {UiEventType::kRestore, HNUI_EVENT_RESTORE},
+      {UiEventType::kPaste, HNUI_EVENT_PASTE},
   };
   std::set<int> seen;
   for (const auto &entry : table) {
@@ -518,3 +554,108 @@ TEST(HnuiEventConvert, NonFileDropEventLeavesPathsNullEvenIfSet) {
 // guard is therefore an optimization -- skip building an unnecessary
 // zero-length pointer array -- and not an externally observable
 // invariant, so no test claims to pin it.
+
+TEST(HnuiEventConvert, NewTypesFollowTheirInternalCounterpartsNumerically) {
+  // The header says the two enums are kept in the same order. The switch
+  // would hide a drift, so pin the numbers of the five appended types.
+  EXPECT_EQ(
+      static_cast<int>(HNUI_EVENT_MOUSE_ENTER),
+      static_cast<int>(UiEventType::kMouseEnter));
+  EXPECT_EQ(
+      static_cast<int>(HNUI_EVENT_MOUSE_LEAVE),
+      static_cast<int>(UiEventType::kMouseLeave));
+  EXPECT_EQ(
+      static_cast<int>(HNUI_EVENT_MINIMIZE),
+      static_cast<int>(UiEventType::kMinimize));
+  EXPECT_EQ(
+      static_cast<int>(HNUI_EVENT_RESTORE),
+      static_cast<int>(UiEventType::kRestore));
+  EXPECT_EQ(
+      static_cast<int>(HNUI_EVENT_PASTE),
+      static_cast<int>(UiEventType::kPaste));
+}
+
+TEST(HnuiEventConvert, AClipboardReplyIsInternalAndHasNoPublicCounterpart) {
+  // kClipboardReply carries a clipboard read's answer from the platform
+  // thread to the JS thread through the input queue. It is not an input
+  // event and never reaches a listener, so it is appended AFTER every value
+  // hnui_event_type mirrors -- the mirrored prefix above stays
+  // value-for-value -- and converting one is refused rather than handed to
+  // an addon as some public type.
+  EXPECT_GT(
+      static_cast<int>(UiEventType::kClipboardReply),
+      static_cast<int>(HNUI_EVENT_PASTE))
+      << "inserted inside the mirrored prefix, shifting every value after it";
+  UiEvent source;
+  source.type = UiEventType::kClipboardReply;
+  source.text = "not for an addon";
+  HnuiEventConverter converter(source);
+  EXPECT_EQ(
+      static_cast<hnui_event_type>(converter.event().type), HNUI_EVENT_INVALID);
+  EXPECT_EQ(converter.event().text, nullptr);
+}
+// Mutation: map kClipboardReply to HNUI_EVENT_PASTE in toHnuiEventType().
+// Fails: the conversion reports a public type.
+
+TEST(HnuiEventConvert, RepeatRoundTrips) {
+  UiEvent source;
+  source.type = UiEventType::kKeyDown;
+  source.repeat = true;
+  EXPECT_EQ(HnuiEventConverter(source).event().repeat, 1u);
+  source.repeat = false;
+  EXPECT_EQ(HnuiEventConverter(source).event().repeat, 0u);
+}
+// Mutation: drop `event_.repeat = ...` in the converter. Fails: repeat
+// reads 0 for the repeating event.
+
+TEST(HnuiEventConvert, PasteExposesItsTextThroughTheTextField) {
+  UiEvent source;
+  source.type = UiEventType::kPaste;
+  source.text = "clipboard";
+  HnuiEventConverter converter(source);
+  ASSERT_NE(converter.event().text, nullptr);
+  EXPECT_STREQ(converter.event().text, "clipboard");
+  EXPECT_EQ(converter.event().text, source.text.c_str());
+}
+
+//===========================================================================
+// HNUI_CHECK_VERSION, compiled as C99 -pedantic (HnuiAbiCProbe.c).
+//===========================================================================
+
+TEST(HnuiVersionCheck, PassesWhenHostAndAddonAgree) {
+  gHostAbiVersion = hnuiAbiCProbeAbiVersion();
+  gHostSokolCommit = hnuiAbiCProbeSokolCommit();
+  gThrownMessage.clear();
+  void *token = reinterpret_cast<void *>(0x1);
+  EXPECT_EQ(
+      hnuiAbiCProbeCheckVersion(reinterpret_cast<napi_env>(token)), token);
+  EXPECT_TRUE(gThrownMessage.empty());
+}
+
+TEST(HnuiVersionCheck, ACommitMismatchThrowsNamingBothAndReturnsNull) {
+  gHostAbiVersion = hnuiAbiCProbeAbiVersion();
+  gHostSokolCommit = "host1234";
+  gThrownMessage.clear();
+  EXPECT_EQ(
+      hnuiAbiCProbeCheckVersion(reinterpret_cast<napi_env>(0x1)), nullptr);
+  EXPECT_NE(gThrownMessage.find("host1234"), std::string::npos)
+      << gThrownMessage;
+  EXPECT_NE(gThrownMessage.find(hnuiAbiCProbeSokolCommit()), std::string::npos)
+      << gThrownMessage;
+  EXPECT_EQ(gThrownCode, "ERR_HNUI_VERSION");
+}
+
+TEST(HnuiVersionCheck, AnAbiVersionMismatchThrowsNamingBothVersions) {
+  gHostAbiVersion = hnuiAbiCProbeAbiVersion() + 41;
+  gHostSokolCommit = hnuiAbiCProbeSokolCommit();
+  gThrownMessage.clear();
+  EXPECT_EQ(
+      hnuiAbiCProbeCheckVersion(reinterpret_cast<napi_env>(0x1)), nullptr);
+  EXPECT_NE(
+      gThrownMessage.find(std::to_string(gHostAbiVersion)), std::string::npos)
+      << gThrownMessage;
+  EXPECT_NE(
+      gThrownMessage.find(std::to_string(hnuiAbiCProbeAbiVersion())),
+      std::string::npos)
+      << gThrownMessage;
+}

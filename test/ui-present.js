@@ -44,8 +44,8 @@
 // UNEQUAL sizes -- the transitional-stretching case spec:991 anticipates
 // as its own separate assertion -- would legitimately match a stretched,
 // linearly filtered frame, and none of the reasoning below would hold for
-// it. Whoever writes that case needs a tolerance; this file does not,
-// because it asks for equal sizes and therefore gets a 1:1 blit.
+// it. That case is test/ui-resize-generation.js, which states its own
+// policy; this file asks for equal sizes and therefore gets a 1:1 blit.
 //
 // Given that, the agreement rule means the frame that matched had
 // targetWidth == framebufferWidth and targetHeight == framebufferHeight, so
@@ -231,7 +231,7 @@ async function main() {
   const addon = require(addonPath);
 
   // The agreement fields every request below shares. The generation is 1
-  // because this build allocates exactly one and SurfaceTable's ids start
+  // because nothing in this test resizes and SurfaceTable's ids start
   // there; the input serial is 0 because no input path exists until Task
   // 11. Both are stated rather than read back from the runtime, so that a
   // change in either is a test failure rather than a silently updated

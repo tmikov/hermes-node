@@ -46,8 +46,12 @@ done
 
 Then, in this order:
 
-1. Update the pin above, and `HNUI_SOKOL_COMMIT` wherever it is baked into
-   the C API (spec: "Version check").
+1. Update the pin above, and `HNUI_SOKOL_COMMIT_PINNED` in
+   `include/hermes/node-compat/ui/hnui.h` -- the one place the C API's copy
+   is written (spec: "Version check"). `external/sokol/CMakeLists.txt` reads
+   it from there and re-runs configure when it changes;
+   `test/sokol-pin.js` fails if the header, the CMake variable and this
+   file disagree.
 2. Re-run the rename generator's consumers: `sgp_rename.h` is generated from
    `sokol_gfx.h` at build time (`utils/gen-sokol-rename.py`), so a symbol
    added or removed upstream changes it with no edit here --

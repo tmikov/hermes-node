@@ -123,6 +123,9 @@ if(HERMES_NODE_ENABLE_UI)
   # calls into -- this binary dlopens no addons of its own, so it does not
   # need the whole-archive treatment hermes_node_link_setup() gives the
   # real binaries, only the symbols it actually calls.
+  add_node_compat_unittest(UiEventsTest UiEventsTest.cpp)
+  target_link_libraries(UiEventsTest hermesNodeUiEvents)
+
   add_node_compat_unittest(UiHostTest UiHostTest.cpp)
   target_link_libraries(UiHostTest
     hermesNodeUiHost
@@ -151,6 +154,11 @@ if(HERMES_NODE_ENABLE_UI)
     C_EXTENSIONS OFF
   )
   set_source_files_properties(HnuiAbiCProbe.c PROPERTIES COMPILE_OPTIONS "-pedantic")
+  # hnui.h includes node_api.h, and HnuiAbiCProbe.c exercises
+  # HNUI_CHECK_VERSION from plain C99. Declarations only: the test defines
+  # the three functions the macro calls itself.
+  target_include_directories(HnuiAbiTest PRIVATE
+    ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi)
 
   # test_hooks.{h,cpp} (lib/compositor-gpu/, Task 9) has no GL or X11
   # dependency of its own -- it only touches SurfaceTable and UiEvent -- but

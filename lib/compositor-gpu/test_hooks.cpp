@@ -116,31 +116,5 @@ bool FrameCapture::tryMatch(const CaptureRequest &observed) {
   return true;
 }
 
-//===========================================================================
-// EventInjector
-//===========================================================================
-
-void EventInjector::inject(UiEvent event) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  queue_.push_back(std::move(event));
-}
-
-bool EventInjector::takeNext(UiEvent *out) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (queue_.empty())
-    return false;
-  // FIFO, matching InputQueue's own drain order: an injected sequence must
-  // land in the order it was injected, not reversed by a pop-from-the-back
-  // shortcut.
-  *out = std::move(queue_.front());
-  queue_.erase(queue_.begin());
-  return true;
-}
-
-bool EventInjector::empty() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return queue_.empty();
-}
-
 } // namespace node_compat
 } // namespace hermes

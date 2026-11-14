@@ -10,10 +10,16 @@
 
 #include <backend.h>
 
+#include <hermes/node-compat/compositor/channels.h>
+#include <hermes/node-compat/compositor/event_dispatcher.h>
+#include <hermes/node-compat/compositor/frame_callbacks.h>
 #include <hermes/node-compat/compositor/surface_table.h>
 #include <hermes/node-compat/compositor/tick_machine.h>
 #include <hermes/node-compat/ui/hnui.h>
 
+#include <node_api.h>
+
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -23,8 +29,9 @@
 /// nothing else about it, which is the whole point: an addon holds the
 /// pointer and never dereferences it. This header is the host's private
 /// view of the same object, shared between the two files that need it --
-/// `ui_module.cpp`, which owns the instance and drives the frame, and
-/// `hnui_api.cpp`, which implements the C entry points against it.
+/// `ui_module.cpp`, which owns the instance and drives the frame,
+/// `ui_events.cpp`, which delivers input to listeners, and `hnui_api.cpp`,
+/// which implements the C entry points against it.
 ///
 /// **Defined at global scope, deliberately.** `hnui_abi.h`'s
 /// `typedef struct hnui_window hnui_window;` declares `::hnui_window`, so
@@ -35,7 +42,7 @@
 /// # Threading
 ///
 /// Everything here belongs to the **owner thread** -- the JS thread that
-/// called `createWindow` -- except the three pointers, which are set
+/// called `createWindow` -- except the three compositor pointers, which are set
 /// before the platform thread can reach them and never change afterwards.
 /// `SurfaceTable` and `TickMachine` carry their own locks and are
 /// deliberately *not* guarded by anything here; the per-tick fields below
@@ -75,21 +82,71 @@ struct hnui_window {
   bool drew = false;
 
   //=========================================================================
-  // Native frame callbacks (`hnui_request_animation_frame`)
+  // Frame callbacks: `hnui_request_animation_frame` and
+  // `requestAnimationFrame`, in one list. Owner thread only.
   //=========================================================================
 
-  struct NativeFrameCallback {
+  /// Native and JavaScript callbacks in one registration-ordered list with
+  /// one id space (Ruling 57). A JavaScript entry's `fn` is a strong
+  /// `napi_ref`, released through `releaseFrameCallback` by both routes
+  /// out of the list a running program takes: the tick, when it takes the
+  /// entry to run it, and either cancel entry point, when it removes one.
+  /// Entries still here at exit are not released: the window lives until
+  /// the process `_exit`s, as `jsWindow` does, and whoever adds window
+  /// teardown must hand them to `FrameCallbackList::releaseAll` while the
+  /// env is still alive.
+  hermes::node_compat::FrameCallbackList frameCallbacks;
+
+  //=========================================================================
+  // Events (`ui_events.cpp`). Owner thread only.
+  //=========================================================================
+  //
+  // Everything event delivery needs is reachable from here, so that
+  // `ui_events.cpp` reaches nothing through `ui_module.cpp`'s statics.
+
+  /// The runtime that owns this window.
+  napi_env env = nullptr;
+
+  /// The JavaScript window object -- an `EventEmitter` -- once
+  /// `createWindow`'s Promise is about to resolve with it; null before.
+  /// Events that arrive before it exists stay queued (see `ui_events.h`).
+  /// A strong reference: the window lives as long as the process does.
+  napi_ref jsWindow = nullptr;
+
+  /// The JS thread's mirror of the window's state: the `window` snapshot of
+  /// the last event delivered (Ruling 52), assigned before any listener for
+  /// that event runs. What `hnui_get_window_state` reports, and what the
+  /// JS object's eight state properties are kept equal to.
+  hermes::node_compat::WindowState state;
+
+  struct NativeEventListener {
     int id = 0;
-    hnui_frame_cb cb = nullptr;
+    hnui_event_cb cb = nullptr;
     void *user = nullptr;
   };
 
-  /// Registered for the **next** tick. The frame loop swaps this list out
-  /// before running it, so a callback that registers another one lands in
-  /// a fresh list and runs a tick later -- the browser rule, and the one
-  /// spec:757 states for native callbacks too.
-  std::vector<NativeFrameCallback> nativeCallbacks;
-  int nextCallbackId = 1;
+  /// `hnui_add_event_listener` registrations, in registration order.
+  std::vector<NativeEventListener> eventListeners;
+  int nextListenerId = 1;
+
+  /// What `win.title` reads back: the last title set, or the one the window
+  /// was created with. A JavaScript-side value, deliberately -- the
+  /// platform thread owns the real title and the JS thread must not ask it.
+  std::string title;
+
+  /// Drains the process's `InputQueue` (`ui_module.cpp` owns the queue;
+  /// the platform thread pushes into it).
+  std::unique_ptr<hermes::node_compat::EventDispatcher> events;
 };
+
+/// Release what a frame callback that has left \p w's list holds: the
+/// JavaScript function's reference, for a JavaScript entry. A native entry
+/// holds nothing of ours -- its `user` pointer is the addon's.
+inline void releaseFrameCallback(
+    hnui_window *w,
+    const hermes::node_compat::FrameCallback &cb) {
+  if (cb.kind == hermes::node_compat::FrameCallback::Kind::kJs)
+    napi_delete_reference(w->env, static_cast<napi_ref>(cb.fn));
+}
 
 #endif // HERMES_NODE_COMPAT_TOOLS_HNUI_WINDOW_H

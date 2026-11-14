@@ -6,6 +6,9 @@
  */
 
 #include <hermes/node-compat/compositor/channels.h>
+#include <hermes/node-compat/compositor/event_dispatcher.h>
+#include <hermes/node-compat/compositor/frame_callbacks.h>
+#include <hermes/node-compat/compositor/hnui_event_convert.h>
 #include <hermes/node-compat/compositor/owner_dispatch.h>
 #include <hermes/node-compat/compositor/surface_table.h>
 #include <hermes/node-compat/compositor/tick_machine.h>
@@ -16,8 +19,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -1659,6 +1664,31 @@ TEST(ChannelsTest, ConsecutiveMouseMovesCoalesceWithDeltasSummed) {
 }
 // Mutation: keep the first position instead of the latest. Fails.
 
+TEST(InputQueueTest, CoalescedMoveKeepsTheLatestWindowSnapshot) {
+  // Every event carries a WindowState snapshot, and a move that absorbs an
+  // earlier one must carry the snapshot of the LATER one: the mirror on the
+  // JS side is assigned from whatever event is delivered, so a stale one
+  // would roll it back past a change the dropped move never described.
+  InputQueue q;
+  UiEvent a{};
+  a.type = UiEventType::kMouseMove;
+  a.window.width = 100;
+  a.window.focused = false;
+  UiEvent b{};
+  b.type = UiEventType::kMouseMove;
+  b.window.width = 200;
+  b.window.focused = true;
+  q.push(a);
+  q.push(b);
+  std::vector<UiEvent> out;
+  q.drain(out);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].window.width, 200);
+  EXPECT_TRUE(out[0].window.focused);
+}
+// Mutation: in InputQueue::push, save back.window before `back = event` and
+// restore it afterwards (keep the first snapshot). Fails.
+
 TEST(ChannelsTest, NonMoveEventsBreakCoalescing) {
   InputQueue q;
   UiEvent move{};
@@ -1711,12 +1741,15 @@ TEST(ChannelsTest, ClipboardRequestIsAnsweredAcrossThreads) {
   // thread runs before or after the waiter blocks.
   ClipboardRequests reqs;
   auto slot = reqs.create();
-  std::thread responder(
-      [&] { reqs.answer(slot->id(), "from the other thread"); });
-  auto got = slot->wait(/*timeoutMs=*/5000);
+  std::thread responder([&] {
+    reqs.answer(
+        slot->id(),
+        ClipboardResult{ClipboardStatus::kOk, "from the other thread"});
+  });
+  ClipboardResult got = slot->wait(/*timeoutMs=*/5000);
   responder.join();
-  ASSERT_TRUE(got.has_value());
-  EXPECT_EQ(*got, "from the other thread");
+  EXPECT_EQ(got.status, ClipboardStatus::kOk);
+  EXPECT_EQ(got.text, "from the other thread");
 }
 // Mutation: fulfill() stores nothing, so the answer never reaches the
 // waiter. Fails by timeout. (Deliberately not "wait() blocks even when the
@@ -1728,7 +1761,7 @@ TEST(ChannelsTest, ClipboardRequestTimesOutRatherThanHanging) {
   ClipboardRequests reqs;
   auto slot = reqs.create();
   const auto start = Clock::now();
-  EXPECT_FALSE(slot->wait(/*timeoutMs=*/20).has_value());
+  EXPECT_EQ(slot->wait(/*timeoutMs=*/20).status, ClipboardStatus::kTimeout);
   const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
       Clock::now() - start);
   // A lower bound, not an upper one: wait_for() with a predicate cannot
@@ -1741,12 +1774,93 @@ TEST(ChannelsTest, ClipboardRequestTimesOutRatherThanHanging) {
 // presentation, so an unbounded wait hangs the JS thread; fails by timeout
 // (caught by this file's TestWatchdog rather than hanging the suite).
 
+TEST(ClipboardRequestTest, AnswerCarriesItsStatus) {
+  // Two requests answered out of order, each with a status the other does
+  // not have. A failed read is a status, not an empty string: "" is what an
+  // empty clipboard reads as, and a failure must not look like one.
+  ClipboardRequests reqs;
+  auto a = reqs.create();
+  auto b = reqs.create();
+  EXPECT_TRUE(
+      reqs.answer(b->id(), ClipboardResult{ClipboardStatus::kTooLarge, ""}));
+  EXPECT_TRUE(
+      reqs.answer(a->id(), ClipboardResult{ClipboardStatus::kOk, "for A"}));
+
+  ClipboardResult gotA = a->wait(1000);
+  EXPECT_EQ(gotA.status, ClipboardStatus::kOk);
+  EXPECT_EQ(gotA.text, "for A");
+  ClipboardResult gotB = b->wait(1000);
+  EXPECT_EQ(gotB.status, ClipboardStatus::kTooLarge);
+  EXPECT_EQ(gotB.text, "");
+
+  // Every status survives the trip unchanged.
+  for (ClipboardStatus status :
+       {ClipboardStatus::kOk,
+        ClipboardStatus::kUnavailable,
+        ClipboardStatus::kTimeout,
+        ClipboardStatus::kTooLarge,
+        ClipboardStatus::kError}) {
+    auto slot = reqs.create();
+    reqs.answer(slot->id(), ClipboardResult{status, "t"});
+    EXPECT_EQ(slot->wait(1000).status, status)
+        << "status " << static_cast<int>(status);
+  }
+}
+// Mutation: make answer() ignore the id and fulfil the oldest outstanding
+// request. A is then handed B's kTooLarge; fails.
+
+TEST(ClipboardRequestTest, WaitReportsTimeoutAsAStatus) {
+  ClipboardRequests reqs;
+  auto slot = reqs.create();
+  ClipboardResult got = slot->wait(/*timeoutMs=*/0);
+  EXPECT_EQ(got.status, ClipboardStatus::kTimeout);
+  EXPECT_TRUE(got.text.empty())
+      << "a timed-out read carries no text -- in particular none from an "
+         "earlier read";
+}
+// Mutation: return a default-constructed result (kError) on expiry. Fails:
+// a caller could not tell a deadline from a broken read.
+
+TEST(
+    ClipboardRequestTest,
+    FailAllCompletesEveryWaiterAndALaterAnswerIsRefused) {
+  ClipboardRequests reqs;
+  auto a = reqs.create();
+  auto b = reqs.create();
+
+  // One waiter that may already be blocked when failAll() runs, one that
+  // asks only afterwards. Race-free: wait() returns a stored answer whether
+  // it arrived before or after the call, and a 10 s deadline that expired
+  // would read as kTimeout rather than as a pass.
+  ClipboardResult gotA;
+  std::thread waiter([&] { gotA = a->wait(10000); });
+  reqs.failAll(ClipboardStatus::kError);
+  waiter.join();
+  EXPECT_EQ(gotA.status, ClipboardStatus::kError);
+  EXPECT_EQ(b->wait(10000).status, ClipboardStatus::kError);
+
+  // What failAll() completed stays completed: a reply that was in flight
+  // when it ran is refused, not delivered over the top of the error.
+  EXPECT_FALSE(
+      reqs.answer(a->id(), ClipboardResult{ClipboardStatus::kOk, "late"}));
+  ClipboardResult again = a->wait(0);
+  EXPECT_EQ(again.status, ClipboardStatus::kError);
+  EXPECT_TRUE(again.text.empty());
+
+  // And the registry still serves requests made after it.
+  auto c = reqs.create();
+  EXPECT_TRUE(reqs.answer(c->id(), ClipboardResult{ClipboardStatus::kOk, "c"}));
+  EXPECT_EQ(c->wait(1000).text, "c");
+}
+// Mutation: make failAll() a no-op. Fails: gotA is kTimeout after 10 s,
+// and the late answer is accepted.
+
 TEST(ChannelsTest, ALateReplyToATimedOutRequestCannotSatisfyTheNextOne) {
   // This is the defect the retained per-request slot exists to prevent.
   ClipboardRequests reqs;
   auto a = reqs.create();
   const uint64_t aId = a->id();
-  EXPECT_FALSE(a->wait(20).has_value()); // A times out
+  EXPECT_EQ(a->wait(20).status, ClipboardStatus::kTimeout); // A times out
   auto b = reqs.create();
 
   // A's waiter gives up and releases its handle while A's entry is still in
@@ -1754,19 +1868,42 @@ TEST(ChannelsTest, ALateReplyToATimedOutRequestCannotSatisfyTheNextOne) {
   // answer() must take a strong reference under the registry lock and find
   // it already gone, rather than writing through a dangling pointer.
   a.reset();
-  EXPECT_FALSE(reqs.answer(aId, "late reply for A"))
+  EXPECT_FALSE(reqs.answer(
+      aId, ClipboardResult{ClipboardStatus::kOk, "late reply for A"}))
       << "a reply to an abandoned request is discarded, not delivered";
-  EXPECT_FALSE(b->wait(20).has_value()) // B must NOT be satisfied
+  EXPECT_EQ(b->wait(20).status, ClipboardStatus::kTimeout) // B NOT satisfied
       << "a reply carries the id of the request it answers";
-  reqs.answer(b->id(), "for B");
-  auto got = b->wait(1000);
-  ASSERT_TRUE(got.has_value());
-  EXPECT_EQ(*got, "for B");
+  reqs.answer(b->id(), ClipboardResult{ClipboardStatus::kOk, "for B"});
+  ClipboardResult got = b->wait(1000);
+  EXPECT_EQ(got.status, ClipboardStatus::kOk);
+  EXPECT_EQ(got.text, "for B");
 }
 // Mutation: keep a single "current request" instead of a map keyed by id, so
 // answer() satisfies whatever is outstanding. B is then handed A's late
 // reply; fails. Run under ASAN: a late reply must not touch freed storage,
 // which is why the slot is reference-counted and outlives its waiter.
+
+TEST(ChannelsTest, AClipboardReplyBreaksAMouseMoveRun) {
+  // A reply is not an input event, but it travels in the input queue, and
+  // it must not be folded into a move: it would vanish, and the Promise
+  // waiting for it would never settle.
+  InputQueue q;
+  UiEvent move;
+  move.type = UiEventType::kMouseMove;
+  move.dx = 1;
+  q.push(move);
+  UiEvent reply;
+  reply.type = UiEventType::kClipboardReply;
+  reply.requestId = 7;
+  q.push(reply);
+  q.push(move);
+
+  std::vector<UiEvent> out;
+  q.drain(out);
+  ASSERT_EQ(out.size(), 3u);
+  EXPECT_EQ(out[1].type, UiEventType::kClipboardReply);
+  EXPECT_EQ(out[1].requestId, 7u);
+}
 
 //===========================================================================
 // Ownership of command payloads.
@@ -1845,3 +1982,364 @@ TEST(ChannelsTest, CursorImagePayloadIsOwned) {
 // heap-use-after-free report; without a sanitizer, the scribble has zeroed
 // the block and the 0xAB comparisons fail. Also the only coverage of five
 // of Command's accessors.
+
+TEST(CommandTest, EachKindOwnsItsPayload) {
+  // The six kinds Task 11c adds, each built from a temporary that is
+  // destroyed before the command is read back. The scribble allocations
+  // after each scope play the part described above ChannelsTest.
+  // CommandQueuePayloadsAreOwned: a command that kept a pointer reads back
+  // the scribble, or trips ASAN.
+  std::vector<Command> cmds;
+  const std::string text(64, 't');
+  constexpr size_t kIconBytes = 4 * 4 * 4;
+  {
+    std::vector<uint8_t> icon(kIconBytes, 0xCD);
+    std::string clip = text;
+    cmds.push_back(Command::setFullscreen(true));
+    cmds.push_back(Command::setIcon(icon, 4, 4));
+    cmds.push_back(Command::setCursor(7));
+    cmds.push_back(Command::showCursor(false));
+    cmds.push_back(Command::lockPointer(true));
+    cmds.push_back(Command::writeClipboard(clip));
+  }
+  std::vector<std::string> scribble;
+  std::vector<std::vector<uint8_t>> scribbleBytes;
+  for (int i = 0; i < 16; ++i) {
+    scribble.emplace_back(64, 'X');
+    scribbleBytes.emplace_back(kIconBytes, 0x00);
+  }
+
+  ASSERT_EQ(cmds.size(), 6u);
+  EXPECT_EQ(cmds[0].kind(), Command::Kind::kSetFullscreen);
+  EXPECT_TRUE(cmds[0].flag());
+
+  EXPECT_EQ(cmds[1].kind(), Command::Kind::kSetIcon);
+  ASSERT_EQ(cmds[1].cursorRgba().size(), kIconBytes);
+  EXPECT_EQ(cmds[1].cursorRgba().front(), 0xCD);
+  EXPECT_EQ(cmds[1].cursorRgba().back(), 0xCD);
+  EXPECT_EQ(cmds[1].width(), 4);
+  EXPECT_EQ(cmds[1].height(), 4);
+
+  EXPECT_EQ(cmds[2].kind(), Command::Kind::kSetCursor);
+  EXPECT_EQ(cmds[2].cursor(), 7);
+
+  EXPECT_EQ(cmds[3].kind(), Command::Kind::kShowCursor);
+  EXPECT_FALSE(cmds[3].flag());
+
+  EXPECT_EQ(cmds[4].kind(), Command::Kind::kLockPointer);
+  EXPECT_TRUE(cmds[4].flag());
+
+  EXPECT_EQ(cmds[5].kind(), Command::Kind::kWriteClipboard);
+  EXPECT_EQ(cmds[5].text(), text);
+}
+// Mutation: make writeClipboard's or setIcon's payload a view of the
+// caller's storage. ASAN reports a use-after-free; without a sanitizer the
+// scribble fails the content comparison.
+
+//===========================================================================
+// EventDispatcher
+//===========================================================================
+
+namespace {
+
+/// A key event whose key code identifies it. Key events, because mouse
+/// moves coalesce in the queue and a test counting deliveries must not
+/// have two of its events merge into one.
+UiEvent numberedKey(int n) {
+  UiEvent e;
+  e.type = UiEventType::kKeyDown;
+  e.keyCode = n;
+  return e;
+}
+
+} // namespace
+
+TEST(EventDispatcherTest, DeliversInPushOrder) {
+  InputQueue queue;
+  EventDispatcher dispatcher(queue);
+  for (int i = 0; i < 3; ++i)
+    queue.push(numberedKey(i));
+
+  // An event pushed from inside a sink is delivered by the same call: the
+  // dispatcher keeps going until the queue is empty.
+  std::vector<int> seen;
+  dispatcher.dispatch([&](const UiEvent &e) {
+    seen.push_back(e.keyCode);
+    if (e.keyCode == 1)
+      queue.push(numberedKey(3));
+  });
+
+  EXPECT_EQ(seen, (std::vector<int>{0, 1, 2, 3}));
+  EXPECT_TRUE(queue.empty());
+}
+
+TEST(EventDispatcherTest, NestedDispatchLeavesABorrowedEventInPlace) {
+  // The address-stability obligation hnui_event_convert.h states (Ruling
+  // 45). "a" is short, so its bytes live inside the UiEvent object itself
+  // (small-string optimization) rather than on the heap: the borrowed
+  // pointer is valid exactly as long as that UiEvent stays where it is.
+  //
+  // Mutation: delete the already-dispatching guard in dispatch(). The
+  // nested call then drains 64 events into the buffer the outer call is
+  // iterating, the buffer reallocates, and reading *p is a
+  // heap-use-after-free under ASAN.
+  InputQueue queue;
+  EventDispatcher dispatcher(queue);
+
+  UiEvent text;
+  text.type = UiEventType::kTextInput;
+  text.text = "a";
+  text.keyCode = 0;
+  queue.push(text);
+  queue.push(numberedKey(1));
+
+  std::vector<int> seen;
+  bool nested = false;
+  char borrowed = 0;
+  EventDispatcher::Sink sink;
+  sink = [&](const UiEvent &e) {
+    seen.push_back(e.keyCode);
+    if (e.type != UiEventType::kTextInput || nested)
+      return;
+    nested = true;
+    HnuiEventConverter converter(e);
+    const char *p = converter.event().text;
+    for (int i = 2; i < 66; ++i)
+      queue.push(numberedKey(i));
+    dispatcher.dispatch(sink);
+    borrowed = *p;
+  };
+  dispatcher.dispatch(sink);
+
+  EXPECT_EQ(borrowed, 'a');
+  std::vector<int> expected;
+  for (int i = 0; i < 66; ++i)
+    expected.push_back(i);
+  EXPECT_EQ(seen, expected);
+}
+
+TEST(EventDispatcherTest, DispatchingIsTrueOnlyInsideASink) {
+  InputQueue queue;
+  EventDispatcher dispatcher(queue);
+  EXPECT_FALSE(dispatcher.dispatching());
+
+  queue.push(numberedKey(0));
+  int calls = 0;
+  bool insideSink = false;
+  dispatcher.dispatch([&](const UiEvent &) {
+    ++calls;
+    insideSink = dispatcher.dispatching();
+  });
+  EXPECT_EQ(calls, 1);
+  EXPECT_TRUE(insideSink);
+  EXPECT_FALSE(dispatcher.dispatching());
+
+  // And an empty queue is a dispatch that runs no sink and leaves the flag
+  // clear.
+  dispatcher.dispatch([&](const UiEvent &) { ++calls; });
+  EXPECT_EQ(calls, 1);
+  EXPECT_FALSE(dispatcher.dispatching());
+}
+
+//===========================================================================
+// FrameCallbackList
+//===========================================================================
+
+namespace {
+
+using Kind = FrameCallback::Kind;
+
+/// A distinct, recognisable opaque pointer per registration. The list
+/// never dereferences `fn` or `user`, so any value will do.
+void *tagPointer(int tag) {
+  return reinterpret_cast<void *>(static_cast<intptr_t>(0x1000 + tag));
+}
+
+/// Run one batch, calling \p during with each callback as it is handed out
+/// -- the point at which the real tick would invoke it -- and return the ids
+/// in the order they ran.
+std::vector<int> runBatch(
+    FrameCallbackList &list,
+    const std::function<void(const FrameCallback &)> &during = nullptr) {
+  std::vector<int> ran;
+  list.beginBatch();
+  FrameCallback cb;
+  while (list.next(&cb)) {
+    ran.push_back(cb.id);
+    if (during)
+      during(cb);
+  }
+  return ran;
+}
+
+} // namespace
+
+TEST(FrameCallbackListTest, RunsInRegistrationOrderAcrossKinds) {
+  FrameCallbackList list;
+  const int js1 = list.add(Kind::kJs, tagPointer(1), nullptr);
+  const int native1 = list.add(Kind::kNative, tagPointer(2), tagPointer(20));
+  const int js2 = list.add(Kind::kJs, tagPointer(3), nullptr);
+  const int native2 = list.add(Kind::kNative, tagPointer(4), tagPointer(40));
+
+  std::vector<FrameCallback> seen;
+  const std::vector<int> ran =
+      runBatch(list, [&](const FrameCallback &cb) { seen.push_back(cb); });
+  EXPECT_EQ(ran, (std::vector<int>{js1, native1, js2, native2}));
+
+  // And each entry comes back exactly as it was registered: the list
+  // carries the caller's opaque pointers and must not mix them up.
+  ASSERT_EQ(seen.size(), 4u);
+  EXPECT_EQ(seen[0].kind, Kind::kJs);
+  EXPECT_EQ(seen[0].fn, tagPointer(1));
+  EXPECT_EQ(seen[1].kind, Kind::kNative);
+  EXPECT_EQ(seen[1].fn, tagPointer(2));
+  EXPECT_EQ(seen[1].user, tagPointer(20));
+  EXPECT_EQ(seen[3].user, tagPointer(40));
+
+  // Run once each: the next batch is empty.
+  EXPECT_TRUE(runBatch(list).empty());
+}
+
+TEST(FrameCallbackListTest, RegisteredDuringABatchRunsInTheNext) {
+  FrameCallbackList list;
+  const int first = list.add(Kind::kJs, tagPointer(1), nullptr);
+  const int second = list.add(Kind::kNative, tagPointer(2), nullptr);
+  EXPECT_TRUE(list.pending());
+
+  int addedDuring = 0;
+  const std::vector<int> ran = runBatch(list, [&](const FrameCallback &cb) {
+    if (cb.id == first)
+      addedDuring = list.add(Kind::kJs, tagPointer(3), nullptr);
+  });
+  // Not extended by the registration: `second` was the last of this batch.
+  EXPECT_EQ(ran, (std::vector<int>{first, second}));
+  EXPECT_TRUE(list.pending());
+
+  EXPECT_EQ(runBatch(list), (std::vector<int>{addedDuring}));
+  EXPECT_FALSE(list.pending());
+}
+
+TEST(
+    FrameCallbackListTest,
+    CancellingALaterCallbackOfTheRunningBatchPreventsIt) {
+  FrameCallbackList list;
+  const int a = list.add(Kind::kJs, tagPointer(1), nullptr);
+  const int b = list.add(Kind::kNative, tagPointer(2), tagPointer(20));
+  const int c = list.add(Kind::kJs, tagPointer(3), nullptr);
+
+  bool cancelled = false;
+  FrameCallback removed;
+  const std::vector<int> ran = runBatch(list, [&](const FrameCallback &cb) {
+    if (cb.id == a)
+      cancelled = list.cancel(b, &removed);
+  });
+  EXPECT_TRUE(cancelled);
+  EXPECT_EQ(removed.id, b);
+  EXPECT_EQ(removed.kind, Kind::kNative);
+  EXPECT_EQ(removed.fn, tagPointer(2));
+  EXPECT_EQ(removed.user, tagPointer(20));
+  EXPECT_EQ(ran, (std::vector<int>{a, c}));
+
+  // Cancelled once: a second cancel has nothing left to remove, and the
+  // next batch does not resurrect it.
+  EXPECT_FALSE(list.cancel(b, &removed));
+  EXPECT_TRUE(runBatch(list).empty());
+}
+
+TEST(FrameCallbackListTest, CancellingOneThatAlreadyRanReportsFalse) {
+  FrameCallbackList list;
+  const int a = list.add(Kind::kJs, tagPointer(1), nullptr);
+  const int b = list.add(Kind::kJs, tagPointer(2), nullptr);
+
+  FrameCallback removed;
+  removed.id = -1;
+  bool cancelledEarlier = true;
+  bool cancelledSelf = true;
+  runBatch(list, [&](const FrameCallback &cb) {
+    if (cb.id == b) {
+      cancelledEarlier = list.cancel(a, &removed);
+      // The callback now executing has already been taken from the batch.
+      cancelledSelf = list.cancel(b, &removed);
+    }
+  });
+  EXPECT_FALSE(cancelledEarlier);
+  EXPECT_FALSE(cancelledSelf);
+  // And after the batch, too.
+  EXPECT_FALSE(list.cancel(a, &removed));
+  // A refusal leaves the out-parameter alone.
+  EXPECT_EQ(removed.id, -1);
+  // Never issued.
+  EXPECT_FALSE(list.cancel(0, &removed));
+  EXPECT_FALSE(list.cancel(1000, &removed));
+}
+
+TEST(FrameCallbackListTest, CancellingANextBatchCallbackRemovesIt) {
+  FrameCallbackList list;
+  const int a = list.add(Kind::kJs, tagPointer(1), nullptr);
+  const int b = list.add(Kind::kNative, tagPointer(2), nullptr);
+
+  FrameCallback removed;
+  EXPECT_TRUE(list.cancel(a, &removed));
+  EXPECT_EQ(removed.id, a);
+  EXPECT_EQ(removed.fn, tagPointer(1));
+  EXPECT_EQ(runBatch(list), (std::vector<int>{b}));
+
+  // Registered inside a callback and cancelled inside the same batch: it
+  // is waiting for the next batch, and is removed from there.
+  int later = 0;
+  bool cancelledLater = false;
+  list.add(Kind::kJs, tagPointer(3), nullptr);
+  runBatch(list, [&](const FrameCallback &) {
+    later = list.add(Kind::kJs, tagPointer(4), nullptr);
+    cancelledLater = list.cancel(later, &removed);
+  });
+  EXPECT_TRUE(cancelledLater);
+  EXPECT_EQ(removed.id, later);
+  EXPECT_FALSE(list.pending());
+  EXPECT_TRUE(runBatch(list).empty());
+}
+
+TEST(FrameCallbackListTest, IdsAreSharedAndNeverReused) {
+  FrameCallbackList list;
+  std::set<int> ids;
+  FrameCallback removed;
+  for (int round = 0; round < 4; ++round) {
+    const int js = list.add(Kind::kJs, tagPointer(round), nullptr);
+    const int native = list.add(Kind::kNative, tagPointer(round), nullptr);
+    const int cancelled = list.add(Kind::kJs, tagPointer(round), nullptr);
+    EXPECT_TRUE(list.cancel(cancelled, &removed));
+    for (int id : {js, native, cancelled}) {
+      EXPECT_GT(id, 0);
+      // One space across both kinds, and nothing handed out twice --
+      // including the ids of callbacks that ran or were cancelled.
+      EXPECT_TRUE(ids.insert(id).second) << "id " << id << " reused";
+    }
+    runBatch(list);
+  }
+  EXPECT_EQ(*ids.begin(), 1);
+}
+
+TEST(FrameCallbackListTest, ReleaseAllHandsBackPendingAndUnrunEntries) {
+  FrameCallbackList list;
+  const int a = list.add(Kind::kJs, tagPointer(1), nullptr);
+  const int b = list.add(Kind::kJs, tagPointer(2), nullptr);
+  const int c = list.add(Kind::kNative, tagPointer(3), nullptr);
+
+  // A batch abandoned after its first callback, with one more registered
+  // for the next: everything not yet run comes back, the cancelled one does
+  // not (cancel() already handed it over), and the list is left empty.
+  list.beginBatch();
+  FrameCallback cb;
+  ASSERT_TRUE(list.next(&cb));
+  EXPECT_EQ(cb.id, a);
+  FrameCallback removed;
+  EXPECT_TRUE(list.cancel(c, &removed));
+  const int d = list.add(Kind::kJs, tagPointer(4), nullptr);
+
+  std::vector<int> released;
+  list.releaseAll(
+      [&](const FrameCallback &entry) { released.push_back(entry.id); });
+  EXPECT_EQ(released, (std::vector<int>{b, d}));
+  EXPECT_FALSE(list.pending());
+  EXPECT_TRUE(runBatch(list).empty());
+}

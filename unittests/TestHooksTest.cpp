@@ -5,10 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// test_hooks.{h,cpp} (lib/compositor-gpu/, plan Task 9) adds three hooks
-// before the consumers that will use them: frame capture and event
-// injection reach real code in Task 10/11, but CompletionGate is testable
-// today, against SurfaceTable alone, with no GPU. That is the point of this
+// test_hooks.{h,cpp} (lib/compositor-gpu/, plan Task 9) added its hooks
+// before the consumers that use them: frame capture reached real code in
+// Task 10 (event injection, once here too, moved to tools/hermes-node-ui/
+// event_injector.h in Task 11b), and CompletionGate is testable against
+// SurfaceTable alone, with no GPU. That is the point of this
 // file -- it is the GPU-ordering coverage the design's Testing section asks
 // for ("the backend tests use controllable producer and consumer
 // completion"), obtained without a GPU (Task 9's brief).
@@ -455,38 +456,4 @@ TEST(FrameCaptureTest, CancelClearsAPendingRequestWithoutMatching) {
   capture.cancel();
   EXPECT_FALSE(capture.pending());
   EXPECT_FALSE(capture.tryMatch(want));
-}
-
-//===========================================================================
-// EventInjector
-//===========================================================================
-
-TEST(EventInjectorTest, DrainsInFifoOrder) {
-  EventInjector injector;
-  UiEvent down;
-  down.type = UiEventType::kMouseDown;
-  down.button = 1;
-  UiEvent up;
-  up.type = UiEventType::kMouseUp;
-  up.button = 1;
-
-  injector.inject(down);
-  injector.inject(up);
-
-  // Mutation: pop from the back of the queue (queue_.back() / pop_back())
-  // instead of the front. Then this test observes kMouseUp first, which
-  // would reorder a click relative to input that came before it -- exactly
-  // the hazard channels.h's own InputQueue coalescing comment warns a
-  // reordered non-move event causes.
-  UiEvent first;
-  ASSERT_TRUE(injector.takeNext(&first));
-  EXPECT_EQ(first.type, UiEventType::kMouseDown);
-
-  UiEvent second;
-  ASSERT_TRUE(injector.takeNext(&second));
-  EXPECT_EQ(second.type, UiEventType::kMouseUp);
-
-  EXPECT_TRUE(injector.empty());
-  UiEvent none;
-  EXPECT_FALSE(injector.takeNext(&none));
 }

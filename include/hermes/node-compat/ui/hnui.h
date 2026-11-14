@@ -13,22 +13,42 @@
 /// `hnui_abi.h`, which this header includes and which an addon may also
 /// include on its own.
 ///
-/// **This is the minimal subset, not the API** (plan Task 10 Step 1). The
-/// design's "The native C API" section lists sixteen entry points; three
-/// are declared here, because three are what the reference addon needs to
-/// draw a frame, and the rest arrive with Task 14 together with the
-/// conformance mode that gives each of them a caller. Declaring the other
-/// thirteen now and implementing them later would put a symbol in this
-/// header that links and then does nothing -- the swallow-and-continue
-/// shape this codebase removes on sight -- so they are absent rather than
-/// stubbed. An addon that references one fails to load, naming it.
+/// The whole API, in the order a renderer meets it:
 ///
-/// **Two things this header does NOT yet carry, deliberately**, both owned
-/// by Task 14 and both recorded here so the gap is visible rather than
-/// forgotten: `hnui_api_version()` and the `HNUI_CHECK_VERSION(env)` macro
-/// that spec:838-841 requires, which must bake in the vendored Sokol
-/// commit alongside `HNUI_ABI_VERSION`. Until they exist, an addon and a
-/// host that disagree about Sokol's ABI are caught by nothing.
+///   - Identity and compatibility: `hnui_api_version`, `hnui_sokol_commit`
+///     and the `HNUI_CHECK_VERSION(env)` macro an addon calls at init.
+///   - The window and the frame: `hnui_get_window`, `hnui_frame_target`,
+///     `hnui_request_animation_frame`, `hnui_cancel_animation_frame`.
+///   - Input and window state: `hnui_add_event_listener`,
+///     `hnui_remove_event_listener`, `hnui_event_dispatch_quiescent`,
+///     `hnui_get_window_state`.
+///   - Platform services: `hnui_set_cursor`, `hnui_show_cursor`,
+///     `hnui_lock_pointer`, `hnui_write_clipboard`,
+///     `hnui_read_clipboard_sync`, and `hnui_free` for what the last one
+///     allocates.
+///
+/// Each entry point arrived with the mechanism it exposes (Ruling 58), so
+/// none of them is a stub: there is nothing declared here that links and
+/// does nothing.
+///
+/// # Version checking
+///
+/// An addon is compiled against this header and run against a host built
+/// from another copy of it. Two things can disagree without any symbol
+/// failing to resolve: the ABI (`HNUI_ABI_VERSION`, bumped when a change is
+/// one a compiled addon cannot tolerate) and the vendored Sokol, whose
+/// structs the `sg_*` calls pass by value and whose layout is not ours to
+/// version. `HNUI_CHECK_VERSION(env)` compares both with the host's
+/// (`hnui_api_version()`, `hnui_sokol_commit()`) and throws a JavaScript
+/// error naming all four values when either differs.
+///
+/// **Where the commit is written.** `HNUI_SOKOL_COMMIT_PINNED` below is the
+/// one place to edit on a Sokol bump. `external/sokol/CMakeLists.txt` reads
+/// it from this file, and `test/sokol-pin.js` checks it against the commit
+/// `external/sokol/README.md` records. `HNUI_SOKOL_COMMIT_OVERRIDE`, when
+/// defined before this header is included, replaces it: that exists so a
+/// test can build a deliberately mismatched addon, and nothing else should
+/// define it.
 ///
 /// # Threading
 ///
@@ -55,9 +75,69 @@
 
 #include <node_api.h>
 
+#include <stdio.h>
+#include <string.h>
+
+/// The Sokol commit vendored at `external/sokol/sokol`. Edit here, and in
+/// `external/sokol/README.md`, when Sokol is bumped; `test/sokol-pin.js`
+/// fails if the two disagree. A plain string literal on a line of its own,
+/// because `external/sokol/CMakeLists.txt` extracts it with a regex.
+#define HNUI_SOKOL_COMMIT_PINNED "c0db757"
+
+#ifdef HNUI_SOKOL_COMMIT_OVERRIDE
+#define HNUI_SOKOL_COMMIT HNUI_SOKOL_COMMIT_OVERRIDE
+#else
+#define HNUI_SOKOL_COMMIT HNUI_SOKOL_COMMIT_PINNED
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/// The `HNUI_ABI_VERSION` the running host was built with.
+int hnui_api_version(void);
+
+/// The Sokol commit the running host vendors, as a NUL-terminated string
+/// owned by the host and valid for the life of the process.
+const char *hnui_sokol_commit(void);
+
+/// Check, at addon init, that this addon and the host agree on the ABI
+/// version and the Sokol commit; on a mismatch, throw a JavaScript error
+/// naming all four values and **return NULL from the calling function**.
+///
+/// Use it inside the addon's init function, before anything else, where
+/// `return NULL` is the right way out -- `NAPI_MODULE_INIT()` returns a
+/// `napi_value`, and NULL with a pending exception makes the load fail with
+/// that error:
+///
+///     NAPI_MODULE_INIT() {
+///       HNUI_CHECK_VERSION(env);
+///       ...
+///       return exports;
+///     }
+///
+/// A macro rather than a function so that the comparison uses the values
+/// compiled into the ADDON: a function inside the host would compare the
+/// host with itself.
+#define HNUI_CHECK_VERSION(env)                                             \
+  do {                                                                      \
+    if (hnui_api_version() != HNUI_ABI_VERSION ||                           \
+        strcmp(hnui_sokol_commit(), HNUI_SOKOL_COMMIT) != 0) {              \
+      char hnui_version_message_[256];                                      \
+      snprintf(                                                             \
+          hnui_version_message_,                                            \
+          sizeof(hnui_version_message_),                                    \
+          "hnui version mismatch: this addon was built for ABI version %d " \
+          "with Sokol %s, but the host provides ABI version %d with Sokol " \
+          "%s. Rebuild the addon against the host's hnui.h.",               \
+          (int)HNUI_ABI_VERSION,                                            \
+          HNUI_SOKOL_COMMIT,                                                \
+          hnui_api_version(),                                               \
+          hnui_sokol_commit());                                             \
+      napi_throw_error((env), "ERR_HNUI_VERSION", hnui_version_message_);   \
+      return NULL;                                                          \
+    }                                                                       \
+  } while (0)
 
 /// The window this `napi_env` owns, or NULL if it has none.
 ///
@@ -105,14 +185,122 @@ bool hnui_frame_target(hnui_window *w, hnui_target *out);
 /// One tick, one call: a callback registered from inside a callback runs
 /// on the next tick, exactly as `requestAnimationFrame` does in a browser.
 ///
-/// \return an id for `hnui_cancel_animation_frame` -- which Task 14 adds,
-///   so in this build the id is returnable and not yet usable. It is
-///   returned anyway rather than made `void`, because the signature is the
-///   one spec:757 fixes and changing it later would break every addon
-///   compiled against this header. Returns 0 -- "no id" -- for a NULL \p w
-///   or a NULL \p cb, for the reason `hnui_frame_target` returns false for
-///   the first of those.
+/// \return an id for `hnui_cancel_animation_frame`, from the same id space
+///   as `requestAnimationFrame`'s; ids start at 1 and are never reused.
+///   Returns 0 -- "no id" -- for a NULL \p w or a NULL \p cb, for the
+///   reason `hnui_frame_target` returns false for the first of those.
 int hnui_request_animation_frame(hnui_window *w, hnui_frame_cb cb, void *user);
+
+/// Cancel the frame callback \p id, so that it does not run: one waiting
+/// for the next tick, or one later in the tick now running.
+///
+/// \p id may be either kind's: native and JavaScript frame callbacks share
+/// one id space, so this cancels a `requestAnimationFrame` callback too,
+/// and JavaScript's `cancelAnimationFrame` cancels a native one.
+///
+/// **An unknown id is a silent no-op, by contract** -- one never issued,
+/// one that already ran, one already cancelled, and the id of the callback
+/// that is running right now. That is what `cancelAnimationFrame` does in
+/// a browser, and it lets a renderer cancel on teardown without tracking
+/// whether its callback has fired. A NULL \p w does nothing either; a
+/// wrong-thread call on a real window aborts.
+void hnui_cancel_animation_frame(hnui_window *w, int id);
+
+/// Register \p cb to receive every input and window event, with \p user
+/// as its opaque argument.
+///
+/// Listeners run on the owner thread, in registration order, before the
+/// event is emitted to JavaScript -- and after the window state the event
+/// carries has been applied, so `hnui_get_window_state` called from inside
+/// \p cb already reports it. The `hnui_event` and everything it points at
+/// is borrowed for the duration of the call only.
+///
+/// A listener registered from inside a listener first sees the next
+/// event.
+///
+/// \return an id, or 0 -- "no id" -- for a NULL \p w or a NULL \p cb, for
+///   the reason `hnui_frame_target` returns false for the first of those.
+int hnui_add_event_listener(hnui_window *w, hnui_event_cb cb, void *user);
+
+/// Remove the listener \p id. **Removal is deferred**, unlike a frame
+/// callback's cancellation: a listener removed while an event is being
+/// delivered still receives THAT event, and no later one -- including the
+/// next event of the same batch. So a listener may remove itself, or
+/// another, from inside a listener.
+///
+/// What this means for the listener's `user` data: it may be freed only
+/// when `hnui_event_dispatch_quiescent` says no listener is on the stack,
+/// because a removed listener may still be about to run for the event in
+/// flight. An unknown id -- never issued, or already removed -- is a silent
+/// no-op, and removing twice is not an error. A NULL \p w does nothing; a
+/// wrong-thread call on a real window aborts.
+void hnui_remove_event_listener(hnui_window *w, int id);
+
+/// True when no native event listener is on the stack: the window is not
+/// delivering an event, so the `user` data of a listener already removed
+/// may be freed. False inside a listener; true inside a frame callback.
+/// True for a NULL \p w, which has no listeners. A wrong-thread call on a
+/// real window aborts.
+bool hnui_event_dispatch_quiescent(hnui_window *w);
+
+/// Fill \p out with the window's current state, as of the last event
+/// delivered on the owner thread.
+///
+/// The size-prefix rule applies: the caller sets `out->size`, the host
+/// writes at most that many bytes, and a `size` below
+/// `HNUI_WINDOW_STATE_MIN_SIZE` is refused without writing anything. A
+/// NULL \p w or \p out writes nothing either.
+void hnui_get_window_state(hnui_window *w, hnui_window_state *out);
+
+/// Set the mouse cursor. A value outside `HNUI_CURSOR_DEFAULT ..
+/// HNUI_CURSOR_NOT_ALLOWED` is refused: one line on stderr naming the
+/// function and the value, and nothing is sent. The four commands here
+/// return nothing by design, so stderr is the only channel and silence
+/// would be a dropped request nobody could find. Applied by the platform
+/// thread on its next frame.
+void hnui_set_cursor(hnui_window *w, hnui_cursor c);
+
+/// Show or hide the mouse cursor over the window.
+void hnui_show_cursor(hnui_window *w, bool show);
+
+/// Lock the pointer to the window (relative motion), or release it.
+void hnui_lock_pointer(hnui_window *w, bool lock);
+
+/// Write \p utf8 to the clipboard. Refused, with a line on stderr naming
+/// the function, for a NULL string or one longer than
+/// `HNUI_CLIPBOARD_MAX_BYTES - 1` bytes -- the bound `ui.writeClipboard`
+/// throws a `RangeError` at.
+void hnui_write_clipboard(hnui_window *w, const char *utf8);
+
+/// Read the clipboard as UTF-8, synchronously, waiting at most
+/// \p timeout_ms milliseconds -- what ImGui's `GetClipboardTextFn` needs,
+/// since it must return a value.
+///
+/// The read is performed by the platform thread on its next frame, and the
+/// answer is written straight into a per-request slot this call waits on;
+/// nothing on the owner thread runs while it waits. **It can time out**,
+/// and does rather than hang: the platform thread can itself be blocked
+/// (in presentation, or in another client's slow selection transfer). A
+/// reply that arrives after the deadline is discarded. A \p timeout_ms of
+/// zero or less always returns `HNUI_TIMEOUT`.
+///
+/// \return `HNUI_OK` with `*out` set to a NUL-terminated, `malloc`ed copy
+///   of the text, to be freed with `hnui_free`. Every other status leaves
+///   `*out` NULL -- never text from an earlier read:
+///   - `HNUI_UNAVAILABLE`: nothing owns the clipboard, or it holds no text.
+///   - `HNUI_TIMEOUT`: no answer before the deadline.
+///   - `HNUI_TOO_LARGE`: over `HNUI_CLIPBOARD_MAX_BYTES - 1` bytes, or
+///     offered incrementally.
+///   - `HNUI_ERROR`: anything else, including a NULL \p w (the ordinary
+///     answer for a runtime with no window, as for every entry point here)
+///     or a failed allocation.
+///   - `HNUI_INVALID_ARGUMENT`: \p out is NULL.
+///   A wrong-thread call on a real window aborts.
+int hnui_read_clipboard_sync(hnui_window *w, int timeout_ms, char **out);
+
+/// Free memory an `hnui_*` call allocated for the caller
+/// (`hnui_read_clipboard_sync`'s `*out`). Accepts NULL. Any thread.
+void hnui_free(void *p);
 
 #ifdef __cplusplus
 } // extern "C"
