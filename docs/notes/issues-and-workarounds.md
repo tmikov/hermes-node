@@ -48,11 +48,11 @@ Actual bugs in Hermes's Node-API implementation.
 
 ### `napi_get_all_property_names` Returns Strings as Symbols
 When both `plusIncludeSymbols().plusKeepSymbols()` and `plusIncludeNonSymbols()` are set (via `napi_key_all_properties`), string property names are returned as Hermes internal SymbolIDs (exposed as JS Symbols).
-- **Fixed upstream** in Hermes NAPI (`454e8a3c1`). Workaround removed.
+- **Fixed upstream** in Hermes NAPI. Workaround removed.
 
 ### `napi_create_string_utf8` Rejects Invalid UTF-8
 Unlike V8 (which produces U+FFFD replacement characters), Hermes raises a RangeError and returns `napi_generic_failure`.
-- **Fixed upstream** in Hermes NAPI (`db4fdc0fe`). Workarounds removed from `string_decoder`, `buffer`, and `encoding_binding`.
+- **Fixed upstream** in Hermes NAPI. Workarounds removed from `string_decoder`, `buffer`, and `encoding_binding`.
 
 ---
 

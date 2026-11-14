@@ -144,7 +144,8 @@ Benefits:
   our existing `net`, `http`, `events`, and `stream` modules plus the vendored
   `ws` package. This is code we already maintain and test.
 
-- **`runHermesNode()` is already thread-safe**. Commit 69fc0e4 eliminated
+- **`runHermesNode()` is already thread-safe**. The 2026-02-24 commit "Extract runHermesNode() API, eliminate
+  per-binding file-scope statics" eliminated
   per-binding file-scope statics and extracted a callable API with per-env
   `RuntimeState`. Spinning up a second runtime is just a function call.
 

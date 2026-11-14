@@ -26,7 +26,8 @@ one file that is not in the container.
 
 **It is an injection point.** Because the preload runs before the bundle
 loader is installed, it can reach into the run that follows. Demonstrated
-against `dedb781`: a preload that plants `Module._cache[<root>/<identity>]`
+against the tree in which `__closeDiskModuleLoading` had just been
+made non-writable: a preload that plants `Module._cache[<root>/<identity>]`
 replaces a bundled module's exports, and the program never sees the
 container's copy.
 
@@ -186,7 +187,7 @@ definition, so it fails the build for the same reason the entry does.
 - **No disk preload in bundle mode, under any flag.** `--bundle` already
   refuses `--inspect`: debugging happens from source, not from the
   container. A `--preload-from-disk` would reopen by the front door what
-  `dedb781` closed.
+  that hardening closed.
 - **No automatic discovery of preloads.** The producer cannot know that a
   module is meant to run first; that is what the flag is for.
 

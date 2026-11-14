@@ -1361,7 +1361,8 @@ int runHermesNode(const HermesNodeConfig &config) {
     } else {
       // Eval / REPL mode: there is no user file URL to set a breakpoint
       // on, so fall back to running a synthetic `debugger;` statement
-      // (the same primitive the binding used before commit 5d36ec8).
+      // (the same primitive the binding used before the commit "Replace
+      // --inspect-brk synthetic 'debugger;' with a CDP breakpoint").
       // The legacy Debugger fires immediately and blocks on the
       // coordinator until a DevTools client connects and sends Resume.
       // The synthetic-frame DevTools UX caveat from that commit only

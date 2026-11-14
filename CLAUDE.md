@@ -1199,7 +1199,7 @@ unrelated change:
 This note suspected it of being genuinely racy rather than load-sensitive,
 on the strength of 2/6 and 5/6 failures in isolation; that suspicion was
 right. Test 38 read a file test 36 creates, with nothing ordering the two
-chains, and `bbfa4f2` fixed it. Measured 12/12 on Linux after, against
+chains, and ordering them fixed it. Measured 12/12 on Linux after, against
 roughly five failures in six before. Recorded rather than deleted because
 the reasoning is the useful part: a flake that fails in *isolation* is a
 race, not a scheduling artifact, and is worth chasing rather than listing.

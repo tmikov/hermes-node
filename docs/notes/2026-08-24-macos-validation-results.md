@@ -52,7 +52,7 @@ signing step if the whole file is ever meant to verify. Details under C9.
 | clang | Apple clang version 21.0.0 (clang-2100.0.123.102) |
 | ld | `@(#)PROGRAM:ld PROJECT:ld-1266.8` |
 | default build | **single-arch arm64** (`cmake-build-release`); a separate `cmake-build-universal` was configured for C9 |
-| submodule | clean, and matching the recorded gitlink `9aaccbe5`. The divergence the handoff warned about did not recur, and no `git submodule` command was run. |
+| submodule | clean, and matching the recorded gitlink. The divergence the handoff warned about did not recur, and no `git submodule` command was run. |
 
 ## What I changed
 
@@ -469,7 +469,7 @@ fine, because macOS only enforces signatures on native arm64 code -- but see
 
 **The release gate passes.** `cmake --build cmake-build-universal --target
 check-hermes-node`, which is exactly what `release.yml` runs, **exits 0**: 285
-unit tests, 180 JS tests, no failures. It did not before commit `4a7975b`; that
+unit tests, 180 JS tests, no failures. It did not before the fix this round made; that
 commit is the difference between a macOS release being cuttable and not.
 
 ## C10 -- an example, end to end

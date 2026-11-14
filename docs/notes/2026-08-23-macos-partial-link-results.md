@@ -41,9 +41,9 @@ pre-linked object**.
 
 ### Build note (not part of the spike, but it blocked it)
 
-The `hermes` submodule checkout was on branch `n-api` at `664be0ea5`, which has
-**diverged** from the recorded gitlink `9aaccbe5` (not merely ahead -- the
-recorded commit is not an ancestor of it). `664be0ea5` lacks
+The `hermes` submodule checkout was on the tip of branch `n-api`, which has
+**diverged** from the recorded gitlink (not merely ahead -- the
+recorded commit is not an ancestor of it). That tip lacks
 `hermes_napi_host::ref_loop` / `unref_loop`, so `lib/event-loop/uv_event_loop.cpp`
 failed to compile:
 
@@ -53,8 +53,8 @@ uv_event_loop.cpp:330:14: error: no member named 'unref_loop' in 'hermes_napi_ho
 ```
 
 On the user's explicit instruction the submodule was checked out to the recorded
-gitlink (`git submodule update --checkout hermes` -> `9aaccbe5`), after which the
-build succeeded. The `n-api` branch ref still points at `664be0ea5`; the tree was
+gitlink (`git submodule update --checkout hermes`), after which the
+build succeeded. The `n-api` branch ref still points at the diverged tip; the tree was
 clean, so nothing was lost. **This is left checked out at the gitlink** -- a
 follow-up session on this machine may want `git -C hermes checkout n-api`.
 
@@ -652,8 +652,8 @@ ad-hoc linker-signed. It changes which route the kit should use.
    isolated runs. It is not a partial-link finding, but it is a real pre-existing
    flake worth chasing separately.
 
-7. **The `hermes` submodule was left at the recorded gitlink `9aaccbe5`**, not at
-   the `n-api` branch tip `664be0ea5` it was on when this started. See the build
+7. **The `hermes` submodule was left at the recorded gitlink**, not at
+   the `n-api` branch tip it was on when this started. See the build
    note under Environment.
 
 8. **The folding problem may be macOS-only, and nobody has checked.** The

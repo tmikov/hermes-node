@@ -28,7 +28,7 @@ Tracks progress on `docs/superpowers/specs/2026-05-14-ci-and-releases-design.md`
 - Generated file lives at `${CMAKE_BINARY_DIR}/generated/hermes/node-compat/version.h`;
   `tools/hermes-node/CMakeLists.txt` adds the generated dir to that
   target's include path (only consumer right now).
-- First local build produced `60d05ea-dirty` since the repo has no
+- First local build produced `<abbreviated SHA>-dirty` since the repo has no
   `v*` tags yet -- `git describe --always` falls back to the abbreviated
   SHA. That's expected.
 

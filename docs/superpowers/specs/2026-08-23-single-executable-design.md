@@ -210,7 +210,7 @@ LLVM version matches ours" -- a real toolchain-compatibility requirement that
 does not otherwise exist here. Explicitly out of scope.
 
 (Dead-stripping is a separate matter, enabled for the ordinary `hermes-node`
-link in `551d4c8` independently of this design: `--gc-sections` / `-dead_strip`,
+link by an earlier commit, independently of this design: `--gc-sections` / `-dead_strip`,
 worth 1,131,376 bytes (-8.10%) on Linux. It does not weaken `-rdynamic` --
 a symbol in the dynamic symbol table is a GC root, and the two sorted export
 name lists diff empty across the change. It applies to a produced executable

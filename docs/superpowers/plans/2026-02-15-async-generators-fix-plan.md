@@ -20,13 +20,13 @@ permanently unavailable.
 
 ## Affected Commits
 
-| Commit | Step | What's Wrong |
-|--------|------|-------------|
-| `939bb5a` | Step 4 (primordials) | `AsyncIteratorPrototype` is a manual stub instead of being derived from `async function*` prototype chain |
-| `0ef1fe4` | Step 8 (bootstrap) | Missing `.withEnableAsyncGenerators(true)` in RuntimeConfig — **root cause** |
-| `dc1d66b` | Step 26 (streams) | Patched `readable.js`, `pipeline.js`; created empty `operators.js` shim |
-| `489723c` | Step 29 (fs_dir) | Patched `internal/fs/dir.js` with manual async iterator |
-| `0108960` | Step 32 (fs async verify) | Test declares `fs.promises` as "permanently unavailable" |
+| Step | What's Wrong |
+|------|-------------|
+| Step 4 (primordials) | `AsyncIteratorPrototype` is a manual stub instead of being derived from `async function*` prototype chain |
+| Step 8 (bootstrap) | Missing `.withEnableAsyncGenerators(true)` in RuntimeConfig — **root cause** |
+| Step 26 (streams) | Patched `readable.js`, `pipeline.js`; created empty `operators.js` shim |
+| Step 29 (fs_dir) | Patched `internal/fs/dir.js` with manual async iterator |
+| Step 32 (fs async verify) | Test declares `fs.promises` as "permanently unavailable" |
 
 ### NOT affected (keep as-is)
 
@@ -61,7 +61,7 @@ Fixup for Step M (<commit-hash>).
 
 This makes the rebase straightforward — the target is recorded in each commit.
 
-### Fix 1: Enable async generators in runtime [amend Step 8, `0ef1fe4`]
+### Fix 1: Enable async generators in runtime [amend Step 8]
 
 **File:** `tools/hermes-node/hermes-node.cpp`
 
@@ -83,7 +83,7 @@ cmake --build cmake-build-asan --target check-hermes-node
 
 ---
 
-### Fix 2: Fix primordials — `AsyncIteratorPrototype` + `FinalizationRegistry` polyfill [amend Step 4, `939bb5a`]
+### Fix 2: Fix primordials — `AsyncIteratorPrototype` + `FinalizationRegistry` polyfill [amend Step 4]
 
 **File:** `libjs/primordials.js`
 
@@ -173,7 +173,7 @@ cmake --build cmake-build-asan --target check-hermes-node
 
 ---
 
-### Fix 3: Revert stream async generator workarounds [amend Step 26, `dc1d66b`]
+### Fix 3: Revert stream async generator workarounds [amend Step 26]
 
 This is the largest fix. Three vendored files were patched and one shim was created
 unnecessarily.
@@ -181,11 +181,11 @@ unnecessarily.
 #### 3a. Revert `libjs-node/internal/streams/readable.js`
 
 Restore the original Node.js `async function* createAsyncIterator(stream, options)`
-at line 1362. The diff from Step 26 commit `dc1d66b` shows exactly what was changed.
+at line 1362. The diff from Step 26 commit shows exactly what was changed.
 
 **Method:** Get the original file from the commit before Step 26:
 ```bash
-git show dc1d66b~1:libjs-node/internal/streams/readable.js > libjs-node/internal/streams/readable.js
+git show <Step 26 commit>~1:libjs-node/internal/streams/readable.js > libjs-node/internal/streams/readable.js
 ```
 
 Or equivalently, reverse-apply only the readable.js hunk from the Step 26 diff.
@@ -196,7 +196,7 @@ Restore the original `async function* fromReadable(val)` at line 90.
 
 **Method:**
 ```bash
-git show dc1d66b~1:libjs-node/internal/streams/pipeline.js > libjs-node/internal/streams/pipeline.js
+git show <Step 26 commit>~1:libjs-node/internal/streams/pipeline.js > libjs-node/internal/streams/pipeline.js
 ```
 
 #### 3c. Delete `libjs/shims/internal/streams/operators.js`
@@ -282,7 +282,7 @@ cmake --build cmake-build-asan --target check-hermes-node
 
 ---
 
-### Fix 4: Revert `internal/fs/dir.js` workaround [amend Step 29, `489723c`]
+### Fix 4: Revert `internal/fs/dir.js` workaround [amend Step 29]
 
 #### 4a. Revert `libjs-node/internal/fs/dir.js`
 
@@ -290,7 +290,7 @@ Restore the original `async* entries()` method at line 294.
 
 **Method:**
 ```bash
-git show 489723c~1:libjs-node/internal/fs/dir.js > libjs-node/internal/fs/dir.js
+git show <Step 29 commit>~1:libjs-node/internal/fs/dir.js > libjs-node/internal/fs/dir.js
 ```
 
 #### 4b. Update `libjs-node/README.md`
@@ -321,7 +321,7 @@ cmake --build cmake-build-asan --target check-hermes-node
 
 ---
 
-### Fix 5: Test `fs.promises` [amend Step 32, `0108960`]
+### Fix 5: Test `fs.promises` [amend Step 32]
 
 With async generators enabled, `internal/fs/promises.js` should no longer throw
 a SyntaxError when parsed. However, it has eager top-level requires that may not
@@ -371,7 +371,7 @@ cmake --build cmake-build-asan --target check-hermes-node
 
 ---
 
-### Fix 6: Update documentation [amend Step 33, `8957f55`]
+### Fix 6: Update documentation [amend Step 33]
 
 #### 6a. `docs/notes/issues-and-workarounds.md`
 
@@ -402,32 +402,32 @@ After all fix commits are created on top of HEAD, perform an interactive rebase
 to squash each fix into its corresponding step:
 
 ```bash
-git rebase -i 939bb5a~1
+git rebase -i <Step 4 commit>~1
 ```
 
 Reorder the pick list so each fix commit immediately follows its target step,
 then mark fix commits as `fixup` (or `squash` if you want to merge commit messages):
 
 ```
-pick 939bb5a Step 4: Implement primordials thin shim
-fixup XXXXXXX Fix 2: Fix primordials AsyncIteratorPrototype
-pick 1c298fe Step 5: Implement internalBinding registry
-pick 4361bfb Step 6: Implement internal module loader
-pick 7c9b402 Step 7: Implement process object (basic properties)
-pick 0ef1fe4 Step 8: Implement bootstrap sequence
-fixup XXXXXXX Fix 1: Enable async generators in runtime
-pick c78207e Step 9: Port constants binding
+pick <hash> Step 4: Implement primordials thin shim
+fixup <hash> Fix 2: Fix primordials AsyncIteratorPrototype
+pick <hash> Step 5: Implement internalBinding registry
+pick <hash> Step 6: Implement internal module loader
+pick <hash> Step 7: Implement process object (basic properties)
+pick <hash> Step 8: Implement bootstrap sequence
+fixup <hash> Fix 1: Enable async generators in runtime
+pick <hash> Step 9: Port constants binding
 ...
-pick dc1d66b Step 26: Verify streams work
-fixup XXXXXXX Fix 3: Revert stream async generator workarounds
+pick <hash> Step 26: Verify streams work
+fixup <hash> Fix 3: Revert stream async generator workarounds
 ...
-pick 489723c Step 29: Port fs_dir binding
-fixup XXXXXXX Fix 4: Revert fs/dir.js workaround
+pick <hash> Step 29: Port fs_dir binding
+fixup <hash> Fix 4: Revert fs/dir.js workaround
 ...
-pick 0108960 Step 32: Verify fs async operations
-fixup XXXXXXX Fix 5: Test fs.promises
-pick 8957f55 Step 33: Run Node.js fs test subset (8/8 pass)
-fixup XXXXXXX Fix 6: Update documentation
+pick <hash> Step 32: Verify fs async operations
+fixup <hash> Fix 5: Test fs.promises
+pick <hash> Step 33: Run Node.js fs test subset (8/8 pass)
+fixup <hash> Fix 6: Update documentation
 ```
 
 ### Conflict Risk Assessment

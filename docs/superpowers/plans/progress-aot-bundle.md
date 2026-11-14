@@ -240,7 +240,7 @@ each new test was confirmed failing without it.
 ### Design doc corrections
 
 Two claims in `2026-08-15-aot-bundle-design.md` did not match what
-shipped, and were corrected in place (the precedent is commit `bd54816`):
+shipped, and were corrected in place (the precedent is the 2026-08-13 commit "Design: correct two stale claims about the shipped implementation"):
 
 - The Testing section named `examples/flow-bundler` as "the natural
   regression test for the fallback path". No such test exists, and it is
@@ -654,7 +654,8 @@ through `loadIdentity` before the entry, in order; a preload observes
 throwing preload stops the run before the entry executes. `--dump` prints
 a `PRELOADS` section.
 
-This closes the loop `dedb781` left open. That commit hardened
+This closes the loop left open by the earlier commit that made
+`__closeDiskModuleLoading` non-writable. That commit hardened
 `__closeDiskModuleLoading` against a preload reassigning it, but its own
 message said plainly: "`-r` is still not rejected with `--bundle`; that
 combination is unchanged by design, only the property's mutability is
@@ -662,7 +663,7 @@ hardened." The design doc traced the sharper problem underneath: preloads
 ran at step 12c of `runHermesNode`, before the bundle loader was installed
 at step 13, resolved from the real filesystem -- so `--bundle app.hbb` and
 `--bundle app.hbb -r x.js` were different worlds, and a preload could reach
-into the run that followed it (demonstrated against `dedb781`: a preload
+into the run that followed it (demonstrated against the tree as that commit left it: a preload
 planting `Module._cache[<root>/<identity>]` replaced a bundled module's
 exports before the program ever saw the container's copy). This round's
 last task makes `checkToolOptions()` refuse `--bundle` combined with
@@ -689,7 +690,7 @@ Two risks carried over from the design doc, neither addressed this round:
   fixtures instead; confirmed this round that `run.sh`, which uses `-r`
   with no `--bundle`, is unaffected by the new refusal.
 
-`dedb781`'s non-writable `__closeDiskModuleLoading` is now unreachable for
+That commit's non-writable `__closeDiskModuleLoading` is now unreachable for
 the attack it was written for: `installBundleLoader()` calls the closer as
 its first statement, before `run()` executes any bundle-carried preload, so
 a preload never occupies the window that hardening defended (a

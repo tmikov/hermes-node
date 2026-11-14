@@ -189,7 +189,7 @@ cmake --build cmake-build-asan --target check-hermes-node` leaves
 **not** hold on this branch. `check-hermes-node` still passed (281/281
 tests green), but the directory was recreated during the run regardless.
 
-**This has since been fixed in commit `180b670`** ("Disable compile cache
+**This has since been fixed by the 2026-08-13 commit** ("Disable compile cache
 in the inspector's second runtime"), by a separate agent following up on
 this finding. The fix sets `inspectorConfig.disableCompileCache = true;`
 explicitly in `lib/runtime/hermes_node_runtime.cpp`, since the inspector's
@@ -254,7 +254,7 @@ substitution) while also passing `--inspect`, in order to test the
 documented "cache is disabled under --inspect" behavior. At the time,
 that test passed anyway, because it only asserted its own `%t.cache`
 stayed absent, which it did; it did not check the real default location,
-so it did not catch this (this is exactly what `180b670` strengthened it
+so it did not catch this (this is exactly what that fix strengthened it
 to do). Confirmed via `strace -f -e trace=mkdir,mkdirat` that the mkdir
 sequence terminates at exactly `~/.cache/hermes-node/compile-cache/v1/
 <generation>`, and bisected to this one test file by running each
@@ -266,7 +266,7 @@ Task 9 itself is documentation-only per the plan's Global Constraints
 part of this task: the diagnostic `fprintf` used to confirm the root
 cause was reverted before the Task 9 commit, leaving
 `lib/runtime/hermes_node_runtime.cpp` unchanged in that commit. It was
-flagged as a concern for a follow-up fix, and `180b670` is that follow-up
+flagged as a concern for a follow-up fix, and the fix named above is that follow-up
 (see above).
 
 Full raw command transcripts are in

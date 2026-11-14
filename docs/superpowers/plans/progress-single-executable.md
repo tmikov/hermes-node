@@ -39,7 +39,7 @@ and the producer's judgment not to forward driver flags to the assemble step
 see the pair; only a pass over the whole branch, including the CI and release
 workflows, could. That is the argument for the final review existing.
 
-The fix (`4534d38`) forwards the manifest's **entire** `driverflag` list to
+The fix forwards the manifest's **entire** `driverflag` list to
 the assemble step rather than a target-selecting subset, because a
 hand-maintained subset drifts and drifts at someone else's link -- the same
 reasoning that made `kit.manifest` a recording of the real link line rather
@@ -55,7 +55,7 @@ generated payload file became load-bearing at that moment. clang runs the C
 preprocessor over `.S` and not over `.s`, and the assemble step now forwards
 `-D` flags over a file that holds an arbitrary user-supplied path inside a
 quoted `.incbin`. `CLAUDE.md` had said `.S`, so the documentation was pointing
-at the single edit that would break it (`e834733`).
+at the single edit that would break it; a later commit corrected it.
 
 ## What shipped
 
@@ -148,7 +148,7 @@ Recorded because each is a trap that would otherwise be rediscovered:
   and macOS; each run now cuts a kit (755 MB ASAN, 39 MB Release) and links
   up to four ~185 MB executables. Each producing test deletes its output on
   its last RUN line, so the artifacts do not accumulate, but the kit stays.
-  A failing gated run no longer uploads them (commit `04b1f73`).
+  A failing gated run no longer uploads them.
 - **Nothing on this branch ran on macOS.** The design's macOS claims --
   ad-hoc linker-signing, `MH_SUBSECTIONS_VIA_SYMBOLS`, the merged-archive
   link -- are the spike's measurements, taken on a Mac before any of this

@@ -5,7 +5,7 @@ asking whether Ink -- React for terminal UIs -- could be a `--build-exe`
 demo. It cannot, on either of its two branches, for unrelated reasons, and
 one of those reasons is worth more than the question was.
 
-Measured on Linux x86_64 against `hermes-node` at `26e2dc1`, with
+Measured on Linux x86_64 against `hermes-node` as built on 2026-08-24, with
 node v24.13.1 as the control.
 
 ## Short answer
