@@ -24,6 +24,19 @@ Node.js API compatibility layer for Hermes. Ports Node's native bindings to Node
 - Tests: GTest (`unittests/`), lit (`test/`)
 - Test target: `check-hermes-node`
 - Commit messages: ASCII only, no emojis
+- **Never write a commit hash into a committed document** -- a plan, a
+  progress file, a spec, a note, an issue, a code comment or this file --
+  whether the commit is this repository's or another's. A hash is not a
+  stable name: a rebase, a squash or an amend gives the same change a new
+  one, and the old one then names nothing, or only something a backup tag
+  happens to keep alive. Name the thing instead: the task, the file, the
+  test, the date, or the commit's subject line. That covers the `hermes`
+  submodule's own branches (`hermes-node`, `n-api`), which get rebased like
+  any working branch. **The one exception is a commit on a public,
+  forward-only branch**, which nobody rewrites: Hermes's `static_h`, or the
+  published history of a third-party project pinned here (Sokol's `c0db757`,
+  a Node release). Hashes also remain fine in a commit *message*, where
+  `git cherry-pick -x` puts one, and in anything uncommitted.
 
 ## Build Configurations
 
