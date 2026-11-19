@@ -14,14 +14,24 @@
 // (Mutation: edit the commit in hnui.h without touching the README.)
 //
 // REQUIRES: ui-enabled
-// Opens no window; ends naturally, and keeps `timeout` for the reason
-// ui-version-check.js gives.
-// RUN: timeout 60 %hermes-node %s %sokol_commit %source_dir | %FileCheck %s
+// Opens no window and ends naturally.
+// RUN: %hermes-node %s %sokol_commit %source_dir | %FileCheck %s
 
 // CHECK: README ok
 // CHECK: HEADER ok
 
 'use strict';
+
+// Bounded from inside the script, because macOS -- where this test runs --
+// has no `timeout` binary. The timer is unref'd, so it never keeps the run
+// alive by itself; it fires only if something else holds the loop open, and
+// then fails the run. It cannot bound a hang in native code once the script
+// has finished; lit's missing per-test timeout (dz 01a0d797-e326) is the gap
+// there.
+setTimeout(() => {
+  console.log('WATCHDOG: the run did not end within 60 s');
+  process.exit(124);
+}, 60000).unref();
 
 const fs = require('fs');
 const variable = process.argv[2];

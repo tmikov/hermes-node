@@ -50,6 +50,12 @@
 //            WINCLOSE's positive line still pass; the implicit check
 //            against RETURNED, and the trace's `close: ending the process`
 //            line, are what fail.)
+//  NOEXIT    process.exit replaced by a non-function, process.exitCode =
+//            8: win.close() enters CLOSING and then throws a TypeError
+//            naming process.exit, which the caller catches. The loop handle
+//            is released, so the script's end ends the process with status
+//            8. (Mutation: remove the napi_throw_type_error call in
+//            uiCloseWindow, and win.close() returns: RETURNED prints.)
 //  LATE      a close request arriving while the window is already CLOSING
 //            -- sent from the 'exit' listener of the close that ended the
 //            run -- is still cancelled, and the platform thread keeps
@@ -111,6 +117,10 @@
 // RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s winclose %hnui_demo_addon %x11_window_driver > %t.winclose.out 2> %t.winclose.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=WINCLOSE-CODE %s
 // RUN: %FileCheck --check-prefix=WINCLOSE --implicit-check-not=CLOSE-EVENT-EMITTED --implicit-check-not=RETURNED %s < %t.winclose.out
 // RUN: %FileCheck --check-prefix=WINCLOSE-TRACE --implicit-check-not='quit requested' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.winclose.err
+//
+// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s noexit %hnui_demo_addon %x11_window_driver > %t.noexit.out 2> %t.noexit.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=NOEXIT-CODE %s
+// RUN: %FileCheck --check-prefix=NOEXIT --implicit-check-not=RETURNED %s < %t.noexit.out
+// RUN: %FileCheck --check-prefix=NOEXIT-TRACE --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.noexit.err
 //
 // RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s late %hnui_demo_addon %x11_window_driver > %t.late.out 2> %t.late.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=LATE-CODE %s
 // RUN: %FileCheck --check-prefix=LATE %s < %t.late.out
@@ -216,6 +226,21 @@ async function main() {
     return;
   }
 
+  if (mode === 'noexit') {
+    process.exitCode = 8;
+    process.on('exit', (code) => console.log('EXIT code=' + code));
+    process.exit = 42;
+    setTimeout(() => {
+      try {
+        win.close();
+        console.log('RETURNED');
+      } catch (e) {
+        console.log('THREW ' + e.name + ': ' + e.message);
+      }
+    }, 1);
+    return;
+  }
+
   if (mode === 'late') {
     // One frame first, for the reason ui-exit-paths.js's LISTENER waits
     // one: sent straight after the await, the first request can be
@@ -310,6 +335,12 @@ main().catch((e) => {
 // WINCLOSE-CODE: EXITCODE 9
 // WINCLOSE-TRACE: lifecycle: CLOSING (reason=close)
 // WINCLOSE-TRACE: close: ending the process through process.exit()
+
+// NOEXIT: THREW TypeError: closing the window: process.exit is not a function, so the process could not be ended.
+// NOEXIT-NEXT: EXIT code=8
+// NOEXIT-CODE: EXITCODE 8
+// NOEXIT-TRACE: lifecycle: CLOSING (reason=close)
+// NOEXIT-TRACE: lifecycle: runtime returned, exiting with status 8
 
 // LATE: QUITS true FRAMES true
 // LATE-CODE: EXITCODE 0

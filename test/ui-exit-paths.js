@@ -8,9 +8,10 @@
 // frame callback, event or posted continuation reaches the program, and the
 // window's commands are refused.
 //
-// Every case's 'exit' listener asks `ui.requestAnimationFrame()` for a
-// frame; `rafRefused=true` -- the request answered 0 and registered nothing
-// -- is the in-process evidence that CLOSING preceded the listener, and
+// The 'exit' listeners of LISTENER, FATAL and THROW ask
+// `ui.requestAnimationFrame()` for a frame; an answer of 0 (`rafRefused=true`,
+// THROW's `RAF 0`) -- the request registered nothing -- is the in-process
+// evidence that CLOSING preceded the listener, and
 // unlike a comparison of trace and stdout it does not depend on how the two
 // streams interleave.
 //
@@ -89,7 +90,13 @@
 //            refused (closing)` trace, printed once the rejection was
 //            performed, is the check. (Mutation: delete the rejectRead()
 //            call in uiReadClipboard's refusal branch, leaving the Promise
-//            pending, and that line is gone.)
+//            pending, and that line is gone.) The same listener calls
+//            createWindow(), which throws `the process is exiting`, and
+//            the addon's hnui_request_animation_frame, which answers 0 and
+//            traces its refusal. (Mutations: remove createWindow's closing
+//            branch, and it throws `a window already exists` instead;
+//            remove hnui_request_animation_frame's, and it answers 1 and
+//            traces `id 1`.)
 //  THROW     createWindow() and then a synchronous throw from the entry
 //            script, in one turn. runHermesNode reaches its step 15 with a
 //            window requested: CLOSING (reason=return) before the 'exit'
@@ -101,9 +108,16 @@
 //            close(); it is never delivered (no `window ready`). The
 //            barrier makes that alternation exact: it returns only after a
 //            platform frame, and init_cb precedes the first one.
+//            The listener's first line is what requestAnimationFrame
+//            answers there: `RAF 0` only in CLOSING, since with the window
+//            still only requested it throws `no window exists yet`. That is
+//            the in-process evidence that CLOSING came first on this path,
+//            the rafRefused of the other cases.
 //            (Mutations: delete the runBeforeRuntimeCleanupHook call, and
 //            the run hangs until `timeout` (124); delete the
 //            kRuntimeReturn hook call, and there is no reason=return line;
+//            move that call below step 15's 'exit' emit, and the listener
+//            prints `RAF threw: ...` where THROW expects `RAF 0`;
 //            move the cleanup hook above step 15's flushPendingWrites, and
 //            the piped lines are lost.) The alternation (THROW-ARM) is
 //            checked in a run of its own, because its two arms fall on
@@ -124,6 +138,28 @@
 // test can hit deterministically.
 // TickMachineTest.NoTickIsSentOnceTheTableIsClosing pins the table's gate,
 // not the call that closes it.
+//
+// Also unpinned, by any test:
+//  - hnui_cancel_close's closing branch (false once CLOSING). Outside a
+//    close event's delivery the `inCloseEvent` check behind it gives the
+//    same answer, so only CLOSING beginning in the middle of that delivery
+//    -- an earlier listener calling a replaced `process.exit` that returns
+//    -- with a native listener still to run would tell the two apart, and
+//    no test arranges that.
+//  - The `reason != kFatalException` condition on uiEnterClosing's tick
+//    drain. Reaching it needs a clipboard Promise outstanding when an
+//    uncaught exception ends the program, and its observable -- a rejection
+//    handler that does not run before the fatal 'exit' -- is an absence.
+//  - The refused-post traces that only a race reaches: `capture: post
+//    refused (dispatcher closed)`, `capture: result dropped (closing)`,
+//    `frame tick: post refused (dispatcher closed)`, `startup failure: post
+//    refused (dispatcher closed)`, `event delivery: not opened (closing)`,
+//    and the `window readiness: refused (closing)` of onStartupFailed. Each
+//    needs a platform-thread post to land in a window the program does not
+//    control: just before or just after the dispatcher's close. (`event
+//    delivery: post refused (dispatcher closed)` is not among them: it is
+//    unreachable by construction, as its comment in onSharedContextReady
+//    says.)
 //
 // LISTENER's `callback(s) ran` check is an --implicit-check-not in a FileCheck
 // run of its own (LISTENER-TICKS), whose one positive line is the one
@@ -181,6 +217,17 @@ const mode = process.argv[2];
 const addonPath = process.argv[3];
 
 const SAPP_KEYCODE_A = 65;
+
+/** What `ui.requestAnimationFrame()` does when called now: `RAF 0` in
+    CLOSING; otherwise it registers (`RAF <id>`) or, with no window ready,
+    throws. */
+function rafResult() {
+  try {
+    return 'RAF ' + ui.requestAnimationFrame(() => {});
+  } catch (e) {
+    return 'RAF threw: ' + e.message;
+  }
+}
 
 function installExitListener() {
   process.on('exit', (code) => console.log(
@@ -275,6 +322,15 @@ async function main() {
       // so a handler here never runs: the trace is what says the Promise
       // was rejected rather than left pending.
       ui.readClipboard().catch(() => {});
+      try {
+        ui.createWindow({width: 320, height: 240});
+        console.log('CREATE returned');
+      } catch (e) {
+        console.log('CREATE threw: ' + e.message);
+      }
+      console.log('NATIVE-RAF ' + addon.requestNativeFrame('late'));
+      // Last before the barrier: its post is attempted by the platform
+      // thread, so its trace line can only follow this listener's own.
       ui.__injectEvent({type: 'KEY_DOWN', keyCode: SAPP_KEYCODE_A});
       console.log('BARRIER ' + ui.__waitPlatformFrames(1));
     });
@@ -293,6 +349,7 @@ if (mode === 'throw') {
   // init_cb precedes the first frame, so by then the window's readiness has
   // been offered to the JS thread and refused one way or the other.
   process.on('exit', (code) => {
+    console.log(rafResult());
     for (let i = 0; i < 8; ++i)
       console.log('EXIT-LINE ' + i + ' code=' + code);
     console.log('BARRIER ' + ui.__waitPlatformFrames(1));
@@ -337,7 +394,9 @@ main().catch((e) => {
 // READS-TRACE: lifecycle: clipboard reads failed sync=0 promise=1
 // READS-TRACE: command refused (closing): read-clipboard
 
-// COMMANDS: BARRIER true
+// COMMANDS: CREATE threw: createWindow: the process is exiting.
+// COMMANDS-NEXT: NATIVE-RAF 0
+// COMMANDS-NEXT: BARRIER true
 // COMMANDS-CODE: EXITCODE 0
 // COMMANDS-TRACE: command title: readback='early title'
 // COMMANDS-TRACE: lifecycle: CLOSING (reason=exit)
@@ -347,9 +406,11 @@ main().catch((e) => {
 // COMMANDS-TRACE: command refused (closing): write-clipboard
 // COMMANDS-TRACE: command refused (closing): read-clipboard
 // COMMANDS-TRACE: clipboard read promise: refused (closing)
+// COMMANDS-TRACE: hnui_request_animation_frame: refused (closing)
 // COMMANDS-TRACE: event dispatch: post refused (dispatcher closed)
 
-// THROW: EXIT-LINE 0 code=1
+// THROW: RAF 0
+// THROW-NEXT: EXIT-LINE 0 code=1
 // THROW: EXIT-LINE 7 code=1
 // THROW-NEXT: BARRIER true
 // THROW-CODE: EXITCODE 1

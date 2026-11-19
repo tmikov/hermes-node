@@ -10,7 +10,10 @@
 
 // A c-ares query whose server never answers must still call back with
 // ETIMEOUT, and a channel must neither keep a finished program alive nor let
-// one with a pending query exit early.
+// one with a pending query exit early. The second half is why the black-hole
+// socket is unref'd: a ref'd socket would keep the loop alive by itself, and
+// the test would then say nothing about the channel. Node v24 waits for
+// ETIMEOUT with the socket unref'd, and so must this.
 //
 // The per-try timeout is deliberately above one second: the c-ares timeout
 // timer used to be one-shot and capped at 1000 ms, so it fired once, before
@@ -80,6 +83,11 @@ function timeoutCase() {
     received++;
   });
   hole.bind(0, '127.0.0.1', function () {
+    // Unref'd, so that the socket is not what keeps the process alive while
+    // the query is pending: the channel must hold the loop by itself, as
+    // Node's does, or the process ends before ETIMEOUT and PASS never
+    // prints.
+    hole.unref();
     var resolver = new dns.Resolver({timeout: TIMEOUT_MS, tries: TRIES});
     resolver.setServers(['127.0.0.1:' + hole.address().port]);
     var calls = 0;

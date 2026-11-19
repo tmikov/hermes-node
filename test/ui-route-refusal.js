@@ -63,7 +63,11 @@
 // createWindow took, so the loop drains, runHermesNode reaches its end, and
 // the pre-cleanup hook exits with the program's own process.exitCode.
 // (Mutation: remove that release from rejectWith, and the run hangs until
-// `timeout` kills it, status 124.)
+// `timeout` kills it, status 124.) Its 'exit' listener prints what
+// requestAnimationFrame answers, which is `RAF 0` only if the hook entered
+// CLOSING (from FAILED) before the listener ran. (Mutation: move
+// runHermesNode's kRuntimeReturn hook call below the 'exit' emit, and the
+// listener prints `RAF threw: ... no window exists yet ...`.)
 //
 // RUN: timeout 60 env HERMES_NODE_UI_GL_ROUTE=bogus HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s return > %t.ret.out 2> %t.ret.err; echo "EXITCODE $?" | %FileCheck --check-prefix=RETCODE %s
 // RUN: %FileCheck --check-prefix=RET %s < %t.ret.out
@@ -72,6 +76,20 @@
 const ui = require('hermes-node:ui');
 
 const returnAfterRejection = process.argv[2] === 'return';
+
+if (returnAfterRejection) {
+  // In CLOSING requestAnimationFrame answers 0; in FAILED, which is where the
+  // window is until the runtime-return hook enters CLOSING, it throws "no
+  // window exists yet". So this line says which of the two the 'exit'
+  // listener ran in.
+  process.on('exit', () => {
+    try {
+      console.log('RAF ' + ui.requestAnimationFrame(() => {}));
+    } catch (e) {
+      console.log('RAF threw: ' + e.message);
+    }
+  });
+}
 
 ui.createWindow({width: 320, height: 240, title: 'route refusal'}).then(
     () => {
@@ -90,6 +108,7 @@ ui.createWindow({width: 320, height: 240, title: 'route refusal'}).then(
     });
 
 // RET: REJECTED {{.*}}unknown value for HERMES_NODE_UI_GL_ROUTE: 'bogus'
+// RET-NEXT: RAF 0
 // RETCODE: EXITCODE 5
 // RETERR: lifecycle: FAILED
 // RETERR: lifecycle: event-loop handle released

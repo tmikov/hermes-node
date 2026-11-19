@@ -32,10 +32,21 @@
 // fail in.
 //
 // REQUIRES: ui && !ui-gpu
-// RUN: timeout 60 %hermes-node-ui %s > %t.out 2> %t.err; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %hermes-node-ui %s > %t.out 2> %t.err; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck --check-prefix=OUT %s < %t.out
 
 'use strict';
+
+// Bounded from inside the script, because macOS -- where this test runs --
+// has no `timeout` binary. The timer is unref'd, so it never keeps the run
+// alive by itself; it fires only if something else holds the loop open, and
+// then fails the run. It cannot bound a hang in native code once the script
+// has finished; lit's missing per-test timeout (dz 01a0d797-e326) is the gap
+// there.
+setTimeout(() => {
+  console.log('WATCHDOG: the run did not end within 60 s');
+  process.exit(124);
+}, 60000).unref();
 
 const ui = require('hermes-node:ui');
 
