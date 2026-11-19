@@ -79,9 +79,11 @@
 ///   - No further event is delivered: native event listeners are no longer
 ///     called, and neither are JavaScript ones. (The one exception is the
 ///     event being delivered when CLOSING began, when that happens inside
-///     its own delivery and does not end the process at once -- only
-///     possible when `process.exit` has been replaced by a function that
-///     returns. That event's remaining listeners still run.)
+///     its own delivery and does not end the process at once: for example
+///     when `process.exit` has been replaced by something that returns or
+///     is not a function, or when a listener catches what `win.close()`
+///     threw. That event's remaining listeners still run, so a listener
+///     must not assume it is called only while the window is open.)
 ///   - `hnui_cancel_close` returns false.
 ///   - `hnui_set_cursor`, `hnui_show_cursor`, `hnui_lock_pointer` and
 ///     `hnui_write_clipboard` drop the request without telling the caller

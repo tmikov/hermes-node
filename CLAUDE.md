@@ -1403,12 +1403,18 @@ Metal backend, and Task 17, the full gated suite, are not.
   the suite run on an Apple-silicon Mac with `HERMES_NODE_ENABLE_UI=ON`.
   There is no GPU backend there yet, so window tests are unsupported and
   `ui_module_nowindow.cpp` is what runs; every UI test not gated on `ui-gpu`
-  or `display` runs there, and must be written for BSD userland with no
-  `timeout` binary: such a test bounds itself from inside the script, with
-  an unref'd watchdog timer (`test/ui-no-window-support.js`,
-  `test/test-dns-timeout.js`). Tests gated on `ui-gpu` or `display` run only
-  on Linux today and keep `timeout <n>` on their RUN lines; that changes
-  when a Metal backend makes `ui-gpu` true on macOS.
+  or `display` runs there, and must be written for BSD userland without
+  relying on a `timeout` command: macOS 27 ships one in `/usr/bin` (Apple's
+  own, which accepts `timeout <n> <command>` and `--foreground` but not
+  GNU's other spellings), older releases ship none, and no test on `master`
+  uses one. Such a test bounds itself from inside the script, with an
+  unref'd watchdog timer (`test/ui-no-window-support.js`,
+  `test/test-dns-timeout.js`). That is a weaker bound than `timeout`: it
+  ends a run that a handle is holding open, and cannot fire while the JS
+  thread is blocked or after the script has finished. Tests gated on
+  `ui-gpu` or `display` run only on Linux today and keep `timeout <n>` on
+  their RUN lines; that changes when a Metal backend makes `ui-gpu` true on
+  macOS.
 - Known defects and limitations live in `dz/`, not here — `dz list`.
 
 ## Test Infrastructure

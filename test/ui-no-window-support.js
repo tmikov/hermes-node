@@ -37,12 +37,13 @@
 
 'use strict';
 
-// Bounded from inside the script, because macOS -- where this test runs --
-// has no `timeout` binary. The timer is unref'd, so it never keeps the run
-// alive by itself; it fires only if something else holds the loop open, and
-// then fails the run. It cannot bound a hang in native code once the script
-// has finished; lit's missing per-test timeout (dz 01a0d797-e326) is the gap
-// there.
+// Bounded from inside the script and not by a `timeout` command on the RUN
+// line: this test runs on macOS, where older releases ship none. The timer
+// is unref'd, so it never keeps the run alive by itself; it fires only if
+// something else holds the loop open, and then fails the run. That is all
+// it bounds: it cannot fire while the JS thread is blocked, or once the
+// script has finished and native code hangs. lit's missing per-test timeout
+// (dz 01a0d797-e326) is the gap there.
 setTimeout(() => {
   console.log('WATCHDOG: the run did not end within 60 s');
   process.exit(124);

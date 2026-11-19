@@ -284,8 +284,7 @@ whichever it chooses.
 needed" only on Linux.** `test/ui-exit-tty.js` and `test/ui-route-refusal.js`
 (all three of its runs, RET included) get there through
 `HERMES_NODE_UI_GL_ROUTE=bogus`, which only the GL backend refuses; they are
-gated on `ui-gpu` without `display`, and their RUN lines use `timeout` and
-`timeout --foreground`, which a stock macOS lacks. Once a Metal backend makes
+gated on `ui-gpu` without `display`, and their RUN lines use `timeout` and `timeout --foreground`. Three more tests are gated on `ui-gpu` without `display` and will start running on macOS the same day: `test/ui-null-window.js`, `test/ui-version-check.js` and `test/ui-exit-late-require.js`; check each against the Metal backend too. On `timeout`: macOS 27 ships one in `/usr/bin` that accepts `timeout <n> <command>` and `--foreground` (measured on the Mac, 2026-11-19), older releases ship none, and 46 RUN lines in the window tests use the plain form. Once a Metal backend makes
 `ui-gpu` true on macOS, each will either open a real window or fail. Task 16
 must re-gate them (on a GL-route feature, or `linux`), or give them a route
 the Metal backend refuses before `sapp_run()` too, and bound them without

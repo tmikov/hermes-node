@@ -15,6 +15,7 @@
 #include <backend.h>
 #include <test_hooks.h>
 #include <ui_trace.h>
+#include <algorithm>
 
 #include <hermes/node-compat/ui/hnui_abi.h>
 
@@ -1094,11 +1095,28 @@ void installFrameGlobals() {
   }
 }
 
+/// Defined with the exit hooks below.
+bool isModuleEnv(napi_env env, bool record);
+
 napi_value createWindow(napi_env env, napi_callback_info info) {
   // From an 'exit' listener, or after any path that entered CLOSING: a
   // window opened now would open into a process on its way out.
   if (uiClosing()) {
     napi_throw_error(env, nullptr, "createWindow: the process is exiting.");
+    return nullptr;
+  }
+
+  // Only the runtime the module belongs to may open the window: the exit
+  // hooks act for that runtime alone (isModuleEnv()), so a window opened by
+  // another one would get neither CLOSING nor the pre-cleanup `_exit()` when
+  // its runtime ended. No second runtime exists today (hermes-node-ui
+  // refuses --inspect); this keeps the rule true if one ever does.
+  if (!isModuleEnv(env, /*record*/ false)) {
+    napi_throw_error(
+        env,
+        nullptr,
+        "createWindow: this runtime is not the one hermes-node:ui was first "
+        "loaded in.");
     return nullptr;
   }
 
@@ -1494,7 +1512,13 @@ namespace {
 bool isModuleEnv(napi_env env, bool record) {
   std::lock_guard<std::mutex> lock(gMutex);
   if (gModuleEnv == nullptr) {
-    if (record)
+    // Once per runtime: a program can call process._preExit() itself, any
+    // number of times.
+    if (record &&
+        std::find(
+            gEnvsExitedBeforeModule.begin(),
+            gEnvsExitedBeforeModule.end(),
+            env) == gEnvsExitedBeforeModule.end())
       gEnvsExitedBeforeModule.push_back(env);
     return false;
   }
