@@ -399,7 +399,10 @@ class ClipboardRequests {
   /// registry. A JavaScript `readClipboard()` Promise is not here; its
   /// counterpart is `uiFailPendingClipboardReads()`
   /// (`tools/hermes-node-ui/ui_events.h`), and shutdown calls both.
-  void failAll(ClipboardStatus status);
+  ///
+  /// \return how many requests it completed: those whose waiter was still
+  ///   alive. An abandoned entry is forgotten but not counted.
+  size_t failAll(ClipboardStatus status);
 
  private:
   std::mutex mutex_;

@@ -22,9 +22,10 @@
 //              have returned its previous buffer here, which is the defect
 //              this whole read exists to remove (spec: Clipboard read)
 //   FAIL-PENDING  (under MUTE) a Promise read still outstanding is
-//              rejected with ERR_CLIPBOARD_FAILED by the test hook standing
-//              in for Task 15's shutdown (uiFailPendingClipboardReads), and
-//              the platform thread's reply that follows settles nothing
+//              rejected with ERR_CLIPBOARD_FAILED by the test hook that runs
+//              what entering CLOSING runs (uiFailPendingClipboardReads),
+//              without the rest of CLOSING, so that the platform thread's
+//              reply that follows can be seen to settle nothing
 //   LATE       the fixture answers read N only when read N+1's request
 //              arrives, with 'reply-1'. Read N times out; read N+1 receives
 //              N's SelectionNotify while it waits, recognises it by its

@@ -50,7 +50,9 @@ napi_value uiWriteClipboard(napi_env env, napi_callback_info info);
 /// `kClipboardReply` event, which uiDispatchEvents() turns into the
 /// settlement: kOk resolves with the text, kUnavailable with `''`, and the
 /// rest reject with an Error whose `code` is `ERR_CLIPBOARD_TIMEOUT`,
-/// `ERR_CLIPBOARD_TOO_LARGE` or `ERR_CLIPBOARD_FAILED`. Throws, as
+/// `ERR_CLIPBOARD_TOO_LARGE` or `ERR_CLIPBOARD_FAILED`. Once the window is
+/// CLOSING the Promise it returns is already rejected with
+/// `ERR_CLIPBOARD_FAILED`, since the command is refused. Throws, as
 /// `writeClipboard` does, when no window has been requested: nothing would
 /// drain the command, so the Promise would never settle.
 napi_value uiReadClipboard(napi_env env, napi_callback_info info);
@@ -60,10 +62,13 @@ napi_value uiReadClipboard(napi_env env, napi_callback_info info);
 /// arrives afterwards settles nothing (it is traced and ignored). The
 /// Promise half of "shutdown and setup failure complete outstanding
 /// requests with an error"; `ClipboardRequests::failAll` is the
-/// synchronous half. **Task 15 calls the two together when CLOSING is
-/// entered.** Until then its only caller is the `__failPendingClipboardReads`
-/// test hook. JS thread only.
-void uiFailPendingClipboardReads(napi_env env);
+/// synchronous half. `uiEnterClosing()` calls the two together, and then
+/// runs the tick callback so the rejection handlers run before the 'exit'
+/// listeners; the `__failPendingClipboardReads` test hook calls this alone.
+/// JS thread only.
+///
+/// \return how many Promises it rejected.
+size_t uiFailPendingClipboardReads(napi_env env);
 
 /// Deliver every queued event, in order, through `w->events`.
 ///

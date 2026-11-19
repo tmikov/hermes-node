@@ -157,7 +157,12 @@ bool uiWindowRequested();
 /// frame that runs. Not safe to call from the platform thread (it would
 /// answer itself next frame, which is harmless but not what the queue is
 /// for).
-void uiPushCommand(Command command);
+///
+/// False, with nothing queued, once the window is CLOSING: the refusal is
+/// traced (`command refused (closing): <name>`) and never thrown. Callers
+/// that only issue a command ignore the result; the two clipboard reads use
+/// it to fail at once instead of waiting for an answer that cannot come.
+bool uiPushCommand(Command command);
 
 /// The deadline a clipboard read gets when nobody names one: a JavaScript
 /// `readClipboard()`, and the read behind a `paste` event.

@@ -166,12 +166,12 @@ void maybeCapture() {
         static_cast<unsigned long long>(observed.publicationId),
         width,
         height);
-    // The dropped bool, same shape as the tick post in onFrame() and with
-    // the same owner: a refused post here leaves __captureFrame()'s
-    // Promise unsettled, bounded only by the caller's own timeout. Only
-    // reachable once the dispatcher is closed (Task 15).
-    if (gDispatch != nullptr)
-      gDispatch->post(onCaptureFinished);
+    // A refused post -- the dispatcher was closed by CLOSING -- leaves
+    // __captureFrame()'s Promise unsettled. The JS thread has already
+    // abandoned it (uiTestHooksAbandonCapture), so nothing waits on it; the
+    // window is a match that was under way when CLOSING began.
+    if (gDispatch == nullptr || !gDispatch->post(onCaptureFinished))
+      uiTrace("capture: post refused (dispatcher closed)");
     return;
   }
 
@@ -191,9 +191,9 @@ void maybeCapture() {
         "was presenting",
         framesObserved,
         static_cast<unsigned long long>(observed.publicationId));
-    // As above: a refused post leaves the Promise unsettled (Task 15).
-    if (gDispatch != nullptr)
-      gDispatch->post(onCaptureFinished);
+    // As above: a refused post leaves the abandoned Promise unsettled.
+    if (gDispatch == nullptr || !gDispatch->post(onCaptureFinished))
+      uiTrace("capture: post refused (dispatcher closed)");
   }
 }
 
@@ -620,8 +620,10 @@ void onInit() {
     // process teardown.
     gStartupError = error;
     gStartupFailed = true;
-    if (gDispatch != nullptr)
-      gDispatch->post(onStartupFailed);
+    // Refused once the JS thread is CLOSING: the rejection is never
+    // delivered, and this thread presents its clear colour until _exit().
+    if (gDispatch == nullptr || !gDispatch->post(onStartupFailed))
+      uiTrace("init_cb: post refused (dispatcher closed)");
     return;
   }
 
@@ -629,8 +631,11 @@ void onInit() {
   gMetrics = gTracked;
 
   uiTrace("init_cb: shared context ready");
-  if (gDispatch != nullptr)
-    gDispatch->post(onSharedContextReady);
+  // Refused once the JS thread is CLOSING: the window's readiness is never
+  // delivered, gPresentReady stays false, and this thread presents its
+  // clear colour until _exit().
+  if (gDispatch == nullptr || !gDispatch->post(onSharedContextReady))
+    uiTrace("init_cb: post refused (dispatcher closed)");
 }
 
 /// The presenting half, once per platform frame: take a newly published
@@ -831,8 +836,8 @@ int uiRunPlatformLoop() {
     // thread after this returns.
     gStartupError = error;
     gStartupFailed = true;
-    if (gDispatch != nullptr)
-      gDispatch->post(onStartupFailed);
+    if (gDispatch == nullptr || !gDispatch->post(onStartupFailed))
+      uiTrace("startup failure: post refused (dispatcher closed)");
     return 1;
   }
 

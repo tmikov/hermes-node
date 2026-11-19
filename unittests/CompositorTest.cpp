@@ -1891,7 +1891,8 @@ TEST(
   // would read as kTimeout rather than as a pass.
   ClipboardResult gotA;
   std::thread waiter([&] { gotA = a->wait(10000); });
-  reqs.failAll(ClipboardStatus::kError);
+  // The count is of requests it completed: both waiters are alive.
+  EXPECT_EQ(reqs.failAll(ClipboardStatus::kError), 2u);
   waiter.join();
   EXPECT_EQ(gotA.status, ClipboardStatus::kError);
   EXPECT_EQ(b->wait(10000).status, ClipboardStatus::kError);
@@ -1903,6 +1904,8 @@ TEST(
   ClipboardResult again = a->wait(0);
   EXPECT_EQ(again.status, ClipboardStatus::kError);
   EXPECT_TRUE(again.text.empty());
+  // Nothing is left for a second call to complete.
+  EXPECT_EQ(reqs.failAll(ClipboardStatus::kError), 0u);
 
   // And the registry still serves requests made after it.
   auto c = reqs.create();
@@ -1910,7 +1913,9 @@ TEST(
   EXPECT_EQ(c->wait(1000).text, "c");
 }
 // Mutation: make failAll() a no-op. Fails: gotA is kTimeout after 10 s,
-// and the late answer is accepted.
+// and the late answer is accepted. Mutation: drop pending_.clear(). Fails:
+// the late answer is accepted, and the second failAll() completes b again
+// (returns 1).
 
 TEST(ChannelsTest, ALateReplyToATimedOutRequestCannotSatisfyTheNextOne) {
   // This is the defect the retained per-request slot exists to prevent.

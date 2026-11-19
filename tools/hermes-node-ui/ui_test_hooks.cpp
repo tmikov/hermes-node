@@ -118,6 +118,21 @@ void onCaptureFinished() {
   napi_close_handle_scope(gEnv, scope);
 }
 
+void uiTestHooksAbandonCapture() {
+  if (!uiTestHooksEnabled())
+    return;
+  // Cancelled first, so that the platform thread's maybeCapture() stops at
+  // its pending() check from here on rather than matching a frame whose
+  // result could only be delivered by a post the closed dispatcher refuses.
+  // A match already under way may still try that post; it is refused and
+  // traced there (`capture: post refused (dispatcher closed)`).
+  gCapture.cancel();
+  if (gCaptureDeferred == nullptr)
+    return;
+  gCaptureDeferred = nullptr;
+  uiTrace("capture: abandoned (closing)");
+}
+
 /// `__captureFrame(options)` -- the JavaScript end of the frame-capture
 /// test hook (`test_hooks.h`).
 ///
@@ -256,8 +271,9 @@ napi_value releaseProducerCompletions(napi_env env, napi_callback_info info) {
   return undefined;
 }
 
-/// `__failPendingClipboardReads()`: what Task 15's shutdown will do to the
-/// Promise reads, reachable now so the mechanism has a caller and a test.
+/// `__failPendingClipboardReads()`: what entering CLOSING does to the
+/// Promise reads, without the rest of CLOSING, so that a test can watch a
+/// late reply settle nothing in a process that carries on.
 napi_value failPendingClipboardReads(napi_env env, napi_callback_info info) {
   (void)info;
   uiFailPendingClipboardReads(env);

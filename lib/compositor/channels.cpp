@@ -336,7 +336,7 @@ bool ClipboardRequests::answer(uint64_t id, ClipboardResult result) {
   return true;
 }
 
-void ClipboardRequests::failAll(ClipboardStatus status) {
+size_t ClipboardRequests::failAll(ClipboardStatus status) {
   std::vector<std::shared_ptr<ClipboardRequest>> live;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -352,6 +352,7 @@ void ClipboardRequests::failAll(ClipboardStatus status) {
   // Fulfilled outside the registry lock, for the reason answer() gives.
   for (auto &slot : live)
     slot->fulfill(ClipboardResult{status, std::string()});
+  return live.size();
 }
 
 } // namespace node_compat

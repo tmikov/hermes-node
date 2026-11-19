@@ -39,10 +39,69 @@
 //            inFrameCallback and haveSlot, set in uiEnterClosing, and
 //            target=true -- either one cleared alone is enough for
 //            hnui_frame_target to refuse; skip releaseAll, and the trace
-//            reads released=0.)
+//            reads released=0.) Nothing checks that CB2 did not run: the
+//            'exit' listener's own line follows CB1 directly (FRAME-NEXT),
+//            and process.exit() never returns into the batch, so no
+//            mutation of the closing code could make it run.
 //  FATAL     an uncaught throw in a timer. `process._fatalException`
 //            enters CLOSING through `process._preExit()` before it emits
 //            'exit'. (Mutation: delete that call, and rafRefused=false.)
+//  READS     a `readClipboard()` Promise still pending when process.exit(0)
+//            runs -- pending by construction, since its reply can only be
+//            delivered by a dispatch and the JS thread has not gone back to
+//            the loop -- is rejected with ERR_CLIPBOARD_FAILED, and its
+//            rejection handler runs before the 'exit' listeners (ORDER). A
+//            synchronous read from the 'exit' listener is refused at once
+//            with HNUI_ERROR rather than reaching the platform thread.
+//            (Mutations: drop the uiRunTickCallback call, and ORDER is just
+//            `exit`; drop the uiFailPendingClipboardReads call, and the
+//            summary reads promise=0 and ORDER is `exit`; let uiPushCommand
+//            accept while closing, and the sync read is answered by the
+//            platform thread: SYNC status=HNUI_UNAVAILABLE.) The
+//            `ClipboardRequests::failAll` call has no observable of its own
+//            here beyond the `sync=0` it returns: a synchronous read blocks
+//            the only thread that can enter CLOSING, so none can be pending
+//            at that moment. Its behaviour is pinned by the GTest
+//            ClipboardRequestTest.FailAllCompletesEveryWaiterAndALaterAnswerIsRefused,
+//            not by this file.
+//  COMMANDS  the window's commands are unavailable to 'exit' listeners: a
+//            title, a cursor and a clipboard write issued there are refused
+//            and traced, an event injected there is pushed but its dispatch
+//            post is refused, and an outstanding `__captureFrame` request is
+//            abandoned. `__waitPlatformFrames(1)` at the end of the listener
+//            is what makes the refusals mean something: the frame that
+//            began after it drained the command queue -- so an accepted
+//            'late title' would have been read back -- and the injector, so
+//            the event's post was attempted. (Mutations: let uiPushCommand
+//            accept while closing, and readback='late title' appears (and
+//            the refusal lines go); keep the refusal trace but queue the
+//            command anyway, and only the 'late title' check fails. That
+//            check is an --implicit-check-not, for the reason LISTENER's
+//            is: the read-back is printed by the barrier frame BEFORE that
+//            frame attempts the event's post, so a CHECK-NOT after the last
+//            positive line could not see it;
+//            remove gDispatch->close() from uiEnterClosing, and the
+//            `post refused` line is gone; remove the
+//            uiTestHooksAbandonCapture() call, and its line is gone.)
+//
+// Not pinned here: the `gTable->beginClosing()` call inside uiEnterClosing.
+// Without it the platform thread could still send a tick after CLOSING, but
+// that tick would be refused by the closed dispatcher a few instructions
+// later, and the window between the gate and the post is not something a
+// test can hit deterministically.
+// TickMachineTest.NoTickIsSentOnceTheTableIsClosing pins the table's gate,
+// not the call that closes it.
+//
+// LISTENER's `callback(s) ran` check is an --implicit-check-not in a FileCheck
+// run of its own (LISTENER-TICKS), whose one positive line is the one
+// legitimate tick -- the frame LISTENER waits for before its first KEY_DOWN.
+// So it covers the whole trace. It cannot share LISTENER-TRACE's run: the
+// stray tick lands between the two -DAG lines (the dispatch and the tick are
+// drained in whichever order they were posted, which varies), and FileCheck
+// checks no NOT inside a DAG group's span. It is the only line that catches a
+// closing drain that runs the tick while still tracing its refusal (mutation:
+// keep runFrameTick's `refused (closing)` trace but drop the return after
+// it; the tick then prints `0 callback(s) ran` and every other line passes).
 //
 // REQUIRES: ui, ui-gpu
 // REQUIRES: display
@@ -53,6 +112,7 @@
 // RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s listener %hnui_demo_addon > %t.listener.out 2> %t.listener.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=LISTENER-CODE %s
 // RUN: %FileCheck --check-prefix=LISTENER %s < %t.listener.out
 // RUN: %FileCheck --check-prefix=LISTENER-TRACE --implicit-check-not=AddressSanitizer %s < %t.listener.err
+// RUN: %FileCheck --check-prefix=LISTENER-TICKS --implicit-check-not='callback(s) ran' %s < %t.listener.err
 //
 // RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s frame %hnui_demo_addon > %t.frame.out 2> %t.frame.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=FRAME-CODE %s
 // RUN: %FileCheck --check-prefix=FRAME %s < %t.frame.out
@@ -61,6 +121,14 @@
 // RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s fatal %hnui_demo_addon > %t.fatal.out 2> %t.fatal.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=FATAL-CODE %s
 // RUN: %FileCheck --check-prefix=FATAL %s < %t.fatal.out
 // RUN: %FileCheck --check-prefix=FATAL-TRACE --implicit-check-not=AddressSanitizer %s < %t.fatal.err
+//
+// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s reads %hnui_demo_addon > %t.reads.out 2> %t.reads.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=READS-CODE %s
+// RUN: %FileCheck --check-prefix=READS %s < %t.reads.out
+// RUN: %FileCheck --check-prefix=READS-TRACE --implicit-check-not=AddressSanitizer %s < %t.reads.err
+//
+// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s commands %hnui_demo_addon > %t.commands.out 2> %t.commands.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=COMMANDS-CODE %s
+// RUN: %FileCheck --check-prefix=COMMANDS %s < %t.commands.out
+// RUN: %FileCheck --check-prefix=COMMANDS-TRACE --implicit-check-not=AddressSanitizer --implicit-check-not='late title' %s < %t.commands.err
 
 'use strict';
 
@@ -131,6 +199,42 @@ async function main() {
     return;
   }
 
+  if (mode === 'reads') {
+    const order = [];
+    process.on('exit', () => {
+      order.push('exit');
+      console.log('ORDER ' + order.join(','));
+      console.log('SYNC status=' + addon.readClipboardSync(5000).status);
+    });
+    setTimeout(() => {
+      ui.readClipboard().then(
+          () => order.push('resolved'),
+          (e) => order.push('rejected:' + e.code));
+      process.exit(0);
+    }, 1);
+    return;
+  }
+
+  if (mode === 'commands') {
+    win.title = 'early title';
+    // The frame that begins after this call drains the command queue, so
+    // the early title has been applied, and read back, when it returns.
+    ui.__waitPlatformFrames(1);
+    // A request that can never match and never gives up: outstanding when
+    // CLOSING begins.
+    ui.__captureFrame({publicationId: 999, giveUpAfterFrames: 0})
+        .catch(() => {});
+    process.on('exit', () => {
+      win.title = 'late title';
+      win.setCursor('ibeam');
+      ui.writeClipboard('late');
+      ui.__injectEvent({type: 'KEY_DOWN', keyCode: SAPP_KEYCODE_A});
+      console.log('BARRIER ' + ui.__waitPlatformFrames(1));
+    });
+    setTimeout(() => process.exit(0), 1);
+    return;
+  }
+
   console.log('unknown mode ' + mode);
   process.exit(2);
 }
@@ -144,17 +248,16 @@ main().catch((e) => {
 // LISTENER-NOT: FRAME-AFTER-EXIT
 // LISTENER-NOT: SECOND-KEY-DELIVERED
 // LISTENER-CODE: EXITCODE 0
+// LISTENER-TICKS: frame tick: 1 callback(s) ran
 // LISTENER-TRACE: lifecycle: CLOSING (reason=exit)
 // LISTENER-TRACE-DAG: event dispatch: refused (closing)
 // LISTENER-TRACE-DAG: frame tick: refused (closing)
 // LISTENER-TRACE: lifecycle: dispatcher closed
 // LISTENER-TRACE: lifecycle: event-loop handle released
 // LISTENER-TRACE: requestAnimationFrame: refused (closing)
-// LISTENER-TRACE-NOT: callback(s) ran
 
 // FRAME: CB1
 // FRAME-NEXT: EXIT code=4 target=false
-// FRAME-NOT: CB2-RAN
 // FRAME-CODE: EXITCODE 4
 // FRAME-TRACE: lifecycle: CLOSING (reason=exit)
 // FRAME-TRACE: lifecycle: frame callbacks released=2
@@ -163,3 +266,21 @@ main().catch((e) => {
 // FATAL-CODE: EXITCODE 1
 // FATAL-TRACE: lifecycle: CLOSING (reason=fatal)
 // FATAL-TRACE: Error: boom in timer
+
+// READS: ORDER rejected:ERR_CLIPBOARD_FAILED,exit
+// READS-NEXT: SYNC status=HNUI_ERROR
+// READS-CODE: EXITCODE 0
+// READS-TRACE: lifecycle: CLOSING (reason=exit)
+// READS-TRACE: clipboard read promise #1: failed by uiFailPendingClipboardReads
+// READS-TRACE: lifecycle: clipboard reads failed sync=0 promise=1
+// READS-TRACE: command refused (closing): read-clipboard
+
+// COMMANDS: BARRIER true
+// COMMANDS-CODE: EXITCODE 0
+// COMMANDS-TRACE: command title: readback='early title'
+// COMMANDS-TRACE: lifecycle: CLOSING (reason=exit)
+// COMMANDS-TRACE: capture: abandoned (closing)
+// COMMANDS-TRACE: command refused (closing): title
+// COMMANDS-TRACE: command refused (closing): cursor
+// COMMANDS-TRACE: command refused (closing): write-clipboard
+// COMMANDS-TRACE: event dispatch: post refused (dispatcher closed)

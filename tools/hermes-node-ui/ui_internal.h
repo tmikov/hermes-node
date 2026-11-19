@@ -125,8 +125,9 @@ extern CommandQueue gCommands;
 /// Atomic, both threads: set by postEventDispatch() and drainInjectedEvents()
 /// (platform), cleared by runEventDispatch() (JS) and drainInjectedEvents().
 extern std::atomic<bool> gDispatchPosted;
-/// Any thread, own lock: the JS thread creates slots and blocks on them, the
-/// platform thread answers them in applyReadClipboard().
+/// Any thread, own lock: the JS thread creates slots and blocks on them, and
+/// fails them all in uiEnterClosing(); the platform thread answers them in
+/// applyReadClipboard().
 extern ClipboardRequests gClipboardReads;
 
 // --- Defined in ui_test_hooks.cpp ------------------------------------------
@@ -135,7 +136,8 @@ extern ClipboardRequests gClipboardReads;
 /// completions pass through it on whichever thread runs them.
 extern CompletionGate gGate;
 /// Any thread, own lock: captureFrame() (JS) requests and cancels,
-/// maybeCapture() (platform) matches and cancels.
+/// uiTestHooksAbandonCapture() (JS) cancels, maybeCapture() (platform)
+/// matches and cancels.
 extern FrameCapture gCapture;
 /// Any thread, own lock: injectEvent() (JS) pushes, drainInjectedEvents()
 /// (platform) takes.
@@ -191,6 +193,12 @@ napi_value holdProducerCompletions(napi_env env, napi_callback_info info);
 napi_value releaseProducerCompletions(napi_env env, napi_callback_info info);
 /// JS thread (NAPI); exported by initUiModule() only when the hooks are on.
 napi_value failPendingClipboardReads(napi_env env, napi_callback_info info);
+/// JS thread, called by uiEnterClosing(). Cancels a pending capture request
+/// (gCapture, so the platform thread stops matching) and forgets its
+/// Promise, which then never settles. Traces `capture: abandoned (closing)`
+/// only when there was a Promise to abandon. Does nothing with the hooks
+/// off.
+void uiTestHooksAbandonCapture();
 /// JS thread (NAPI); exported by initUiModule() only when the hooks are on.
 napi_value injectEvent(napi_env env, napi_callback_info info);
 /// JS thread (NAPI); exported by initUiModule() only when the hooks are on.

@@ -215,16 +215,19 @@ bool takeReferencedHandle(uv_loop_t *loop) {
 /// loop, so the allocation is handed to that callback rather than freed
 /// here -- the same ownership split OwnerDispatch uses for its own handle.
 ///
-/// Also the last step of uiEnterClosing(). Traced only when it actually
-/// closes a handle, so the line records a release that happened.
-void releaseReferencedHandle() {
+/// Also a step of uiEnterClosing(). Untraced here: each caller traces in
+/// its own words, and only when this returned true, so a line records a
+/// release that happened and says which path made it.
+///
+/// \return true if a handle was closed.
+bool releaseReferencedHandle() {
   if (gKeepAlive == nullptr)
-    return;
+    return false;
   uv_close(reinterpret_cast<uv_handle_t *>(gKeepAlive), [](uv_handle_t *h) {
     delete reinterpret_cast<uv_async_t *>(h);
   });
   gKeepAlive = nullptr;
-  uiTrace("lifecycle: event-loop handle released");
+  return true;
 }
 
 //===========================================================================
@@ -599,11 +602,18 @@ void openEventDelivery() {
 void postEventDispatch() {
   if (gDispatchPosted.exchange(true))
     return;
-  // post() refuses only once the dispatcher is closed, which is Task 15's
-  // teardown. The events stay queued, and the flag is put back so that a
-  // later event tries again instead of finding it stuck at "posted".
-  if (gDispatch == nullptr || !gDispatch->post(runEventDispatch))
+  // post() refuses once uiEnterClosing() has closed the dispatcher. The
+  // events stay queued and are never delivered; the flag is put back, as it
+  // always was, so that it is never left claiming a post that did not
+  // happen.
+  if (gDispatch == nullptr) {
     gDispatchPosted.store(false);
+    return;
+  }
+  if (!gDispatch->post(runEventDispatch)) {
+    gDispatchPosted.store(false);
+    uiTrace("event dispatch: post refused (dispatcher closed)");
+  }
 }
 
 namespace {
@@ -796,8 +806,12 @@ void onSharedContextReady() {
   // them there until delivery opens. Opened from a post, so that the
   // script's `await createWindow()` continuation has run first: see
   // openEventDelivery().
-  if (gDispatch != nullptr)
-    gDispatch->post(openEventDelivery);
+  //
+  // A refusal is unreachable by construction: this function runs on the
+  // thread that closes the dispatcher, and returned above if it was
+  // CLOSING. Checked and traced anyway, so that it would be seen.
+  if (gDispatch != nullptr && !gDispatch->post(openEventDelivery))
+    uiTrace("event delivery: post refused (dispatcher closed)");
 }
 
 void onStartupFailed() {
@@ -1128,7 +1142,8 @@ napi_value createWindow(napi_env env, napi_callback_info info) {
     // ~OwnerDispatch closes on this thread, which is its owner thread --
     // the requirement its own header states -- since createWindow runs on
     // the JS thread that owns the loop.
-    releaseReferencedHandle();
+    if (releaseReferencedHandle())
+      uiTrace("createWindow: event-loop handle released (no Promise)");
     delete gDispatch;
     gDispatch = nullptr;
     gEnv = nullptr;
@@ -1291,6 +1306,23 @@ void uiEnterClosing(UiCloseReason reason) {
     uiTrace("lifecycle: frame callbacks released=%d", released);
   }
 
+  // Outstanding clipboard reads of both kinds complete with an error (spec:
+  // Lifecycle). A synchronous read blocks the only thread that can get
+  // here, so none can be waiting now; failAll() still runs, and forgets the
+  // registry's entries so that a reply in flight is refused. The Promise
+  // reads are rejected now and their handlers run at the end of this
+  // function, below.
+  const size_t syncFailed = gClipboardReads.failAll(ClipboardStatus::kError);
+  const size_t promiseFailed = uiFailPendingClipboardReads(gEnv);
+  uiTrace(
+      "lifecycle: clipboard reads failed sync=%zu promise=%zu",
+      syncFailed,
+      promiseFailed);
+
+  // A capture requested through the test hook is abandoned: its result
+  // could only be delivered by a post, which is about to be refused.
+  uiTestHooksAbandonCapture();
+
   // The synchronized sender shutdown. It drains what was already
   // posted -- every function that can be posted checks uiClosing() and
   // refuses -- and post() returns false on any thread afterwards. Closed,
@@ -1305,7 +1337,18 @@ void uiEnterClosing(UiCloseReason reason) {
   }
 
   // The loop is no longer held open on the window's behalf.
-  releaseReferencedHandle();
+  if (releaseReferencedHandle())
+    uiTrace("lifecycle: event-loop handle released");
+
+  // Last, because it runs program code -- the rejection handlers of the
+  // reads failed above -- and, if that throws with nothing to catch it,
+  // does not return. Only when a Promise was actually rejected, so a
+  // process.exit() with nothing outstanding runs no queued nextTick or
+  // promise callback, which Node's does not either; and never on the fatal
+  // path, where Node runs no further callback after an uncaught exception
+  // and a throwing handler would replace the error being reported.
+  if (promiseFailed > 0 && reason != UiCloseReason::kFatalException)
+    uiRunTickCallback(gEnv);
 }
 
 void uiBeforeExitListeners(napi_env env, ExitReason reason) {
@@ -1332,8 +1375,46 @@ bool uiWindowRequested() {
   return gWindowRequested;
 }
 
-void uiPushCommand(Command command) {
+namespace {
+
+/// The name a refused command is traced under.
+const char *commandName(Command::Kind kind) {
+  switch (kind) {
+    case Command::Kind::kSetTitle:
+      return "title";
+    case Command::Kind::kSetFullscreen:
+      return "fullscreen";
+    case Command::Kind::kSetIcon:
+      return "icon";
+    case Command::Kind::kSetCursor:
+      return "cursor";
+    case Command::Kind::kSetCursorImage:
+      return "custom-cursor";
+    case Command::Kind::kShowCursor:
+      return "show-cursor";
+    case Command::Kind::kLockPointer:
+      return "lock-pointer";
+    case Command::Kind::kReadClipboard:
+      return "read-clipboard";
+    case Command::Kind::kWriteClipboard:
+      return "write-clipboard";
+  }
+  return "unknown";
+}
+
+} // namespace
+
+bool uiPushCommand(Command command) {
+  // Dropped and traced, never thrown or printed (spec: Lifecycle, "platform
+  // commands are unavailable" to 'exit' listeners): a listener that restores
+  // the cursor must not have the rest of its body skipped by an exception
+  // that processExit would swallow.
+  if (uiClosing()) {
+    uiTrace("command refused (closing): %s", commandName(command.kind()));
+    return false;
+  }
   gCommands.push(std::move(command));
+  return true;
 }
 
 ClipboardRequests &uiClipboardReads() {

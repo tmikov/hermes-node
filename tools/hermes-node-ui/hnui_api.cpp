@@ -375,8 +375,14 @@ int hnui_read_clipboard_sync(hnui_window *w, int timeout_ms, char **out) {
   auto slot = hermes::node_compat::uiClipboardReads().create();
   const uint64_t deadline = hermes::node_compat::clipboardClockNs() +
       static_cast<uint64_t>(timeoutMs) * 1000000u;
-  hermes::node_compat::uiPushCommand(
-      Command::readClipboard(slot->id(), /*replyThroughSlot=*/true, deadline));
+  // Refused once the window is CLOSING (an 'exit' listener's read, say):
+  // nothing will answer, so this fails at once rather than waiting out the
+  // timeout. The slot was created only to name the command; it is released
+  // on return, and the registry reaps its expired entry.
+  if (!hermes::node_compat::uiPushCommand(Command::readClipboard(
+          slot->id(), /*replyThroughSlot=*/true, deadline))) {
+    return HNUI_ERROR;
+  }
 
   // Blocks this (the JS) thread. The platform thread answers into the slot
   // directly, never through anything this thread would have to drain, and

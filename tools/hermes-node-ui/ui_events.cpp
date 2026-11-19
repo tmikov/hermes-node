@@ -853,19 +853,19 @@ napi_value uiWriteClipboard(napi_env env, napi_callback_info info) {
   return jsUndefined(env);
 }
 
-void uiFailPendingClipboardReads(napi_env env) {
+size_t uiFailPendingClipboardReads(napi_env env) {
   // Taken out first, so a reply delivered afterwards finds nothing to
   // settle, and a rejection handler that starts a new read gets a fresh
   // entry this loop does not see.
   std::map<uint64_t, napi_deferred> pending;
   pending.swap(gPendingReads);
   if (pending.empty())
-    return;
+    return 0;
   napi_handle_scope scope = nullptr;
   if (napi_open_handle_scope(env, &scope) != napi_ok) {
     // Put back rather than lost; nothing else can settle them.
     gPendingReads.insert(pending.begin(), pending.end());
-    return;
+    return 0;
   }
   for (const auto &entry : pending) {
     uiTrace(
@@ -878,6 +878,7 @@ void uiFailPendingClipboardReads(napi_env env) {
         "readClipboard: the read was abandoned before it was answered.");
   }
   napi_close_handle_scope(env, scope);
+  return pending.size();
 }
 
 napi_value uiReadClipboard(napi_env env, napi_callback_info info) {
@@ -897,11 +898,23 @@ napi_value uiReadClipboard(napi_env env, napi_callback_info info) {
     return nullptr;
 
   const uint64_t id = gNextReadId++;
-  gPendingReads[id] = deferred;
   const uint64_t deadline = clipboardClockNs() +
       static_cast<uint64_t>(kClipboardReadDefaultTimeoutMs) * 1000000u;
-  uiPushCommand(
-      Command::readClipboard(id, /*replyThroughSlot=*/false, deadline));
+  // Recorded only once the command is accepted. A refused one -- the
+  // window is CLOSING -- will never be answered, and its Promise is
+  // rejected here rather than left for a uiFailPendingClipboardReads() that
+  // has already run. Pushing before recording is safe: the reply comes
+  // back through the input queue, which only this thread drains.
+  if (!uiPushCommand(
+          Command::readClipboard(id, /*replyThroughSlot=*/false, deadline))) {
+    rejectRead(
+        env,
+        deferred,
+        "ERR_CLIPBOARD_FAILED",
+        "readClipboard: the window is closing.");
+    return promise;
+  }
+  gPendingReads[id] = deferred;
   return promise;
 }
 
