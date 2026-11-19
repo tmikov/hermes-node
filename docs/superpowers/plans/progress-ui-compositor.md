@@ -11,13 +11,14 @@ Tracks `docs/superpowers/plans/2026-09-21-ui-compositor.md`, which implements
 | A — foundations, no GPU | 1–4 | **complete** | 2026-09-22 |
 | B — one window presenting one known pattern | 5–10 | **complete** | 2026-09-25 |
 | C — the rest of the surface area | 11–14 (as 11a–11d, 12, 13, 14a, 14b) | **complete** | 2026-11-13 |
-| D — lifecycle, Metal, suite | 15–17 | not started | — |
+| D — lifecycle, Metal, suite | 15–17 | Task 15 (as 15a–15f) **complete**; 16 and 17 not started | Task 15: 2026-11-19 |
 
 Slice A: 49 tests in `unittests/CompositorTest.cpp`. Slice B: 33 commits, 75
 files, and the suite at 414 unit tests plus 201 JS tests. Slice C: eight
 tasks, a whole-slice review and one fix wave; the suite stands at 449 unit
 tests and 220 JS tests, with 4 unsupported (one needs `examples/` installed,
-three are CI- or macOS-only gates).
+three are CI- or macOS-only gates). Task 15: six tasks and eight commits;
+the suite stands at 452 unit tests and 224 JS tests, with 4 unsupported.
 
 **First macOS build, 2026-11-19** (Apple M4 Max, macOS 27.2, Apple clang 21,
 ASAN Debug with `HERMES_NODE_ENABLE_UI=ON`): the tree configures and builds
@@ -29,8 +30,23 @@ pass and 25 are unsupported: the 23 gated on `ui-gpu` or `display`,
 `bundle-yargs.js`, and `ui-sokol-validation-feature.js`. That last one
 failed on the first run, because it required only `ui` while asserting a
 `--version` line compiled only with window support; its gate is now
-`ui, ui-gpu`. `test/ui-no-window-support.js` runs there and passes. Nothing
-window- or GPU-related was compiled or run on macOS: that is Task 16.
+`ui, ui-gpu`. `test/ui-no-window-support.js` runs there and passes. No
+window was opened on macOS: that is Task 16.
+
+Later the same day, on the same machine, the Metal half was probed ahead of
+Task 16. The two `sokol_gfx` implementation files compile for Metal as
+Objective-C++ with no warnings; `utils/check-sgp-isolation.py` reads the
+Mach-O objects correctly through Apple's `nm` (156 `sg_*` against 156
+`sgp_*`, and an un-renamed control is refused); and both instances ran
+concurrently on one `MTLDevice` under Metal API and GPU validation. That run
+was offscreen and clear-only -- no drawable, presentation, shader or
+pipeline. The exit-hook commit (`Enter CLOSING before 'exit' listeners on
+process.exit and fatal paths`) passed there with 442 unit tests. The suite
+then hung twice in `test-dns-resolve.js`, which led to the c-ares fix (`Re-arm
+the c-ares timeout timer`: the timeout timer fired once and was never
+re-armed, so a query to a server that never answered stayed pending
+forever). At that commit the Mac suite was green twice under load: 442 unit
+tests, 200 JS tests passing and 27 unsupported.
 
 ## What Slice B actually produced
 
@@ -98,6 +114,75 @@ read is ours rather than a Sokol patch; the frame timestamp's origin is
 Sokol panic now terminates the process on all three loggers; and until Task
 15 the close button emits `close` and leaves the window open.
 
+## What Task 15 actually produced
+
+A window closes, and every way a windowed process ends is now defined.
+Written out in `docs/superpowers/plans/2026-11-19-ui-compositor-task15.md`;
+each task there carries an "As built" note for where it departed from the
+plan.
+
+- **15a** split `ui_module.cpp` by thread into `ui_module.cpp` (JS thread),
+  `ui_platform.cpp` (platform thread), `ui_test_hooks.cpp` and
+  `ui_internal.h`, whose every declaration states its owner thread and
+  guard. A pure move, checked line by line against the old file.
+- **15b** added `ProcessExitHooks` to `lib/process` and CLOSING on the
+  `process.exit()` and fatal paths, plus `__waitPlatformFrames`.
+- **15c** made CLOSING fail clipboard reads of both kinds, refuse commands,
+  and trace every refused `post()`; and captured `process._preExit` once, so
+  a program cannot skip the fatal path's hook by deleting the property.
+- **15d** ended a runtime that returns with a window requested
+  (`uiBeforeRuntimeCleanup`, a new `_exit()` site that restores the
+  terminal) and released the loop handle on a rejected `createWindow`.
+- **15e** made `close` cancelable (`event.preventDefault()`,
+  `hnui_cancel_close`), made an uncancelled `close` and `win.close()` end
+  the process, added `__waitPlatformQuitRequests`, and closed tracker
+  `01a0d88a-6518`.
+- **15f** made the two `win.close()` endings checkable, corrected every
+  comment that still described the old behaviour, and wrote this.
+
+**Before and after, measured on `cmake-build-asan` under `utils/with-xvfb.py`:**
+
+| Scenario | Before | After |
+|---|---|---|
+| A real `WM_DELETE_WINDOW`, `close` listener that does not cancel, `process.exitCode = 7` (`test/ui-close.js` DEFAULT) | `close` emitted, window stays, killed by `timeout` (124) | exit 7, the `'exit'` listener's eight lines through a pipe |
+| `createWindow()` then a synchronous `throw` (`test/ui-exit-paths.js` THROW) | error and `'exit'` listener, then `window ready` after them, then 124 | exit 1, eight lines and a barrier through a pipe, CLOSING before the listener |
+| `HERMES_NODE_UI_GL_ROUTE=bogus`, rejection handled, script returns (`test/ui-route-refusal.js` RET) | `REJECTED ...`, then 124 | exit 5, the program's `process.exitCode` |
+| The THROW shape with `stdin.setRawMode(true)` on a pty (`test/ui-exit-tty.js`) | 124, `LEFT-IN-RAW-MODE` | terminal restored |
+| `process.exit(0)` in a `keydown` listener with a frame requested (`test/ui-exit-paths.js` LISTENER) | the frame callback ran after `'exit'` listeners | refused, traced |
+
+**Suite totals:** 449 unit tests and 220 JS tests before 15b; after 15f,
+**452 unit tests and 224 JS tests, 4 unsupported**, with no failure. The
+three new unit tests are `ProcessExitHooksTest.HooksReceiveWhatTheCallSitePassed`,
+`OwnerDispatchTest.CloseFromInsideAPostedFunctionRunsTheRestAndRefusesLaterPosts`
+and `TickMachineTest.NoTickIsSentOnceTheTableIsClosing`; the four new JS
+files are `test/ui-exit-paths.js`, `test/ui-exit-tty.js`, `test/ui-close.js`
+and, unrelated to the UI, `test/test-dns-timeout.js` from the c-ares fix.
+
+**Departures from the spec, and where it was edited** (15e, Step 7, in
+`docs/superpowers/specs/2026-09-18-ui-compositor-design.md`): the `quit`
+command is gone from "Input and platform services"; "Closing" there says
+every quit is cancelled, CLOSING included, and why, then how a listener
+cancels; "Lifecycle" says the window lives "until the process ends", that
+a rejected `createWindow` releases its handle, that abnormal return ends in
+`_exit()` from the JS thread rather than tearing the window down, that
+CLOSING fails reads of both kinds and is entered on every path that emits
+`'exit'`, what "unavailable" means for a command, and that CLOSED is the
+`_exit()`; "The JS API" gains `preventDefault()` and `win.close()`; "The
+native C API" gains `hnui_cancel_close`. These are Rulings 70-79 in the
+plan's Task 15 paragraph.
+
+**What review established, and is worth carrying.** Five planned or proposed
+checks could not fail on the mutation written beside them. Four were
+FileCheck `-NOT` lines sitting between two `-DAG` lines or after the last
+positive line, where they cannot see what precedes their anchor; the fifth
+was an alternation satisfied by either arm. Each was rewritten as a separate
+FileCheck run or an `--implicit-check-not`, and proven by a mutation that
+leaves every positive line matching. That rule is now in CLAUDE.md. Two
+planned mutations predicted a hang and got an exit instead, because CLOSING
+releases the loop handle and the runtime-return hook then ends the process
+with `process.exitCode`; a test whose only failure signal is `timeout` is
+blind to that mutant.
+
 ## Things a newcomer needs to know
 
 - **Five lit features, and they are not interchangeable.** `ui-enabled`
@@ -128,31 +213,40 @@ Sokol panic now terminates the process on all three loggers; and until Task
 ## Known defects and limitations
 
 Filed in `dz/`, not duplicated here — `dz list` is authoritative. As of the
-end of Slice C the UI ones are: closing the window hanging the process when
-the quit is not cancelled (Task 15 owns it); a Slice A test asserting a
+end of Slice C the UI ones were: closing the window hanging the process when
+the quit is not cancelled (closed by Task 15); a Slice A test asserting a
 wall-clock throughput floor; lit setting no per-test timeout; the completion
 probe's 2 s handshake budget; the no-window stub's text being executed by no
 test on Linux; and five filed by the Slice C review — the custom-cursor bind
 being verified by no test, the input queue growing without bound after a
 late `createWindow` rejection, callback ids being `int`, a clipboard reply
 landing inside Sokol's event batch, and (not UI code) a throw inside a
-`.then()` never reaching an `uncaughtException` listener.
+`.then()` never reaching an `uncaughtException` listener. Task 15 added one,
+also not UI code: an unhandled rejection exits through an `_exit(1)` that
+does not restore the terminal.
 
 ## Obligations carried into later tasks
 
 All live in the plan itself, at the task that discharges them, because task
 briefs are cut from the plan and an obligation recorded anywhere else is one
-no brief will carry. **Task 15** carries eight from Slice C, numbered in its
-paragraph: splitting `ui_module.cpp` by thread as Slice D's first commit;
-failing outstanding clipboard reads of both kinds on entering CLOSING;
-releasing frame callbacks at teardown; `win.close()` and revisiting every
-test that ends through `process.exit()`; testing the close handshake with a
-real `WM_DELETE_WINDOW`; deciding how a native listener cancels a close; the
-refused-post edges; and `process.exit()` inside a listener letting a frame
-callback run after `'exit'`. **Task 16** owns a backend-local copy of the
-`sg_view` asserts (optional — `HnuiAbiTest` already covers every platform)
-and, since Slice C, the macOS clipboard read (`sapp_get_clipboard_string`
-is reliable there). **Task 17** keeps macOS gating, the lifecycle
-assertions, a stderr-check sweep of four tests, and one small rejection
-test; the real-framebuffer resize it used to carry was discharged by
-`test/ui-real-events.js`.
+no brief will carry. **Task 15's eight, carried from Slice C, are
+discharged**; the plan's Task 15 paragraph names the task and test for each.
+**Task 16** owns a backend-local copy of the `sg_view` asserts (optional —
+`HnuiAbiTest` already covers every platform); the macOS clipboard read,
+which the Mac probes showed must read `NSPasteboard` directly, because
+`sapp_get_clipboard_string()` truncates silently and cannot tell empty text
+from no text; compiling the two `sokol_gfx` files as Objective-C++, with a
+`#error` in `sokol_config.h` when `SOKOL_METAL` is defined without
+`__OBJC__`; and, from Task 15, keeping "the quit is always cancelled and the
+JS thread `_exit`s", with a check that `sapp_cancel_quit()` from `event_cb`
+inside `windowShouldClose:` cancels the close as it does on X11, tested
+with a real close request. **Task 17** keeps macOS gating, a stderr-check
+sweep of four tests, and one small rejection test; the lifecycle assertions
+it was waiting for now exist (`test/ui-exit-paths.js`, `test/ui-close.js`,
+`test/ui-exit-tty.js`), and the real-framebuffer resize it used to carry was
+discharged by `test/ui-real-events.js`. From Task 15 it also inherits one
+unenforced assumption: `test/ui-close.js` REPLACED and `test/ui-events.js`
+rely on two back-to-back `__injectEvent` calls being taken by one
+`drainInjectedEvents()` call (measured 64/64 at 16-way parallel on Linux),
+which a new platform's suite run should confirm or the injector should make
+explicit.

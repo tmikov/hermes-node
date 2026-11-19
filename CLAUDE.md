@@ -127,7 +127,7 @@ needs the `uv_stream_t` behind each JS stream; losing a program's output is
 the worse of the two divergences. Pinned by
 `test/test-process-exit-event.js`, seven cases, each checked against Node.
 
-**Every `_exit()` path restores the terminal.** `stdin.setRawMode(true)`
+**Each `_exit()` caller restores the terminal itself.** `stdin.setRawMode(true)`
 reaches `uv_tty_set_mode()`, which saves the original termios in a libuv
 global; raw mode clears `ECHO` and `ICANON`, so a program that leaves it set
 hands the user back a shell that no longer echoes what they type, with
@@ -143,17 +143,40 @@ for, which is also where Node's `atexit` handler sits relative to them.
 
 Falling off the end of the program was never affected: step 16 closes the
 stdio handles and libuv's `uv__tty_close` restores termios on the way past.
-That is why the fix is two lines in the two `_exit()` callers
-(`processExit`, and `triggerUncaughtException` in `lib/bindings/
-node_errors.cpp`) rather than one call somewhere central -- adding a third
-call on the natural path would work, and would also stop
-`test-tty-restore.js`'s `natural` case from noticing if that cleanup ever
-broke. `process.abort()` deliberately gets no restore, since `abort()` runs
-no `atexit` handler under Node either. Pinned by `test/test-tty-restore.js`,
-four cases; it needs a real terminal, so it runs through
-`test/fixtures/tty/run-on-pty.py`, which reads the flags back **inside** the
-pty session -- on macOS the slave fd is revoked once the session leader
-exits, so a parent holding it gets `ENOTTY`.
+That is why the fix is two lines in each `_exit()` caller (`processExit`,
+and `triggerUncaughtException` in `lib/bindings/node_errors.cpp`) rather
+than one call somewhere central -- adding a call on the natural path would
+work, and would also stop `test-tty-restore.js`'s `natural` case from
+noticing if that cleanup ever broke. `process.abort()` deliberately gets no
+restore, since `abort()` runs no `atexit` handler under Node either. Pinned
+by `test/test-tty-restore.js`, four cases; it needs a real terminal, so it
+runs through `test/fixtures/tty/run-on-pty.py`, which reads the flags back
+**inside** the pty session -- on macOS the slave fd is revoked once the
+session leader exits, so a parent holding it gets `ENOTTY`.
+`hermes-node-ui` adds `_exit()` callers of its own and each restores the
+same way: `uiBeforeRuntimeCleanup` (`tools/hermes-node-ui/ui_module.cpp`,
+for a runtime that returns with a window requested -- pinned the same way by
+`test/ui-exit-tty.js`), `terminateGraphicsSession`, the Sokol panic logger
+`uiSokolLog` and the no-window refusal in `ui_host.cpp`. The
+unhandled-rejection exit in `node_errors.cpp` is the one `_exit()` that does
+not restore yet; see the open issues (`dz list`).
+
+**An embedder can hook every exit path** (`ProcessExitHooks`,
+`include/hermes/node-compat/process/node_process.h`), which is how
+`hermes-node-ui` shuts its window down before the program's `'exit'`
+listeners run. `beforeExitListeners` is called on all three paths that emit
+`'exit'`: by `processExit` after the argument is validated and before the
+once-only emit block (unconditionally, since even a receiver-less call pumps
+the loop); by `process._fatalException` through the native
+`process._preExit()`, which `libjs/process-events.js` captures **once at
+load** so a program that deletes or replaces the property cannot skip it;
+and by step 15 of `runHermesNode` right after `markProcessExiting()`. It may
+run more than once and must be idempotent. `beforeRuntimeCleanup` is called
+between steps 15 and 16, once listeners ran and stdio is flushed, and may
+not return. The hooks are set once, before any runtime starts, and are
+unsynchronized for that reason. **With no hooks set, nothing changes**:
+plain `hermes-node` sets none, and every path behaves exactly as it did
+before they existed.
 
 The one remaining divergence: assigning a **non-numeric** value is ignored
 here, where Node throws `ERR_INVALID_ARG_TYPE` at the assignment (so
@@ -1164,8 +1187,9 @@ every drawing GPU call into offscreen surfaces handed back for presentation.
 Design `docs/superpowers/specs/2026-09-18-ui-compositor-design.md`, plan
 `docs/superpowers/plans/2026-09-21-ui-compositor.md`, progress
 `docs/superpowers/plans/progress-ui-compositor.md`. Slices A, B and C are
-done; D (lifecycle and closing, the Metal backend, the full gated suite) is
-not.
+done, and so is Task 15 of Slice D, lifecycle and closing (written out in
+`docs/superpowers/plans/2026-11-19-ui-compositor-task15.md`). Task 16, the
+Metal backend, and Task 17, the full gated suite, are not.
 
 - **All of it is behind `HERMES_NODE_ENABLE_UI`, default OFF.** As of the
   embedder-module work that option is a real **preprocessor define**, not
@@ -1180,6 +1204,16 @@ not.
   that check is load-bearing, because dropping the rename header from the
   presenting TU still links and still builds, and only the symbol table shows
   it.
+- **The window's code is split by thread.** In `tools/hermes-node-ui/`,
+  `ui_module.cpp` is the JS thread (the `hermes-node:ui` module surface and
+  the lifecycle), `ui_platform.cpp` the platform thread (the `sokol_app`
+  callbacks and the commands they apply), and `ui_test_hooks.cpp` the hooks
+  exported under `HERMES_NODE_UI_TEST_HOOKS`. `ui_internal.h` declares only
+  what more than one of them touches, and **each declaration there states
+  which thread may touch it and what guards or orders that**; everything
+  else stays file-local. Keep the rule when adding a shared name: in the
+  single file this replaced, thread ownership was enforced by comments, and
+  one of them was already false.
 - **Five lit features, and the names mislead.** `ui-enabled` probes the
   *plain* `hermes-node` binary for `--test-embedder-module` and really means
   "the CMake option was compiled in" — it is the one that sounds like it
@@ -1207,7 +1241,12 @@ not.
   `test/ui-sokol-validation-feature.js` plus `-ci.js` are
   `sokol-validation`'s. Add one with any new feature.
 - **Environment variables**: `HERMES_NODE_UI_TEST_HOOKS` enables the test
-  hooks (frame capture, synthetic event injection, controllable completion),
+  hooks (frame capture, synthetic event injection, controllable completion,
+  and two platform-thread barriers: `ui.__waitPlatformFrames(n)` blocks the
+  JS thread until the platform thread has finished `n` frames begun after
+  the call, and `ui.__waitPlatformQuitRequests(total)` until it has
+  cancelled `total` quit requests since startup, each giving up after 10 s
+  and returning false),
   `HERMES_NODE_UI_GL_ROUTE` forces the GL context route,
   `HERMES_NODE_UI_GL_COMPLETION` overrides the completion mode, and
   `HERMES_NODE_DEBUG_NATIVE=UI` turns on tracing. `test/lit.cfg` replaces the
@@ -1218,6 +1257,16 @@ not.
   parallel. A trace must print what was **executed or read back**, never what
   was requested or selected: a line that prints the request passes with the
   call it describes deleted, and that hole was found five separate times.
+  A test that needs "the platform thread got that far" waits on one of the
+  two barriers above, never on time.
+- **A FileCheck `-NOT` between two `-DAG` lines, or after the last positive
+  line, cannot see what precedes its anchor**, so it passes with the line it
+  forbids present. Lines from one dispatcher drain arrive in either order,
+  which is what forces the `-DAG` in the first place. Put such an exclusion
+  in a FileCheck run of its own, or make it an `--implicit-check-not`, which
+  applies to the whole input -- and prove it by a mutation that leaves every
+  positive line matching. Several closing checks were blind to their own
+  mutations until written that way.
 - **Window tests run under `utils/with-xvfb.py` (`%with-xvfb`), not
   `xvfb-run -a`.** `xvfb-run -a` picks a display number and then starts the
   server, which is not atomic: under 16-way load two runs were handed the
@@ -1226,11 +1275,59 @@ not.
   selection belongs to the server. The wrapper has Xvfb claim its own display
   (`-displayfd`) and tears it down, `timeout` included. RUN lines keep their
   redirections inside `sh -c '...'`.
-- **Every test that opens a window ends through `process.exit()`, and every
-  RUN line keeps `timeout <n>`.** Closing the window is Slice D's: today the
-  close button emits a `close` event and leaves the window open, and a
-  script ends itself from that listener (the reference demo does). An
-  uncancelled quit still hangs the process.
+- **A window test ends through `process.exit()`, `win.close()` or a real
+  close request, and every RUN line keeps `timeout <n>`**: lit has no
+  per-test timeout, and a regression in closing shows up as a hang. Most
+  window tests end through `process.exit()` because their subject is not
+  closing; `test/ui-close.js` is the closing test, and
+  `test/ui-exit-paths.js` covers CLOSING on the other exit paths.
+- **Closing is decided and carried out on the JS thread, and the platform
+  thread is never told.** Every `QUIT_REQUESTED` is cancelled with
+  `sapp_cancel_quit()` inside `event_cb` (`uiHandlePlatformEvent`,
+  `ui_platform.cpp`), unconditionally, CLOSING included, and forwarded as
+  `close`; `sapp_quit()` and `sapp_request_quit()` are never called. So
+  `sapp_run()` never returns and `cleanup_cb` never runs, on any path. The
+  reason is the X display: the JS thread's GL context is created on Sokol's
+  own display (`createSharedContext` in `lib/compositor-gpu/gl_backend.cpp`
+  takes `glXGetCurrentDisplay()`), and Sokol's Linux teardown after a quit
+  ends in `XCloseDisplay()`, under a context the live JS thread still has
+  current. (On macOS the quit path exits 0 from the main thread, which
+  cannot carry a status.) Every windowed process therefore ends in `_exit()`
+  on the JS thread: `processExit` for `process.exit()`, `win.close()` and an
+  uncancelled `close`; `triggerUncaughtException` for the fatal path; and
+  `uiBeforeRuntimeCleanup` for a runtime that returns with a window
+  requested, so step 16 never runs there. No window, surface or GPU
+  resource is torn down on any path. `test/ui-close.js` LATE pins the
+  cancel during CLOSING, and every trace run there forbids
+  `sapp_run returned` and `cleanup_cb`.
+- **CLOSING is entered before any `'exit'` listener runs, on every path**,
+  through the exit hooks (Bootstrap Sequence): `uiBeforeExitListeners`
+  enters it for `process.exit()`, the fatal path and a runtime return, and
+  `win.close()` or an uncancelled `close` enter it before calling
+  `process.exit()`. It is a JS-thread state (`gLifecycle`, `ui_module.cpp`)
+  that nothing leaves. `uiEnterClosing` stops acquire and publish on the
+  surface table (so no further tick is sent), releases every frame
+  callback, fails outstanding clipboard reads of both kinds, abandons a
+  pending capture, closes the owner dispatcher -- closed, never deleted,
+  because the platform thread reads the pointer unsynchronized -- and
+  releases the event loop's referenced handle. From then on every posted
+  function refuses on entry, queued events are not delivered, and commands
+  are dropped and traced, never thrown, so an `'exit'` listener is not cut
+  short: `requestAnimationFrame` returns 0, `ui.readClipboard()` returns a
+  Promise already rejected with `ERR_CLIPBOARD_FAILED`,
+  `hnui_read_clipboard_sync` returns `HNUI_ERROR` at once, and
+  `createWindow` throws. The window stays on screen while `'exit'`
+  listeners run.
+- **A `close` is cancelled synchronously, while it is being delivered**:
+  from JavaScript by `event.preventDefault()` on its payload, from native
+  code by `hnui_cancel_close(w)`, which returns true only during delivery of
+  an `HNUI_EVENT_CLOSE_REQUESTED` for `w` (an added export, so no ABI bump).
+  A later call does nothing. Uncancelled, the window closes and the process
+  ends as `process.exit()` with no argument would, so `process.exitCode` is
+  the status. **`win.close()` emits no `close`** -- that event means the
+  window system asked -- and otherwise does the same. A program that has
+  replaced `process.exit` with a function that returns is left with its
+  window in CLOSING, and nothing recovers it.
 - **The presented-pixel test compares exactly — 0 or 255, no tolerance.**
   That is stronger than a threshold, not weaker, and it is affordable because
   the capture's agreement rule forces target size to equal framebuffer size:
@@ -1295,6 +1392,12 @@ not.
   probes). The vendored Sokol commit is single-sourced as
   `HNUI_SOKOL_COMMIT_PINNED` in `hnui.h`; CMake reads it from there and
   `test/sokol-pin.js` checks the README agrees.
+- **macOS runs part of this suite.** On 2026-11-19 the tree was built and
+  the suite run on an Apple-silicon Mac with `HERMES_NODE_ENABLE_UI=ON`.
+  There is no GPU backend there yet, so window tests are unsupported and
+  `ui_module_nowindow.cpp` is what runs; every UI test not gated on `ui-gpu`
+  or `display` runs there, and must be written for BSD userland with no
+  `timeout` binary.
 - Known defects and limitations live in `dz/`, not here — `dz list`.
 
 ## Test Infrastructure

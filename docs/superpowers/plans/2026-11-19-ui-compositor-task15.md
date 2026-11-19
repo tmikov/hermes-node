@@ -322,6 +322,21 @@ Failure modes most likely to bite that nothing covers today, each assigned:
 
 Discharges obligations (3) and (8).
 
+**As built** (commit `Enter CLOSING before 'exit' listeners on process.exit
+and fatal paths`). LISTENER waits one frame before its first KEY_DOWN:
+injected straight after the `await`, that key can be delivered by
+`openEventDelivery()` while its own posted dispatch is still queued in the
+same pass, leaving no dispatch for CLOSING to refuse; the tick is posted
+after `openEventDelivery()`, so the wait is ordered, not timed. FRAME's
+mutation (a) has to keep **both** `inFrameCallback` and `haveSlot` set,
+since `hnui_frame_target` refuses on either. `LISTENER-NOT:
+SECOND-KEY-DELIVERED` pins almost nothing (the line was absent before
+implementation too); the refusal trace is what pins the dispatch.
+`ui_module.h` declares `enum class ExitReason;` opaquely, because
+`node_process.h` pulls in `<uv.h>` and the no-window hand compile has no
+libuv include path. `rejectWith` sets FAILED here but releases nothing
+until 15d.
+
 **Files:**
 - Modify: `include/hermes/node-compat/process/node_process.h`,
   `lib/process/node_process.cpp`, `libjs/process-events.js`,
@@ -404,7 +419,7 @@ Refusals added here: `runFrameTick`, `runEventDispatch`,
 nothing; `hnui_frame_target` returns false (it already does once
 `inFrameCallback` is cleared; no new check).
 
-- [ ] **Step 1: Write the failing unit tests.**
+- [x] **Step 1: Write the failing unit tests.**
   - `unittests/NodeProcessTest.cpp`, `ProcessExitHooksTest.HooksReceiveWhatTheCallSitePassed`:
     with no hooks set both `run...` functions return; after
     `setProcessExitHooks`, `runBeforeExitListenersHook(nullptr, ExitReason::kFatalException)`
@@ -425,14 +440,14 @@ nothing; `hnui_frame_target` returns false (it already does once
     `table.beginClosing()`, `shouldSendTick(table)` is false, state stays
     `kIdle`. Expected to pass at once. *Mutation: delete the `closing_`
     check in `SurfaceTable::anyFreeSlotLocked`.*
-- [ ] **Step 2: Run them.** The first fails to compile (`ProcessExitHooks`
+- [x] **Step 2: Run them.** The first fails to compile (`ProcessExitHooks`
   does not exist). Implement the three functions in `node_process.cpp` and
   rerun; make the three mutations, watch each fail, revert.
-- [ ] **Step 3: Add `frameTargetAvailable()` to the addon and
+- [x] **Step 3: Add `frameTargetAvailable()` to the addon and
   `__waitPlatformFrames` to the test hooks.** `onFrame` has several
   returns: use one scope guard at its top, active only when
   `uiTestHooksEnabled()`.
-- [ ] **Step 4: Write the failing lit test** `test/ui-exit-paths.js`
+- [x] **Step 4: Write the failing lit test** `test/ui-exit-paths.js`
   (`REQUIRES: ui, ui-gpu` and `REQUIRES: display`). `process.argv[2]` is
   the case, `process.argv[3]` the addon. One RUN group per case, in this
   shape, with `<C>` the case name in upper case and `<c>` in lower:
@@ -504,24 +519,24 @@ nothing; `hnui_frame_target` returns false (it already does once
 
     *Mutation: delete `process._preExit()` from `_fatalException` --
     `rafRefused=false`.*
-- [ ] **Step 5: Run it.** Expected before implementation: LISTENER prints
+- [x] **Step 5: Run it.** Expected before implementation: LISTENER prints
   `FRAME-AFTER-EXIT` and `rafRefused=false` (the behaviour measured in
   Design (c)); FRAME fails on `frameTargetAvailable`'s answer and the
   missing trace; FATAL prints `rafRefused=false`.
-- [ ] **Step 6: Implement** call sites 1 and 2, `process._preExit`, the
+- [x] **Step 6: Implement** call sites 1 and 2, `process._preExit`, the
   state, `uiEnterClosing`, the six guards and the refusals. Replace the
   "Nothing releases it yet" paragraph above `takeReferencedHandle`, the
   "Known edge, owned by Task 15's teardown" comment in `onFrame`, and the
   "Entries still here at exit are not released" sentence in `hnui_window.h`
   with what is now true. `releaseAll`'s callback is
   `releaseFrameCallback(gWindow, cb)`; count the calls for the trace.
-- [ ] **Step 7: Run to verify it passes, then
+- [x] **Step 7: Run to verify it passes, then
   `test/test-process-exit-event.js`, `test/test-process-exit-code.js`,
   `test/test-uncaught-exception-async.js` and `test/ui-windowless.js`**,
   which run the changed runtime code with no hooks and with hooks and no
   window.
-- [ ] **Step 8: Make each named mutation, watch its case fail, revert.**
-- [ ] **Step 9: Format, run `check-hermes-node`, commit**
+- [x] **Step 8: Make each named mutation, watch its case fail, revert.**
+- [x] **Step 9: Format, run `check-hermes-node`, commit**
   (`Enter CLOSING before 'exit' listeners on process.exit and fatal paths`).
 
 ---
@@ -529,6 +544,20 @@ nothing; `hnui_frame_target` returns false (it already does once
 ## Task 15c: what CLOSING fails and refuses
 
 Discharges obligations (2) and (7).
+
+**As built** (two commits: `Capture process._preExit once in the fatal
+path`, then `Fail clipboard reads and refuse commands once the window is
+closing`). `libjs/process-events.js` captures `process._preExit` at load,
+because a program that deleted or replaced the property would otherwise
+skip every `'exit'` listener inside a swallowing `try`; two cases in
+`test/test-uncaught-exception-async.js` pin it. Two trailing `-NOT` checks
+in this plan were blind and were rewritten: LISTENER gained a fourth
+FileCheck run, `LISTENER-TICKS` with `--implicit-check-not='callback(s)
+ran'`, and COMMANDS' `late title` exclusion became an
+`--implicit-check-not`. `hnui_read_clipboard_sync` creates its slot before
+the push (the command carries the slot's id) and returns `HNUI_ERROR` at
+once when the push is refused. `failAll` and `uiFailPendingClipboardReads`
+return counts, traced as `clipboard reads failed sync=<n> promise=<n>`.
 
 **Files:**
 - Modify: `include/hermes/node-compat/compositor/channels.h`,
@@ -589,11 +618,11 @@ the Promise it just created with `ERR_CLIPBOARD_FAILED` and the message
 Each `post()` in Design (d)'s first table has its result checked and its
 line traced. No other behaviour changes at those sites.
 
-- [ ] **Step 1: Extend the unit test**
+- [x] **Step 1: Extend the unit test**
   `ClipboardRequestTest.FailAllCompletesEveryWaiterAndALaterAnswerIsRefused`
   to expect the count (2 for its two live waiters, 0 on a second call).
   Fail (does not compile), implement, pass.
-- [ ] **Step 2: Add two cases to `test/ui-exit-paths.js`**, RUN groups in
+- [x] **Step 2: Add two cases to `test/ui-exit-paths.js`**, RUN groups in
   the 15b shape.
   - **READS** (obligation 2). The `'exit'` listener pushes `'exit'` onto an
     array, prints `ORDER <array joined by ,>`, then prints
@@ -650,18 +679,18 @@ line traced. No other behaviour changes at those sites.
     appears; (b) remove `gDispatch->close()` from `uiEnterClosing` -- the
     post is accepted and the `post refused` line is gone; (c) remove the
     `uiTestHooksAbandonCapture()` call -- its line is gone.*
-- [ ] **Step 3: Run to verify both fail** (READS: `ORDER exit`, no
+- [x] **Step 3: Run to verify both fail** (READS: `ORDER exit`, no
   clipboard line; COMMANDS: `readback='late title'` present, measured in
   Design (c)).
-- [ ] **Step 4: Implement.** Remove the "only reachable once the dispatcher
+- [x] **Step 4: Implement.** Remove the "only reachable once the dispatcher
   is closed (Task 15)" comments at the call sites this step changes, and
   the "Task 15 calls the two together" sentence in `ui_events.h`, replacing
   each with what the code now does.
-- [ ] **Step 5: Run to verify it passes, plus `test/ui-clipboard.js`,
+- [x] **Step 5: Run to verify it passes, plus `test/ui-clipboard.js`,
   `test/ui-commands.js`, `test/ui-abi-sizes.js` and `test/ui-conformance.js`**
   (every caller of `uiPushCommand`).
-- [ ] **Step 6: Make each named mutation, watch it fail, revert.**
-- [ ] **Step 7: Format, run `check-hermes-node`, commit**
+- [x] **Step 6: Make each named mutation, watch it fail, revert.**
+- [x] **Step 7: Format, run `check-hermes-node`, commit**
   (`Fail clipboard reads and refuse commands once the window is closing`).
 
 ---
@@ -669,6 +698,21 @@ line traced. No other behaviour changes at those sites.
 ## Task 15d: a runtime that returns, and a rejected createWindow
 
 The pre-cleanup lifecycle hook.
+
+**As built** (commit `End a windowed process when its runtime returns`).
+THROW's trace check is split in two, because the alternation as planned was
+satisfied by either arm with `gDispatch->close()` removed: an accepted
+post is refused inside `close()`'s drain, before `lifecycle: dispatcher
+closed`, and a refused post after it. THROW-TRACE now forbids `window
+readiness: refused (closing)` after `dispatcher closed`, and THROW-ARM, a
+separate run, keeps the alternation. `test/ui-exit-tty.js` runs the program
+under `timeout --foreground` inside the pty session (`run-on-pty.py`'s child
+calls `setsid()`, so an outer `timeout` would not reach it; the inner bound
+is 25 s since 15e). `ui_host.h` had no "Task 15" comment; its `run()` doc
+was rewritten instead. `rejectWith` traces its release as
+`event-loop handle released (createWindow rejected)`. The windowless
+mutation as named stays green, because `uiBeforeRuntimeCleanup`'s two early
+returns overlap there; removing both fails it.
 
 **Files:**
 - Modify: `lib/runtime/hermes_node_runtime.cpp`,
@@ -708,7 +752,7 @@ that restores the terminal first, and its comment says why it is safe to
 skip step 16 (the reasons `processExit` gives) and why it must not return
 (Design (b), first bullet list).
 
-- [ ] **Step 1: Add case THROW to `test/ui-exit-paths.js`.** No `await`:
+- [x] **Step 1: Add case THROW to `test/ui-exit-paths.js`.** No `await`:
   the script installs an `'exit'` listener that prints
   `EXIT-LINE <i> code=<code>` for `i` in 0..7 and then
   `BARRIER <ui.__waitPlatformFrames(1)>`, calls `ui.createWindow(...)`, and
@@ -741,7 +785,7 @@ skip step 16 (the reasons `processExit` gives) and why it must not return
   eight still arrive, raise the count until the mutation fails, and keep
   that count); (d) remove `gDispatch->close()` from `uiEnterClosing` --
   neither arm of the alternation is printed.*
-- [ ] **Step 2: Add a third RUN group to `test/ui-route-refusal.js`**,
+- [x] **Step 2: Add a third RUN group to `test/ui-route-refusal.js`**,
   `HERMES_NODE_UI_GL_ROUTE=bogus` with an extra argument `return`: the
   rejection handler prints `REJECTED ...`, sets `process.exitCode = 5` and
   returns instead of calling `process.exit(3)`. Needs no display.
@@ -759,7 +803,7 @@ skip step 16 (the reasons `processExit` gives) and why it must not return
 
   *Mutation: remove `releaseReferencedHandle()` from `rejectWith` -- 124,
   which is today's behaviour.*
-- [ ] **Step 3: Create `test/ui-exit-tty.js`** (`REQUIRES: ui, ui-gpu`; no
+- [x] **Step 3: Create `test/ui-exit-tty.js`** (`REQUIRES: ui, ui-gpu`; no
   display). Modelled on `test/test-tty-restore.js`'s `natural` case:
 
   ```
@@ -775,19 +819,19 @@ skip step 16 (the reasons `processExit` gives) and why it must not return
   `RESULT:` no longer says `RESTORED`.* If the test passes with the call
   deleted, the terminal is being restored by something else on this path;
   find out what before keeping the test.
-- [ ] **Step 4: Add a second RUN group to `test/ui-windowless.js`** with
+- [x] **Step 4: Add a second RUN group to `test/ui-windowless.js`** with
   `HERMES_NODE_DEBUG_NATIVE=UI` and stderr captured: same script, same exit
   code as its first run, and `--implicit-check-not='lifecycle:'` over
   stderr. A script that never asks for a window must still return through
   `UiHost::run()`. *Mutation: remove the `uiWindowRequested()` test from
   `uiBeforeRuntimeCleanup` -- `lifecycle: runtime returned` is printed.*
-- [ ] **Step 5: Run all four; expect** THROW 124 with `window ready` in the
+- [x] **Step 5: Run all four; expect** THROW 124 with `window ready` in the
   trace, RET 124, the tty test `RESULT:` anything (it hangs first: the
   script never ends), windowless passing.
-- [ ] **Step 6: Implement.** Rewrite the three comments listed under Files
+- [x] **Step 6: Implement.** Rewrite the three comments listed under Files
   so none says the shutdown is still to come.
-- [ ] **Step 7: Run to verify, make each mutation, revert.**
-- [ ] **Step 8: Format, run `check-hermes-node`, commit**
+- [x] **Step 7: Run to verify, make each mutation, revert.**
+- [x] **Step 8: Format, run `check-hermes-node`, commit**
   (`End a windowed process when its runtime returns`).
 
 ---
@@ -796,6 +840,22 @@ skip step 16 (the reasons `processExit` gives) and why it must not return
 
 Discharges obligations (5) and (6), and the code half of (4). Closes
 tracker issue `01a0d88a-6518` in this commit.
+
+**As built** (commit `Close the window on an uncancelled close, and add
+win.close()`). LATE waits one frame first, for LISTENER's reason. WINCLOSE's
+mutation ("`win.close()` only enters CLOSING") does not end at `timeout`:
+CLOSING released the referenced handle, the loop drains and the
+runtime-return hook exits 9, so the planned trailing `-NOT` lines became
+`--implicit-check-not`s and `close: ending the process through
+process.exit()` was added to the trace. Two cases were added, REPLACED and
+RFRAME, for a `process.exit` replaced by a function that returns; they
+needed two refusals the plan does not name, `uiDispatchEvents` refusing
+every event once CLOSING and `runFrameTick` reclaiming its slot instead of
+submitting when a callback entered CLOSING. `uiCloseWindow` throws a
+`TypeError` when `process.exit` is not a function, and an uncancelled
+close's default action is skipped when the window is already CLOSING.
+Design (e)'s test changes were made here, including the two `win.close()`
+endings planned as 15f Step 1.
 
 **Files:**
 - Modify: `include/hermes/node-compat/ui/hnui.h`,
@@ -867,7 +927,7 @@ its data; `win.close()` is defined in `defineWindowCommands`. Both check
 `uiClosing()` first and return undefined. The native entry point is
 `requireOwnerThread`-checked like its neighbours.
 
-- [ ] **Step 1: Extend the addon** with `armCloseCancel` and
+- [x] **Step 1: Extend the addon** with `armCloseCancel` and
   `cancelCloseNow`, and `demo_conformance.c` plus `demo.js`'s conformance
   mode with one observation, placed after the
   `hnui_event_dispatch_quiescent next frame callback` line: call
@@ -876,7 +936,7 @@ its data; `win.close()` is defined in `defineWindowCommands`. Both check
   `hnui_cancel_close outside=0 inside=1`. Add that line as a `CHECK-NEXT`
   in `test/ui-conformance.js`. (Injection is right here: this is the entry
   point's own bookkeeping, after the converter.)
-- [ ] **Step 2: Write the failing lit test** `test/ui-close.js`
+- [x] **Step 2: Write the failing lit test** `test/ui-close.js`
   (`REQUIRES: ui, ui-gpu`, `REQUIRES: display`). `process.argv` is
   `<case> <addon> <driver>`. Close requests are real: the script calls
   `child_process.spawnSync(driver, ['--close', TITLE])`, the driver's
@@ -979,28 +1039,28 @@ its data; `win.close()` is defined in `defineWindowCommands`. Both check
     *Mutation: cancel only the first quit request (a static flag in
     `uiHandlePlatformEvent`) -- `sapp_run returned` appears, which the
     implicit check forbids, and `FRAMES false`.*
-- [ ] **Step 3: Run; expect** DEFAULT, CANCEL, NATIVE and LATE to end at
+- [x] **Step 3: Run; expect** DEFAULT, CANCEL, NATIVE and LATE to end at
   `timeout` (the window stays open today) or fail to load (`preventDefault`
   and the addon functions do not exist), WINCLOSE to throw
   `win.close is not a function`.
-- [ ] **Step 4: Implement** the entry point, the two window fields,
+- [x] **Step 4: Implement** the entry point, the two window fields,
   `deliver`'s close handling, `uiCloseWindow`, `preventDefault`,
   `win.close()` and the quit counter. Rewrite the Ruling 54 comment in
   `uiHandlePlatformEvent` and its paragraph in `ui_module.h`: the quit is
   cancelled always, and why (Design (b)).
-- [ ] **Step 5: Update the tests whose premise changed** (Design (e)):
+- [x] **Step 5: Update the tests whose premise changed** (Design (e)):
   `test/ui-events.js` CLOSE and `test/ui-real-events.js` CLOSE call
   `e.preventDefault()` and say why in their headers;
   `test/fixtures/hnui-demo/demo.js` drops its `close` listener and the
   comment above it, and `ui-real-events.js`'s DEMO mutation note becomes
   "delete the `uiCloseWindow` call in `deliver`". Run both, and
   `test/ui-conformance.js`.
-- [ ] **Step 6: Run `test/ui-close.js` to verify it passes; make each
+- [x] **Step 6: Run `test/ui-close.js` to verify it passes; make each
   mutation; revert.** Then run it 20 times in a row under
   `for i in $(seq 20)`: LATE and CANCEL each depend on a second process
   reaching the X server, and a case that fails once in twenty is a race to
   find now, not a flake to list later.
-- [ ] **Step 7: Correct the spec.** In "Input and platform services":
+- [x] **Step 7: Correct the spec.** In "Input and platform services":
   rewrite **Closing** (always cancelled; `preventDefault` /
   `hnui_cancel_close`; an uncancelled close enters CLOSING and ends the
   process) and remove `quit` from the Commands list. In "The JS API": add
@@ -1011,12 +1071,12 @@ its data; `win.close()` is defined in `defineWindowCommands`. Both check
   ends" for "quitting only when JS asks", the FAILED sentence from (f) 3,
   CLOSING failing reads "of both kinds" with the clause from (f) 6, the
   refusal rules from (f) 7, and (f) 9.
-- [ ] **Step 8: Close the issue** before committing, with the tracker run
+- [x] **Step 8: Close the issue** before committing, with the tracker run
   as CLAUDE.md says (build the bundled ditz2 once if `dist/` is missing):
   `node examples/ditz2/ditz2/dist/cli/main.js close 01a0d88a` with a
   comment naming `test/ui-close.js` DEFAULT as what pins it. Stage `dz/`
   with the fix.
-- [ ] **Step 9: Format, run `check-hermes-node`, commit**
+- [x] **Step 9: Format, run `check-hermes-node`, commit**
   (`Close the window on an uncancelled close, and add win.close()`).
 
 ---
@@ -1024,6 +1084,20 @@ its data; `win.close()` is defined in `defineWindowCommands`. Both check
 ## Task 15f: revisit the window tests, and the documents
 
 Discharges the rest of obligation (4).
+
+**As built** (two commits: `Revisit the window tests now that a window can
+close`, then `Record how a window closes` for the documents and the tracker). Step 1's endings already existed (15e); what
+was missing was a check that can fail on the mutation "`win.close()` enters
+CLOSING and returns", which exits 0 through the runtime-return hook and
+passes CODE. Both tests' trace runs now require `lifecycle: CLOSING
+(reason=close)` and `close: ending the process through process.exit()` and
+carry `--implicit-check-not='runtime returned'`; the mutation "does
+nothing" ends at `timeout` as planned. Beyond the files listed, stale
+comments were corrected in `test/ui-present.js`, `test/ui-create-window.js`,
+`lib/compositor-gpu/gl_present.cpp`, and the "every `_exit()` path restores
+the terminal" comments in `sokol_log.h`, `ui_host.cpp`, `hnui_api.cpp` and
+`ui_module.cpp`, since one path does not: the unhandled-rejection `_exit(1)`
+in `lib/bindings/node_errors.cpp`, filed as tracker `01a1f36f-ce35`.
 
 **Files:**
 - Modify: `test/ui-commands.js`, `test/fixtures/hnui-demo/demo.js`
@@ -1038,20 +1112,20 @@ Discharges the rest of obligation (4).
   `CLAUDE.md`, `docs/superpowers/plans/2026-09-21-ui-compositor.md`,
   `docs/superpowers/plans/progress-ui-compositor.md`
 
-- [ ] **Step 1: End two tests by `win.close()`.** `test/ui-commands.js`
+- [x] **Step 1: End two tests by `win.close()`.** `test/ui-commands.js`
   calls `win.close()` where it calls `process.exit(0)` on its marker, and
   gains `// TRACE: lifecycle: CLOSING (reason=close)` after its last
   command check; `demo.js`'s conformance mode ends with `win.close()` after
   `DONE`. Both keep `EXITCODE 0`. *Mutation, for both at once: make
   `win.close()` return without exiting -- each run ends at its `timeout`.*
   Run both, make the mutation, revert.
-- [ ] **Step 2: Correct the comments.** Every window test still ends
+- [x] **Step 2: Correct the comments.** Every window test still ends
   through `process.exit()` or `win.close()` and still keeps `timeout <n>`
   (lit has no per-test timeout, tracker `01a0d797-e326`); what is no longer
   true is the stated reason "closing the window hangs". Replace each such
   sentence; do not touch RUN lines. Confirm with the grep above that
   nothing under `test/`, `tools/`, `lib/` or `include/` still says so.
-- [ ] **Step 3: Update `CLAUDE.md`'s UI Compositor section.** Slices A-C
+- [x] **Step 3: Update `CLAUDE.md`'s UI Compositor section.** Slices A-C
   done and Task 15 of D done; the bullet "Every test that opens a window
   ends through `process.exit()` ..." becomes a description of how a window
   closes now (the three paths, CLOSING before `'exit'` listeners, the quit
@@ -1061,7 +1135,7 @@ Discharges the rest of obligation (4).
   platform thread got that far" waits on one of them rather than on time;
   in "Bootstrap Sequence", one sentence that `runHermesNode` and
   `processExit` call `ProcessExitHooks`, and where.
-- [ ] **Step 4: Update the plan and the progress file.** In the plan,
+- [x] **Step 4: Update the plan and the progress file.** In the plan,
   replace the Task 15 paragraph with the five tasks ticked, each of the
   eight obligations followed by the task and test that discharged it, and
   the rulings made here (Design (f) 1-9 and the cancel API) numbered after
@@ -1071,7 +1145,7 @@ Discharges the rest of obligation (4).
   does on X11. Amend Task 17's: the lifecycle assertions it was waiting for
   exist. In the progress file, the status table, a "What Task 15 produced"
   paragraph, and the test totals from this task's final suite run.
-- [ ] **Step 5: Format, run `check-hermes-node`** (the totals must be at
+- [x] **Step 5: Format, run `check-hermes-node`** (the totals must be at
   least 449 + the unit tests added in 15b-15c, and 220 + 3 new JS files,
   with 4 unsupported), **commit**
   (`Revisit the window tests and record how a window closes`).
