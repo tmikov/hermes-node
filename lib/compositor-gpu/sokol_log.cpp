@@ -9,8 +9,8 @@
 
 #include <uv.h>
 
-#include <cstdio>
 #include <unistd.h>
+#include <cstdio>
 
 namespace hermes {
 namespace node_compat {
