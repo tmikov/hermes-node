@@ -1316,8 +1316,15 @@ Metal backend, and Task 17, the full gated suite, are not.
   short: `requestAnimationFrame` returns 0, `ui.readClipboard()` returns a
   Promise already rejected with `ERR_CLIPBOARD_FAILED`,
   `hnui_read_clipboard_sync` returns `HNUI_ERROR` at once, and
-  `createWindow` throws. The window stays on screen while `'exit'`
-  listeners run.
+  `createWindow` throws. Queued ticks (nextTick and promise callbacks) run
+  on entering CLOSING only when a `ui.readClipboard()` Promise was actually
+  rejected there, so its handlers run before the `'exit'` listeners, and
+  never on the fatal path. The window stays on screen while `'exit'`
+  listeners run. The exit hooks are process-wide and run on whichever
+  runtime's thread is exiting, so both return at once for any env other
+  than the one that instantiated `hermes-node:ui` (`isModuleEnv` in
+  `ui_module.cpp`); this binary runs one runtime, and the hooks do not
+  depend on it.
 - **A `close` is cancelled synchronously, while it is being delivered**:
   from JavaScript by `event.preventDefault()` on its payload, from native
   code by `hnui_cancel_close(w)`, which returns true only during delivery of
@@ -1397,7 +1404,11 @@ Metal backend, and Task 17, the full gated suite, are not.
   There is no GPU backend there yet, so window tests are unsupported and
   `ui_module_nowindow.cpp` is what runs; every UI test not gated on `ui-gpu`
   or `display` runs there, and must be written for BSD userland with no
-  `timeout` binary.
+  `timeout` binary: such a test bounds itself from inside the script, with
+  an unref'd watchdog timer (`test/ui-no-window-support.js`,
+  `test/test-dns-timeout.js`). Tests gated on `ui-gpu` or `display` run only
+  on Linux today and keep `timeout <n>` on their RUN lines; that changes
+  when a Metal backend makes `ui-gpu` true on macOS.
 - Known defects and limitations live in `dz/`, not here — `dz list`.
 
 ## Test Infrastructure
@@ -1409,6 +1420,10 @@ JS tests use LLVM Lit (`test/lit.cfg`), run in parallel via `check-hermes-node-j
 - **Primordials test**: `// RUN: cat %source_dir/libjs/primordials.js %s > %t.js && %hermes -Xasync-generators %t.js`
 - **Expected-failure tests**: `%not` runs a command that must exit non-zero, e.g. `// RUN: %not %hermes-node %s 2>&1 | %FileCheck %s`
 - Run single test (paths must be absolute): `python3 cmake-build-asan/bin/hermes-lit $(pwd)/test/test-foo.js --param hermes_node=$(pwd)/cmake-build-asan/bin/hermes-node --param hermes=$(pwd)/cmake-build-asan/bin/hermes --param FileCheck=$(pwd)/cmake-build-asan/bin/FileCheck --param not=$(pwd)/cmake-build-asan/bin/not --param source_dir=$(pwd) --param test_exec_root=$(pwd)/cmake-build-asan/test`
+  Run it through `python3` rather than directly: the generated script's
+  shebang is `#!/usr/bin/env python`, which fails on a machine that has
+  `python3` and no `python`. `-v` shows the output of failing tests only; `-a` shows
+  every test's RUN lines and output, passing ones included.
 
 Unit tests (GTest) are discovered and run by Lit too (`unittests/lit.cfg`), via
 the `check-hermes-node-unit` target. `check-hermes-node` runs both suites, so a

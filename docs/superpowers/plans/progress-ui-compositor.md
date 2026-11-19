@@ -18,7 +18,15 @@ files, and the suite at 414 unit tests plus 201 JS tests. Slice C: eight
 tasks, a whole-slice review and one fix wave; the suite stands at 449 unit
 tests and 220 JS tests, with 4 unsupported (one needs `examples/` installed,
 three are CI- or macOS-only gates). Task 15: six tasks and eight commits;
-the suite stands at 452 unit tests and 224 JS tests, with 4 unsupported.
+the suite stood at 452 unit tests and 224 JS tests, with 4 unsupported.
+A whole-branch review of Task 15 returned ready after fixes, and one fix
+wave (2026-11-19) closed its list: the runtime-return path's CLOSING is now
+pinned in-process, three more CLOSING branches have cases, the exit hooks
+act only for the runtime that instantiated the module, `hnui.h` gained a
+"Closing" section, and the three tests that run on macOS without a GPU
+backend bound themselves without `timeout`. The suite stands at 452 unit
+tests and 225 JS tests (the new one is `test/ui-exit-late-require.js`),
+with 4 unsupported.
 
 **First macOS build, 2026-11-19** (Apple M4 Max, macOS 27.2, Apple clang 21,
 ASAN Debug with `HERMES_NODE_ENABLE_UI=ON`): the tree configures and builds
@@ -147,7 +155,7 @@ plan.
 | A real `WM_DELETE_WINDOW`, `close` listener that does not cancel, `process.exitCode = 7` (`test/ui-close.js` DEFAULT) | `close` emitted, window stays, killed by `timeout` (124) | exit 7, the `'exit'` listener's eight lines through a pipe |
 | `createWindow()` then a synchronous `throw` (`test/ui-exit-paths.js` THROW) | error and `'exit'` listener, then `window ready` after them, then 124 | exit 1, eight lines and a barrier through a pipe, CLOSING before the listener |
 | `HERMES_NODE_UI_GL_ROUTE=bogus`, rejection handled, script returns (`test/ui-route-refusal.js` RET) | `REJECTED ...`, then 124 | exit 5, the program's `process.exitCode` |
-| The THROW shape with `stdin.setRawMode(true)` on a pty (`test/ui-exit-tty.js`) | 124, `LEFT-IN-RAW-MODE` | terminal restored |
+| A rejected `createWindow` (`HERMES_NODE_UI_GL_ROUTE=bogus`), handled, the script returning, with `stdin.setRawMode(true)` on a pty (`test/ui-exit-tty.js`) | 124, `LEFT-IN-RAW-MODE` | terminal restored |
 | `process.exit(0)` in a `keydown` listener with a frame requested (`test/ui-exit-paths.js` LISTENER) | the frame callback ran after `'exit'` listeners | refused, traced |
 
 **Suite totals:** 449 unit tests and 220 JS tests before 15b; after 15f,
@@ -250,3 +258,35 @@ rely on two back-to-back `__injectEvent` calls being taken by one
 `drainInjectedEvents()` call (measured 64/64 at 16-way parallel on Linux),
 which a new platform's suite run should confirm or the injector should make
 explicit.
+
+**Also Task 16's, found by the whole-branch review of Task 15 and checked
+against `external/sokol/sokol/sokol_app.h`.** On macOS, `[NSApp terminate:]`
+-- the Dock's Quit, a Cmd-Q menu item, logout -- never raises
+`QUIT_REQUESTED` in the vendored Sokol. That event comes only from the
+window delegate's `windowShouldClose:`. Sokol's app delegate implements
+`applicationShouldTerminateAfterLastWindowClosed:` and
+`applicationWillTerminate:`, and no `applicationShouldTerminate:`, so AppKit
+terminates without asking: `applicationWillTerminate:` calls
+`_sapp_call_cleanup()` (our `cleanup_cb`), then `_sapp_macos_discard_state()`
+and `_sapp_discard_state()`, and AppKit then exits 0 from the main thread
+with the JS thread still running. That breaks three things Task 15
+established: every quit request is cancelled, `cleanup_cb` never runs, and
+the JS thread ends the process with its status. The Metal task must either
+intercept termination -- for instance by adding
+`applicationShouldTerminate:` to Sokol's delegate class at run time
+(`class_addMethod` on `_sapp_macos_app_delegate`, since the vendored source
+stays unmodified), answering `NSTerminateCancel` and forwarding the request
+to the JS thread as `close` -- or document the exception where Task 15's
+guarantees are stated (CLAUDE.md, the spec's Lifecycle, `hnui.h`), and test
+whichever it chooses.
+
+**And a second: two tests reach "fails before `sapp_run()`, no display
+needed" only on Linux.** `test/ui-exit-tty.js` and `test/ui-route-refusal.js`
+(all three of its runs, RET included) get there through
+`HERMES_NODE_UI_GL_ROUTE=bogus`, which only the GL backend refuses; they are
+gated on `ui-gpu` without `display`, and their RUN lines use `timeout` and
+`timeout --foreground`, which a stock macOS lacks. Once a Metal backend makes
+`ui-gpu` true on macOS, each will either open a real window or fail. Task 16
+must re-gate them (on a GL-route feature, or `linux`), or give them a route
+the Metal backend refuses before `sapp_run()` too, and bound them without
+`timeout` there.

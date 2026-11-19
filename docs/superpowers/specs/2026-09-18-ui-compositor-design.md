@@ -665,8 +665,14 @@ scale read once at startup.
 
 ## Lifecycle
 
-**Startup states:** REQUESTED -> RUNNING, or REQUESTED -> FAILED; RUNNING ->
-CLOSING -> CLOSED.
+**States:** IDLE (no window requested) -> REQUESTED; REQUESTED -> RUNNING,
+or REQUESTED -> FAILED. CLOSING is entered from **any** of IDLE, REQUESTED,
+RUNNING and FAILED -- whichever the window is in when a path that emits
+`'exit'` begins -- and CLOSING -> CLOSED. From IDLE it only records the state,
+so that a `createWindow` called from an `'exit'` listener throws; from
+REQUESTED (the entry script threw after calling `createWindow`) and FAILED
+(a handled rejection, then the script returned) it does everything listed
+below for whatever exists yet.
 
 - `main()` spawns the JS thread and waits on a condition variable. Waiting
   before `[NSApp run]` is fine on macOS.
@@ -733,6 +739,13 @@ waiting out its timeout. It is entered on **every** path that emits
 This is required because `flushPendingWrites` runs `uv_run(UV_RUN_NOWAIT)` up
 to 64 times (`lib/process/node_process.cpp:544`) and would otherwise dispatch
 UI work while `'exit'` listeners are tearing down addon state.
+
+Entering CLOSING runs queued ticks (nextTick and promise callbacks) only when
+it actually rejected a `ui.readClipboard()` Promise, so that the rejection's
+handlers run before the `'exit'` listeners; and never on the fatal path. With
+no Promise rejected, nothing queued runs, as in Node, whose `process.exit()`
+runs no queued callback; and after an uncaught exception Node runs no further
+callback, and a throwing handler would replace the error being reported.
 
 Unavailable means refused quietly: a refused command is dropped and traced,
 never thrown and never printed, because an `'exit'` listener that restores
@@ -882,6 +895,18 @@ int   hnui_read_clipboard_sync(hnui_window *w, int timeout_ms, char **out);
   `HNUI_ABI_VERSION` bump: an added export is a change an already-compiled
   addon tolerates, and one that calls it against an older host fails at
   `dlopen` with an undefined symbol.
+- **Once the window is CLOSING** (see Lifecycle), the API is the one the
+  "Closing" section of `hnui.h` lists: `hnui_request_animation_frame`
+  returns 0 and registers nothing; registered frame callbacks are dropped
+  without being called, and their `user` pointers are never handed back;
+  event listeners are no longer called; `hnui_frame_target` and
+  `hnui_cancel_close` return false; the cursor, pointer-lock and
+  clipboard-write commands are dropped (traced, not printed); and
+  `hnui_read_clipboard_sync` returns `HNUI_ERROR` at once. **There is no
+  teardown notification:** every exit of a windowed process is an `_exit()`,
+  the N-API environment is never destroyed, and so neither environment
+  cleanup hooks nor the finalizers its destruction would run are called. An
+  addon must not rely on being told the process is ending.
 - Addons own every `sg_*` resource they create, and **create and destroy them
   at init or inside a frame callback**, where a commit follows. Doing so at
   other times is out of contract in v1: on Metal it exhausts Sokol's id-pool,
