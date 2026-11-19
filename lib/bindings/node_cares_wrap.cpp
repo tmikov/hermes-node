@@ -489,13 +489,20 @@ class ChannelWrap {
   static void
   sockStateCb(void *data, ares_socket_t sock, int readable, int writable);
 
-  // Timer callback for c-ares timeout processing.
+  // Timer callback for c-ares timeout processing. Like Node's AresTimeout, it
+  // only asks c-ares to expire whatever is due; the timer repeats by itself.
   static void timerCb(uv_timer_t *timer);
 
   // Poll callback from libuv.
   static void pollCb(uv_poll_t *watcher, int status, int events);
 
+  /// Start the repeating timeout timer unless it is already running. Mirrors
+  /// Node's ChannelWrap::StartTimer.
   void startTimer();
+
+  /// Stop the timeout timer once c-ares holds no sockets. Mirrors Node's
+  /// ChannelWrap::CloseTimer, except that the handle is kept for reuse.
+  void stopTimer();
 
   // NAPI getter for native pointer.
   static ChannelWrap *unwrap(napi_env env, napi_value jsObj);
@@ -509,6 +516,9 @@ class ChannelWrap {
   ares_channel_t *channel_ = nullptr;
   uv_timer_t timer_{};
   bool timerInitialized_ = false;
+  // Per-try timeout the channel was configured with, in ms; <= 0 means the
+  // c-ares default. Sets the timer period, as Node's timeout_ does.
+  int timeout_ = 0;
   bool closed_ = false;
   napi_ref selfRef_ = nullptr;
   std::unordered_map<ares_socket_t, AresTask *> tasks_;
@@ -607,6 +617,8 @@ void ChannelWrap::setup(int timeout, int tries) {
   struct ares_options opts {};
   int optmask = ARES_OPT_FLAGS | ARES_OPT_SOCK_STATE_CB;
 
+  timeout_ = timeout;
+
   opts.flags = ARES_FLAG_NOCHECKRESP;
   opts.sock_state_cb = sockStateCb;
   opts.sock_state_cb_data = this;
@@ -624,7 +636,8 @@ void ChannelWrap::setup(int timeout, int tries) {
   assert(r == ARES_SUCCESS);
   (void)r;
 
-  // Initialize timeout timer.
+  // Initialize timeout timer. It is unref'd: while a query is pending c-ares
+  // holds a socket, and that socket's poll handle keeps the loop alive.
   uv_timer_init(rtState_->loop, &timer_);
   timer_.data = this;
   uv_unref(reinterpret_cast<uv_handle_t *>(&timer_));
@@ -651,12 +664,17 @@ void ChannelWrap::sockStateCb(
           reinterpret_cast<uv_handle_t *>(&task->poll_watcher),
           [](uv_handle_t *h) { delete reinterpret_cast<AresTask *>(h->data); });
     }
+    // With no sockets left nothing can be pending, so the timer has nothing
+    // to expire (Node's ares_sockstate_cb calls CloseTimer here).
+    if (self->tasks_.empty())
+      self->stopTimer();
     return;
   }
 
   AresTask *task;
   if (it == self->tasks_.end()) {
-    // New socket — create poll watcher.
+    // New socket — start the timer and create a poll watcher.
+    self->startTimer();
     task = new AresTask();
     task->channel = self;
     task->sock = sock;
@@ -674,13 +692,14 @@ void ChannelWrap::sockStateCb(
     events |= UV_WRITABLE;
 
   uv_poll_start(&task->poll_watcher, events, pollCb);
-
-  self->startTimer();
 }
 
 void ChannelWrap::pollCb(uv_poll_t *watcher, int status, int events) {
   auto *task = static_cast<AresTask *>(watcher->data);
   ChannelWrap *self = task->channel;
+
+  // Reset the idle timer, as Node's ares_poll_cb does.
+  uv_timer_again(&self->timer_);
 
   ares_socket_t read_fd = ARES_SOCKET_BAD;
   ares_socket_t write_fd = ARES_SOCKET_BAD;
@@ -697,8 +716,6 @@ void ChannelWrap::pollCb(uv_poll_t *watcher, int status, int events) {
   }
 
   ares_process_fd(self->channel_, read_fd, write_fd);
-
-  self->startTimer();
 }
 
 void ChannelWrap::timerCb(uv_timer_t *timer) {
@@ -708,16 +725,22 @@ void ChannelWrap::timerCb(uv_timer_t *timer) {
 }
 
 void ChannelWrap::startTimer() {
-  // Use ares_timeout to compute next timeout. Default 1 second.
-  struct timeval tv;
-  struct timeval maxtv;
-  maxtv.tv_sec = 1;
-  maxtv.tv_usec = 0;
-  struct timeval *tvp = ares_timeout(channel_, &maxtv, &tv);
-  uint64_t ms = static_cast<uint64_t>(tvp->tv_sec) * 1000 + tvp->tv_usec / 1000;
-  if (ms == 0)
-    ms = 1;
-  uv_timer_start(&timer_, timerCb, ms, 0);
+  // The timer must repeat: c-ares only expires a query when asked, and a
+  // server that never answers produces no socket event to ask it. A one-shot
+  // timer fired once, before a deadline above its period, and was never armed
+  // again, so such a query never completed.
+  if (!timerInitialized_ ||
+      uv_is_active(reinterpret_cast<uv_handle_t *>(&timer_)))
+    return;
+  int timeout = timeout_;
+  if (timeout <= 0 || timeout > 1000)
+    timeout = 1000;
+  uv_timer_start(&timer_, timerCb, timeout, timeout);
+}
+
+void ChannelWrap::stopTimer() {
+  if (timerInitialized_)
+    uv_timer_stop(&timer_);
 }
 
 ChannelWrap *ChannelWrap::unwrap(napi_env env, napi_value jsObj) {
