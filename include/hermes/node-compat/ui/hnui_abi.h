@@ -424,7 +424,7 @@ typedef struct hnui_target {
 /// property and Sokol's own `sapp_mouse_cursor` -- not required to share
 /// either one's numeric values: the host maps each to Sokol's cursor through
 /// an explicit table (`sappCursorFor` in tools/hermes-node-ui/
-/// ui_module.cpp), never a cast.
+/// ui_platform.cpp), never a cast.
 /// `HNUI_CURSOR_DEFAULT` is zero because it is a legitimate steady state (a
 /// window that never calls `hnui_set_cursor` still has one), unlike
 /// `HNUI_EVENT_INVALID` above, whose zero exists to flag data nobody wrote.

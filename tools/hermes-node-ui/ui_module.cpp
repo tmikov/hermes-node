@@ -7,18 +7,12 @@
 
 #include "ui_module.h"
 
-#include "event_injector.h"
 #include "hnui_window.h"
-#include "sapp_event_convert.h"
 #include "ui_events.h"
 #include "ui_host.h"
-#ifdef HERMES_NODE_UI_HAVE_X11
-#include "x11_clipboard.h"
-#include "x11_readback.h"
-#endif
+#include "ui_internal.h"
 
 #include <backend.h>
-#include <sokol_log.h>
 #include <test_hooks.h>
 #include <ui_trace.h>
 
@@ -32,17 +26,13 @@
 #include <hermes/node-compat/compositor/surface_table.h>
 #include <hermes/node-compat/compositor/tick_machine.h>
 
-#include <sokol_app.h>
-
 #include <uv.h>
 
 #include <unistd.h>
 
-#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -52,44 +42,20 @@
 namespace hermes {
 namespace node_compat {
 
-namespace {
-
 //===========================================================================
 // State
 //===========================================================================
 //
-// Two threads share this file. The split below is deliberate and is the
-// thing to preserve when editing: the fields under `gMutex` are the only
-// ones either thread may touch at a time the other might, and everything
-// else is owned outright by one thread.
-//
-// What makes the rest safe without a lock is the handshake, not luck. The
-// platform thread publishes its results BEFORE posting to the JS thread
-// through OwnerDispatch, and OwnerDispatch posts through `uv_async_send`
-// under its own mutex; the JS thread reads them only from inside the posted
-// function. That pairing is the happens-before edge. A field read outside
-// that pairing has no ordering at all, so do not add one.
-
-struct WindowRequest {
-  int width = 1280;
-  int height = 800;
-  std::string title = "hermes-node";
-  bool highDpi = false;
-  bool fullscreen = false;
-};
+// The JS-thread half of the window. Shared state is declared in
+// ui_internal.h, which says which thread may touch each and what orders it.
 
 std::mutex gMutex;
-/// Guarded by gMutex.
-bool gWindowRequested = false;
 /// Guarded by gMutex. Written by the JS thread in createWindow(), read by
 /// the platform thread once it wakes. Its `title` also backs
 /// `sapp_desc::window_title`, which Sokol borrows rather than copies, so
-/// this object must outlive `sapp_run()` -- which, being a file-static, it
+/// this object must outlive `sapp_run()` -- which, having static storage, it
 /// does.
 WindowRequest gRequest;
-
-/// Set once by main(), before the JS thread exists.
-UiHost *gHost = nullptr;
 
 /// Created by the platform thread before `sapp_run()`, used by both
 /// afterwards -- each through the methods `backend.h` says belong to its
@@ -98,10 +64,9 @@ CompositorBackend *gBackend = nullptr;
 
 /// Filled by the platform thread inside `init_cb`, read by the JS thread
 /// from the posted continuation, which is where the window's mirror starts
-/// from. See the ordering note above.
+/// from. See the ordering note in ui_internal.h.
 WindowState gMetrics;
 std::string gStartupError;
-bool gStartupFailed = false;
 
 /// Created and closed on the JS thread, which is also the only thread its
 /// posted functions run on. **Posted to from both threads**: post() is the
@@ -110,8 +75,6 @@ bool gStartupFailed = false;
 /// failure, the frame tick, event dispatch and a finished capture.
 OwnerDispatch *gDispatch = nullptr;
 napi_env gEnv = nullptr;
-napi_deferred gDeferred = nullptr;
-uv_async_t *gKeepAlive = nullptr;
 
 //===========================================================================
 // The compositor
@@ -122,18 +85,6 @@ uv_async_t *gKeepAlive = nullptr;
 /// own locks, so what the flag publishes is the pointers, not the state.
 SurfaceTable *gTable = nullptr;
 TickMachine *gTick = nullptr;
-hnui_window *gWindow = nullptr;
-
-/// The current generation and the framebuffer size it was allocated at.
-/// **JS thread only.** Written in onSharedContextReady() and again by
-/// uiFollowFramebufferSize() whenever an event reports a different
-/// framebuffer size, so they change at run time and the platform thread
-/// must never read them: it takes a presented surface's size from that
-/// surface's own `SurfaceRef::gen`, through
-/// `CompositorBackend::generationSize()` (see maybeCapture()).
-GenerationId gGeneration{};
-int gGenerationWidth = 0;
-int gGenerationHeight = 0;
 
 /// Publishes everything above to the platform thread. Release on the
 /// store, acquire on the load -- `frame_cb` runs from the moment
@@ -141,12 +92,6 @@ int gGenerationHeight = 0;
 /// "the pointer is set by then" is not something the frame callback may
 /// assume.
 std::atomic<bool> gPresentReady{false};
-
-/// Platform thread only: what is on screen, and which generations this
-/// thread holds wrappers for.
-SurfaceRef gPresenting{};
-bool gHavePresenting = false;
-std::vector<GenerationId> gWrappedGenerations;
 
 //===========================================================================
 // Input
@@ -179,21 +124,6 @@ CommandQueue gCommands;
 /// already empty.
 std::atomic<bool> gDispatchPosted{false};
 
-/// The platform thread's tracked window state: the `window` snapshot of
-/// the last event it converted, refreshed from `sapp_*` queries before each
-/// real event (the converter handles focus and minimize, not size).
-/// Platform thread only.
-WindowState gTracked;
-
-/// Whether the tick machine has been told the tracked minimized state. An
-/// ICONIFIED that arrives before `gPresentReady` has no machine to tell, so
-/// the first frame after readiness catches it up. Platform thread only.
-bool gTickMinimizedSynced = false;
-
-/// Test hook: platform events injected by `__injectEvent`, taken by
-/// `onFrame`. Carries its own lock.
-PlatformEventInjector gInjector;
-
 /// The synchronous native clipboard reads (`hnui_read_clipboard_sync`):
 /// the JS thread creates a slot here and blocks on it, and the platform
 /// thread answers into it directly. Carries its own lock. A file-static
@@ -201,41 +131,31 @@ PlatformEventInjector gInjector;
 /// not use it: its answer goes through `gInput` as a `kClipboardReply`.
 ClipboardRequests gClipboardReads;
 
-/// The most the platform thread will wait for another client's selection
-/// reply, whatever deadline the request carries. Every frame and every
-/// event waits behind it, and a native caller may pass a deadline of a
-/// minute; that caller gets kTimeout after this long instead.
-constexpr int kClipboardReadCapMs = 2000;
+namespace {
 
-//===========================================================================
-// Test hooks (lib/compositor-gpu/test_hooks.h)
-//===========================================================================
-//
-// Compiled always, enabled only by HERMES_NODE_UI_TEST_HOOKS, and every
-// call site below checks `uiTestHooksEnabled()` first -- nothing in
-// test_hooks.h enforces that, so it is a convention this file has to keep
-// rather than one it inherits.
+/// Guarded by gMutex.
+bool gWindowRequested = false;
 
-CompletionGate gGate;
-FrameCapture gCapture;
+/// Set once by main(), before the JS thread exists.
+UiHost *gHost = nullptr;
 
-/// What the platform thread owes the JS thread once a capture resolves.
-/// Guarded by gCaptureMutex, which also guards the request's own
-/// parameters: the JS thread writes them, the platform thread reads them.
-struct CaptureState {
-  std::string path;
-  int giveUpAfterFrames = 0;
-  int framesObserved = 0;
-  bool finished = false;
-  bool matched = false;
-  uint64_t publicationId = 0;
-  int width = 0;
-  int height = 0;
-};
-std::mutex gCaptureMutex;
-CaptureState gCaptureState;
-/// JS thread only.
-napi_deferred gCaptureDeferred = nullptr;
+napi_deferred gDeferred = nullptr;
+uv_async_t *gKeepAlive = nullptr;
+
+/// Created on the JS thread with gTable above; read off it only by
+/// onOwnerThread().
+hnui_window *gWindow = nullptr;
+
+/// The current generation and the framebuffer size it was allocated at.
+/// **JS thread only.** Written in onSharedContextReady() and again by
+/// uiFollowFramebufferSize() whenever an event reports a different
+/// framebuffer size, so they change at run time and the platform thread
+/// must never read them: it takes a presented surface's size from that
+/// surface's own `SurfaceRef::gen`, through
+/// `CompositorBackend::generationSize()` (see maybeCapture()).
+GenerationId gGeneration{};
+int gGenerationWidth = 0;
+int gGenerationHeight = 0;
 
 //===========================================================================
 // The referenced libuv handle
@@ -312,22 +232,6 @@ void rejectWith(const std::string &message) {
   napi_close_handle_scope(gEnv, scope);
 }
 
-/// Adds \p name = \p value to \p object. Errors are dropped on purpose:
-/// every call here sets a plain number or boolean on a freshly created
-/// object, so the only way one fails is an env that is already throwing,
-/// and in that state the caller's own next NAPI call reports it.
-void setNumber(napi_value object, const char *name, double value) {
-  napi_value number = nullptr;
-  if (napi_create_double(gEnv, value, &number) == napi_ok)
-    napi_set_named_property(gEnv, object, name, number);
-}
-
-void setBool(napi_value object, const char *name, bool value) {
-  napi_value boolean = nullptr;
-  if (napi_get_boolean(gEnv, value, &boolean) == napi_ok)
-    napi_set_named_property(gEnv, object, name, boolean);
-}
-
 //===========================================================================
 // The frame tick, and what completes it
 //===========================================================================
@@ -381,6 +285,8 @@ double frameTimestampMs() {
   return static_cast<double>(uv_hrtime() - gFrameOriginNs) / 1e6;
 }
 
+} // namespace
+
 /// End the graphics session, loudly.
 ///
 /// Reached when a completion could not be **established** --
@@ -408,6 +314,8 @@ double frameTimestampMs() {
   uv_tty_reset_mode();
   _exit(1);
 }
+
+namespace {
 
 /// The producer's GPU work for \p ref has finished -- or could not be
 /// shown to have finished. **May run on any thread**: the platform thread
@@ -515,6 +423,8 @@ void runJsFrameCallback(const FrameCallback &cb, double timestamp) {
   napi_close_handle_scope(gEnv, scope);
 }
 
+} // namespace
+
 /// One frame tick, on the JS thread, posted by the platform thread when
 /// `TickMachine::shouldSendTick()` said so.
 void runFrameTick() {
@@ -604,6 +514,8 @@ void runFrameTick() {
   gBackend->submitAndTrackCompletion(*slot, onProducerComplete, nullptr);
 }
 
+namespace {
+
 //===========================================================================
 // Event dispatch
 //===========================================================================
@@ -647,6 +559,8 @@ void openEventDelivery() {
   uiDispatchEvents(gWindow);
 }
 
+} // namespace
+
 /// Any thread: the platform thread after pushing an event, the JS thread
 /// once the window object exists.
 void postEventDispatch() {
@@ -659,188 +573,7 @@ void postEventDispatch() {
     gDispatchPosted.store(false);
 }
 
-//===========================================================================
-// Frame capture (test hook)
-//===========================================================================
-
-/// Hand the finished capture back to the JavaScript that asked for it.
-/// JS thread, posted by the platform thread.
-void onCaptureFinished() {
-  if (gCaptureDeferred == nullptr || gEnv == nullptr)
-    return;
-
-  CaptureState state;
-  {
-    std::lock_guard<std::mutex> lock(gCaptureMutex);
-    state = gCaptureState;
-  }
-
-  napi_handle_scope scope = nullptr;
-  if (napi_open_handle_scope(gEnv, &scope) != napi_ok)
-    return;
-
-  napi_value result = nullptr;
-  if (napi_create_object(gEnv, &result) == napi_ok) {
-    setBool(result, "matched", state.matched);
-    setNumber(result, "framesObserved", state.framesObserved);
-    setNumber(
-        result, "publicationId", static_cast<double>(state.publicationId));
-    setNumber(result, "width", state.width);
-    setNumber(result, "height", state.height);
-    napi_value path = nullptr;
-    if (napi_create_string_utf8(
-            gEnv, state.path.c_str(), NAPI_AUTO_LENGTH, &path) == napi_ok) {
-      napi_set_named_property(gEnv, result, "path", path);
-    }
-    napi_resolve_deferred(gEnv, gCaptureDeferred, result);
-  }
-  gCaptureDeferred = nullptr;
-  napi_close_handle_scope(gEnv, scope);
-}
-
-/// Write a captured frame as a binary PPM (P6).
-///
-/// A deliberately dull format: a five-byte header and three bytes per
-/// pixel, which a test can parse in a few lines of JavaScript with no
-/// decoder. The alpha channel is dropped because the comparison is over
-/// colour and the swapchain's alpha is not something the pattern controls.
-bool writeCapturePpm(
-    const std::string &path,
-    int width,
-    int height,
-    const std::vector<uint8_t> &rgba) {
-  std::FILE *file = std::fopen(path.c_str(), "wb");
-  if (file == nullptr)
-    return false;
-  std::fprintf(file, "P6\n%d %d\n255\n", width, height);
-  std::vector<uint8_t> rgb(static_cast<size_t>(width) * height * 3);
-  for (size_t i = 0, n = static_cast<size_t>(width) * height; i < n; ++i) {
-    rgb[i * 3 + 0] = rgba[i * 4 + 0];
-    rgb[i * 3 + 1] = rgba[i * 4 + 1];
-    rgb[i * 3 + 2] = rgba[i * 4 + 2];
-  }
-  const size_t written = std::fwrite(rgb.data(), 1, rgb.size(), file);
-  std::fclose(file);
-  return written == rgb.size();
-}
-
-/// Report what this frame actually presented, and take a capture if it is
-/// the frame somebody asked for. Platform thread, once per presented
-/// frame, immediately after the blit.
-///
-/// **Matching, not polling** (`test_hooks.h`): the presenter says what it
-/// drew and finds out in the same call whether that was the frame
-/// requested. Every field must agree -- and the one that does the work
-/// here is `publicationId`, because a re-blit of the still-presenting
-/// surface reports every other field identically.
-void maybeCapture() {
-  if (!uiTestHooksEnabled() || !gCapture.pending())
-    return;
-
-  CaptureRequest observed;
-  observed.generation = gPresenting.gen;
-  observed.publicationId = gTick->presentingPublicationId();
-  // The presented surface's OWN size, keyed by its generation -- never
-  // gGenerationWidth/Height, which the JS thread rewrites on a resize and
-  // which would then describe a generation other than the one on screen
-  // (and be a data race besides). The generation is alive here: this
-  // thread holds its wrappers.
-  int targetWidth = 0;
-  int targetHeight = 0;
-  if (gBackend->generationSize(gPresenting.gen, &targetWidth, &targetHeight)) {
-    observed.targetWidth = targetWidth;
-    observed.targetHeight = targetHeight;
-  }
-  observed.framebufferWidth = sapp_width();
-  observed.framebufferHeight = sapp_height();
-  observed.dpiScale = gMetrics.dpiScale;
-
-  std::string path;
-  int giveUpAfterFrames = 0;
-  int framesObserved = 0;
-  {
-    std::lock_guard<std::mutex> lock(gCaptureMutex);
-    if (gCaptureState.finished)
-      return;
-    path = gCaptureState.path;
-    giveUpAfterFrames = gCaptureState.giveUpAfterFrames;
-    framesObserved = ++gCaptureState.framesObserved;
-  }
-
-  if (gCapture.tryMatch(observed)) {
-    const int width = observed.framebufferWidth;
-    const int height = observed.framebufferHeight;
-    std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4);
-    const bool read =
-        gBackend->readPresentedPixels(width, height, pixels.data());
-    const bool wrote = read && writeCapturePpm(path, width, height, pixels);
-    {
-      std::lock_guard<std::mutex> lock(gCaptureMutex);
-      gCaptureState.finished = true;
-      gCaptureState.matched = wrote;
-      gCaptureState.publicationId = observed.publicationId;
-      gCaptureState.width = width;
-      gCaptureState.height = height;
-    }
-    uiTrace(
-        "capture: %s generation %u publication %llu (%dx%d)",
-        wrote ? "written" : "FAILED",
-        observed.generation.value,
-        static_cast<unsigned long long>(observed.publicationId),
-        width,
-        height);
-    // The dropped bool, same shape as the tick post in onFrame() and with
-    // the same owner: a refused post here leaves __captureFrame()'s
-    // Promise unsettled, bounded only by the caller's own timeout. Only
-    // reachable once the dispatcher is closed (Task 15).
-    if (gDispatch != nullptr)
-      gDispatch->post(onCaptureFinished);
-    return;
-  }
-
-  // Not this frame. A budget in FRAMES, not milliseconds: the suite runs
-  // 16-way parallel and the plan forbids timing-based assertions, so a
-  // test that needs to prove a request was NOT satisfied counts presented
-  // frames instead of waiting a while.
-  if (giveUpAfterFrames > 0 && framesObserved >= giveUpAfterFrames) {
-    gCapture.cancel();
-    {
-      std::lock_guard<std::mutex> lock(gCaptureMutex);
-      gCaptureState.finished = true;
-      gCaptureState.matched = false;
-    }
-    uiTrace(
-        "capture: no match after %d presented frame(s); publication %llu "
-        "was presenting",
-        framesObserved,
-        static_cast<unsigned long long>(observed.publicationId));
-    // As above: a refused post leaves the Promise unsettled (Task 15).
-    if (gDispatch != nullptr)
-      gDispatch->post(onCaptureFinished);
-  }
-}
-
-/// Destroy the presenting instance's wrappers for every generation that
-/// has stopped needing them.
-///
-/// **On a trigger, not by waiting** (spec: Generations). Waiting for the
-/// reference count to reach zero would deadlock, since the wrappers are
-/// themselves counted owners; `wrappersReleasable()` is the trigger, and
-/// it is asked only about generations this thread actually holds wrappers
-/// for.
-void releaseObsoleteWrappers() {
-  for (size_t i = 0; i < gWrappedGenerations.size();) {
-    const GenerationId gen = gWrappedGenerations[i];
-    if (gTable->wrappersReleasable(gen)) {
-      gBackend->releaseWrappers(gen);
-      gTable->releaseWrappers(gen);
-      gWrappedGenerations.erase(
-          gWrappedGenerations.begin() + static_cast<long>(i));
-    } else {
-      ++i;
-    }
-  }
-}
+namespace {
 
 /// Whether the calling thread is the one owning the producing context --
 /// `hnui_window::ownerThread`, the JS thread. Any thread.
@@ -866,6 +599,8 @@ void destroyGeneration(GenerationId gen) {
       gen.value,
       onOwnerThread() ? 1 : 0);
 }
+
+} // namespace
 
 /// Runs on the JS thread, posted from `init_cb`. This is stage 2b: the
 /// worker binds the shared context the platform thread created, which only
@@ -1029,8 +764,6 @@ void onStartupFailed() {
   rejectWith(gStartupError);
 }
 
-} // namespace
-
 void uiFollowFramebufferSize(const WindowState &state) {
   if (gTable == nullptr || gBackend == nullptr)
     return;
@@ -1080,556 +813,6 @@ void uiFollowFramebufferSize(const WindowState &state) {
       previous.value,
       previousWidth,
       previousHeight);
-}
-
-namespace {
-
-//===========================================================================
-// Platform thread: Sokol callbacks
-//===========================================================================
-
-/// Sokol's logger, and the fatal half of the spec's "Failure splits in
-/// two".
-///
-/// Window and context creation failing is fatal **by contract**: Sokol
-/// routes it to `_SAPP_PANIC` from inside `sapp_run()`, before `init_cb`
-/// ever runs, and there is no recovery path. Returning from a logger does
-/// not make Sokol stop -- it carries on into the state the panic was about
-/// -- so this terminates instead.
-void sokolLog(
-    const char *tag,
-    uint32_t logLevel,
-    uint32_t logItemId,
-    const char *message,
-    uint32_t lineNr,
-    const char *filename,
-    void *userData) {
-  (void)userData;
-  // A panic does not return: uiSokolLog restores the terminal and exits,
-  // the same path both sokol_gfx instances' loggers take.
-  uiSokolLog(
-      tag ? tag : "sokol",
-      logLevel,
-      logItemId,
-      message,
-      lineNr,
-      filename,
-      "hermes-node-ui: the windowing system could not be initialised. This "
-      "is fatal: sokol_app panics from inside sapp_run(), before any "
-      "callback of ours runs, and offers no way to recover.");
-}
-
-/// Bring the tracked state's size, DPI scale and fullscreen flag up to date
-/// from Sokol. The converter handles what an event itself changes --
-/// focus, minimize -- and copies the rest from its source, so a RESIZED
-/// that was not preceded by this would report the old size.
-///
-/// On Linux sokol_app maps window size to framebuffer size 1:1
-/// (sokol_app.h, _sapp_linux_run), so sapp_width() is both. Divided by the
-/// DPI scale anyway rather than assumed equal: the logical/physical split
-/// is real on every other platform this interface will meet, and a
-/// framebuffer size that silently doubles as a logical one is the kind of
-/// thing that reads correctly right up until it does not.
-void refreshTrackedState() {
-  const float dpiScale = sapp_dpi_scale();
-  gTracked.framebufferWidth = sapp_width();
-  gTracked.framebufferHeight = sapp_height();
-  gTracked.dpiScale = dpiScale;
-  gTracked.width = dpiScale > 0.0f ? static_cast<int>(sapp_widthf() / dpiScale)
-                                   : sapp_width();
-  gTracked.height = dpiScale > 0.0f
-      ? static_cast<int>(sapp_heightf() / dpiScale)
-      : sapp_height();
-  gTracked.fullscreen = sapp_is_fullscreen();
-}
-
-const char *clipboardStatusName(ClipboardStatus status) {
-  switch (status) {
-    case ClipboardStatus::kOk:
-      return "ok";
-    case ClipboardStatus::kUnavailable:
-      return "unavailable";
-    case ClipboardStatus::kTimeout:
-      return "timeout";
-    case ClipboardStatus::kTooLarge:
-      return "too-large";
-    case ClipboardStatus::kError:
-      return "error";
-  }
-  return "error";
-}
-
-/// Read the clipboard now, waiting at most \p timeoutMs for another
-/// client's reply. Platform thread only.
-///
-/// On X11 this is our own read (Ruling 55, `x11_clipboard.h`), never
-/// `sapp_get_clipboard_string()` alone, whose failures return its previous
-/// buffer. Elsewhere -- macOS, with Task 16 -- Sokol's getter reads the
-/// pasteboard directly and has no stale-buffer path.
-ClipboardResult readClipboardNow(int timeoutMs) {
-#ifdef HERMES_NODE_UI_HAVE_X11
-  return x11ReadClipboard(
-      const_cast<void *>(sapp_x11_get_display()),
-      reinterpret_cast<unsigned long>(sapp_x11_get_window()),
-      timeoutMs,
-      HNUI_CLIPBOARD_MAX_BYTES - 1);
-#else
-  (void)timeoutMs;
-  const char *text = sapp_get_clipboard_string();
-  if (text == nullptr)
-    return ClipboardResult{ClipboardStatus::kError, std::string()};
-  return ClipboardResult{ClipboardStatus::kOk, text};
-#endif
-}
-
-/// A PlatformSource over the real platform, as of now.
-PlatformSource realPlatformSource() {
-  PlatformSource source;
-  source.window = gTracked;
-  // A paste carries the text read when it happened, through the same read
-  // `readClipboard()` uses. A read that did not succeed means the paste is
-  // not forwarded (the converter refuses it) -- an empty-but-successful
-  // read still is, since pasting nothing is a real paste.
-  source.readClipboard = [](std::string &out) {
-    ClipboardResult result = readClipboardNow(kClipboardReadDefaultTimeoutMs);
-    if (result.status != ClipboardStatus::kOk) {
-      uiTrace(
-          "paste: clipboard read %s; not forwarded",
-          clipboardStatusName(result.status));
-      return false;
-    }
-    out = std::move(result.text);
-    return true;
-  };
-  source.droppedPaths = [] {
-    std::vector<std::string> paths;
-    const int count = sapp_get_num_dropped_files();
-    for (int i = 0; i < count; ++i)
-      paths.emplace_back(sapp_get_dropped_file_path(i));
-    return paths;
-  };
-  return source;
-}
-
-/// Hand every injected event to uiHandlePlatformEvent(), with the injected
-/// clipboard, paths and window substituted where present.
-///
-/// **One post for the whole batch.** The flag is held for the duration
-/// (taken only once there is a first event, so an empty frame never holds
-/// it), so no dispatch is posted until every event of the batch is queued,
-/// and a batch that a test injected together is delivered by one dispatch
-/// -- which is what lets test/ui-events.js tell "promise callbacks ran
-/// between two events" apart from "they ran after the dispatch". Two
-/// cases still split a batch, and neither loses anything: a dispatch
-/// already outstanding when the batch began may run mid-batch (the events
-/// after it then post for themselves, the ordinary path), and one already
-/// running on the JS thread drains events as they land.
-void drainInjectedEvents() {
-  InjectedPlatformEvent injected;
-  if (!gInjector.takeNext(&injected))
-    return;
-  const bool batched = !gDispatchPosted.exchange(true);
-
-  do {
-    refreshTrackedState();
-    PlatformSource source = realPlatformSource();
-    if (injected.hasClipboard) {
-      source.readClipboard = [&injected](std::string &out) {
-        out = injected.clipboard;
-        return true;
-      };
-    }
-    // Always substituted: Sokol's drop buffer holds nothing for an event
-    // Sokol did not produce, and sapp_get_dropped_file_path() asserts on
-    // an index it did not hand out.
-    source.droppedPaths = [&injected] { return injected.paths; };
-    if (injected.hasWindow)
-      source.window = injected.window;
-    uiHandlePlatformEvent(injected.event, source);
-  } while (gInjector.takeNext(&injected));
-
-  if (!batched)
-    return;
-  // Released, then the queue is checked -- not "did this batch push
-  // anything". While the flag was held, a postEventDispatch() from the JS
-  // thread (the one onSharedContextReady makes for events that predate the
-  // window object) returned without posting, on the strength of this
-  // holder; checking the queue is what keeps that promise. A batch whose
-  // every event the converter refused is covered by the same check.
-  gDispatchPosted.store(false);
-  if (!gInput.empty())
-    postEventDispatch();
-}
-
-//===========================================================================
-// Platform commands
-//===========================================================================
-
-/// The one place an `hnui_cursor` becomes a Sokol cursor. Explicit rather
-/// than a cast: the two enumerations are named alike and happen to line up
-/// today, and nothing but this table keeps them honest when either moves.
-sapp_mouse_cursor sappCursorFor(int cursor) {
-  switch (static_cast<hnui_cursor>(cursor)) {
-    case HNUI_CURSOR_DEFAULT:
-      return SAPP_MOUSECURSOR_DEFAULT;
-    case HNUI_CURSOR_ARROW:
-      return SAPP_MOUSECURSOR_ARROW;
-    case HNUI_CURSOR_IBEAM:
-      return SAPP_MOUSECURSOR_IBEAM;
-    case HNUI_CURSOR_CROSSHAIR:
-      return SAPP_MOUSECURSOR_CROSSHAIR;
-    case HNUI_CURSOR_POINTING_HAND:
-      return SAPP_MOUSECURSOR_POINTING_HAND;
-    case HNUI_CURSOR_RESIZE_EW:
-      return SAPP_MOUSECURSOR_RESIZE_EW;
-    case HNUI_CURSOR_RESIZE_NS:
-      return SAPP_MOUSECURSOR_RESIZE_NS;
-    case HNUI_CURSOR_RESIZE_NWSE:
-      return SAPP_MOUSECURSOR_RESIZE_NWSE;
-    case HNUI_CURSOR_RESIZE_NESW:
-      return SAPP_MOUSECURSOR_RESIZE_NESW;
-    case HNUI_CURSOR_RESIZE_ALL:
-      return SAPP_MOUSECURSOR_RESIZE_ALL;
-    case HNUI_CURSOR_NOT_ALLOWED:
-      return SAPP_MOUSECURSOR_NOT_ALLOWED;
-    case HNUI_CURSOR_FORCE_I32:
-      break;
-  }
-  return SAPP_MOUSECURSOR_DEFAULT;
-}
-
-/// A `Command::readClipboard`. Platform thread.
-///
-/// The read is bounded by the request's remaining deadline and by
-/// kClipboardReadCapMs. **Nothing here waits on the JS thread**: a sync
-/// read's answer is written into its slot from this thread, because the JS
-/// thread is blocked on that slot and could never drain a queued reply.
-void applyReadClipboard(const Command &command) {
-  const uint64_t id = command.requestId();
-  const bool viaSlot = command.replyThroughSlot();
-  const char *path = viaSlot ? "sync" : "promise";
-
-  ClipboardResult result;
-  const uint64_t now = clipboardClockNs();
-  if (now >= command.deadlineNs()) {
-    // Its waiter has already given up (or is about to): reading would block
-    // this thread for an answer nobody takes. A Promise still has to
-    // settle, so it is told kTimeout; a sync waiter needs nothing.
-    uiTrace(
-        "clipboard read %s #%llu: deadline passed; skipped",
-        path,
-        static_cast<unsigned long long>(id));
-    if (viaSlot)
-      return;
-    result.status = ClipboardStatus::kTimeout;
-  } else {
-    const uint64_t remainingNs = command.deadlineNs() - now;
-    // Rounded up: a deadline 0.4 ms away is a short wait, not none.
-    const uint64_t remainingMs = (remainingNs + 999999) / 1000000;
-    const int timeoutMs = static_cast<int>(std::min<uint64_t>(
-        remainingMs, static_cast<uint64_t>(kClipboardReadCapMs)));
-    result = readClipboardNow(timeoutMs);
-    uiTrace(
-        "clipboard read %s #%llu: status=%s bytes=%zu",
-        path,
-        static_cast<unsigned long long>(id),
-        clipboardStatusName(result.status),
-        result.text.size());
-  }
-
-  if (viaSlot) {
-    if (!gClipboardReads.answer(id, std::move(result))) {
-      uiTrace(
-          "clipboard read sync #%llu: waiter gone; reply discarded",
-          static_cast<unsigned long long>(id));
-    }
-    return;
-  }
-
-  UiEvent reply;
-  reply.type = UiEventType::kClipboardReply;
-  reply.requestId = id;
-  reply.clipboardStatus = result.status;
-  reply.text = std::move(result.text);
-  gInput.push(reply);
-  postEventDispatch();
-}
-
-/// Apply one command with the matching sapp_* call. Platform thread only.
-/// **Each trace prints the value read back afterwards**, never the
-/// request, so a trace cannot pass with its call removed.
-void applyCommand(const Command &command) {
-  switch (command.kind()) {
-    case Command::Kind::kSetTitle: {
-      sapp_set_window_title(command.title().c_str());
-      // The read-backs below exist for the trace and run only when it is on:
-      // each is a synchronous X round trip.
-      if (!uiTracingEnabled())
-        break;
-#ifdef HERMES_NODE_UI_HAVE_X11
-      std::string name;
-      if (uiX11FetchWindowName(name))
-        uiTrace("command title: readback='%s'", name.c_str());
-      else
-        uiTrace("command title: no readback available");
-#else
-      uiTrace(
-          "command title: applied '%s' (unverified: no read-back on this "
-          "platform)",
-          command.title().c_str());
-#endif
-      break;
-    }
-    case Command::Kind::kSetFullscreen:
-      // sapp_toggle_fullscreen() toggles; compare first.
-      if (sapp_is_fullscreen() != command.flag())
-        sapp_toggle_fullscreen();
-      uiTrace("command fullscreen: is_fullscreen=%d", sapp_is_fullscreen());
-      break;
-    case Command::Kind::kSetIcon: {
-      sapp_icon_desc icon = {};
-      icon.images[0].width = command.width();
-      icon.images[0].height = command.height();
-      icon.images[0].pixels.ptr = command.cursorRgba().data();
-      icon.images[0].pixels.size = command.cursorRgba().size();
-      sapp_set_icon(&icon);
-      if (!uiTracingEnabled())
-        break;
-#ifdef HERMES_NODE_UI_HAVE_X11
-      int w = 0, h = 0;
-      uint32_t first = 0;
-      if (uiX11FetchIconHead(w, h, first))
-        uiTrace(
-            "command icon: _NET_WM_ICON %dx%d first_pixel=0x%08x", w, h, first);
-      else
-        uiTrace("command icon: no _NET_WM_ICON readback");
-#else
-      uiTrace(
-          "command icon: applied (unverified: no read-back on this platform)");
-#endif
-      break;
-    }
-    case Command::Kind::kSetCursor: {
-      sapp_set_mouse_cursor(sappCursorFor(command.cursor()));
-      uiTrace(
-          "command cursor %d: sapp_mouse_cursor=%d",
-          command.cursor(),
-          static_cast<int>(sapp_get_mouse_cursor()));
-      break;
-    }
-    case Command::Kind::kSetCursorImage: {
-      sapp_image_desc image = {};
-      image.width = command.width();
-      image.height = command.height();
-      image.cursor_hotspot_x = command.hotspotX();
-      image.cursor_hotspot_y = command.hotspotY();
-      image.pixels.ptr = command.cursorRgba().data();
-      image.pixels.size = command.cursorRgba().size();
-      // sapp_bind_mouse_cursor_image returns the cursor it was given whether
-      // or not binding worked, so its result is not traced: only the
-      // selection is read back, and the bind itself is unverified.
-      sapp_bind_mouse_cursor_image(SAPP_MOUSECURSOR_CUSTOM_0, &image);
-      sapp_set_mouse_cursor(SAPP_MOUSECURSOR_CUSTOM_0);
-      uiTrace(
-          "command custom cursor: sapp_mouse_cursor=%d",
-          static_cast<int>(sapp_get_mouse_cursor()));
-      break;
-    }
-    case Command::Kind::kShowCursor:
-      sapp_show_mouse(command.flag());
-      uiTrace("command show cursor: sapp_mouse_shown=%d", sapp_mouse_shown());
-      break;
-    case Command::Kind::kLockPointer:
-      sapp_lock_mouse(command.flag());
-      uiTrace(
-          "command lock pointer: sapp_mouse_locked=%d", sapp_mouse_locked());
-      break;
-    case Command::Kind::kReadClipboard:
-      applyReadClipboard(command);
-      break;
-    case Command::Kind::kWriteClipboard: {
-      sapp_set_clipboard_string(command.text().c_str());
-      if (!uiTracingEnabled())
-        break;
-#ifdef HERMES_NODE_UI_HAVE_X11
-      // Ownership, asked of the server. sapp_get_clipboard_string() is not
-      // used: when we are not the owner it runs a selection conversion that
-      // stalls this thread and overwrites Sokol's buffer.
-      uiTrace(
-          "command clipboard: owns_selection=%d bytes=%zu",
-          uiX11OwnsClipboard() ? 1 : 0,
-          command.text().size());
-#else
-      uiTrace(
-          "command clipboard: written %zu bytes (unverified: no read-back on "
-          "this platform)",
-          command.text().size());
-#endif
-      break;
-    }
-  }
-}
-
-void drainCommands() {
-  std::vector<Command> commands;
-  gCommands.drain(commands);
-  for (const Command &command : commands)
-    applyCommand(command);
-}
-
-void onInit() {
-  std::string error;
-  if (!gBackend->createSharedContext(error)) {
-    // The recoverable half. The main loop keeps running -- this returns
-    // into it -- so that the rejection reaches JS rather than racing a
-    // process teardown.
-    gStartupError = error;
-    gStartupFailed = true;
-    if (gDispatch != nullptr)
-      gDispatch->post(onStartupFailed);
-    return;
-  }
-
-  refreshTrackedState();
-  gMetrics = gTracked;
-
-  uiTrace("init_cb: shared context ready");
-  if (gDispatch != nullptr)
-    gDispatch->post(onSharedContextReady);
-}
-
-/// The presenting half, once per platform frame: take a newly published
-/// surface if there is one, blit it or the previous one, release completed
-/// reads, and send the frame tick if one is due (spec: Architecture,
-/// `frame_cb`), and drain the command queue and the clipboard reads.
-void onFrame() {
-  if (gBackend == nullptr)
-    return;
-
-  // **Before the readiness check, and unconditionally.** This is where the
-  // stage-2 completion probe is answered, and the worker is blocked
-  // waiting for that answer before the window's Promise can resolve -- so
-  // a frame callback that skipped it while "not ready yet" would deadlock
-  // the very startup it is part of.
-  gBackend->pollCompletions();
-
-  // Commands from JavaScript, before the injected events: a test that
-  // issues commands and then injects a marker relies on the marker never
-  // overtaking them. Before the readiness check, like the completions, so
-  // a command pushed early is applied by the first frame rather than left
-  // behind.
-  drainCommands();
-
-  // Injected events, immediately after the completions. Before the
-  // readiness check like them, so that an event injected early is queued
-  // rather than left behind -- the JS side delivers nothing until its
-  // window object exists anyway.
-  if (uiTestHooksEnabled())
-    drainInjectedEvents();
-
-  // Exactly one acquisition per frame, whichever of the three presenting
-  // calls below follows it.
-  if (!gBackend->acquireFrameSwapchain()) {
-    // No usable swapchain: present nothing, and release nothing, because
-    // nothing was submitted. GL never reports this; macOS does, for an
-    // obscured window.
-    gBackend->presentInvalid();
-    return;
-  }
-
-  if (!gPresentReady.load(std::memory_order_acquire)) {
-    // The window exists from the moment sapp_run() starts, and the JS
-    // thread has not finished binding its context yet. Something still
-    // has to go on screen: _sapp_linux_frame swaps unconditionally after
-    // this returns, so skipping the clear would present undefined
-    // back-buffer contents rather than nothing.
-    gBackend->presentClear();
-    return;
-  }
-
-  // An ICONIFIED converted before readiness had no machine to tell.
-  if (!gTickMinimizedSynced) {
-    gTick->setMinimized(gTracked.minimized);
-    gTickMinimizedSynced = true;
-  }
-
-  // The composed gate is used below for the tick; the take is composed in
-  // the same way, and for the same reason -- takeFrame() moves the
-  // machine's state under the table's own lock, so the presenter cannot
-  // take a frame the machine has not finished publishing.
-  std::optional<SurfaceRef> taken = gTick->takeFrame(*gTable);
-  if (taken) {
-    std::string error;
-    if (!gBackend->wrapForPresenting(taken->gen, error))
-      terminateGraphicsSession(error);
-    if (std::find(
-            gWrappedGenerations.begin(),
-            gWrappedGenerations.end(),
-            taken->gen) == gWrappedGenerations.end()) {
-      // One wrapper registration per generation, matching the one set of
-      // wrappers the backend created. Each is a counted owner, which is
-      // what keeps the generation alive while this thread can still draw
-      // from it.
-      gTable->addWrapper(taken->gen);
-      gWrappedGenerations.push_back(taken->gen);
-    }
-    gPresenting = *taken;
-    gHavePresenting = true;
-  }
-
-  if (!gHavePresenting) {
-    // Nothing has ever been published. Attachment contents are initially
-    // undefined (sokol_gfx.h:3714), so the presenter samples nothing and
-    // shows a clear colour instead.
-    gBackend->presentClear();
-  } else {
-    // **Every blit takes a read reference before submission**, including
-    // a re-present of an unchanged surface, and releases it when that
-    // blit completes on the GPU (spec: Slot states, Blit). The release is
-    // onConsumerComplete's job.
-    gTable->addRead(gPresenting);
-    gBackend->blit(gPresenting);
-    maybeCapture();
-  }
-
-  releaseObsoleteWrappers();
-
-  // **The composed overload**, not anyFreeSlot() followed by
-  // shouldSendTick(bool): the free-slot reading and the tick transition
-  // happen in one critical section, so the answer cannot go stale between
-  // them. `shouldSendTick(&table)` would bind to the bool overload
-  // through a pointer conversion and silently mean "a slot is always
-  // free"; TickMachine deletes that overload so it cannot compile.
-  //
-  // **Known edge, owned by Task 15's teardown.** shouldSendTick() CONSUMES
-  // the request: a true return has already cleared `pending_` and moved
-  // the machine to kTickQueued. So if gDispatch is null, or post() returns
-  // false -- which happens once the dispatcher is closed -- nothing ever
-  // calls beginCallbacks(), the machine stays in kTickQueued, and every
-  // later shouldSendTickLocked() refuses on `state_ != kIdle`. The
-  // animation is then dead with nothing printed. It is unreachable until
-  // something closes the dispatcher, which only the lifecycle hook will.
-  //
-  // Putting the tick back is declined on semantics, not on absence: it IS
-  // expressible with the methods that exist -- requestFrame() then
-  // beginCallbacks() then endCallbacksDrew(false) returns the machine to
-  // kIdle with the request pending, and beginCallbacks()'s assert holds --
-  // but it would mean calling two methods that mean "the callbacks began"
-  // and "the callbacks ended" when no callback ran. Whoever writes the
-  // teardown should add a real entry point if one is needed, rather than
-  // conclude from this comment that the class is missing something.
-  // Recorded here so that edge is found rather than rediscovered as a hang.
-  if (gTick->shouldSendTick(*gTable) && gDispatch != nullptr)
-    gDispatch->post(runFrameTick);
-}
-
-void onEvent(const sapp_event *event) {
-  refreshTrackedState();
-  uiHandlePlatformEvent(*event, realPlatformSource());
-}
-
-void onCleanup() {
-  uiTrace("cleanup_cb");
 }
 
 //===========================================================================
@@ -1701,6 +884,8 @@ void readString(
     *out = std::move(parsed);
   }
 }
+
+namespace {
 
 /// `requestAnimationFrame(cb)` -- exported by the module and installed as
 /// a global once a window exists. Returns the id `cancelAnimationFrame`
@@ -1793,341 +978,6 @@ void installFrameGlobals() {
       napi_set_named_property(gEnv, global, entry.name, fn);
     }
   }
-}
-
-/// `__captureFrame(options)` -- the JavaScript end of the frame-capture
-/// test hook (`test_hooks.h`).
-///
-/// **The caller supplies every agreement field**, and that is the point
-/// rather than an inconvenience: the capture is taken only when the
-/// generation, the publication id, the target size, the framebuffer size
-/// and the DPI scale all match what the presenter
-/// actually drew, so a test that wants a capture has to state which frame
-/// it means. A hook that worked out the fields for itself would agree
-/// with the presenter by construction and would test nothing.
-///
-/// `giveUpAfterFrames` bounds the wait **in presented frames, not in
-/// milliseconds**: the suite runs 16-way parallel and the plan forbids
-/// timing-based assertions, and the negative case this hook exists for
-/// ("a re-blit must not satisfy a request for the next publication") can
-/// only be established by letting some number of re-blits go past.
-///
-/// \return a Promise for
-///   `{matched, framesObserved, publicationId, width, height, path}`.
-napi_value captureFrame(napi_env env, napi_callback_info info) {
-  if (!uiTestHooksEnabled()) {
-    napi_throw_error(
-        env,
-        nullptr,
-        "__captureFrame is only available when HERMES_NODE_UI_TEST_HOOKS is "
-        "set.");
-    return nullptr;
-  }
-  if (gTick == nullptr || gDispatch == nullptr) {
-    napi_throw_error(env, nullptr, "__captureFrame: no window exists yet.");
-    return nullptr;
-  }
-  if (gCaptureDeferred != nullptr) {
-    napi_throw_error(
-        env,
-        nullptr,
-        "__captureFrame: a capture is already outstanding. The hook holds "
-        "at most one request, so a second would silently replace the first.");
-    return nullptr;
-  }
-
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  napi_valuetype type = napi_undefined;
-  if (argc < 1 || napi_typeof(env, argv[0], &type) != napi_ok ||
-      type != napi_object) {
-    napi_throw_type_error(
-        env, nullptr, "__captureFrame: an options object is required.");
-    return nullptr;
-  }
-
-  // Every field defaults to zero rather than to "whatever the presenter
-  // has". An omitted field therefore means "must be zero", which is a
-  // request that simply does not match -- the strict reading, and the one
-  // that cannot accidentally capture the wrong frame.
-  CaptureRequest want;
-  int generation = 0;
-  double publicationId = 0;
-  int targetWidth = 0;
-  int targetHeight = 0;
-  int framebufferWidth = 0;
-  int framebufferHeight = 0;
-  double dpiScale = 0;
-  int giveUpAfterFrames = 0;
-  std::string path;
-
-  readInt(env, argv[0], "generation", &generation);
-  readDouble(env, argv[0], "publicationId", &publicationId);
-  readInt(env, argv[0], "targetWidth", &targetWidth);
-  readInt(env, argv[0], "targetHeight", &targetHeight);
-  readInt(env, argv[0], "framebufferWidth", &framebufferWidth);
-  readInt(env, argv[0], "framebufferHeight", &framebufferHeight);
-  readDouble(env, argv[0], "dpiScale", &dpiScale);
-  readInt(env, argv[0], "giveUpAfterFrames", &giveUpAfterFrames);
-  readString(env, argv[0], "path", &path);
-
-  want.generation = GenerationId{static_cast<uint32_t>(generation)};
-  want.publicationId = static_cast<uint64_t>(publicationId);
-  want.targetWidth = targetWidth;
-  want.targetHeight = targetHeight;
-  want.framebufferWidth = framebufferWidth;
-  want.framebufferHeight = framebufferHeight;
-  want.dpiScale = dpiScale;
-
-  {
-    std::lock_guard<std::mutex> lock(gCaptureMutex);
-    // A fresh state, so that a previous capture's "finished" flag cannot
-    // make this one return before it has seen a single frame.
-    gCaptureState = CaptureState();
-    gCaptureState.path = path;
-    gCaptureState.giveUpAfterFrames = giveUpAfterFrames;
-  }
-  gCapture.request(want);
-
-  napi_value promise = nullptr;
-  if (napi_create_promise(env, &gCaptureDeferred, &promise) != napi_ok) {
-    gCapture.cancel();
-    gCaptureDeferred = nullptr;
-    napi_throw_error(
-        env, nullptr, "__captureFrame: could not create a Promise.");
-    return nullptr;
-  }
-  return promise;
-}
-
-/// `__holdProducerCompletions()` / `__releaseProducerCompletions()` -- the
-/// JavaScript end of `CompletionGate`'s producer half (`test_hooks.h`).
-/// Exported only under HERMES_NODE_UI_TEST_HOOKS.
-///
-/// What it buys is a frame that is **deterministically still in flight**
-/// when something else happens: hold, draw, do the other thing, release.
-/// Without it "the GPU had not finished yet" is a race the test can only
-/// hope to win -- test/ui-resize-generation.js needs a frame of a retired
-/// generation to complete *after* the resize, so that its publication is
-/// refused and its slot reclaimed, and that is the path it pins.
-///
-/// Release runs the queued completions **on the calling thread**, which is
-/// the JS thread, rather than the one that would have carried them. That
-/// is within onProducerComplete()'s contract, which already runs on either.
-napi_value holdProducerCompletions(napi_env env, napi_callback_info info) {
-  (void)info;
-  gGate.holdProducer();
-  uiTrace("test hook: producer completions held");
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  return undefined;
-}
-
-napi_value releaseProducerCompletions(napi_env env, napi_callback_info info) {
-  (void)info;
-  uiTrace("test hook: producer completions released");
-  gGate.releaseProducer();
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  return undefined;
-}
-
-/// `__failPendingClipboardReads()`: what Task 15's shutdown will do to the
-/// Promise reads, reachable now so the mechanism has a caller and a test.
-napi_value failPendingClipboardReads(napi_env env, napi_callback_info info) {
-  (void)info;
-  uiFailPendingClipboardReads(env);
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  return undefined;
-}
-
-/// The `SAPP_EVENTTYPE_` name without its prefix, or false.
-bool sappEventTypeFromName(const std::string &name, sapp_event_type *out) {
-  static const struct {
-    const char *name;
-    sapp_event_type type;
-  } kTypes[] = {
-      {"KEY_DOWN", SAPP_EVENTTYPE_KEY_DOWN},
-      {"KEY_UP", SAPP_EVENTTYPE_KEY_UP},
-      {"CHAR", SAPP_EVENTTYPE_CHAR},
-      {"MOUSE_DOWN", SAPP_EVENTTYPE_MOUSE_DOWN},
-      {"MOUSE_UP", SAPP_EVENTTYPE_MOUSE_UP},
-      {"MOUSE_SCROLL", SAPP_EVENTTYPE_MOUSE_SCROLL},
-      {"MOUSE_MOVE", SAPP_EVENTTYPE_MOUSE_MOVE},
-      {"MOUSE_ENTER", SAPP_EVENTTYPE_MOUSE_ENTER},
-      {"MOUSE_LEAVE", SAPP_EVENTTYPE_MOUSE_LEAVE},
-      {"TOUCHES_BEGAN", SAPP_EVENTTYPE_TOUCHES_BEGAN},
-      {"TOUCHES_MOVED", SAPP_EVENTTYPE_TOUCHES_MOVED},
-      {"TOUCHES_ENDED", SAPP_EVENTTYPE_TOUCHES_ENDED},
-      {"TOUCHES_CANCELLED", SAPP_EVENTTYPE_TOUCHES_CANCELLED},
-      {"RESIZED", SAPP_EVENTTYPE_RESIZED},
-      {"ICONIFIED", SAPP_EVENTTYPE_ICONIFIED},
-      {"RESTORED", SAPP_EVENTTYPE_RESTORED},
-      {"FOCUSED", SAPP_EVENTTYPE_FOCUSED},
-      {"UNFOCUSED", SAPP_EVENTTYPE_UNFOCUSED},
-      {"SUSPENDED", SAPP_EVENTTYPE_SUSPENDED},
-      {"RESUMED", SAPP_EVENTTYPE_RESUMED},
-      {"QUIT_REQUESTED", SAPP_EVENTTYPE_QUIT_REQUESTED},
-      {"CLIPBOARD_PASTED", SAPP_EVENTTYPE_CLIPBOARD_PASTED},
-      {"FILES_DROPPED", SAPP_EVENTTYPE_FILES_DROPPED},
-  };
-  for (const auto &entry : kTypes) {
-    if (name == entry.name) {
-      *out = entry.type;
-      return true;
-    }
-  }
-  return false;
-}
-
-/// Reads an array of strings, leaving \p out alone when absent. An
-/// element that is not a string is skipped.
-void readStringArray(
-    napi_env env,
-    napi_value options,
-    const char *name,
-    std::vector<std::string> *out) {
-  napi_value value = nullptr;
-  bool isArray = false;
-  if (napi_get_named_property(env, options, name, &value) != napi_ok ||
-      napi_is_array(env, value, &isArray) != napi_ok || !isArray) {
-    return;
-  }
-  uint32_t length = 0;
-  if (napi_get_array_length(env, value, &length) != napi_ok)
-    return;
-  out->clear();
-  for (uint32_t i = 0; i < length; ++i) {
-    napi_value element = nullptr;
-    napi_valuetype type = napi_undefined;
-    if (napi_get_element(env, value, i, &element) != napi_ok ||
-        napi_typeof(env, element, &type) != napi_ok || type != napi_string) {
-      continue;
-    }
-    size_t size = 0;
-    if (napi_get_value_string_utf8(env, element, nullptr, 0, &size) !=
-        napi_ok) {
-      continue;
-    }
-    std::string text(size, '\0');
-    if (napi_get_value_string_utf8(env, element, &text[0], size + 1, &size) ==
-        napi_ok) {
-      text.resize(size);
-      out->push_back(std::move(text));
-    }
-  }
-}
-
-/// Whether \p options has a property \p name that is not undefined.
-bool hasProperty(napi_env env, napi_value options, const char *name) {
-  napi_value value = nullptr;
-  napi_valuetype type = napi_undefined;
-  return napi_get_named_property(env, options, name, &value) == napi_ok &&
-      napi_typeof(env, value, &type) == napi_ok && type != napi_undefined;
-}
-
-/// `__injectEvent(desc)` -- the JavaScript end of event injection
-/// (`event_injector.h`). Exported only under HERMES_NODE_UI_TEST_HOOKS.
-///
-/// **A platform event, not a UiEvent**: `desc` describes a `sapp_event`
-/// -- `type` is the `SAPP_EVENTTYPE_` name without the prefix, `button`
-/// uses Sokol's numbering, `modifiers` Sokol's bits -- and the platform
-/// thread converts it on its next frame exactly as it converts a real one.
-/// `clipboard`, `paths` and `window` stand in for what the converter would
-/// otherwise read from the platform. Every other field defaults to zero.
-napi_value injectEvent(napi_env env, napi_callback_info info) {
-  if (!uiTestHooksEnabled()) {
-    napi_throw_error(
-        env,
-        nullptr,
-        "__injectEvent is only available when HERMES_NODE_UI_TEST_HOOKS is "
-        "set.");
-    return nullptr;
-  }
-
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  napi_valuetype argType = napi_undefined;
-  if (argc < 1 || napi_typeof(env, argv[0], &argType) != napi_ok ||
-      argType != napi_object) {
-    napi_throw_type_error(
-        env, nullptr, "__injectEvent: an event description is required.");
-    return nullptr;
-  }
-  napi_value desc = argv[0];
-
-  std::string typeName;
-  readString(env, desc, "type", &typeName);
-  InjectedPlatformEvent injected;
-  if (!sappEventTypeFromName(typeName, &injected.event.type)) {
-    const std::string message = "__injectEvent: unknown event type '" +
-        typeName + "'; expected a SAPP_EVENTTYPE_ name without the prefix.";
-    napi_throw_type_error(env, nullptr, message.c_str());
-    return nullptr;
-  }
-
-  sapp_event &e = injected.event;
-  int keyCode = 0;
-  int button = 0;
-  double modifiers = 0;
-  double charCode = 0;
-  double mouseX = 0, mouseY = 0, mouseDx = 0, mouseDy = 0;
-  double scrollX = 0, scrollY = 0;
-  bool repeat = false;
-  readInt(env, desc, "keyCode", &keyCode);
-  readBool(env, desc, "repeat", &repeat);
-  readDouble(env, desc, "modifiers", &modifiers);
-  readDouble(env, desc, "mouseX", &mouseX);
-  readDouble(env, desc, "mouseY", &mouseY);
-  readDouble(env, desc, "mouseDx", &mouseDx);
-  readDouble(env, desc, "mouseDy", &mouseDy);
-  readDouble(env, desc, "scrollX", &scrollX);
-  readDouble(env, desc, "scrollY", &scrollY);
-  readInt(env, desc, "button", &button);
-  readDouble(env, desc, "charCode", &charCode);
-  e.key_code = static_cast<sapp_keycode>(keyCode);
-  e.key_repeat = repeat;
-  e.modifiers = static_cast<uint32_t>(modifiers);
-  e.mouse_x = static_cast<float>(mouseX);
-  e.mouse_y = static_cast<float>(mouseY);
-  e.mouse_dx = static_cast<float>(mouseDx);
-  e.mouse_dy = static_cast<float>(mouseDy);
-  e.scroll_x = static_cast<float>(scrollX);
-  e.scroll_y = static_cast<float>(scrollY);
-  e.mouse_button = static_cast<sapp_mousebutton>(button);
-  e.char_code = static_cast<uint32_t>(charCode);
-
-  if (hasProperty(env, desc, "clipboard")) {
-    injected.hasClipboard = true;
-    readString(env, desc, "clipboard", &injected.clipboard);
-  }
-  readStringArray(env, desc, "paths", &injected.paths);
-
-  napi_value window = nullptr;
-  napi_valuetype windowType = napi_undefined;
-  if (napi_get_named_property(env, desc, "window", &window) == napi_ok &&
-      napi_typeof(env, window, &windowType) == napi_ok &&
-      windowType == napi_object) {
-    injected.hasWindow = true;
-    WindowState &state = injected.window;
-    readInt(env, window, "width", &state.width);
-    readInt(env, window, "height", &state.height);
-    readInt(env, window, "framebufferWidth", &state.framebufferWidth);
-    readInt(env, window, "framebufferHeight", &state.framebufferHeight);
-    readDouble(env, window, "dpiScale", &state.dpiScale);
-    readBool(env, window, "focused", &state.focused);
-    readBool(env, window, "fullscreen", &state.fullscreen);
-    readBool(env, window, "minimized", &state.minimized);
-  }
-
-  gInjector.inject(std::move(injected));
-
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  return undefined;
 }
 
 napi_value createWindow(napi_env env, napi_callback_info info) {
@@ -2317,37 +1167,6 @@ napi_value initUiModule(napi_env env, napi_value exports) {
   return exports;
 }
 
-void uiHandlePlatformEvent(
-    const sapp_event &event,
-    const PlatformSource &source) {
-  // Ruling 54: the close button emits `close` and the window stays open.
-  // Cancelled BEFORE anything else, because Sokol acts on the flag as soon
-  // as this callback returns; what an uncancelled close does is Task 15's.
-  if (event.type == SAPP_EVENTTYPE_QUIT_REQUESTED) {
-    sapp_cancel_quit();
-    uiTrace("quit requested: cancelled, forwarded as close");
-  }
-
-  UiEvent converted;
-  if (!convertSappEvent(event, source, &converted))
-    return;
-  gTracked = converted.window;
-
-  // A minimized window receives no ticks (spec: Frames). Told here, on the
-  // platform thread, before the event is even queued -- so by the time a
-  // `minimize` listener requests a frame, the machine already withholds
-  // it. Before readiness there is no machine; onFrame catches it up.
-  if ((converted.type == UiEventType::kMinimize ||
-       converted.type == UiEventType::kRestore) &&
-      gPresentReady.load(std::memory_order_acquire)) {
-    gTick->setMinimized(converted.window.minimized);
-    gTickMinimizedSynced = true;
-  }
-
-  gInput.push(converted);
-  postEventDispatch();
-}
-
 bool uiWindowRequested() {
   std::lock_guard<std::mutex> lock(gMutex);
   return gWindowRequested;
@@ -2370,94 +1189,6 @@ hnui_window *uiWindowForEnv(napi_env env) {
   if (gEnv == nullptr || env != gEnv)
     return nullptr;
   return gWindow;
-}
-
-int uiRunPlatformLoop() {
-  gBackend = createGlBackend();
-  if (gBackend == nullptr) {
-    std::fprintf(
-        stderr,
-        "hermes-node-ui: no GPU backend is available for this build.\n");
-    return 1;
-  }
-
-  // Stage 1, and it must happen here rather than in init_cb: Sokol ranks
-  // its framebuffer config and creates its context inside sapp_run()
-  // (sokol_app.h:14272-14274), long before init_cb is first called from the
-  // frame path. A route decided afterwards could not change either.
-  std::string error;
-  if (!gBackend->selectContextRoute(error)) {
-    std::fprintf(stderr, "hermes-node-ui: %s\n", error.c_str());
-    std::fflush(stderr);
-    // Posted as well as printed, so the program's own `catch` runs rather
-    // than the Promise simply never settling. There is no Sokol loop yet to
-    // keep alive for delivery -- sapp_run() has not been called -- so what
-    // guarantees the JS thread gets to observe it is that UiHost joins that
-    // thread after this returns.
-    gStartupError = error;
-    gStartupFailed = true;
-    if (gDispatch != nullptr)
-      gDispatch->post(onStartupFailed);
-    return 1;
-  }
-
-  WindowRequest request;
-  {
-    std::lock_guard<std::mutex> lock(gMutex);
-    request = gRequest;
-  }
-
-  // What an event converted before init_cb reports, until init_cb's
-  // refresh replaces the size. A new window is taken to have focus, which
-  // is also what the JS object said before Task 11b kept it current.
-  gTracked.focused = true;
-  gTracked.fullscreen = request.fullscreen;
-
-  sapp_desc desc = {};
-  desc.init_cb = onInit;
-  desc.frame_cb = onFrame;
-  desc.event_cb = onEvent;
-  desc.cleanup_cb = onCleanup;
-  desc.width = request.width;
-  desc.height = request.height;
-  // Borrowed, not copied, by sokol_app -- which is why gRequest is a
-  // file-static and this reads from it rather than from the local copy
-  // above.
-  desc.window_title = gRequest.title.c_str();
-  desc.high_dpi = request.highDpi;
-  desc.fullscreen = request.fullscreen;
-  desc.logger.func = sokolLog;
-  // 4.3 core, matching what GlBackend requires of the context it shares
-  // with. Sokol already defaults to 4.3 on Linux; stated explicitly so the
-  // two cannot drift apart silently, since a lower context would run until
-  // the first texture view and then assert inside Sokol.
-  desc.gl.major_version = 4;
-  desc.gl.minor_version = 3;
-  // Drops are delivered with their paths (`hnui_event::paths`), bounded by
-  // the ABI's own limits so that what Sokol keeps and what the ABI
-  // promises cannot disagree.
-  desc.enable_dragndrop = true;
-  desc.max_dropped_files = HNUI_DROP_MAX_FILES;
-  desc.max_dropped_file_path_length = HNUI_DROP_MAX_PATH_BYTES;
-  // Needed for `ui.writeClipboard`, and for answering other clients that
-  // ask for our selection. It also makes Sokol emit CLIPBOARD_PASTED, on
-  // X11 right after the KEY_DOWN of a Ctrl+V with no other modifier
-  // (`_sapp_x11_key_event`, sokol_app.h:13562-13570); the event's text then
-  // comes from readClipboardNow(), which blocks this thread inside event_cb
-  // for up to kClipboardReadDefaultTimeoutMs when the owner is slow.
-  desc.enable_clipboard = true;
-  desc.clipboard_size = HNUI_CLIPBOARD_MAX_BYTES;
-
-  uiTrace("sapp_run: %dx%d", desc.width, desc.height);
-  sapp_run(&desc);
-
-  // Reached on Linux when the window closes; never on macOS ([NSApp run]).
-  // The JS thread is still running at this point, and bringing it down in
-  // an orderly way -- CLOSING, the pre-cleanup lifecycle hook, the exit
-  // code -- is Task 15. Until then UiHost joins it, and in practice the
-  // program ends through process.exit() before this line is reached.
-  uiTrace("sapp_run returned");
-  return 0;
 }
 
 } // namespace node_compat

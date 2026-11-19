@@ -76,25 +76,28 @@ target_include_directories(hermes-node-ui PRIVATE
 # is a real, tested configuration rather than a degraded one: a script that
 # never asks for a window runs to completion either way.
 #
-# ui_module.cpp holds both halves of the window -- the NAPI surface the JS
-# thread calls and the sokol_app callbacks the platform thread runs -- and
-# sokol_app_impl.cpp is the single compilation of sokol_app's
-# implementation. Both go into the EXECUTABLE rather than into
-# hermesNodeUiHost, deliberately: that library is what unittests/
-# UiHostTest.cpp links, and pulling sokol_app and a GL backend into a GTest
-# that only exercises a condition-variable predicate would make the test
-# need a display to link. UiHost reaches the window through a function
-# pointer main() sets (see setWindowRunner) precisely so that stays true.
+# ui_module.cpp (the NAPI surface the JS thread calls), ui_platform.cpp (the
+# sokol_app callbacks the platform thread runs) and ui_test_hooks.cpp hold
+# the window, sharing ui_internal.h, and sokol_app_impl.cpp is the single
+# compilation of sokol_app's implementation. All go into the EXECUTABLE
+# rather than into hermesNodeUiHost, deliberately: that library is what
+# unittests/UiHostTest.cpp links, and pulling sokol_app and a GL backend
+# into a GTest that only exercises a condition-variable predicate would make
+# the test need a display to link. UiHost reaches the window through a
+# function pointer main() sets (see setWindowRunner) precisely so that stays
+# true.
 if(TARGET hermesNodeCompositorGpu)
   # hnui_api.cpp implements the public C entry points an addon calls. It
   # lives in the EXECUTABLE rather than in a library for the reason the
-  # comment above gives for ui_module.cpp -- and for one of its own: the
-  # symbols are exported from this binary (hermes_node_link_setup's
-  # -rdynamic) so a dlopen'd addon resolves them, which only works if they
-  # are linked into the binary rather than left in an archive member
-  # nothing references.
+  # comment above gives for ui_module.cpp and its siblings -- and for one of
+  # its own: the symbols are exported from this binary
+  # (hermes_node_link_setup's -rdynamic) so a dlopen'd addon resolves them,
+  # which only works if they are linked into the binary rather than left in
+  # an archive member nothing references.
   target_sources(hermes-node-ui PRIVATE
     ui_module.cpp
+    ui_platform.cpp
+    ui_test_hooks.cpp
     ui_events.cpp
     hnui_api.cpp
     sokol_app_impl.cpp

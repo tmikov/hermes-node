@@ -102,7 +102,8 @@ struct hnui_window {
   //=========================================================================
   //
   // Everything event delivery needs is reachable from here, so that
-  // `ui_events.cpp` reaches nothing through `ui_module.cpp`'s statics.
+  // `ui_events.cpp` reaches nothing through the statics of `ui_module.cpp`
+  // and `ui_platform.cpp`.
 
   /// The runtime that owns this window.
   napi_env env = nullptr;

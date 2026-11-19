@@ -209,7 +209,7 @@ class CompletionGate {
 /// the same pixels -- but the spec's binding rule is a property of the
 /// matching *mechanism*, not of any one demo's content, so it is not
 /// optional here. The presenter reports the presenting surface's id
-/// (`TickMachine::presentingPublicationId()`, read in ui_module.cpp); this
+/// (`TickMachine::presentingPublicationId()`, read in ui_platform.cpp); this
 /// module only compares it.
 struct CaptureRequest {
   GenerationId generation;

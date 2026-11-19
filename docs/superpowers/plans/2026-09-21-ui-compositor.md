@@ -45,7 +45,7 @@ The cost is not one uncontended lock: three threads reach this table — the JS 
 | `lib/compositor-gpu/backend.h` | The backend interface both GL and Metal implement. Defined once, before either. |
 | `lib/compositor-gpu/gl_backend.cpp`, `lib/compositor-gpu/metal_backend.mm` | The two implementations. |
 | `lib/compositor-gpu/test_hooks.{h,cpp}` | Frame capture, synthetic event injection, controllable completion. Built always, enabled by environment variable. |
-| `tools/hermes-node-ui/main.cpp`, `ui_host.{h,cpp}`, `ui_module.cpp`, `hnui_api.cpp` | Binary entry, thread/lifecycle host, the `hermes-node:ui` module, the C API implementation. |
+| `tools/hermes-node-ui/main.cpp`, `ui_host.{h,cpp}`, `ui_module.cpp`, `ui_platform.cpp`, `ui_test_hooks.cpp`, `ui_internal.h`, `hnui_api.cpp` | Binary entry, thread/lifecycle host, the `hermes-node:ui` module (its JS-thread surface, its platform-thread half, its test hooks, and the declarations those three share), the C API implementation. |
 | `test/fixtures/hnui-demo/` | Reference addon: visual, fixed-pattern, native-tick and conformance modes. |
 | `unittests/CompositorTest.cpp` | GTest for everything in `lib/compositor/`. |
 | `test/ui-*.js` | lit tests, gated on `ui` and `display`. |

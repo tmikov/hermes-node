@@ -168,7 +168,7 @@ const ownerPath = process.argv[3];
 // under a 16-way parallel ASAN run.
 const SYNC_TIMEOUT_MS = 3000;
 // LONGER than the platform thread's own cap on a selection wait
-// (kClipboardReadCapMs, 2000 ms, in ui_module.cpp), deliberately: the
+// (kClipboardReadCapMs, 2000 ms, in ui_platform.cpp), deliberately: the
 // platform thread then gives up first and its answer is the one this read
 // receives. With a shorter deadline the waiter gives up first, the
 // platform's answer is discarded, and the sync half of MUTE would pass

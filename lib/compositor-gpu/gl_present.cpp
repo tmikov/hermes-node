@@ -66,7 +66,7 @@ constexpr float kClearLevel = 32.0f / 255.0f;
 
 /// Sokol's logger for the PRESENTING instance.
 ///
-/// Its own copy rather than the one in ui_module.cpp, because the two
+/// Its own copy rather than the one in ui_platform.cpp, because the two
 /// instances are separate builds of the same header and a message needs to
 /// say which one produced it: "an error in sg_apply_bindings" means
 /// something very different on the producer than on the presenter.
