@@ -138,13 +138,16 @@ int UiHost::run() {
       // still running and will answer for itself.
       windowRunner_();
 
-      // Orderly shutdown of the JS thread after the window is gone --
-      // CLOSING, the pre-cleanup lifecycle hook that closes the UI handle
-      // so UvEventLoop::close() can finish -- is Task 15. Until it exists
-      // this join is what keeps the process alive long enough for the JS
-      // thread to observe a rejected createWindow and exit with its own
-      // status, which is the one path through here that this build
-      // actually exercises.
+      // The runner returns only when startup failed before sapp_run() (the
+      // failure is posted to the JS thread as a rejected createWindow):
+      // nothing calls sapp_quit(), every quit request is cancelled, and on
+      // macOS sapp_run() never returns. Either way the process does not end
+      // here. Every path that ends a windowed process ends it from the JS
+      // thread with _exit() -- process.exit(), the fatal path, or, when the
+      // runtime reaches its own end with a window requested, the
+      // pre-cleanup hook uiBeforeRuntimeCleanup() -- so this join is what
+      // keeps the process alive until the JS thread does, and in practice
+      // it never completes.
       uv_thread_join(&jsThread_);
       uv_mutex_lock(&mutex_);
       const int exitCode = runtimeExitCode_;

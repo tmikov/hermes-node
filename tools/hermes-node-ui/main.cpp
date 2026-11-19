@@ -199,12 +199,15 @@ int main(int argc, char **argv) {
   hermes::node_compat::setUiModuleHost(&host);
   host.setWindowRunner(hermes::node_compat::uiRunPlatformLoop);
   // The window enters CLOSING before any 'exit' listener runs, on every
-  // path that emits 'exit'. Set here for the same ordering reason as the
-  // host pointer: setProcessExitHooks() is not synchronized, and the JS
+  // path that emits 'exit'; and a runtime that reaches its own end with a
+  // window requested ends the process from the JS thread, with its status,
+  // before anything is torn down. Set here for the same ordering reason as
+  // the host pointer: setProcessExitHooks() is not synchronized, and the JS
   // thread that reads the hooks does not exist yet. The no-window build
   // sets nothing, and its exits are exactly plain hermes-node's.
   hermes::node_compat::ProcessExitHooks exitHooks;
   exitHooks.beforeExitListeners = hermes::node_compat::uiBeforeExitListeners;
+  exitHooks.beforeRuntimeCleanup = hermes::node_compat::uiBeforeRuntimeCleanup;
   hermes::node_compat::setProcessExitHooks(exitHooks);
 #endif
 

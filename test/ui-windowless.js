@@ -25,6 +25,15 @@
 // REQUIRES: ui
 // RUN: %hermes-node-ui %s > %t.out; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck --check-prefix=OUT %s < %t.out
+//
+// The same run with tracing on, both streams kept: a script that never asks
+// for a window must still end by returning through UiHost::run(), not
+// through the pre-cleanup hook's _exit(), and must print no lifecycle line
+// at all. (Mutation: let uiBeforeRuntimeCleanup proceed with no window
+// requested, and `lifecycle: runtime returned` is printed.)
+//
+// RUN: env HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s > %t.dbg 2>&1; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %FileCheck --check-prefix=OUT --implicit-check-not='lifecycle:' %s < %t.dbg
 
 console.log('PASS');
 process.exitCode = 7;

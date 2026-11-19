@@ -891,11 +891,14 @@ int uiRunPlatformLoop() {
   uiTrace("sapp_run: %dx%d", desc.width, desc.height);
   sapp_run(&desc);
 
-  // Reached on Linux when the window closes; never on macOS ([NSApp run]).
-  // The JS thread is still running at this point, and bringing it down in
-  // an orderly way -- CLOSING, the pre-cleanup lifecycle hook, the exit
-  // code -- is Task 15. Until then UiHost joins it, and in practice the
-  // program ends through process.exit() before this line is reached.
+  // Not reached: nothing calls sapp_quit() or sapp_request_quit(), every
+  // quit request is cancelled in event_cb, and on macOS sapp_run() is
+  // [NSApp run], which never returns. That is deliberate rather than a gap:
+  // on Linux sapp_run() returning would close the X display the JS thread's
+  // GL context was created on, under that thread. The process ends from the
+  // JS thread instead -- process.exit(), the fatal path, or
+  // uiBeforeRuntimeCleanup() -- with the window still on screen. Traced, so
+  // that a run reaching here anyway says so.
   uiTrace("sapp_run returned");
   return 0;
 }

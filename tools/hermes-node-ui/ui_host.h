@@ -65,9 +65,13 @@ class UiHost {
   /// reconciliation described in CLAUDE.md's "Bootstrap Sequence" section,
   /// so nothing here may re-derive or clamp it. On the window-requested
   /// path this build cannot service -- see the class comment -- it does
-  /// not return at all: it terminates the process instead, so this
-  /// signature's "returns an exit code" contract only describes the path
-  /// that can actually happen today.
+  /// not return at all: it terminates the process instead. Nor, in
+  /// practice, does it return on the path that runs a window: the process
+  /// is ended from the JS thread (process.exit(), the fatal path, or the
+  /// pre-cleanup hook when the runtime reaches its own end), while this
+  /// thread is still in the runner or in the join after it. So this
+  /// signature's "returns an exit code" contract describes the windowless
+  /// path.
   int run();
 
   /// Wakes run()'s wait with the window half of the predicate. Safe to

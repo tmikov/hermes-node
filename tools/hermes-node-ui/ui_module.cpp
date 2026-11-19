@@ -179,12 +179,13 @@ int gGenerationHeight = 0;
 ///
 /// Released by uiEnterClosing(), so that once the window is CLOSING the
 /// loop that `process.exit()` and the fatal path pump on their way out is
-/// not held open by it. A script that calls createWindow and then simply
-/// returns still waits inside `UvEventLoop::close()`'s
-/// `uv_run(UV_RUN_DEFAULT)`: that path reaches the runtime's own end with no
-/// CLOSING yet, because the hook it needs before runtime cleanup is not
-/// installed. `process.exit()` is the path that works, and is also the one
-/// the spec describes as how a UI process ends normally.
+/// not held open by it; and by rejectWith(), so that a script which handles
+/// a rejected createWindow and returns lets the loop drain. A window that
+/// opened keeps holding it: a script that calls createWindow and then
+/// returns keeps running, as a server that listens and returns does, until
+/// something ends the process. When the runtime does reach its own end
+/// with a window requested -- the entry script threw, or the window failed
+/// -- uiBeforeRuntimeCleanup() ends the process with the runtime's status.
 bool takeReferencedHandle(uv_loop_t *loop) {
   gKeepAlive = new uv_async_t();
   // The callback never runs: nothing calls uv_async_send on this handle.
@@ -236,6 +237,15 @@ bool releaseReferencedHandle() {
 
 void rejectWith(const std::string &message) {
   gLifecycle = UiLifecycle::kFailed;
+  uiTrace("lifecycle: FAILED");
+  // A window that failed to open no longer holds the loop open: a script
+  // that handles the rejection and returns must end (spec: Lifecycle).
+  // Released before the rejection, so it happens even if the scope below
+  // cannot be opened. The dispatcher stays open: the rejection's handlers
+  // run on this thread as ordinary continuations, and CLOSING closes it
+  // when the process ends.
+  if (releaseReferencedHandle())
+    uiTrace("lifecycle: event-loop handle released (createWindow rejected)");
   napi_handle_scope scope = nullptr;
   if (napi_open_handle_scope(gEnv, &scope) != napi_ok)
     return;
@@ -1308,10 +1318,13 @@ void uiEnterClosing(UiCloseReason reason) {
 
   // Outstanding clipboard reads of both kinds complete with an error (spec:
   // Lifecycle). A synchronous read blocks the only thread that can get
-  // here, so none can be waiting now; failAll() still runs, and forgets the
-  // registry's entries so that a reply in flight is refused. The Promise
-  // reads are rejected now and their handlers run at the end of this
-  // function, below.
+  // here, so none can be waiting now, and every slot such a read created
+  // has already been released by the read that created it -- so a reply
+  // still in flight is refused whether or not failAll() runs. It runs
+  // anyway, as the spec's step and so that the count it returns (0) is
+  // traced; a slot created after this point is refused at its push, since
+  // uiPushCommand() refuses once CLOSING is set. The Promise reads are
+  // rejected now and their handlers run at the end of this function, below.
   const size_t syncFailed = gClipboardReads.failAll(ClipboardStatus::kError);
   const size_t promiseFailed = uiFailPendingClipboardReads(gEnv);
   uiTrace(
@@ -1368,6 +1381,46 @@ void uiBeforeExitListeners(napi_env env, ExitReason reason) {
       uiEnterClosing(UiCloseReason::kRuntimeReturn);
       return;
   }
+}
+
+void uiBeforeRuntimeCleanup(napi_env env, int exitCode) {
+  // A script that never asked for a window has nothing here to protect, and
+  // ends exactly as plain hermes-node does: step 16, then UiHost::run()
+  // joins the JS thread and returns its status.
+  if (!uiWindowRequested())
+    return;
+  if (env != gEnv)
+    return;
+
+  // Ending here rather than letting step 16 run is not a shortcut. The
+  // window cannot be torn down: sapp_run() returning would close the X
+  // display this thread's GL context was created on, while this thread
+  // still has it current, and on macOS sapp_run() never returns and its
+  // quit path exits 0 from the main thread, which cannot carry a status.
+  // So the window stays until the process ends, and the process ends here,
+  // from the JS thread, as process.exit() and the fatal path end it.
+  //
+  // Skipping step 16 is safe for the reasons processExit() gives for its
+  // own _exit(): the status is already settled, the 'exit' listeners have
+  // run, and step 15 flushed what they wrote; what step 16 would add is
+  // tearing down a runtime the OS is about to reclaim, which under ASAN is
+  // also thousands of leak reports for the live Hermes heap. And it must
+  // not return once a window may exist: the main thread is then inside
+  // sapp_run(), which returns on no path, so after step 16 the JS thread
+  // would finish with nothing left to end the process -- a window on screen
+  // with no runtime behind it, whose platform thread is still reaching into
+  // what this thread created. (When startup failed before sapp_run(), the
+  // main thread is in UiHost::run()'s join instead, and returning would
+  // work; ending the same way on every windowed path is simpler than
+  // telling the two apart, and gives up nothing.)
+  uiTrace("lifecycle: runtime returned, exiting with status %d", exitCode);
+  std::fflush(nullptr);
+  // Every _exit() path in this tree restores the terminal first (CLAUDE.md,
+  // Bootstrap Sequence). Step 16 is what restores it on plain hermes-node's
+  // natural path -- closing the stdio handles reaches uv__tty_close -- and
+  // this path skips step 16, so nothing else would.
+  uv_tty_reset_mode();
+  _exit(exitCode);
 }
 
 bool uiWindowRequested() {

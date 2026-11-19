@@ -261,7 +261,10 @@ uint64_t gNextReadId = 1;
 
 /// Reject \p deferred with an Error carrying \p code. Inside a handle
 /// scope the caller opened.
-void rejectRead(
+///
+/// \return whether the rejection was performed, so a caller's trace can
+/// record one that happened rather than one that was attempted.
+bool rejectRead(
     napi_env env,
     napi_deferred deferred,
     const char *code,
@@ -272,7 +275,7 @@ void rejectRead(
   napi_create_string_utf8(env, code, NAPI_AUTO_LENGTH, &codeValue);
   napi_create_string_utf8(env, message.data(), message.size(), &messageValue);
   napi_create_error(env, codeValue, messageValue, &error);
-  napi_reject_deferred(env, deferred, error);
+  return napi_reject_deferred(env, deferred, error) == napi_ok;
 }
 
 /// Settle the Promise a `kClipboardReply` answers, then run the tick
@@ -907,11 +910,13 @@ napi_value uiReadClipboard(napi_env env, napi_callback_info info) {
   // back through the input queue, which only this thread drains.
   if (!uiPushCommand(
           Command::readClipboard(id, /*replyThroughSlot=*/false, deadline))) {
-    rejectRead(
-        env,
-        deferred,
-        "ERR_CLIPBOARD_FAILED",
-        "readClipboard: the window is closing.");
+    if (rejectRead(
+            env,
+            deferred,
+            "ERR_CLIPBOARD_FAILED",
+            "readClipboard: the window is closing.")) {
+      uiTrace("clipboard read promise: refused (closing)");
+    }
     return promise;
   }
   gPendingReads[id] = deferred;

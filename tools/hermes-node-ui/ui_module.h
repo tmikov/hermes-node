@@ -140,6 +140,13 @@ bool uiClosing();
 /// window's (when a window was requested). JS thread.
 void uiBeforeExitListeners(napi_env env, ExitReason reason);
 
+/// `ProcessExitHooks::beforeRuntimeCleanup`, which `main()` installs.
+/// Returns when no window was ever requested (the windowless path ends
+/// through `UiHost::run()` as before) or when \p env is not the window's.
+/// Otherwise does not return: `std::fflush(nullptr)`, `uv_tty_reset_mode()`,
+/// `_exit(exitCode)`. JS thread.
+void uiBeforeRuntimeCleanup(napi_env env, int exitCode);
+
 /// Whether `createWindow` has been called. JS thread. What
 /// `ui.writeClipboard` checks: with no window ever requested nothing would
 /// drain the command queue, so an accepted call would silently do nothing.

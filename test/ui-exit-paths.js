@@ -83,6 +83,39 @@
 //            remove gDispatch->close() from uiEnterClosing, and the
 //            `post refused` line is gone; remove the
 //            uiTestHooksAbandonCapture() call, and its line is gone.)
+//            A `readClipboard()` there returns a Promise that is already
+//            rejected; nothing drains microtasks before _exit(), so no
+//            handler can report it and the `clipboard read promise:
+//            refused (closing)` trace, printed once the rejection was
+//            performed, is the check. (Mutation: delete the rejectRead()
+//            call in uiReadClipboard's refusal branch, leaving the Promise
+//            pending, and that line is gone.)
+//  THROW     createWindow() and then a synchronous throw from the entry
+//            script, in one turn. runHermesNode reaches its step 15 with a
+//            window requested: CLOSING (reason=return) before the 'exit'
+//            listeners, then the pre-cleanup hook ends the process with
+//            the runtime's status, 1, after step 15 has flushed stdio --
+//            the eight listener lines and the barrier's must all arrive
+//            through a pipe. The window's readiness, posted by init_cb, is
+//            either refused at the post or drained and refused by
+//            close(); it is never delivered (no `window ready`). The
+//            barrier makes that alternation exact: it returns only after a
+//            platform frame, and init_cb precedes the first one.
+//            (Mutations: delete the runBeforeRuntimeCleanupHook call, and
+//            the run hangs until `timeout` (124); delete the
+//            kRuntimeReturn hook call, and there is no reason=return line;
+//            move the cleanup hook above step 15's flushPendingWrites, and
+//            the piped lines are lost.) The alternation (THROW-ARM) is
+//            checked in a run of its own, because its two arms fall on
+//            opposite sides of `dispatcher closed`: a post refused by the
+//            closed dispatcher is traced after it, and one accepted before
+//            it is run and refused by close()'s own drain, before its
+//            trace. THROW-TRACE's NOT pins that second arm's position, and
+//            with it the close() call: without close() the readiness is not
+//            lost -- it is still refused, by the state check on entry, but
+//            from the loop step 15 pumps after the listeners, after
+//            `dispatcher closed`. (Mutation: remove gDispatch->close(), and
+//            the NOT fails; THROW-ARM alone stays green.)
 //
 // Not pinned here: the `gTable->beginClosing()` call inside uiEnterClosing.
 // Without it the platform thread could still send a tick after CLOSING, but
@@ -129,6 +162,16 @@
 // RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s commands %hnui_demo_addon > %t.commands.out 2> %t.commands.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=COMMANDS-CODE %s
 // RUN: %FileCheck --check-prefix=COMMANDS %s < %t.commands.out
 // RUN: %FileCheck --check-prefix=COMMANDS-TRACE --implicit-check-not=AddressSanitizer --implicit-check-not='late title' %s < %t.commands.err
+//
+// THROW's stdout goes through a pipe, because the flush is part of the
+// claim: a pipe is a libuv stream whose writes are queued, so an _exit()
+// that ran before step 15's flush would lose the listener's lines.
+//
+// RUN: timeout 120 %with-xvfb sh -c '{ HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s throw %hnui_demo_addon 2> %t.throw.err; echo "EXITCODE $?" > %t.throw.code; } | cat > %t.throw.out'
+// RUN: %FileCheck --check-prefix=THROW-CODE %s < %t.throw.code
+// RUN: %FileCheck --check-prefix=THROW %s < %t.throw.out
+// RUN: %FileCheck --check-prefix=THROW-TRACE --implicit-check-not='window ready' --implicit-check-not=AddressSanitizer %s < %t.throw.err
+// RUN: %FileCheck --check-prefix=THROW-ARM %s < %t.throw.err
 
 'use strict';
 
@@ -228,6 +271,10 @@ async function main() {
       win.title = 'late title';
       win.setCursor('ibeam');
       ui.writeClipboard('late');
+      // Nothing drains microtasks between an 'exit' listener and _exit(),
+      // so a handler here never runs: the trace is what says the Promise
+      // was rejected rather than left pending.
+      ui.readClipboard().catch(() => {});
       ui.__injectEvent({type: 'KEY_DOWN', keyCode: SAPP_KEYCODE_A});
       console.log('BARRIER ' + ui.__waitPlatformFrames(1));
     });
@@ -237,6 +284,21 @@ async function main() {
 
   console.log('unknown mode ' + mode);
   process.exit(2);
+}
+
+if (mode === 'throw') {
+  // Everything in the entry script's own turn: no await, so the throw is
+  // the entry script's and step 13 of runHermesNode records it. The barrier
+  // at the end of the listener returns only after a platform frame, and
+  // init_cb precedes the first frame, so by then the window's readiness has
+  // been offered to the JS thread and refused one way or the other.
+  process.on('exit', (code) => {
+    for (let i = 0; i < 8; ++i)
+      console.log('EXIT-LINE ' + i + ' code=' + code);
+    console.log('BARRIER ' + ui.__waitPlatformFrames(1));
+  });
+  ui.createWindow({width: 320, height: 240, title: 'exit paths'});
+  throw new Error('boom after createWindow');
 }
 
 main().catch((e) => {
@@ -283,4 +345,19 @@ main().catch((e) => {
 // COMMANDS-TRACE: command refused (closing): title
 // COMMANDS-TRACE: command refused (closing): cursor
 // COMMANDS-TRACE: command refused (closing): write-clipboard
+// COMMANDS-TRACE: command refused (closing): read-clipboard
+// COMMANDS-TRACE: clipboard read promise: refused (closing)
 // COMMANDS-TRACE: event dispatch: post refused (dispatcher closed)
+
+// THROW: EXIT-LINE 0 code=1
+// THROW: EXIT-LINE 7 code=1
+// THROW-NEXT: BARRIER true
+// THROW-CODE: EXITCODE 1
+// THROW-TRACE: Error: boom after createWindow
+// THROW-TRACE: lifecycle: CLOSING (reason=return)
+// THROW-TRACE: lifecycle: dispatcher closed
+// THROW-TRACE-NOT: window readiness: refused (closing)
+// THROW-TRACE: lifecycle: runtime returned, exiting with status 1
+// THROW-ARM: lifecycle: CLOSING (reason=return)
+// THROW-ARM: {{(init_cb: post refused \(dispatcher closed\)|window readiness: refused \(closing\))}}
+// THROW-ARM: lifecycle: runtime returned, exiting with status 1
