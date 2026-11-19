@@ -96,7 +96,15 @@ def run(seconds, command, env=None, foreground=False):
             proc.wait(timeout=KILL_GRACE_SECONDS)
         except subprocess.TimeoutExpired:
             _signal(proc, own_group, signal.SIGKILL)
-            proc.wait()
+            try:
+                # Bounded: a process stuck in an uninterruptible wait cannot
+                # be reaped, and must not hang whoever is waiting on us.
+                # The limit did expire, so the answer is still 124.
+                proc.wait(timeout=KILL_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                sys.stderr.write(
+                    'timeout.py: %s did not exit after SIGKILL; giving up '
+                    'on it\n' % command[0])
         if own_group:
             # The command may have gone at SIGTERM while a child of its
             # ignored it; the group is what the limit applies to.

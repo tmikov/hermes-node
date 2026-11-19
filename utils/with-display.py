@@ -134,6 +134,15 @@ def open_lock(path):
       file and its mode is changed only when this process created it, so
       locking through a hard link changes nothing. Do not "fix" this by
       adding a chmod of an existing file -- that is exactly the hole.
+
+    What this accepts, deliberately: a machine-wide lock in /tmp means any
+    local user can stop the window tests for everyone, by holding the lock
+    or by planting at the path something this refuses (a file we cannot
+    open, a FIFO, a socket, a directory, a symlink). Whoever first creates
+    the file owns it, and could unlink and recreate it to break the
+    serialisation. The worst outcome of either is stalled or flaky window
+    tests -- never a write through a link -- and the alternative, running
+    unserialised, gives wrong test results silently.
     """
     flags = getattr(os, 'O_CLOEXEC', 0) | os.O_NOFOLLOW
     for _ in range(3):
@@ -168,6 +177,20 @@ def open_lock(path):
     return None, 'keeps disappearing between create and open'
 
 
+def describe_owner(path):
+    """`name (uid N)` of whoever owns `path` itself (not a link's target);
+    never fails."""
+    try:
+        uid = os.lstat(path).st_uid
+    except OSError:
+        return 'unknown'
+    try:
+        import pwd
+        return '%s (uid %d)' % (pwd.getpwuid(uid).pw_name, uid)
+    except (ImportError, KeyError):
+        return 'uid %d' % uid
+
+
 def run_darwin(seconds, command):
     import fcntl
 
@@ -190,10 +213,13 @@ def run_darwin(seconds, command):
         return OWN_FAILURE
     fd, problem = open_lock(path)
     if fd is None:
-        # Neither running unserialised nor hanging is acceptable.
+        # Neither running unserialised nor hanging is acceptable. One line
+        # a person can act on: what, whose, and what to do about it.
         sys.stderr.write(
-            'with-display.py: refusing the display lock %s: it %s\n' %
-            (path, problem))
+            'with-display.py: refusing the display lock %s: it %s (owner: '
+            '%s); remove it (as that user or with sudo), or set '
+            'HERMES_NODE_UI_DISPLAY_LOCK to another path\n' %
+            (path, problem, describe_owner(path)))
         return OWN_FAILURE
     try:
         # Polled rather than blocking, because a blocking flock() cannot be

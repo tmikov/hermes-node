@@ -8,8 +8,9 @@
     lock_check.py WITH_DISPLAY LOCK_PATH WORK_DIR
 
 Starts run A (a command that records its start, holds for a while, records
-its end), waits until A's command has started, then starts run B (which
-records its start). Each run is given a DIFFERENT TMPDIR, as two concurrent
+its end), waits until A's command has started -- so A holds the lock --
+then starts run B (which records its start). Serialised means B was
+launched before A's command ended and B's command started after it. Each run is given a DIFFERENT TMPDIR, as two concurrent
 lit invocations get (lit points TMPDIR at a fresh lit_tmp_* directory per
 run), so a lock derived from TMPDIR would not serialise them.
 
@@ -77,11 +78,21 @@ a = subprocess.Popen(darwin + ['30'] + recorder(a_mark, 2.0), env=env_for('A'))
 if not wait_for(a_mark + '.start', 20):
     print('A never started')
     sys.exit(1)
+# B is launched only once A's COMMAND has started, so A provably holds the
+# lock. Serialised means B was launched while A still held it AND B's
+# command started only after A's ended: a B that merely started late
+# would satisfy the second half alone.
+b_launched = time.time()
 b = subprocess.Popen(darwin + ['30'] + recorder(b_mark, 0), env=env_for('B'))
 a_status = a.wait()
 b_status = b.wait()
-print('serialised' if read(b_mark + '.start') >= read(a_mark + '.end')
-      else 'OVERLAP')
+a_end = read(a_mark + '.end')
+if not b_launched < a_end:
+    print('B launched too late to prove anything')
+elif read(b_mark + '.start') >= a_end:
+    print('serialised')
+else:
+    print('OVERLAP')
 print('A status=%d' % a_status)
 print('B status=%d' % b_status)
 

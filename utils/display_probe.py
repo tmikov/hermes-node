@@ -59,22 +59,62 @@ def outer_timeout(lock_wait=LOCK_WAIT_SECONDS, limit=LIMIT_SECONDS):
     return lock_wait + limit + _kill_grace_seconds() + MARGIN_SECONDS
 
 
+# The pkill this uses; a module variable so test/display-probe.js can make
+# it unavailable.
+PKILL = 'pkill'
+# How long to wait for the wrapper to be reaped after SIGKILL.
+REAP_SECONDS = 10
+UNKILLABLE = "the probe's session could not be killed; a window may survive"
+
+
 def _kill_session(proc):
-    """Kill the wrapper's whole session, then reap the wrapper."""
-    # The session id is the wrapper's pid (it was started as a session
-    # leader). pkill -s takes a session id on Linux (procps) and macOS (BSD)
-    # alike; killpg below covers the wrapper's own group if pkill is absent.
+    """End the wrapper and everything it started; '' or a problem to add
+    to the reason.
+
+    (a) SIGTERM to the wrapper alone first. While its command runs,
+        with-display.py (timeout.run) forwards SIGTERM to the command's
+        process group and waits for it; while it is still queueing for the
+        lock there is no command, and SIGTERM ends it. So the ordinary case
+        needs no external tool.
+    (b) Then, to be sure nothing of the session is left -- a command that
+        ignores SIGTERM, a wrapper that did not exit -- `pkill -KILL -s
+        <sid>` (the wrapper is the session leader, so its pid is the sid;
+        the command, in a process group of its own, is still in the
+        session), and killpg of the wrapper's own group. killpg alone
+        cannot reach the command's group, so a pkill that could not run
+        (missing, or exit 2/3: usage or internal error on procps and BSD
+        alike) is REPORTED, never swallowed.
+    (c) The final reap is bounded.
+    """
+    problems = []
     try:
-        subprocess.run(['pkill', '-KILL', '-s', str(proc.pid)],
-                       stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
+        proc.send_signal(signal.SIGTERM)
+    except ProcessLookupError:
         pass
+    try:
+        proc.wait(timeout=_kill_grace_seconds() + 2)
+    except subprocess.TimeoutExpired:
+        pass
+    pkill_ok = True
+    try:
+        result = subprocess.run([PKILL, '-KILL', '-s', str(proc.pid)],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=10)
+        if result.returncode not in (0, 1):
+            pkill_ok = False
+    except (OSError, subprocess.TimeoutExpired):
+        pkill_ok = False
+    if not pkill_ok:
+        problems.append(UNKILLABLE)
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
-    proc.wait()
+    try:
+        proc.wait(timeout=REAP_SECONDS)
+    except subprocess.TimeoutExpired:
+        problems.append('the wrapper did not exit after SIGKILL')
+    return '; '.join(problems)
 
 
 def _wrapper_line(stderr):
@@ -107,10 +147,12 @@ def run(wrapper, command, env=None, lock_wait=LOCK_WAIT_SECONDS,
     try:
         out, err = proc.communicate(timeout=outer)
     except subprocess.TimeoutExpired:
-        _kill_session(proc)
-        return None, b'', b'', (
-            'display probe killed after %g s; the wrapper never returned' %
-            outer)
+        problem = _kill_session(proc)
+        reason = ('display probe killed after %g s; the wrapper never '
+                  'returned' % outer)
+        if problem:
+            reason += '; ' + problem
+        return None, b'', b'', reason
     status = proc.returncode
     if status == 125:
         line = _wrapper_line(err)
@@ -124,6 +166,19 @@ def run(wrapper, command, env=None, lock_wait=LOCK_WAIT_SECONDS,
         return status, out, err, (
             'display probe timed out after %g s' % limit)
     return status, out, err, None
+
+
+# What a reason may contain once it is a lit substitution. The two tests
+# that print %display-reason do so inside single quotes on a shell line, and
+# lit itself expands `%` sequences in RUN lines, so anything outside this
+# conservative set -- quotes, backslash, `$`, backquote, `%`, newline -- is
+# replaced by `?`: visibly sanitised, never executed.
+_REASON_SAFE = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+                   '0123456789 _.,:;()/=+-')
+
+
+def sanitize_reason(reason):
+    return ''.join(c if c in _REASON_SAFE else '?' for c in reason)
 
 
 def is_busy(reason):

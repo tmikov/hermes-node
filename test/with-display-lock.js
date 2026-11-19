@@ -61,10 +61,10 @@
 // CHECK-NEXT: {{^}}D said: with-display.py: gave up waiting for the display lock {{.*}}display.lock after 1 s{{$}}
 
 // HARD: {{^}}symlink status=125 ran=0 target-mode=600{{$}}
-// HARD-NEXT: {{^}}symlink said: with-display.py: refusing the display lock {{.*}}link-to-victim: it is a symbolic link{{$}}
+// HARD-NEXT: {{^}}symlink said: with-display.py: refusing the display lock {{.*}}link-to-victim: it is a symbolic link (owner: {{[^ ]+}} (uid [[UID:[0-9]+]])); remove it (as that user or with sudo), or set HERMES_NODE_UI_DISPLAY_LOCK to another path{{$}}
 // HARD-NEXT: {{^}}dangling status=125 ran=0 target-created=0{{$}}
 // HARD-NEXT: {{^}}fifo status=125 ran=0 prompt=1{{$}}
-// HARD-NEXT: {{^}}fifo said: with-display.py: refusing the display lock {{.*}}fifo: it is not a regular file{{$}}
+// HARD-NEXT: {{^}}fifo said: with-display.py: refusing the display lock {{.*}}fifo: it is not a regular file (owner: {{[^ ]+}} (uid [[UID]])); remove it (as that user or with sudo), or set HERMES_NODE_UI_DISPLAY_LOCK to another path{{$}}
 // HARD-NEXT: {{^}}readonly status=0 serialised=1 mode=444{{$}}
 // HARD-NEXT: {{^}}umask 022 status=0 ran=1 mode=666{{$}}
 // HARD-NEXT: {{^}}umask 077 status=0 ran=1 mode=666{{$}}

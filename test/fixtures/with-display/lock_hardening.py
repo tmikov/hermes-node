@@ -107,6 +107,9 @@ deadline = time.monotonic() + 20
 while not os.path.exists(a_mark[0]) and time.monotonic() < deadline:
     time.sleep(0.02)
 b_mark = fresh('B.start')
+# Launched only once A's command has started (A holds the lock); proves
+# the wait only if it was also launched before A's command ended.
+b_launched = time.time()
 status, _, _ = wrap(readonly, command=[
     sys.executable, '-c',
     'import sys, time; open(sys.argv[1], "w").write(repr(time.time()))',
@@ -117,7 +120,7 @@ with open(b_mark) as f:
 with open(a_mark[1]) as f:
     a_end = float(f.read())
 print('readonly status=%s serialised=%d mode=%s' % (
-    status, int(b_start >= a_end), mode(readonly)))
+    status, int(b_launched < a_end <= b_start), mode(readonly)))
 
 # (5) A file the wrapper creates is 0666 whatever the umask.
 for umask in (0o022, 0o077):
