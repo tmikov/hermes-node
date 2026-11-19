@@ -205,6 +205,11 @@ int main(int argc, char **argv) {
   // the host pointer: setProcessExitHooks() is not synchronized, and the JS
   // thread that reads the hooks does not exist yet. The no-window build
   // sets nothing, and its exits are exactly plain hermes-node's.
+  //
+  // The hooks are process-wide and run on the JS thread of whichever
+  // runtime is exiting. This binary runs one runtime (it refuses
+  // `--inspect`), and the hooks do not rely on that: each returns at once
+  // for any env other than the one that instantiated `hermes-node:ui`.
   hermes::node_compat::ProcessExitHooks exitHooks;
   exitHooks.beforeExitListeners = hermes::node_compat::uiBeforeExitListeners;
   exitHooks.beforeRuntimeCleanup = hermes::node_compat::uiBeforeRuntimeCleanup;

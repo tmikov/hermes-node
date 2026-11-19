@@ -56,8 +56,6 @@ SurfaceRef gPresenting{};
 bool gHavePresenting = false;
 std::vector<GenerationId> gWrappedGenerations;
 
-bool gStartupFailed = false;
-
 /// The platform thread's tracked window state: the `window` snapshot of
 /// the last event it converted, refreshed from `sapp_*` queries before each
 /// real event (the converter handles focus and minimize, not size).
@@ -386,11 +384,10 @@ void drainInjectedEvents() {
   if (!batched)
     return;
   // Released, then the queue is checked -- not "did this batch push
-  // anything". While the flag was held, a postEventDispatch() from the JS
-  // thread (the one onSharedContextReady makes for events that predate the
-  // window object) returned without posting, on the strength of this
-  // holder; checking the queue is what keeps that promise. A batch whose
-  // every event the converter refused is covered by the same check.
+  // anything". While the flag was held, any postEventDispatch() returned
+  // without posting, on the strength of this holder; checking the queue is
+  // what keeps that promise. A batch whose every event the converter
+  // refused is covered by the same check.
   gDispatchPosted.store(false);
   if (!gInput.empty())
     postEventDispatch();
@@ -619,7 +616,6 @@ void onInit() {
     // into it -- so that the rejection reaches JS rather than racing a
     // process teardown.
     gStartupError = error;
-    gStartupFailed = true;
     // Refused once the JS thread is CLOSING: the rejection is never
     // delivered, and this thread presents its clear colour until _exit().
     if (gDispatch == nullptr || !gDispatch->post(onStartupFailed))
@@ -847,7 +843,6 @@ int uiRunPlatformLoop() {
     // guarantees the JS thread gets to observe it is that UiHost joins that
     // thread after this returns.
     gStartupError = error;
-    gStartupFailed = true;
     if (gDispatch == nullptr || !gDispatch->post(onStartupFailed))
       uiTrace("startup failure: post refused (dispatcher closed)");
     return 1;

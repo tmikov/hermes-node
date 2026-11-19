@@ -61,6 +61,50 @@
 /// "Misuse of a checked `hnui_*` call from the wrong thread: abort naming
 /// the function").
 ///
+/// # Closing
+///
+/// Every path that emits `'exit'` in a windowed process --
+/// `process.exit()`, an uncaught exception, the runtime reaching its own
+/// end, and through `process.exit()` a `close` nobody cancelled and
+/// `win.close()` -- first puts the window into CLOSING, before any
+/// JavaScript `'exit'` listener runs. The window stays on screen, showing
+/// its last presented frame, until the process ends. From that moment:
+///
+///   - `hnui_request_animation_frame` registers nothing and returns 0.
+///   - Frame callbacks already registered are dropped without being called,
+///     those still to run in a tick under way included. Their `user`
+///     pointers are never handed back: nothing is called with them.
+///   - `hnui_frame_target` returns false, even inside the frame callback
+///     that was running when CLOSING began.
+///   - No further event is delivered: native event listeners are no longer
+///     called, and neither are JavaScript ones. (The one exception is the
+///     event being delivered when CLOSING began, when that happens inside
+///     its own delivery and does not end the process at once -- only
+///     possible when `process.exit` has been replaced by a function that
+///     returns. That event's remaining listeners still run.)
+///   - `hnui_cancel_close` returns false.
+///   - `hnui_set_cursor`, `hnui_show_cursor`, `hnui_lock_pointer` and
+///     `hnui_write_clipboard` drop the request without telling the caller
+///     (traced under `HERMES_NODE_DEBUG_NATIVE=UI`); an argument they would
+///     refuse anyway is still refused on stderr first.
+///   - `hnui_read_clipboard_sync` returns `HNUI_ERROR` at once, without
+///     waiting for \p timeout_ms.
+///
+/// `hnui_get_window` keeps returning the window, and
+/// `hnui_get_window_state` keeps answering with the last state delivered.
+///
+/// **There is no teardown notification.** Every one of those paths ends in
+/// `_exit()` on the JS thread, and a fatal graphics error ends the process
+/// with `_exit()` at once, from whichever thread met it: nothing in the
+/// window or in the producing `sg_*` instance is torn down, and the N-API
+/// environment is never destroyed, so cleanup hooks registered with
+/// `napi_add_env_cleanup_hook`, and the finalizers an environment's
+/// destruction would run, do not run either. An addon
+/// must not rely on being told the process is ending; whatever it holds
+/// ends with the process. Code that must run on the way out belongs in a
+/// JavaScript `'exit'` listener, from which the API behaves as listed
+/// above.
+///
 /// # Linking
 ///
 /// The host exports these symbols from its own executable
@@ -188,7 +232,9 @@ bool hnui_frame_target(hnui_window *w, hnui_target *out);
 /// \return an id for `hnui_cancel_animation_frame`, from the same id space
 ///   as `requestAnimationFrame`'s; ids start at 1 and are never reused.
 ///   Returns 0 -- "no id" -- for a NULL \p w or a NULL \p cb, for the
-///   reason `hnui_frame_target` returns false for the first of those.
+///   reason `hnui_frame_target` returns false for the first of those, and
+///   once the window is closing (see "Closing" above), when \p cb is not
+///   registered.
 int hnui_request_animation_frame(hnui_window *w, hnui_frame_cb cb, void *user);
 
 /// Cancel the frame callback \p id, so that it does not run: one waiting

@@ -137,8 +137,29 @@ namespace {
 /// Guarded by gMutex.
 bool gWindowRequested = false;
 
-/// Where the window is in its life (spec: Lifecycle). **JS thread only**,
-/// with no atomic: every transition and every read happens there, and the
+/// The env of the runtime that instantiated `hermes-node:ui`, and the only
+/// env the process exit hooks act for. Guarded by gMutex. Written once, by
+/// the first initUiModule(); never changed or cleared afterwards.
+///
+/// The hooks are process-wide: whichever runtime is exiting calls them, on
+/// its own JS thread. hermes-node-ui runs one runtime today (it refuses
+/// `--inspect`), but the hooks are not allowed to depend on that: an exit of
+/// any other runtime must not put this module's window into CLOSING, and
+/// must not run the closing sequence on a thread that does not own it.
+napi_env gModuleEnv = nullptr;
+
+/// Envs whose beforeExitListeners hook ran before any runtime had
+/// instantiated the module. Guarded by gMutex. initUiModule() looks its own
+/// env up here, so that a script which first requires the module from an
+/// 'exit' listener finds it CLOSING, as one that required it earlier does,
+/// and its createWindow throws. One entry per call of that hook before then,
+/// of which a process makes very few; cleared once the module exists.
+std::vector<napi_env> gEnvsExitedBeforeModule;
+
+/// Where the window is in its life (spec: Lifecycle). **JS thread only** --
+/// the thread of the runtime that instantiated the module -- with no
+/// atomic: every transition (initUiModule()'s included) and every read
+/// happens there, the exit hooks reaching it only for that runtime, and the
 /// platform thread is never told -- it learns of CLOSING only through what
 /// CLOSING does (a table that refuses publication and withholds the tick, a
 /// dispatcher that refuses posts). CLOSED has no value: it is the `_exit()`,
@@ -619,8 +640,11 @@ void openEventDelivery() {
 
 } // namespace
 
-/// Any thread: the platform thread after pushing an event, the JS thread
-/// once the window object exists.
+/// Platform thread: its three callers are all in ui_platform.cpp, two right
+/// after pushing onto the input queue and drainInjectedEvents() after
+/// finding it non-empty at the end of a batch. Nothing it touches is
+/// thread-confined -- gDispatchPosted is atomic and post() locks -- so a
+/// JS-thread caller would be safe too, but there is none.
 void postEventDispatch() {
   if (gDispatchPosted.exchange(true))
     return;
@@ -1221,6 +1245,26 @@ bool exportFunction(
 } // namespace
 
 napi_value initUiModule(napi_env env, napi_value exports) {
+  // Record which runtime this module belongs to before anything it exports
+  // can run. The first initialisation wins; a module instantiated by a
+  // second runtime is not the one the exit hooks act for.
+  {
+    std::lock_guard<std::mutex> lock(gMutex);
+    if (gModuleEnv == nullptr) {
+      gModuleEnv = env;
+      for (napi_env exited : gEnvsExitedBeforeModule) {
+        if (exited == env) {
+          // This runtime is already on its way out (the module was first
+          // required from an 'exit' listener). The state uiEnterClosing()
+          // records when no window was requested, recorded here instead,
+          // on this runtime's JS thread, which is the thread that owns it.
+          gLifecycle = UiLifecycle::kClosing;
+          break;
+        }
+      }
+      gEnvsExitedBeforeModule.clear();
+    }
+  }
   if (!exportFunction(env, exports, "createWindow", createWindow))
     return nullptr;
   if (!exportFunction(
@@ -1434,11 +1478,37 @@ bool uiCloseWindow(hnui_window *w) {
   return true;
 }
 
+namespace {
+
+/// Whether \p env is the runtime the module belongs to (gModuleEnv), which
+/// is the only one the exit hooks act for. Called first by both hooks, on
+/// \p env's own JS thread. When no runtime has instantiated the module yet
+/// the answer is false, and \p record says whether to remember \p env for
+/// initUiModule() (see gEnvsExitedBeforeModule).
+///
+/// Everything is read under gMutex, so the answer is ordered with the
+/// initUiModule() that wrote gModuleEnv whichever thread asks; and a true
+/// answer means the caller is the module's own JS thread, so what the hook
+/// goes on to touch -- gLifecycle, gEnv, the window -- is touched by the
+/// thread that owns it.
+bool isModuleEnv(napi_env env, bool record) {
+  std::lock_guard<std::mutex> lock(gMutex);
+  if (gModuleEnv == nullptr) {
+    if (record)
+      gEnvsExitedBeforeModule.push_back(env);
+    return false;
+  }
+  return env == gModuleEnv;
+}
+
+} // namespace
+
 void uiBeforeExitListeners(napi_env env, ExitReason reason) {
-  // Another runtime's exit is not this window's. With no window requested
-  // there is no env to compare against, and the state is recorded anyway
-  // (see uiEnterClosing()).
-  if (uiWindowRequested() && env != gEnv)
+  // Another runtime's exit is not this window's, and is not run on this
+  // window's thread: return at once. A runtime that has not instantiated the
+  // module yet has no window either; it is remembered, so that a require
+  // from one of its 'exit' listeners finds the module CLOSING.
+  if (!isModuleEnv(env, /*record*/ true))
     return;
   switch (reason) {
     case ExitReason::kExitCall:
@@ -1454,19 +1524,17 @@ void uiBeforeExitListeners(napi_env env, ExitReason reason) {
 }
 
 void uiBeforeRuntimeCleanup(napi_env env, int exitCode) {
+  // Another runtime's end is not this window's: return at once, and let
+  // that runtime tear itself down. From here on this is the module's own JS
+  // thread (isModuleEnv()), so gEnv below is read by the thread that writes
+  // it.
+  if (!isModuleEnv(env, /*record*/ false))
+    return;
   // A script that never asked for a window has nothing here to protect, and
   // ends exactly as plain hermes-node does: step 16, then UiHost::run()
-  // joins the JS thread and returns its status.
-  //
-  // The two checks overlap in that case -- gEnv is still null, so the
-  // second would return as well -- and the order is not interchangeable.
-  // uiWindowRequested() reads under gMutex; gEnv is a plain variable the
-  // window's JS thread writes in createWindow() BEFORE it publishes the
-  // request under that same mutex. So a true answer here guarantees that
-  // gEnv has been published to this thread, and only then is it read. That
-  // matters when a second runtime exists, the inspector's: its JS thread
-  // reaches this hook too, and reading gEnv first would be an
-  // unsynchronized read of a variable another thread may be writing.
+  // joins the JS thread and returns its status. Nor does one whose window
+  // was requested through another runtime's instance of the module (gEnv
+  // names the runtime that called createWindow).
   if (!uiWindowRequested())
     return;
   if (env != gEnv)

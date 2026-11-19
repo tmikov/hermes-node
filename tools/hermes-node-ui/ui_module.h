@@ -120,8 +120,10 @@ enum class UiCloseReason {
   kRuntimeReturn,
 };
 
-/// Enter CLOSING (spec: Lifecycle). JS thread only. Idempotent: a second
-/// call returns at once.
+/// Enter CLOSING (spec: Lifecycle). Only on the JS thread of the runtime
+/// that instantiated the module: uiBeforeExitListeners() calls it only for
+/// that runtime's env, and every other caller is that runtime's own NAPI
+/// code. Idempotent: a second call returns at once.
 ///
 /// From here on no frame callback, event, readiness or capture result
 /// reaches the program, and `requestAnimationFrame` (both forms) registers
@@ -132,7 +134,10 @@ enum class UiCloseReason {
 /// opening a window into a process on its way out.
 void uiEnterClosing(UiCloseReason reason);
 
-/// True from uiEnterClosing() on. JS thread only.
+/// True from uiEnterClosing() on, or from initUiModule() on when the module
+/// was first instantiated by a runtime already exiting. Only on the JS
+/// thread of the runtime that instantiated the module, which is the only
+/// thread that writes the state; no lock or atomic orders the read.
 bool uiClosing();
 
 /// The window closing itself: the default action of a `close` nobody
@@ -149,15 +154,24 @@ bool uiClosing();
 bool uiCloseWindow(hnui_window *w);
 
 /// `ProcessExitHooks::beforeExitListeners`, which `main()` installs: enters
-/// CLOSING with the reason \p reason maps to. Ignores an env that is not the
-/// window's (when a window was requested). JS thread.
+/// CLOSING with the reason \p reason maps to.
+///
+/// The hooks are process-wide, so this runs on the JS thread of WHICHEVER
+/// runtime is exiting, \p env's. It acts only when \p env is the runtime
+/// that instantiated `hermes-node:ui` (recorded by initUiModule() under the
+/// module's mutex, which is also what orders this read against that write);
+/// for any other env it returns at once, before touching anything the
+/// module's thread owns. When no runtime has instantiated the module yet it
+/// remembers \p env, so that the module, if a listener of that runtime
+/// requires it, starts out CLOSING.
 void uiBeforeExitListeners(napi_env env, ExitReason reason);
 
-/// `ProcessExitHooks::beforeRuntimeCleanup`, which `main()` installs.
-/// Returns when no window was ever requested (the windowless path ends
-/// through `UiHost::run()` as before) or when \p env is not the window's.
-/// Otherwise does not return: `std::fflush(nullptr)`, `uv_tty_reset_mode()`,
-/// `_exit(exitCode)`. JS thread.
+/// `ProcessExitHooks::beforeRuntimeCleanup`, which `main()` installs. Runs
+/// on \p env's JS thread, as uiBeforeExitListeners() does, and returns at
+/// once for an env that is not the module's. Also returns when no window
+/// was ever requested (the windowless path ends through `UiHost::run()` as
+/// before). Otherwise does not return: `std::fflush(nullptr)`,
+/// `uv_tty_reset_mode()`, `_exit(exitCode)`.
 void uiBeforeRuntimeCleanup(napi_env env, int exitCode);
 
 /// Whether `createWindow` has been called. JS thread. What

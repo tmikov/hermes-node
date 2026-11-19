@@ -78,7 +78,7 @@ struct CaptureState {
 // --- Defined in ui_module.cpp ----------------------------------------------
 
 /// Both threads lock it: guards gRequest here, and ui_module.cpp's own
-/// gWindowRequested.
+/// gWindowRequested, gModuleEnv and gEnvsExitedBeforeModule.
 extern std::mutex gMutex;
 /// Under gMutex: written once by createWindow() (JS) before requestWindow();
 /// copied by uiRunPlatformLoop() (platform) and onSharedContextReady() (JS).
@@ -104,8 +104,12 @@ extern std::string gStartupError;
 /// published, because the platform thread reads the pointer unsynchronized;
 /// a closed dispatcher refuses every post().
 extern OwnerDispatch *gDispatch;
-/// JS thread only (ui_module.cpp, ui_test_hooks.cpp). Written by
-/// createWindow().
+/// The runtime that called createWindow(). Written by createWindow() on that
+/// runtime's JS thread before it publishes the request under gMutex (and
+/// nulled again there if the request is abandoned before publication), and
+/// read only on that thread: by ui_module.cpp and ui_test_hooks.cpp, and by
+/// uiBeforeRuntimeCleanup(), which reads it only after its gMutex-guarded
+/// check that the exiting runtime is the module's own.
 extern napi_env gEnv;
 /// Created by onSharedContextReady() (JS); the platform thread touches it
 /// only after an acquire of gPresentReady. Carries its own lock.
