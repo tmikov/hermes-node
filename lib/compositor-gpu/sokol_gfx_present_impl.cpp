@@ -32,3 +32,9 @@
 
 #define SOKOL_GFX_IMPL
 #include <sokol_gfx.h>
+
+// This instance's accessors for state Sokol keeps private (the Metal frame
+// command buffer and id-pool counts; nothing on GL). Here because only this
+// unit can see its `_sg`; see sokol_gfx_ext.h.
+#define HNUI_SG_EXT(name) hnui_sgp_##name
+#include "sokol_gfx_ext.inc"

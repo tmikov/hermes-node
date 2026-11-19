@@ -134,13 +134,27 @@ target_link_libraries(hermesNodeCompositorGpu PUBLIC
 # Wired into the lit suite (test/sokol-isolation.js) rather than left as a
 # target somebody remembers to run -- this plan has already been bitten once
 # by tests that existed and never ran anywhere.
+#
+# The two USER objects are the backend's own code that calls each instance.
+# One that references the other instance's family -- the presenter reading
+# the producer's command-buffer accessor, say -- links cleanly and reads the
+# wrong `_sg`, so the checker refuses it. Promoted to the parent scope
+# because the top-level CMakeLists.txt passes them to lit
+# (HERMES_NODE_LIT_PARAMS, for test/sokol-isolation.js); the Metal backend
+# names its own objects here.
 set(SGP_ISOLATION_OBJ_DIR
   ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/hermesNodeCompositorGpu.dir)
+set(HNUI_SGP_PRODUCING_USER_OBJ ${SGP_ISOLATION_OBJ_DIR}/gl_backend.cpp.o)
+set(HNUI_SGP_PRESENTING_USER_OBJ ${SGP_ISOLATION_OBJ_DIR}/gl_present.cpp.o)
+set(HNUI_SGP_PRODUCING_USER_OBJ ${HNUI_SGP_PRODUCING_USER_OBJ} PARENT_SCOPE)
+set(HNUI_SGP_PRESENTING_USER_OBJ ${HNUI_SGP_PRESENTING_USER_OBJ} PARENT_SCOPE)
 add_custom_target(check-sgp-isolation
   COMMAND ${Python_EXECUTABLE}
           ${PROJECT_SOURCE_DIR}/utils/check-sgp-isolation.py
           --producing ${SGP_ISOLATION_OBJ_DIR}/sokol_gfx_impl.cpp.o
           --presenting ${SGP_ISOLATION_OBJ_DIR}/sokol_gfx_present_impl.cpp.o
+          --producing-user ${HNUI_SGP_PRODUCING_USER_OBJ}
+          --presenting-user ${HNUI_SGP_PRESENTING_USER_OBJ}
   DEPENDS hermesNodeCompositorGpu
           ${PROJECT_SOURCE_DIR}/utils/check-sgp-isolation.py
   COMMENT "Checking sokol_gfx symbol isolation"

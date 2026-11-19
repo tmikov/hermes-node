@@ -44,6 +44,16 @@
 //            'exit' listener's own line follows CB1 directly (FRAME-NEXT),
 //            and process.exit() never returns into the batch, so no
 //            mutation of the closing code could make it run.
+//            process.exit() also reaches flushPendingWrites, whose nested
+//            uv_run runs the check phase with this frame callback still on
+//            the stack -- so the worker's per-turn check must skip the
+//            backend, and traces that it did (`worker loop: turn skipped
+//            (closing)`). On GL the guard protects nothing yet, since GL's
+//            workerLoopTurn() is empty; its Metal half -- an autorelease
+//            pool that must not be popped, and a maintenance commit that
+//            must not be issued, under an open pass -- is Task 16c's.
+//            (Mutation: delete the two guards in the check callback, and
+//            the line is missing.)
 //  FATAL     an uncaught throw in a timer. `process._fatalException`
 //            enters CLOSING through `process._preExit()` before it emits
 //            'exit'. (Mutation: delete that call, and rafRefused=false.)
@@ -380,6 +390,7 @@ main().catch((e) => {
 // FRAME-CODE: EXITCODE 4
 // FRAME-TRACE: lifecycle: CLOSING (reason=exit)
 // FRAME-TRACE: lifecycle: frame callbacks released=2
+// FRAME-TRACE: worker loop: turn skipped (closing)
 
 // FATAL: EXIT code=1 rafRefused=true
 // FATAL-CODE: EXITCODE 1

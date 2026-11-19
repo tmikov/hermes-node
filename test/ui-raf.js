@@ -360,6 +360,11 @@ main().catch((e) => {
 // CHECK-NEXT: HANDLED ok
 // CHECK-NEXT: DONE
 
+// The worker's per-turn check (CompositorBackend::workerLoopTurn) ran: it
+// is started once the worker's context is current, so by the time frame
+// ticks run it has run too. (Mutation: do not start the handle, and the
+// line is missing.)
+// TRACE: worker loop: first turn
 // The empty tick of CANCEL (c), traced where the batch ran.
 // TRACE: frame tick: 0 callback(s) ran, nothing drawn
 

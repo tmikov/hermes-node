@@ -323,6 +323,8 @@ class GlBackend final : public CompositorBackend {
   void pollCompletions() override;
   bool readPresentedPixels(int width, int height, uint8_t *out) override;
 
+  void workerLoopTurn() override;
+
  private:
   /// One generation's surfaces, as both halves of this backend see them.
   ///
@@ -1174,6 +1176,15 @@ void GlBackend::presentInvalid() {
   // rather than left to a comment.
 }
 
+void GlBackend::workerLoopTurn() {
+  // Empty, and not a placeholder. The method exists for Metal, whose worker
+  // owns an autorelease pool that must be drained every loop turn and a
+  // release clock that only advances inside sg_commit(). GL has neither:
+  // nothing GL or Sokol's GL backend creates is autoreleased, and Sokol's
+  // GL resources are freed at the sg_destroy_* call itself, so there is no
+  // deferred release to collect.
+}
+
 void GlBackend::pollCompletions() {
   // The probe first, and unconditionally: it is answered from here, and
   // the worker is blocked waiting for that answer before the window's
@@ -1193,8 +1204,12 @@ void GlBackend::pollCompletions() {
 
 CompositorBackend::~CompositorBackend() = default;
 
-CompositorBackend *createGlBackend() {
+CompositorBackend *createCompositorBackend() {
   return new GlBackend();
+}
+
+const char *compositorBackendName() {
+  return "gl";
 }
 
 } // namespace node_compat

@@ -33,7 +33,14 @@
 //
 // REQUIRES: ui-gpu
 
-// RUN: %python %source_dir/utils/check-sgp-isolation.py --producing %sgp_objdir/sokol_gfx_impl.cpp.o --presenting %sgp_objdir/sokol_gfx_present_impl.cpp.o | %FileCheck %s
+// The two USER objects -- the backend code that calls each instance (on
+// Linux gl_backend.cpp.o and gl_present.cpp.o) -- are named by CMake
+// rather than here, so that the Metal backend can name its own. A user
+// object referencing the OTHER instance's family is how a presenter that
+// installed its completion handler on the producer's command buffer would
+// show up: it links, and it reads the wrong `_sg`.
+//
+// RUN: %python %source_dir/utils/check-sgp-isolation.py --producing %sgp_objdir/sokol_gfx_impl.cpp.o --presenting %sgp_objdir/sokol_gfx_present_impl.cpp.o --producing-user %sgp_producing_user --presenting-user %sgp_presenting_user | %FileCheck %s
 
 // The counts are checked, not just the verdict. A checker that read no
 // symbols at all would satisfy every "must not contain" assertion it makes,
@@ -42,3 +49,4 @@
 // reader tell "isolated" from "saw nothing".
 //
 // CHECK: sgp isolation OK: producing defines {{[0-9]+}} sg_*, presenting defines {{[0-9]+}} sgp_*, no cross-references
+// CHECK-NEXT: sgp users OK: producing user references {{[0-9]+}} sg_*, presenting user references {{[0-9]+}} sgp_*, neither references the other family

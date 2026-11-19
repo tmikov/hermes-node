@@ -346,16 +346,41 @@ class CompositorBackend {
   /// \return false if the read failed or the backend cannot do one.
   virtual bool readPresentedPixels(int width, int height, uint8_t *out) = 0;
 
+  //=========================================================================
+  // The worker's event loop
+  //=========================================================================
+
+  /// Worker thread, once per event-loop turn, with no frame callback on the
+  /// stack and not once the window is CLOSING. GL: nothing. Metal: drain
+  /// and replace the worker's autorelease pool, then run maintenance if due.
+  ///
+  /// Called from a `uv_check_t` the shared code starts on the JS loop once
+  /// `makeCurrentOnWorker()` has succeeded (ui_module.cpp). The check phase
+  /// follows the poll phase, so whatever one turn's callbacks left behind
+  /// is dealt with in the turn that created it. The two exclusions are the
+  /// caller's, not the implementation's: `process.exit()` inside a frame
+  /// callback reaches a nested `uv_run` (`flushPendingWrites`), which runs
+  /// the check phase under an open pass -- where neither a pool may be
+  /// popped nor a maintenance commit issued.
+  virtual void workerLoopTurn() = 0;
+
  protected:
   CompositorBackend() = default;
 };
 
-/// The GL backend. Linux/GLX only in v1; `lib/compositor-gpu/CMakeLists.txt`
-/// builds this directory only there, and Metal arrives with Task 16.
+/// The backend this binary was built with: GL (`gl_backend.cpp`) on Linux,
+/// Metal on macOS (Task 16). Exactly one implementation file defines this
+/// and `compositorBackendName()`, which is what makes the choice a link-time
+/// fact rather than a run-time one.
 ///
-/// Returns null having printed why, rather than an object in a state no
-/// method can be called on.
-CompositorBackend *createGlBackend();
+/// Replaces createGlBackend(). Null, having printed why, if none -- rather
+/// than an object in a state no method can be called on.
+CompositorBackend *createCompositorBackend();
+
+/// "gl" or "metal": the backend this binary was built with. Printed by
+/// `hermes-node-ui --version` as `gpu backend: <name>`, which is what
+/// test/lit.cfg reads for `%ui-backend` and the `ui-backend-*` features.
+const char *compositorBackendName();
 
 } // namespace node_compat
 } // namespace hermes

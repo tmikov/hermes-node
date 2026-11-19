@@ -23,6 +23,7 @@
 #endif
 
 #ifdef HERMES_NODE_UI_HAVE_WINDOW
+#include <backend.h>
 #include <sokol_log.h>
 #endif
 
@@ -94,6 +95,18 @@ int main(int argc, char **argv) {
       std::printf(
           "sokol_gfx validation: %s\n",
           hermes::node_compat::producerSokolValidates() ? "on" : "off");
+#endif
+      // Printed in every build, `none` included: test/lit.cfg reads it for
+      // `%ui-backend` and the `ui-backend-gl` / `ui-backend-metal`
+      // features, and test/ui-backend-feature.js checks that it, lit and
+      // the platform agree. The name comes from the backend's own
+      // implementation file, so it is what was linked, not what was
+      // configured.
+#ifdef HERMES_NODE_UI_HAVE_WINDOW
+      std::printf(
+          "gpu backend: %s\n", hermes::node_compat::compositorBackendName());
+#else
+      std::printf("gpu backend: none\n");
 #endif
       return 0;
     } else if (

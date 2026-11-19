@@ -174,6 +174,16 @@ UiHost *gHost = nullptr;
 napi_deferred gDeferred = nullptr;
 uv_async_t *gKeepAlive = nullptr;
 
+/// The JS thread's loop, as createWindow() found it. JS thread only.
+uv_loop_t *gLoop = nullptr;
+
+/// The worker's per-turn check: an UNREFERENCED `uv_check_t` on gLoop whose
+/// callback calls `CompositorBackend::workerLoopTurn()`. Started once the
+/// worker's context is current and never stopped -- the process ends by
+/// `_exit()` with it still running, as with every other handle a window
+/// holds. JS thread only.
+uv_check_t *gWorkerTurn = nullptr;
+
 /// Created on the JS thread with gTable above; read off it only by
 /// onOwnerThread().
 hnui_window *gWindow = nullptr;
@@ -340,8 +350,9 @@ double frameTimestampMs() {
 
 /// End the graphics session, loudly.
 ///
-/// Reached when a completion could not be **established** --
-/// `GL_WAIT_FAILED` -- which is terminal by design: "the slot is
+/// Reached when a completion could not be **established** -- GL's
+/// `GL_WAIT_FAILED`, a Metal command buffer that ended in error -- which is
+/// terminal by design: "the slot is
 /// quarantined, never returned to FREE, and the graphics session is
 /// terminated with an error rather than risking a write into a texture
 /// still being read" (spec: Errors). Quarantine is the *absence* of an
@@ -377,7 +388,7 @@ void onProducerComplete(void *user, SurfaceRef ref, bool ok) {
       gTick->publicationDropped();
       terminateGraphicsSession(
           "the producer's GPU work could not be confirmed complete "
-          "(GL_WAIT_FAILED)");
+          "(the backend reported the completion as failed)");
     }
 
     // **`TickMachine::publishFrame()`, never `SurfaceTable::publish()`.**
@@ -423,7 +434,8 @@ void onConsumerComplete(void *user, SurfaceRef ref, bool ok) {
   auto action = [ref, ok]() {
     if (!ok) {
       terminateGraphicsSession(
-          "a blit's completion could not be confirmed (GL_WAIT_FAILED)");
+          "a blit's completion could not be confirmed (the backend "
+          "reported the completion as failed)");
     }
     gTable->releaseRead(ref);
   };
@@ -692,6 +704,69 @@ void destroyGeneration(GenerationId gen) {
 
 } // namespace
 
+namespace {
+
+/// The check phase of every JS loop turn, once the worker's context is
+/// current. **JS thread.**
+///
+/// The check phase follows the poll phase, so whatever one turn's
+/// callbacks left behind -- on Metal, objects an addon's frame callback or
+/// a `sg_make_*` autoreleased -- is dealt with in the turn that created it.
+///
+/// Two exclusions, both decided here rather than in the backend, because
+/// both are facts about the shared code: once the window is CLOSING the
+/// backend is not called again, and neither is it while a frame callback
+/// is on the stack. The second is reachable: `process.exit()` inside a
+/// frame callback reaches `flushPendingWrites`, whose nested `uv_run` runs
+/// this phase, and a Metal pool must not be popped -- nor a maintenance
+/// commit issued -- under an open pass. (That same path also enters
+/// CLOSING first, which is why test/ui-exit-paths.js FRAME sees the
+/// closing line rather than the frame-callback one.) Each exclusion is
+/// traced the first time it applies, and the first turn that did reach the
+/// backend is traced after it returned.
+void onWorkerLoopTurn(uv_check_t *handle) {
+  (void)handle;
+  static bool tracedClosing = false;
+  static bool tracedFrameCallback = false;
+  static bool tracedFirstTurn = false;
+  if (uiClosing()) {
+    if (!tracedClosing) {
+      tracedClosing = true;
+      uiTrace("worker loop: turn skipped (closing)");
+    }
+    return;
+  }
+  if (gWindow != nullptr && gWindow->inFrameCallback) {
+    if (!tracedFrameCallback) {
+      tracedFrameCallback = true;
+      uiTrace("worker loop: turn skipped (frame callback)");
+    }
+    return;
+  }
+  gBackend->workerLoopTurn();
+  if (!tracedFirstTurn) {
+    tracedFirstTurn = true;
+    uiTrace("worker loop: first turn");
+  }
+}
+
+/// Start onWorkerLoopTurn() on gLoop, unreferenced: it must run every turn
+/// the loop makes, and must never be the reason the loop keeps making them.
+bool startWorkerLoopTurns(std::string &error) {
+  gWorkerTurn = new uv_check_t();
+  if (gLoop == nullptr || uv_check_init(gLoop, gWorkerTurn) != 0) {
+    delete gWorkerTurn;
+    gWorkerTurn = nullptr;
+    error = "could not attach the worker's per-turn check to the event loop";
+    return false;
+  }
+  uv_check_start(gWorkerTurn, onWorkerLoopTurn);
+  uv_unref(reinterpret_cast<uv_handle_t *>(gWorkerTurn));
+  return true;
+}
+
+} // namespace
+
 /// Runs on the JS thread, posted from `init_cb`. This is stage 2b: the
 /// worker binds the shared context the platform thread created, which only
 /// the thread that will use it can do.
@@ -709,6 +784,15 @@ void onSharedContextReady() {
 
   std::string error;
   if (!gBackend->makeCurrentOnWorker(error)) {
+    napi_close_handle_scope(gEnv, scope);
+    rejectWith(error);
+    return;
+  }
+
+  // Immediately after the context is bound, and before anything below can
+  // fail: on Metal makeCurrentOnWorker() pushes the worker's first
+  // autorelease pool, and this check is what drains and replaces it.
+  if (!startWorkerLoopTurns(error)) {
     napi_close_handle_scope(gEnv, scope);
     rejectWith(error);
     return;
@@ -1190,6 +1274,7 @@ napi_value createWindow(napi_env env, napi_callback_info info) {
   }
 
   gEnv = env;
+  gLoop = loop;
   gDispatch = new OwnerDispatch(loop);
 
   napi_value promise = nullptr;
@@ -1211,6 +1296,7 @@ napi_value createWindow(napi_env env, napi_callback_info info) {
     delete gDispatch;
     gDispatch = nullptr;
     gEnv = nullptr;
+    gLoop = nullptr;
     napi_throw_error(env, nullptr, "createWindow: could not create a Promise.");
     return nullptr;
   }
