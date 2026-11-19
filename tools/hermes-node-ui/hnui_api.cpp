@@ -56,7 +56,7 @@ using hermes::node_compat::uiTrace;
       "\"Threading\".\n",
       function);
   std::fflush(stderr);
-  // Every _exit() path in this tree restores the terminal first; see
+  // Each _exit() caller in this tree restores the terminal itself; see
   // CLAUDE.md's Bootstrap Sequence section. abort() would skip that, and
   // this path is reachable from a program that had set raw mode.
   uv_tty_reset_mode();

@@ -330,8 +330,7 @@ double frameTimestampMs() {
 /// `_exit()` rather than a return, for the reason every other `_exit()`
 /// path in this tree gives (CLAUDE.md, Bootstrap Sequence): a live Hermes
 /// runtime on another thread cannot be unwound through normal C++
-/// teardown. And like every one of those paths, it restores the terminal
-/// first.
+/// teardown. And like the others, it restores the terminal first.
 [[noreturn]] void terminateGraphicsSession(const std::string &reason) {
   std::fprintf(
       stderr,
@@ -1496,8 +1495,8 @@ void uiBeforeRuntimeCleanup(napi_env env, int exitCode) {
   // telling the two apart, and gives up nothing.)
   uiTrace("lifecycle: runtime returned, exiting with status %d", exitCode);
   std::fflush(nullptr);
-  // Every _exit() path in this tree restores the terminal first (CLAUDE.md,
-  // Bootstrap Sequence). Step 16 is what restores it on plain hermes-node's
+  // Each _exit() caller restores the terminal itself (CLAUDE.md, Bootstrap
+  // Sequence). Step 16 is what restores it on plain hermes-node's
   // natural path -- closing the stdio handles reaches uv__tty_close -- and
   // this path skips step 16, so nothing else would.
   uv_tty_reset_mode();

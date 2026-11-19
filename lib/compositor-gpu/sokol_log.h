@@ -28,8 +28,8 @@ namespace node_compat {
 /// publish a frame it never drew.
 ///
 /// The terminal restore is the reason this is one function rather than
-/// three copies: every `_exit()` path in this tree calls
-/// `uv_tty_reset_mode()` first (CLAUDE.md, Bootstrap Sequence -- raw mode
+/// three copies: each `_exit()` caller in this tree calls
+/// `uv_tty_reset_mode()` itself (CLAUDE.md, Bootstrap Sequence -- raw mode
 /// is a libuv global, and a shell left in it no longer echoes). Nothing
 /// here flushes the JS thread's queued stdio the way `processExit()` does:
 /// a panic can be raised on either thread, and from the platform thread

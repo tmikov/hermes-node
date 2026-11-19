@@ -327,9 +327,9 @@ async function main() {
   }
 
   console.log('DONE');
-  // Required, not tidy: createWindow takes a REFERENCED libuv handle and
-  // nothing releases it until Task 15, so a script that simply returned
-  // would wait forever in UvEventLoop::close(). Same note as
+  // Required, not tidy: createWindow takes a REFERENCED libuv handle that
+  // only closing the window releases, so a script that simply returned
+  // would keep running with its window open. Same note as
   // ui-create-window.js.
   process.exit(0);
 }

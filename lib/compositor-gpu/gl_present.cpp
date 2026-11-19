@@ -170,9 +170,11 @@ GlPresenter::~GlPresenter() {
   // object is destroyed on the way out of a process whose JS thread may
   // still be live and whose GL context may already be gone; the same
   // reasoning SurfaceTable's destructor records for not running its
-  // destroy function. Every exit path this build has ends in _exit()
-  // (CLAUDE.md, Bootstrap Sequence), which frees the driver's resources
-  // wholesale. Orderly teardown is Task 15's.
+  // destroy function. In hermes-node-ui it is not reached at all: the
+  // backend is never deleted, sapp_run() never returns, and every exit
+  // path ends in _exit() on the JS thread (CLAUDE.md, UI Compositor), which
+  // frees the driver's resources wholesale. There is no orderly teardown,
+  // by design.
   delete state_;
 }
 

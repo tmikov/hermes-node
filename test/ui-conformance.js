@@ -45,10 +45,13 @@
 // trace file is the binary's own stderr whatever the display wrapper does,
 // and `timeout` because lit has no per-test timeout (dz 01a0d797-e326).
 // demo.js ends conformance mode with win.close(), the way a program would.
+// A win.close() that did nothing leaves the run at its `timeout`; one that
+// entered CLOSING and returned lets the loop drain and exit 0 through the
+// runtime-return hook, which the implicit NOT on `runtime returned` catches.
 //
 // RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %source_dir/test/fixtures/hnui-demo/demo.js %hnui_demo_addon conformance %x11_selection_owner %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --check-prefix=TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' %s < %t.err
+// RUN: %FileCheck --check-prefix=TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='runtime returned' %s < %t.err
 
 // CODE: EXITCODE 0
 
@@ -86,3 +89,5 @@
 // TRACE: command clipboard: owns_selection=1 bytes=16
 // TRACE: clipboard read sync #1: status=ok bytes=16
 // TRACE: clipboard read sync #2: status=timeout bytes=0
+// TRACE: lifecycle: CLOSING (reason=close)
+// TRACE: close: ending the process through process.exit()

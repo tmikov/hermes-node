@@ -179,12 +179,12 @@ int UiHost::run() {
         "Error: a window was requested, but hermes-node-ui has no window "
         "support yet.\n");
     std::fflush(stderr);
-    // Every _exit() path in this tree restores the terminal, and this is the
-    // third one. stdin.setRawMode(true) reaches uv_tty_set_mode(), which
-    // clears ECHO and ICANON; leaving that set hands the user back a shell
-    // that no longer echoes what they type, with nothing on screen saying
-    // why. atexit() is not available to us -- both existing _exit() callers
-    // use it deliberately, to keep ASAN from reporting the live Hermes
+    // Each _exit() caller in this tree restores the terminal itself, and
+    // this is one of them. stdin.setRawMode(true) reaches uv_tty_set_mode(),
+    // which clears ECHO and ICANON; leaving that set hands the user back a
+    // shell that no longer echoes what they type, with nothing on screen
+    // saying why. atexit() is not available to us -- the _exit() callers
+    // use _exit() deliberately, to keep ASAN from reporting the live Hermes
     // runtime as thousands of leaks -- so each caller restores for itself.
     // See lib/process/node_process.cpp and lib/bindings/node_errors.cpp.
     uv_tty_reset_mode();

@@ -55,9 +55,9 @@
  * -- not at load, and never from an event listener. `sgl_shutdown()` is
  * never called: the demo runs until the process ends, and the host's
  * sokol_gfx instance, with every resource in it, ends with the process.
- * The host defines no teardown point yet for an addon that must give its
- * resources back earlier -- that is the pre-cleanup lifecycle hook, a later
- * task's (dz 01a0d88a).
+ * The host defines no teardown point for an addon that must give its
+ * resources back earlier: every way a window process ends is an _exit() on
+ * the JS thread, and no GPU resource is torn down on any of them.
  */
 
 #include "demo_addon.h"

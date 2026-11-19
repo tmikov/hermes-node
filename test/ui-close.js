@@ -43,8 +43,13 @@
 //            are missing.)
 //  WINCLOSE  win.close() from a timer, with process.exitCode = 9: status
 //            9, no `close` emitted, and win.close() does not return.
-//            (Mutation: have win.close() only enter CLOSING, and RETURNED
-//            prints and the run ends at `timeout`.)
+//            (Mutation: have win.close() only enter CLOSING and return.
+//            RETURNED prints, and the run does not hang: CLOSING released
+//            the referenced handle, so the loop drains and the
+//            runtime-return hook exits with process.exitCode, 9. CODE and
+//            WINCLOSE's positive line still pass; the implicit check
+//            against RETURNED, and the trace's `close: ending the process`
+//            line, are what fail.)
 //  LATE      a close request arriving while the window is already CLOSING
 //            -- sent from the 'exit' listener of the close that ended the
 //            run -- is still cancelled, and the platform thread keeps
@@ -67,6 +72,15 @@
 //            replacement set calls the original process.exit(6). Under
 //            ASAN. (Mutation: remove the closing check in
 //            uiDispatchEvents, and KEY-AFTER-CLOSE prints.)
+//            Nothing enforces "the same dispatch pass": it holds because the
+//            two back-to-back __injectEvent calls are taken by one
+//            drainInjectedEvents() call on the platform thread (measured
+//            64/64 at 16-way parallel; ui-events.js relies on the same
+//            pattern). Were they split across two frames with the JS thread
+//            running the first pass in between, the KEY_DOWN would arrive
+//            after the dispatcher closed, and the trace would read `event
+//            dispatch: post refused (dispatcher closed)` where REPLACED-TRACE
+//            expects `event keydown: not delivered (closing)`.
 //  RFRAME    the same replacement, with win.close() called from a frame
 //            callback that has drawn: the tick does not go on to submit
 //            the frame, since the table is closing and the slot is put
@@ -239,7 +253,8 @@ async function main() {
       win.on('close', () => console.log('CLOSE-EVENT'));
       win.on('keydown', () => console.log('KEY-AFTER-CLOSE'));
       // One injected batch: the platform thread pushes both in one frame,
-      // so one dispatch pass delivers them, close first.
+      // so one dispatch pass delivers them, close first. Not enforced; see
+      // REPLACED in the header.
       ui.__injectEvent({type: 'QUIT_REQUESTED'});
       ui.__injectEvent({type: 'KEY_DOWN', keyCode: SAPP_KEYCODE_A});
       return;
