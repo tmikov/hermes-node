@@ -63,8 +63,10 @@ function startDriver({ui, driverPath, title}) {
     if (typeof ui.__driveWindow !== 'function')
       return Promise.reject(missingDriveWindow());
     return Promise.resolve({
+      // A throw from __driveWindow REJECTS, as a failure of the X11
+      // driver does, rather than escaping send() synchronously.
       send(command) {
-        return Promise.resolve(driveLine(ui, command));
+        return new Promise((resolve) => resolve(driveLine(ui, command)));
       },
       onLost(callback) {
         void callback;

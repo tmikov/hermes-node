@@ -120,7 +120,7 @@ if (( check )); then
   check_files=(
     $(find "${FORMAT_DIRS[@]}" \
         -name \*.h -print -o -name \*.c -print -o -name \*.cpp -print \
-        -o -name \*.mm -print -o -name \*.m -print)
+        -o -name \*.mm -print -o -name \*.m -print -o -name \*.inc -print)
   )
   if [ ${#check_files[@]} -eq 0 ]; then
     echo "No files found in FORMAT_DIRS to check."
@@ -170,7 +170,7 @@ if (( all )); then
   files=(
     $(find "${FORMAT_DIRS[@]}" \
         -name \*.h -print -o -name \*.c -print -o -name \*.cpp -print \
-        -o -name \*.mm -print -o -name \*.m -print)
+        -o -name \*.mm -print -o -name \*.m -print -o -name \*.inc -print)
   )
   if (( verbose )); then
     echo "Files to be processed:"

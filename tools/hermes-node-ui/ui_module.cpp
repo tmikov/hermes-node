@@ -736,6 +736,17 @@ void onWorkerLoopTurn(uv_check_t *handle) {
     }
     return;
   }
+  // **Asserted by no test, and none can be written today.** Nothing in the
+  // tree runs a nested uv_run under a frame callback OUTSIDE CLOSING: the
+  // one path that does -- process.exit() inside a frame callback, via
+  // flushPendingWrites -- enters CLOSING first, and uiEnterClosing() clears
+  // inFrameCallback, so the closing guard above acts and this one never
+  // does (deleting it leaves ui-exit-paths, ui-raf, ui-event-exceptions and
+  // ui-close green). It stays as the second line of defence for Metal,
+  // where popping the autorelease pool or committing maintenance under an
+  // open pass would be a use-after-free rather than a wrong answer; a
+  // Metal implementer must not rely on the trace
+  // `worker loop: turn skipped (frame callback)` ever appearing.
   if (gWindow != nullptr && gWindow->inFrameCallback) {
     if (!tracedFrameCallback) {
       tracedFrameCallback = true;

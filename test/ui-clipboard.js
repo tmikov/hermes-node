@@ -48,8 +48,9 @@
 // forwarded at all (PASTE-MUTE: a marker key injected after it arrives,
 // and no paste before it).
 //
-// Each lit run starts its own Xvfb (%with-xvfb lets `Xvfb -displayfd`
-// claim a free display atomically, which `xvfb-run -a` did not), and a
+// Each lit run starts its own Xvfb (%with-display runs utils/with-xvfb.py,
+// which lets `Xvfb -displayfd` claim a free display atomically, as
+// `xvfb-run -a` did not), and a
 // selection belongs to one X server, so parallel runs of this test do not
 // share a CLIPBOARD. Were they to, another run's owner
 // would break OWN, FOREIGN or NONE here.

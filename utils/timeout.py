@@ -15,8 +15,9 @@ implements the subset of it the RUN lines use, with the same answers:
 
 - **Exit 124 when the limit expired**, whatever the command then did. Any
   other status is the command's own, 128+N for a command killed by signal N,
-  as a shell reports it. 125 is this script's own failure (bad arguments, a
-  command that could not be started).
+  as a shell reports it. As GNU `timeout`: 127 when the command does not
+  exist, 126 when it exists and cannot be executed, 125 for this script's
+  own failure (bad arguments, any other start-up error).
 - **Without --foreground the command runs in a new process group, and
   expiry signals the whole group**, so a shell's children go with it, as
   they do under GNU `timeout`. SIGTERM first; SIGKILL if the group is still
@@ -40,6 +41,8 @@ import sys
 
 TIMED_OUT = 124
 OWN_FAILURE = 125
+CANNOT_EXECUTE = 126
+NOT_FOUND = 127
 
 # How long a command gets between SIGTERM and SIGKILL after expiry.
 KILL_GRACE_SECONDS = 5.0
@@ -67,6 +70,12 @@ def run(seconds, command, env=None, foreground=False):
             command,
             env=env,
             preexec_fn=os.setpgrp if own_group else None)
+    except FileNotFoundError as e:
+        sys.stderr.write('timeout.py: %s: %s\n' % (command[0], e))
+        return NOT_FOUND
+    except PermissionError as e:
+        sys.stderr.write('timeout.py: %s: %s\n' % (command[0], e))
+        return CANNOT_EXECUTE
     except OSError as e:
         sys.stderr.write('timeout.py: %s: %s\n' % (command[0], e))
         return OWN_FAILURE

@@ -19,9 +19,13 @@ probe that runs the binary and waits for a trace line can only reach
 why. This asks first, cheaply and without opening a window.
 
 The source is `ioreg -n Root -d1 -a`, parsed with plistlib: python3 only, no
-PyObjC, no third-party module. The first entry of `IOConsoleUsers` carries
-`CGSSessionScreenIsLocked` (present only while locked, so an ABSENT key
-means not locked) and `kCGSSessionOnConsoleKey`. Anything that cannot be
+PyObjC, no third-party module. `IOConsoleUsers` has one entry per GUI
+session; ours is the one whose `kCGSSessionUserIDKey` is our uid (else the
+one marked `kCGSSessionOnConsoleKey`). It carries `CGSSessionScreenIsLocked`
+(present only while locked, so an ABSENT key means not locked) and
+`kCGSSessionOnConsoleKey`. Parsing the plist into that list is
+`_find_console_users()`, kept small so a different real shape changes one
+function. Anything that cannot be
 read -- ioreg missing, exiting non-zero, output that is not a plist or has
 no `IOConsoleUsers` -- is "not usable", with a reason, never an exception.
 
@@ -32,6 +36,7 @@ a top-level array of dictionaries, which covers the shapes `ioreg -a` is
 known to produce; the Mac round confirms it.
 """
 
+import os
 import plistlib
 import subprocess
 import sys
@@ -56,8 +61,39 @@ def _find_console_users(node, depth=0):
     return _find_console_users(node.get('IORegistryEntryChildren'), depth + 1)
 
 
-def classify(plist_bytes):
-    """(usable, reason) for the bytes `ioreg -n Root -d1 -a` printed."""
+def _select_session(users, uid):
+    """(entry, None) for this user's console-session entry, or (None, why).
+
+    One entry per GUI session: with fast user switching the console one need
+    not be first. Ours is the one whose `kCGSSessionUserIDKey` is our uid;
+    failing that, the one entry marked on console. Anything ambiguous is
+    refused with a reason rather than guessed at.
+    """
+    entries = [u for u in users if isinstance(u, dict)]
+    if len(entries) != len(users):
+        return None, 'IOConsoleUsers in ioreg output holds a non-dictionary'
+    mine = [u for u in entries if u.get('kCGSSessionUserIDKey') == uid]
+    if len(mine) == 1:
+        return mine[0], None
+    if len(mine) > 1:
+        return None, '%d console sessions for uid %d' % (len(mine), uid)
+    on_console = [u for u in entries if u.get('kCGSSessionOnConsoleKey')]
+    if len(on_console) == 1:
+        return on_console[0], None
+    return None, ('no console session for uid %d, and %d sessions on '
+                  'console' % (uid, len(on_console)))
+
+
+def classify(plist_bytes, uid=None):
+    """(usable, reason) for the bytes `ioreg -n Root -d1 -a` printed.
+
+    `uid` defaults to this process's (os.getuid()); the self-test fixes it.
+    Flags are read for truth, not identity: a lock flag of an unexpected
+    type (an integer 1 rather than a boolean) reads as LOCKED -- the cost of
+    that mistake is a skipped test, the cost of the other an unbounded wait.
+    """
+    if uid is None:
+        uid = os.getuid()
     try:
         root = plistlib.loads(plist_bytes)
     except Exception:  # plistlib raises several unrelated types
@@ -69,12 +105,12 @@ def classify(plist_bytes):
         return False, 'IOConsoleUsers in ioreg output is not a list'
     if not users:
         return False, 'no console session (IOConsoleUsers is empty)'
-    first = users[0]
-    if not isinstance(first, dict):
-        return False, 'IOConsoleUsers[0] in ioreg output is not a dictionary'
-    if first.get('CGSSessionScreenIsLocked') is True:
+    session, why = _select_session(users, uid)
+    if session is None:
+        return False, why
+    if session.get('CGSSessionScreenIsLocked'):
         return False, 'console session is locked'
-    if first.get('kCGSSessionOnConsoleKey') is not True:
+    if not session.get('kCGSSessionOnConsoleKey'):
         return False, 'session is not on console'
     return True, 'console session is unlocked and on console'
 
@@ -99,17 +135,48 @@ def _sample(users):
                            'IOConsoleUsers': users})
 
 
+# The uid the self-test classifies as, so its answers do not depend on who
+# runs it.
+SELF_TEST_UID = 501
+
+
+def _me(**flags):
+    entry = {'kCGSSessionUserIDKey': SELF_TEST_UID}
+    entry.update(flags)
+    return entry
+
+
 SELF_TEST = [
-    ('locked', _sample([{'CGSSessionScreenIsLocked': True,
-                         'kCGSSessionOnConsoleKey': True}])),
-    ('usable', _sample([{'kCGSSessionOnConsoleKey': True}])),
+    ('locked', _sample([_me(CGSSessionScreenIsLocked=True,
+                            kCGSSessionOnConsoleKey=True)])),
+    ('usable', _sample([_me(kCGSSessionOnConsoleKey=True)])),
     ('usable-nested', plistlib.dumps([{
         'IORegistryEntryName': 'Root',
         'IORegistryEntryChildren': [{
-            'IOConsoleUsers': [{'kCGSSessionOnConsoleKey': True}]}]}])),
-    ('unlocked-flag-false', _sample([{'CGSSessionScreenIsLocked': False,
-                                      'kCGSSessionOnConsoleKey': True}])),
-    ('not-on-console', _sample([{'kCGSSessionOnConsoleKey': False}])),
+            'IOConsoleUsers': [_me(kCGSSessionOnConsoleKey=True)]}]}])),
+    ('unlocked-flag-false', _sample([_me(CGSSessionScreenIsLocked=False,
+                                         kCGSSessionOnConsoleKey=True)])),
+    ('not-on-console', _sample([_me(kCGSSessionOnConsoleKey=False)])),
+    # Fast user switching: another user's session first, ours second.
+    ('console-user-second', _sample([
+        {'kCGSSessionUserIDKey': 502, 'kCGSSessionOnConsoleKey': False,
+         'CGSSessionScreenIsLocked': True},
+        _me(kCGSSessionOnConsoleKey=True)])),
+    # Ours is second and locked; the first is not locked: ours decides.
+    ('mine-locked-other-not', _sample([
+        {'kCGSSessionUserIDKey': 502, 'kCGSSessionOnConsoleKey': False},
+        _me(CGSSessionScreenIsLocked=True, kCGSSessionOnConsoleKey=True)])),
+    # No uid match: the single on-console entry is taken.
+    ('no-uid-one-on-console', _sample([
+        {'kCGSSessionUserIDKey': 502, 'kCGSSessionOnConsoleKey': False},
+        {'kCGSSessionUserIDKey': 503, 'kCGSSessionOnConsoleKey': True}])),
+    ('no-uid-none-on-console', _sample([
+        {'kCGSSessionUserIDKey': 502, 'kCGSSessionOnConsoleKey': False}])),
+    ('two-entries-for-uid', _sample([_me(kCGSSessionOnConsoleKey=True),
+                                     _me(kCGSSessionOnConsoleKey=True)])),
+    # A lock flag of an unexpected type reads as locked.
+    ('integer-lock-flag', _sample([_me(CGSSessionScreenIsLocked=1,
+                                       kCGSSessionOnConsoleKey=True)])),
     ('no-users', _sample([])),
     ('no-key', plistlib.dumps({'IORegistryEntryName': 'Root'})),
     ('garbage', b'this is not a plist\n'),
@@ -119,7 +186,7 @@ SELF_TEST = [
 def main(argv):
     if argv == ['--self-test']:
         for name, data in SELF_TEST:
-            usable, reason = classify(data)
+            usable, reason = classify(data, uid=SELF_TEST_UID)
             print('%s: usable=%d reason=%s' % (name, int(usable), reason))
         return 0
     if argv:

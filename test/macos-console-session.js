@@ -17,6 +17,15 @@
 // screen is locked, so treating absence as failure would turn the feature
 // off on every unlocked Mac.
 //
+// With fast user switching IOConsoleUsers holds one entry per GUI session
+// and ours need not be first: the entry is chosen by
+// `kCGSSessionUserIDKey == getuid()` (the self-test fixes the uid at 501),
+// else the single on-console entry, and anything ambiguous is refused with
+// a reason. A lock flag of an unexpected type (integer 1) reads as locked.
+// (Mutations: take IOConsoleUsers[0] -- console-user-second and
+// mine-locked-other-not go red; test the lock flag with `is True` --
+// integer-lock-flag reads usable.)
+//
 // RUN: %python %source_dir/utils/macos_console_session.py --self-test | %FileCheck %s
 
 // CHECK: {{^}}locked: usable=0 reason=console session is locked{{$}}
@@ -24,6 +33,12 @@
 // CHECK-NEXT: {{^}}usable-nested: usable=1 reason=console session is unlocked and on console{{$}}
 // CHECK-NEXT: {{^}}unlocked-flag-false: usable=1 reason=console session is unlocked and on console{{$}}
 // CHECK-NEXT: {{^}}not-on-console: usable=0 reason=session is not on console{{$}}
+// CHECK-NEXT: {{^}}console-user-second: usable=1 reason=console session is unlocked and on console{{$}}
+// CHECK-NEXT: {{^}}mine-locked-other-not: usable=0 reason=console session is locked{{$}}
+// CHECK-NEXT: {{^}}no-uid-one-on-console: usable=1 reason=console session is unlocked and on console{{$}}
+// CHECK-NEXT: {{^}}no-uid-none-on-console: usable=0 reason=no console session for uid 501, and 0 sessions on console{{$}}
+// CHECK-NEXT: {{^}}two-entries-for-uid: usable=0 reason=2 console sessions for uid 501{{$}}
+// CHECK-NEXT: {{^}}integer-lock-flag: usable=0 reason=console session is locked{{$}}
 // CHECK-NEXT: {{^}}no-users: usable=0 reason=no console session (IOConsoleUsers is empty){{$}}
 // CHECK-NEXT: {{^}}no-key: usable=0 reason=ioreg output has no IOConsoleUsers{{$}}
 // CHECK-NEXT: {{^}}garbage: usable=0 reason=ioreg output could not be parsed as a plist{{$}}
