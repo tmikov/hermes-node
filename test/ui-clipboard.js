@@ -71,7 +71,10 @@
 // accepts. Both are correct; what ABANDONED pins is that the abandoned
 // request neither hangs the waiter nor disturbs the read after it.
 //
-// REQUIRES: ui, ui-gpu
+// GL-only: what this pins is the X11 selection protocol -- a mute owner, a
+// late reply, INCR -- which the macOS pasteboard does not have
+// (test/ui-clipboard-mac.js covers what it can do, Task 16e).
+// REQUIRES: ui, ui-gpu, ui-backend-gl
 // REQUIRES: display
 //
 // RUN-line shape as in ui-events.js: redirections inside `sh -c`, so the

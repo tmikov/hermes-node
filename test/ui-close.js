@@ -137,7 +137,7 @@
 'use strict';
 
 const ui = require('hermes-node:ui');
-const {spawnSync} = require('child_process');
+const {closeOnce} = require('./fixtures/hnui-demo/window_driver.js');
 
 const mode = process.argv[2];
 const addonPath = process.argv[3];
@@ -146,12 +146,12 @@ const driverPath = process.argv[4];
 const TITLE = 'hnui close ' + process.pid;
 const SAPP_KEYCODE_A = 65;
 
-/** One real close request: the driver waits for the window and sends
-    WM_DELETE_WINDOW, and has exited (XSync'd) when this returns. */
+/** One real close request (test/fixtures/hnui-demo/window_driver.js): on
+    Linux the X11 driver waits for the window and sends WM_DELETE_WINDOW,
+    and has exited (XSync'd) when this returns. */
 function requestClose() {
-  const r = spawnSync(driverPath, ['--close', TITLE], {stdio: 'inherit'});
-  if (r.status !== 0)
-    console.log('DRIVER FAILED status=' + r.status);
+  if (!closeOnce({ui, driverPath, title: TITLE}))
+    console.log('DRIVER FAILED');
 }
 
 function nextFrame(cb) {
