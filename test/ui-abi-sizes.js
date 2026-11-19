@@ -38,10 +38,10 @@
 // RUN-line shape as in ui-events.js (redirections inside `sh -c`, `timeout`,
 // ends through process.exit()).
 //
-// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
 // RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=ERR %s < %t.err
-// RUN: %FileCheck --check-prefix=APPLIED %s < %t.err
+// RUN: %FileCheck --check-prefixes=APPLIED,APPLIED-%ui-backend %s < %t.err
 // RUN: grep -c 'command cursor' %t.err | %FileCheck --check-prefix=NCURSOR %s
 // RUN: grep -c 'command clipboard' %t.err | %FileCheck --check-prefix=NCLIP %s
 // RUN: %FileCheck --check-prefix=SHORT %s < %t.err
@@ -66,7 +66,10 @@
 // APPLIED: command show cursor: sapp_mouse_shown=1
 // APPLIED: command lock pointer: sapp_mouse_locked=1
 // APPLIED: command lock pointer: sapp_mouse_locked=0
-// APPLIED: command clipboard: owns_selection=1 bytes=1048575
+// The clipboard line's read-back is X11's (selection ownership), so it is
+// GL-only; every backend's `-<backend>` line must still show the full
+// 1048575 bytes arriving.
+// APPLIED-gl: command clipboard: owns_selection=1 bytes=1048575
 
 // "Pushes nothing" is pinned by COUNTING what the platform thread applied,
 // not by CHECK-NOT: a NOT only searches the text before the next positive

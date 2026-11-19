@@ -55,9 +55,9 @@
 // with the wrong status fails CODE; one that entered CLOSING and returned
 // fails TRACE (see the ending's lines below).
 //
-// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %ui-backend > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='runtime returned' --check-prefix=TRACE %s < %t.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='runtime returned' --check-prefixes=TRACE,TRACE-%ui-backend %s < %t.err
 
 // CODE: EXITCODE 0
 
@@ -68,6 +68,16 @@
 // CHECK: MARKER ok
 // CHECK: DONE
 
+// The backend (`%ui-backend`) is the script's first argument and selects
+// the `TRACE-<backend>` lines. What names an X11 or GL fact -- the
+// fullscreen pair, `_NET_WM_ICON`, `owns_selection` -- is under TRACE-gl;
+// what every backend prints the same way (the title read-back, Sokol's own
+// cursor, visibility and lock read-backs) stays under TRACE. On `gl`
+// nothing is skipped. On `metal` the fullscreen pair is not issued: AppKit's
+// toggleFullScreen: is an animated transition into a new Space, and what it
+// does with a second toggle during the first is not something this test
+// should depend on (Task 16e).
+//
 // Each line is the value READ BACK after the call. `command cursor N` is the
 // hnui_cursor value pushed (default, arrow, ibeam, crosshair, pointer,
 // ew-resize, ns-resize, nwse-resize, nesw-resize, move, not-allowed, in the
@@ -76,9 +86,9 @@
 // RESIZE_NS 6, RESIZE_NWSE 7, RESIZE_NESW 8, RESIZE_ALL 9, NOT_ALLOWED 10,
 // CUSTOM_0 11.
 // TRACE: command title: readback='commands test title'
-// TRACE: command fullscreen: is_fullscreen=1
-// TRACE: command fullscreen: is_fullscreen=0
-// TRACE: command icon: _NET_WM_ICON 16x16 first_pixel=0xff0a141e
+// TRACE-gl: command fullscreen: is_fullscreen=1
+// TRACE-gl: command fullscreen: is_fullscreen=0
+// TRACE-gl: command icon: _NET_WM_ICON 16x16 first_pixel=0xff0a141e
 // TRACE: command cursor 0: sapp_mouse_cursor=0
 // TRACE: command cursor 1: sapp_mouse_cursor=1
 // TRACE: command cursor 2: sapp_mouse_cursor=2
@@ -95,7 +105,7 @@
 // TRACE: command show cursor: sapp_mouse_shown=1
 // TRACE: command lock pointer: sapp_mouse_locked=1
 // TRACE: command lock pointer: sapp_mouse_locked=0
-// TRACE: command clipboard: owns_selection=1 bytes=14
+// TRACE-gl: command clipboard: owns_selection=1 bytes=14
 // The ending: win.close() enters CLOSING and then calls process.exit(). The
 // implicit NOT on `runtime returned` is what catches a win.close() that
 // enters CLOSING and returns: the released handle lets the loop drain, the
@@ -107,6 +117,13 @@
 'use strict';
 
 const ui = require('hermes-node:ui');
+
+// `gl` or `metal`, from the RUN line's %ui-backend.
+const backend = process.argv[2];
+if (backend !== 'gl' && backend !== 'metal') {
+  console.log('BACKEND argument is not gl or metal: ' + backend);
+  process.exit(2);
+}
 
 const SAPP_KEYCODE_F3 = 292;
 const CURSORS = [
@@ -149,8 +166,10 @@ async function main() {
   win.title = 'commands test title';
   report('GETTER', win.title === 'commands test title', win.title);
 
-  win.setFullscreen(true);
-  win.setFullscreen(false);
+  if (backend !== 'metal') {
+    win.setFullscreen(true);
+    win.setFullscreen(false);
+  }
 
   // RGBA (10, 20, 30, 255): the X property holds ARGB, so the first pixel
   // reads back as 0xff0a141e.

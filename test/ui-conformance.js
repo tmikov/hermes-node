@@ -49,9 +49,14 @@
 // entered CLOSING and returned lets the loop drain and exit 0 through the
 // runtime-return hook, which the implicit NOT on `runtime returned` catches.
 //
-// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %source_dir/test/fixtures/hnui-demo/demo.js %hnui_demo_addon conformance %x11_selection_owner %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
-// RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --check-prefix=TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='runtime returned' %s < %t.err
+// The backend (`%ui-backend`) is demo.js's last argument and selects the
+// `CHECK-<backend>` and `TRACE-<backend>` lines. What names an X11 fact --
+// `owns_selection`, the timeout against a mute selection owner -- is under
+// `-gl`; on `gl` nothing is skipped.
+//
+// RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %source_dir/test/fixtures/hnui-demo/demo.js %hnui_demo_addon conformance %x11_selection_owner %t.ppm %ui-backend > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %FileCheck --check-prefixes=CHECK,CHECK-%ui-backend %s < %t.out
+// RUN: %FileCheck --check-prefixes=TRACE,TRACE-%ui-backend --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='runtime returned' %s < %t.err
 
 // CODE: EXITCODE 0
 
@@ -75,7 +80,7 @@
 // CHECK-NEXT: hnui_write_clipboard "hnui conformance" issued
 // CHECK-NEXT: hnui_read_clipboard_sync status=HNUI_OK text="hnui conformance"
 // CHECK-NEXT: hnui_free released the HNUI_OK copy
-// CHECK-NEXT: hnui_read_clipboard_sync (owner never answers) status=HNUI_TIMEOUT out=NULL
+// CHECK-gl-NEXT: hnui_read_clipboard_sync (owner never answers) status=HNUI_TIMEOUT out=NULL
 // CHECK-NEXT: hnui_free(NULL) returned
 // CHECK-NEXT: DONE
 
@@ -86,8 +91,8 @@
 // TRACE: command show cursor: sapp_mouse_shown=1
 // TRACE: command lock pointer: sapp_mouse_locked=1
 // TRACE: command lock pointer: sapp_mouse_locked=0
-// TRACE: command clipboard: owns_selection=1 bytes=16
+// TRACE-gl: command clipboard: owns_selection=1 bytes=16
 // TRACE: clipboard read sync #1: status=ok bytes=16
-// TRACE: clipboard read sync #2: status=timeout bytes=0
+// TRACE-gl: clipboard read sync #2: status=timeout bytes=0
 // TRACE: lifecycle: CLOSING (reason=close)
 // TRACE: close: ending the process through process.exit()

@@ -22,7 +22,7 @@
 // status is the program's own, 3.
 //
 // REQUIRES: ui, ui-gpu
-// RUN: timeout 60 env HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s > %t.out 2> %t.err; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %timeout 60 env HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s > %t.out 2> %t.err; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
 
 'use strict';

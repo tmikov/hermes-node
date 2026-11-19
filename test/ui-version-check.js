@@ -20,7 +20,7 @@
 // `timeout` stays because lit has no per-test timeout (dz 01a0d797-e326).
 //
 // REQUIRES: ui, ui-gpu
-// RUN: timeout 60 %hermes-node-ui %s %hnui_demo_addon %hnui_bad_version_addon > %t.out 2> %t.err; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %timeout 60 %hermes-node-ui %s %hnui_demo_addon %hnui_bad_version_addon > %t.out 2> %t.err; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
 
 // CODE: EXITCODE 0

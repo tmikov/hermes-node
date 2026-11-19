@@ -36,7 +36,7 @@
 // failure mode is a hang would stall a worker slot rather than fail.
 //
 // REQUIRES: ui, ui-gpu
-// RUN: timeout 60 %hermes-node-ui %s %hnui_demo_addon > %t.out 2> %t.err; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %timeout 60 %hermes-node-ui %s %hnui_demo_addon > %t.out 2> %t.err; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck --check-prefix=OUT %s < %t.out
 
 'use strict';

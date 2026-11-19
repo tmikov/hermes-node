@@ -64,11 +64,11 @@
 // and `timeout` because lit has no per-test timeout (dz 01a0d797-e326).
 // Ends through process.exit(): its subject is not closing.
 //
-// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon %x11_window_driver %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon %x11_window_driver %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
 // RUN: %FileCheck --check-prefix=TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' %s < %t.err
 //
-// RUN: timeout 120 %with-xvfb sh -c '%hermes-node-ui %source_dir/test/fixtures/hnui-demo/demo.js %hnui_demo_addon js > %t.demo.out 2> %t.demo.err & %x11_window_driver --close "hermes-node-ui demo"; wait $!'; echo "DEMOEXIT $?" | %FileCheck --check-prefix=DEMO %s
+// RUN: %with-display 120 sh -c '%hermes-node-ui %source_dir/test/fixtures/hnui-demo/demo.js %hnui_demo_addon js > %t.demo.out 2> %t.demo.err & %x11_window_driver --close "hermes-node-ui demo"; wait $!'; echo "DEMOEXIT $?" | %FileCheck --check-prefix=DEMO %s
 // RUN: %FileCheck --check-prefix=DEMOOUT %s < %t.demo.out
 
 // CODE: EXITCODE 0

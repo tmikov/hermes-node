@@ -30,7 +30,7 @@
 //
 // REQUIRES: ui, ui-gpu
 //
-// RUN: python3 %S/fixtures/tty/run-on-pty.py timeout --foreground 25 env HERMES_NODE_UI_GL_ROUTE=bogus %hermes-node-ui %s | %FileCheck %s
+// RUN: python3 %S/fixtures/tty/run-on-pty.py %timeout --foreground 25 env HERMES_NODE_UI_GL_ROUTE=bogus %hermes-node-ui %s | %FileCheck %s
 // CHECK: exit status: 0
 // CHECK: RESULT: RESTORED
 

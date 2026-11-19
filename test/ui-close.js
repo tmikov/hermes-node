@@ -101,36 +101,36 @@
 // through a pipe, because the flush is part of the claim: a pipe is a
 // libuv stream whose writes are queued.
 //
-// RUN: timeout 120 %with-xvfb sh -c '{ HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s default %hnui_demo_addon %x11_window_driver 2> %t.default.err; echo "EXITCODE $?" > %t.default.code; } | cat > %t.default.out'
+// RUN: %with-display 120 sh -c '{ HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s default %hnui_demo_addon %x11_window_driver 2> %t.default.err; echo "EXITCODE $?" > %t.default.code; } | cat > %t.default.out'
 // RUN: %FileCheck --check-prefix=DEFAULT-CODE %s < %t.default.code
 // RUN: %FileCheck --check-prefix=DEFAULT %s < %t.default.out
 // RUN: %FileCheck --check-prefix=DEFAULT-TRACE --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.default.err
 //
-// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s cancel %hnui_demo_addon %x11_window_driver > %t.cancel.out 2> %t.cancel.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CANCEL-CODE %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s cancel %hnui_demo_addon %x11_window_driver > %t.cancel.out 2> %t.cancel.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CANCEL-CODE %s
 // RUN: %FileCheck --check-prefix=CANCEL %s < %t.cancel.out
 // RUN: %FileCheck --check-prefix=CANCEL-TRACE --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.cancel.err
 //
-// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s native %hnui_demo_addon %x11_window_driver > %t.native.out 2> %t.native.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=NATIVE-CODE %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s native %hnui_demo_addon %x11_window_driver > %t.native.out 2> %t.native.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=NATIVE-CODE %s
 // RUN: %FileCheck --check-prefix=NATIVE %s < %t.native.out
 // RUN: %FileCheck --check-prefix=NATIVE-TRACE --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.native.err
 //
-// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s winclose %hnui_demo_addon %x11_window_driver > %t.winclose.out 2> %t.winclose.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=WINCLOSE-CODE %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s winclose %hnui_demo_addon %x11_window_driver > %t.winclose.out 2> %t.winclose.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=WINCLOSE-CODE %s
 // RUN: %FileCheck --check-prefix=WINCLOSE --implicit-check-not=CLOSE-EVENT-EMITTED --implicit-check-not=RETURNED %s < %t.winclose.out
 // RUN: %FileCheck --check-prefix=WINCLOSE-TRACE --implicit-check-not='quit requested' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.winclose.err
 //
-// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s noexit %hnui_demo_addon %x11_window_driver > %t.noexit.out 2> %t.noexit.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=NOEXIT-CODE %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s noexit %hnui_demo_addon %x11_window_driver > %t.noexit.out 2> %t.noexit.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=NOEXIT-CODE %s
 // RUN: %FileCheck --check-prefix=NOEXIT --implicit-check-not=RETURNED %s < %t.noexit.out
 // RUN: %FileCheck --check-prefix=NOEXIT-TRACE --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.noexit.err
 //
-// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s late %hnui_demo_addon %x11_window_driver > %t.late.out 2> %t.late.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=LATE-CODE %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s late %hnui_demo_addon %x11_window_driver > %t.late.out 2> %t.late.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=LATE-CODE %s
 // RUN: %FileCheck --check-prefix=LATE %s < %t.late.out
 // RUN: %FileCheck --check-prefix=LATE-TRACE --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.late.err
 //
-// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s replaced %hnui_demo_addon %x11_window_driver > %t.replaced.out 2> %t.replaced.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=REPLACED-CODE %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s replaced %hnui_demo_addon %x11_window_driver > %t.replaced.out 2> %t.replaced.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=REPLACED-CODE %s
 // RUN: %FileCheck --check-prefix=REPLACED --implicit-check-not=KEY-AFTER-CLOSE --implicit-check-not=FRAME-AFTER-CLOSE %s < %t.replaced.out
 // RUN: %FileCheck --check-prefix=REPLACED-TRACE --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.replaced.err
 //
-// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s rframe %hnui_demo_addon %x11_window_driver > %t.rframe.out 2> %t.rframe.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=RFRAME-CODE %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s rframe %hnui_demo_addon %x11_window_driver > %t.rframe.out 2> %t.rframe.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=RFRAME-CODE %s
 // RUN: %FileCheck --check-prefix=RFRAME --implicit-check-not=CB2-RAN %s < %t.rframe.out
 // RUN: %FileCheck --check-prefix=RFRAME-TRACE --implicit-check-not=', drew' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.rframe.err
 
