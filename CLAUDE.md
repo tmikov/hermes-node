@@ -1440,11 +1440,18 @@ JS tests use LLVM Lit (`test/lit.cfg`), run in parallel via `check-hermes-node-j
 - **Node-ported tests** (`test/node-tests/parallel/*.js`): `// RUN: TEST_THREAD_ID=$$ %hermes-node %s`
 - **Primordials test**: `// RUN: cat %source_dir/libjs/primordials.js %s > %t.js && %hermes -Xasync-generators %t.js`
 - **Expected-failure tests**: `%not` runs a command that must exit non-zero, e.g. `// RUN: %not %hermes-node %s 2>&1 | %FileCheck %s`
-- Run single test (paths must be absolute): `python3 cmake-build-asan/bin/hermes-lit $(pwd)/test/test-foo.js --param hermes_node=$(pwd)/cmake-build-asan/bin/hermes-node --param hermes=$(pwd)/cmake-build-asan/bin/hermes --param FileCheck=$(pwd)/cmake-build-asan/bin/FileCheck --param not=$(pwd)/cmake-build-asan/bin/not --param source_dir=$(pwd) --param test_exec_root=$(pwd)/cmake-build-asan/test`
-  Run it through `python3` rather than directly: the generated script's
-  shebang is `#!/usr/bin/env python`, which fails on a machine that has
-  `python3` and no `python`. `-v` shows the output of failing tests only; `-a` shows
-  every test's RUN lines and output, passing ones included.
+- Run single tests (paths must be absolute):
+  `utils/lit-run.sh <build dir> [lit options] <absolute test path>...`, e.g.
+  `utils/lit-run.sh cmake-build-asan -v $(pwd)/test/test-foo.js`. It takes
+  every `--param` from the build directory's own `check-hermes-node-js`
+  command in `build.ninja`, so it cannot drift from what CMake passes (a
+  hand-written param list did: it lacked `python`, and every `%python` test
+  failed with `/nonexistent/python-was-not-configured`), and it runs
+  `hermes-lit` through `python3`, whose generated shebang names a `python`
+  some machines lack. `-v` shows the output of failing tests only; `-a`
+  shows every test's RUN lines and output, passing ones included. **Never
+  run two lit invocations over one build directory at once**: they share
+  `test_exec_root`, so each overwrites the other's `%t` files.
 
 Unit tests (GTest) are discovered and run by Lit too (`unittests/lit.cfg`), via
 the `check-hermes-node-unit` target. `check-hermes-node` runs both suites, so a

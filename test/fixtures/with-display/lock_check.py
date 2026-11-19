@@ -16,8 +16,10 @@ run), so a lock derived from TMPDIR would not serialise them.
 HERMES_NODE_UI_DISPLAY_LOCK points both at LOCK_PATH, so this test never
 touches the machine's real lock. Prints `serialised` if B's command started
 after A's ended, `OVERLAP` otherwise, then a line per run with its status.
-Also checks that B, given a limit shorter than A's hold, gives up with 124
-rather than waiting past its own limit.
+Then two cases of the wait's own budget: C, whose TEST limit is shorter
+than A's hold, still runs and succeeds (the limit starts once the lock is
+held); D, whose lock-wait budget (HERMES_NODE_UI_DISPLAY_LOCK_WAIT) is
+shorter than the hold, exits 125 without running its command.
 """
 
 import os

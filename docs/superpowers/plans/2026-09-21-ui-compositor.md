@@ -561,7 +561,7 @@ Build and run one unit-test binary (the build is part of the command; a stale bi
 cmake --build cmake-build-asan --target <TestName> && cmake-build-asan/unittests/<TestName> --gtest_filter='<Suite>.*'
 ```
 
-Run named lit tests with exactly the params CMake passes — `.superpowers/sdd/2026-09-21-ui-compositor/runlit.sh <absolute test path>...`, after `cmake --build cmake-build-asan --target hermes-node-ui hnui_demo_addon`. A new lit `--param` is added to `test/CMakeLists.txt`, `test/lit.cfg` **and** `runlit.sh` in the task that introduces it.
+Run named lit tests with exactly the params CMake passes — `utils/lit-run.sh cmake-build-asan <absolute test path>...` (since Task 16a; it reads the params from `build.ninja`, so a new `--param` needs adding only to `HERMES_NODE_LIT_PARAMS` in the top-level `CMakeLists.txt` and to `test/lit.cfg`), after `cmake --build cmake-build-asan --target hermes-node-ui hnui_demo_addon`. Earlier tasks used a hand-maintained `.superpowers/sdd/2026-09-21-ui-compositor/runlit.sh`, which a new param had to be added to by hand.
 
 Before every commit: `./utils/format.sh -f` then `cmake --build cmake-build-asan --target check-hermes-node`. A run reporting fewer tests than the previous task's total is a failure.
 

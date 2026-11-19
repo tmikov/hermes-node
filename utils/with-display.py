@@ -7,6 +7,7 @@
 """Run one command with a display to open windows on, and a time limit.
 
     with-display.py SECONDS COMMAND [ARG...]
+    with-display.py --print-lock-path
 
 What `%with-display` expands to in every window test's RUN line
 (test/lit.cfg), and what the `display` feature's own probe runs through, so
@@ -33,10 +34,12 @@ machine, so instead:
    capture never matches. Not under `$TMPDIR`: lit points TMPDIR at a fresh
    `lit_tmp_*` directory per invocation, and on macOS TMPDIR is per-user
    anyway, so a lock there serialised only the tests of one lit run.
-   The file is created mode 0666 (forced past the umask) so that another
-   user of the machine can take it too; a lock file that exists and cannot
-   be opened for writing -- another user created it under a stricter umask
-   before this rule -- is opened read-only, which is all `flock` needs.
+   The file is created mode 0666 (forced past the umask, and only when this
+   run created it) so that another user of the machine can take it too; an
+   existing one is opened read-only, which is all `flock` needs. A path that
+   is a symlink, a FIFO or anything but a regular file is REFUSED: exit 125
+   with one line naming the path and the problem, without running the
+   command -- see open_lock() for why, and for why a hard link is safe.
    Never stale: an `flock` belongs to the open file, and the kernel drops it
    when the last descriptor closes, which happens when this process exits
    however it exits, SIGKILL included. The command does not inherit the
@@ -63,8 +66,11 @@ machine, so instead:
 stdout and stderr are the command's own on both platforms.
 """
 
+import errno
 import importlib.util
+import math
 import os
+import stat
 import sys
 import time
 
@@ -102,30 +108,64 @@ def run_linux(seconds, command):
         return OWN_FAILURE
 
 
+def lock_path():
+    """The display lock's path: the override, else the fixed default."""
+    return os.environ.get('HERMES_NODE_UI_DISPLAY_LOCK') or LOCK_PATH
+
+
 def open_lock(path):
-    """A descriptor on the lock file, creating it world-accessible; None
-    (with a message) if it can be opened neither way."""
-    try:
-        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o666)
+    """(fd, None) on the lock file, or (None, what is wrong with it).
+
+    Hardened against another local user, since the default path is in
+    world-writable /tmp and macOS has nothing like Linux's
+    protected_symlinks:
+
+    - Created with O_CREAT|O_EXCL|O_NOFOLLOW, so a planted symlink -- to a
+      file of ours, or to one that does not exist -- is never followed and
+      nothing is created through it. Only a file THIS call created is
+      fchmod'ed to 0666 (to get past the umask, so another user can take
+      the lock too). A file that already existed is never chmod'ed.
+    - An existing file is opened O_RDONLY|O_NOFOLLOW|O_NONBLOCK: a symlink
+      fails with ELOOP, a FIFO cannot block the open, and fstat then refuses
+      anything that is not a regular file. flock needs only an open
+      descriptor, whatever its access mode.
+    - A hard link to a file of ours cannot be told apart from an ordinary
+      lock file, and does not need to be: nothing is ever written to the
+      file and its mode is changed only when this process created it, so
+      locking through a hard link changes nothing. Do not "fix" this by
+      adding a chmod of an existing file -- that is exactly the hole.
+    """
+    flags = getattr(os, 'O_CLOEXEC', 0) | os.O_NOFOLLOW
+    for _ in range(3):
         try:
-            # Past the umask, so another user of the machine can open it.
-            # Fails harmlessly if the file is someone else's.
-            os.fchmod(fd, 0o666)
-        except OSError:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | flags,
+                         0o666)
+        except FileExistsError:
             pass
-        return fd
-    except PermissionError:
-        pass
-    except OSError as e:
-        sys.stderr.write('with-display.py: %s: %s\n' % (path, e))
-        return None
-    try:
-        # Exists, owned by another user, not writable by us: flock needs
-        # only an open descriptor, whatever its access mode.
-        return os.open(path, os.O_RDONLY)
-    except OSError as e:
-        sys.stderr.write('with-display.py: %s: %s\n' % (path, e))
-        return None
+        except OSError as e:
+            return None, 'cannot be created (%s)' % e.strerror
+        else:
+            try:
+                os.fchmod(fd, 0o666)
+            except OSError:
+                pass
+            return fd, None
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | flags)
+        except FileNotFoundError:
+            # Removed between the two opens: another run's create lost to
+            # an unlink. Try creating it again.
+            continue
+        except OSError as e:
+            if e.errno == errno.ELOOP:
+                return None, 'is a symbolic link'
+            return None, 'cannot be opened (%s)' % e.strerror
+        mode = os.fstat(fd).st_mode
+        if not stat.S_ISREG(mode):
+            os.close(fd)
+            return None, 'is not a regular file'
+        return fd, None
+    return None, 'keeps disappearing between create and open'
 
 
 def run_darwin(seconds, command):
@@ -137,17 +177,23 @@ def run_darwin(seconds, command):
     except ValueError:
         return usage()
 
-    lock_path = os.environ.get('HERMES_NODE_UI_DISPLAY_LOCK') or LOCK_PATH
+    path = lock_path()
     budget_text = os.environ.get('HERMES_NODE_UI_DISPLAY_LOCK_WAIT') or ''
     try:
         budget = float(budget_text) if budget_text else LOCK_WAIT_SECONDS
     except ValueError:
+        budget = float('nan')
+    if not math.isfinite(budget) or budget < 0:
         sys.stderr.write(
             'with-display.py: HERMES_NODE_UI_DISPLAY_LOCK_WAIT must be a '
-            'number of seconds, not %r\n' % budget_text)
+            'finite, non-negative number of seconds, not %r\n' % budget_text)
         return OWN_FAILURE
-    fd = open_lock(lock_path)
+    fd, problem = open_lock(path)
     if fd is None:
+        # Neither running unserialised nor hanging is acceptable.
+        sys.stderr.write(
+            'with-display.py: refusing the display lock %s: it %s\n' %
+            (path, problem))
         return OWN_FAILURE
     try:
         # Polled rather than blocking, because a blocking flock() cannot be
@@ -162,7 +208,7 @@ def run_darwin(seconds, command):
             if time.monotonic() - started >= budget:
                 sys.stderr.write(
                     'with-display.py: gave up waiting for the display lock '
-                    '%s after %s s\n' % (lock_path, budget_text or
+                    '%s after %s s\n' % (path, budget_text or
                                          '%g' % LOCK_WAIT_SECONDS))
                 return OWN_FAILURE
             time.sleep(0.05)
@@ -188,6 +234,12 @@ def run_darwin(seconds, command):
 
 
 def main(argv):
+    if argv == ['--print-lock-path']:
+        # The path the macOS branch would lock, on any platform. Exists so
+        # test/with-display-lock.js can pin the DEFAULT without taking the
+        # machine's real lock.
+        print(lock_path())
+        return 0
     if len(argv) < 2:
         return usage()
     seconds, command = argv[0], argv[1:]

@@ -28,12 +28,30 @@
 // path is pointed into %t through HERMES_NODE_UI_DISPLAY_LOCK, so a real
 // Mac's lock is never touched.
 //
+// HARD is the lock file's hardening (test/fixtures/with-display/
+// lock_hardening.py): the default path is in world-writable /tmp, so what
+// another local user can plant there must not be turned against the user
+// running the tests. A symlink is not followed (its 0600 target keeps its
+// mode, a missing target is not created), a FIFO is refused at once rather
+// than blocking the open, each with 125 and without running the command;
+// a read-only existing lock still serialises; a file the wrapper creates is
+// 0666 under umask 022 and 077. Lock-wait budgets that are not a finite,
+// non-negative number are refused with 125. And the DEFAULT path, with no
+// override, is the fixed machine-wide one whatever TMPDIR says.
+//
 // (Mutations: derive the lock path from TMPDIR again -- OVERLAP; charge
 // the wait to the limit again -- C status=124 ran=0; ignore the budget --
-// D waits for the holder and runs: status=0 ran=1.)
+// D waits for the holder and runs: status=0 ran=1; open with O_RDWR|O_CREAT
+// and fchmod as before -- symlink status=0 target-mode=666, the dangling
+// target is created; drop O_NONBLOCK -- the FIFO hangs (status=None); drop
+// the fchmod -- umask 077 mode=600; accept nan -- budget nan runs;
+// derive the default from TMPDIR -- default lines differ.)
 //
 // RUN: rm -rf %t.d && mkdir -p %t.d
 // RUN: %python %S/fixtures/with-display/lock_check.py %source_dir/utils/with-display.py %t.d/display.lock %t.d | %FileCheck %s
+
+// RUN: rm -rf %t.h && mkdir -p %t.h
+// RUN: %python %S/fixtures/with-display/lock_hardening.py %source_dir/utils/with-display.py %t.h | %FileCheck --check-prefix=HARD %s
 
 // CHECK: {{^}}serialised{{$}}
 // CHECK-NEXT: {{^}}A status=0{{$}}
@@ -41,3 +59,18 @@
 // CHECK-NEXT: {{^}}C status=0 ran=1 waited-past-limit=1{{$}}
 // CHECK-NEXT: {{^}}D status=125 ran=0 bounded=1{{$}}
 // CHECK-NEXT: {{^}}D said: with-display.py: gave up waiting for the display lock {{.*}}display.lock after 1 s{{$}}
+
+// HARD: {{^}}symlink status=125 ran=0 target-mode=600{{$}}
+// HARD-NEXT: {{^}}symlink said: with-display.py: refusing the display lock {{.*}}link-to-victim: it is a symbolic link{{$}}
+// HARD-NEXT: {{^}}dangling status=125 ran=0 target-created=0{{$}}
+// HARD-NEXT: {{^}}fifo status=125 ran=0 prompt=1{{$}}
+// HARD-NEXT: {{^}}fifo said: with-display.py: refusing the display lock {{.*}}fifo: it is not a regular file{{$}}
+// HARD-NEXT: {{^}}readonly status=0 serialised=1 mode=444{{$}}
+// HARD-NEXT: {{^}}umask 022 status=0 ran=1 mode=666{{$}}
+// HARD-NEXT: {{^}}umask 077 status=0 ran=1 mode=666{{$}}
+// HARD-NEXT: {{^}}budget abc status=125 ran=0 said: with-display.py: HERMES_NODE_UI_DISPLAY_LOCK_WAIT must be a finite, non-negative number of seconds, not 'abc'{{$}}
+// HARD-NEXT: {{^}}budget nan status=125 ran=0 said: {{.*}}not 'nan'{{$}}
+// HARD-NEXT: {{^}}budget inf status=125 ran=0 said: {{.*}}not 'inf'{{$}}
+// HARD-NEXT: {{^}}budget -1 status=125 ran=0 said: {{.*}}not '-1'{{$}}
+// HARD-NEXT: {{^}}default (TMPDIR=one): /tmp/hermes-node-ui-display.lock{{$}}
+// HARD-NEXT: {{^}}default (TMPDIR=two): /tmp/hermes-node-ui-display.lock{{$}}
