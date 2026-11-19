@@ -17,10 +17,18 @@
 //
 // Two assertions, gated differently, because they ask different questions.
 //
-//  AGREE, everywhere the UI binary exists: the binary prints the line, with
+//  AGREE, wherever a GPU backend was built: the binary prints the line, with
 //  exactly `on` or `off`, and lit.cfg computed the SAME answer. This is what
 //  catches a reworded line or a drifted match -- lit would compute `off`
 //  while the binary still says `on` -- and it needs no display and no CI.
+//
+//  `ui-gpu` and not `ui` alone: a hermes-node-ui built without a backend
+//  (macOS until the Metal backend lands) contains no sokol_gfx to validate,
+//  so tools/hermes-node-ui/main.cpp prints no such line there and there is
+//  nothing for lit to agree with. Gated on `ui` alone, this test failed on
+//  the first macOS build of the UI option. Nothing is lost by the narrower
+//  gate: test/ui-sokol-validation.js, the test this feature exists to keep
+//  running, requires `ui-gpu` itself.
 //
 //  CI, only where a GPU backend was built and the environment says it is CI:
 //  the answer is `on`. .github/workflows/ci.yml enables
@@ -35,7 +43,7 @@
 // different wording from tools/hermes-node-ui/main.cpp -- AGREE goes red,
 // because the BINARY check below no longer finds it.
 //
-// REQUIRES: ui
+// REQUIRES: ui, ui-gpu
 // RUN: %hermes-node-ui --version | %FileCheck --check-prefix=BINARY %s
 // RUN: %hermes-node-ui --version | grep '^sokol_gfx validation: ' | sed 's/^sokol_gfx validation: /agree binary=/' | tr -d '\n' > %t.agree
 // RUN: echo ' lit=%sokol-validation-state' >> %t.agree
