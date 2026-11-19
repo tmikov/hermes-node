@@ -32,7 +32,10 @@
 //             line (and the TRACE line) stays green with the
 //             sapp_cancel_quit() call removed. test/ui-real-events.js,
 //             whose close request is a real WM_DELETE_WINDOW, pins the
-//             cancellation.
+//             cancellation. The `close` listener calls e.preventDefault():
+//             an uncancelled `close` closes the window, which ends the
+//             process, and would end this test at that point
+//             (test/ui-close.js pins both outcomes).
 //  STATE      hnui_get_window_state agrees with the JS object.
 //  MINIMIZED  a frame requested while minimized does not run until the
 //             window is restored. (Mutation: remove setMinimized.)
@@ -59,8 +62,7 @@
 // whatever the display wrapper does, and `timeout` because lit has no
 // per-test timeout (dz 01a0d797-e326) and a mutation here typically waits
 // forever for an event that never arrives. The test ends through
-// process.exit() (Ruling 59): closing the window still hangs (dz
-// 01a0d88a-6518).
+// process.exit(): its subject is not closing.
 //
 // RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
@@ -182,7 +184,11 @@ async function main() {
   win.on('focus', () => {
     focusedInFocus = win.focused;
   });
-  win.on('close', () => closeSeen());
+  win.on('close', (e) => {
+    // Cancelled, or the default action would end the process here.
+    e.preventDefault();
+    closeSeen();
+  });
 
   // --- Phase one: one of everything, in one burst. ---------------------
   ui.__injectEvent(
@@ -202,10 +208,9 @@ async function main() {
 
   await closed;
   // A turn of the loop after `close`, so that anything else the dispatch
-  // delivered has been delivered. (Not evidence that the quit was
-  // cancelled: an injected QUIT_REQUESTED never asks Sokol to quit, and an
-  // uncancelled real one would not stop this thread either -- the process
-  // stays up without its window, dz 01a0d88a-6518.)
+  // delivered has been delivered. (Not evidence that Sokol's quit was
+  // cancelled: an injected QUIT_REQUESTED never asks Sokol to quit. That
+  // is test/ui-real-events.js's and test/ui-close.js's.)
   await new Promise((resolve) => setImmediate(resolve));
 
   const log = addon.takeEventLog();

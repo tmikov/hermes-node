@@ -21,7 +21,7 @@
 ///     `hnui_request_animation_frame`, `hnui_cancel_animation_frame`.
 ///   - Input and window state: `hnui_add_event_listener`,
 ///     `hnui_remove_event_listener`, `hnui_event_dispatch_quiescent`,
-///     `hnui_get_window_state`.
+///     `hnui_cancel_close`, `hnui_get_window_state`.
 ///   - Platform services: `hnui_set_cursor`, `hnui_show_cursor`,
 ///     `hnui_lock_pointer`, `hnui_write_clipboard`,
 ///     `hnui_read_clipboard_sync`, and `hnui_free` for what the last one
@@ -246,6 +246,27 @@ void hnui_remove_event_listener(hnui_window *w, int id);
 /// one, too; true inside a frame callback. True for a NULL \p w, which has
 /// no listeners. A wrong-thread call on a real window aborts.
 bool hnui_event_dispatch_quiescent(hnui_window *w);
+
+/// Cancel the close the window system is asking for, from inside the
+/// delivery of an `HNUI_EVENT_CLOSE_REQUESTED` event.
+///
+/// The window is never closed by the window system: the host cancels every
+/// close request it receives and forwards it as that event. Once the
+/// event's native listeners and JavaScript `close` listeners have all run,
+/// a close that nobody cancelled closes the window, and the process ends as
+/// if `process.exit()` had been called with no argument -- so
+/// `process.exitCode` is the status. This is the native half of
+/// cancelling; the JavaScript half is the `close` payload's
+/// `preventDefault()`, and either one is enough.
+///
+/// \return true when called while a close request is being delivered for
+///   \p w -- from a native listener, or from native code reached from a
+///   JavaScript `close` listener -- and the close is then cancelled. A
+///   second call during the same event is harmless and returns true too.
+///   False at any other time (a later call cancels nothing: the decision
+///   is made when delivery ends), for a NULL \p w, and once the window is
+///   closing. A wrong-thread call on a real window aborts.
+bool hnui_cancel_close(hnui_window *w);
 
 /// Fill \p out with the window's current state, as of the last event
 /// delivered on the owner thread.

@@ -211,6 +211,15 @@ void uiTestHookFrameBegan();
 /// Platform thread, on every return of onFrame(), only when the hooks are
 /// on. Takes gFrameCountMutex and wakes waitPlatformFrames().
 void uiTestHookFrameEnded();
+/// JS thread (NAPI); exported by initUiModule() only when the hooks are on.
+/// Blocks the JS thread on gQuitCountMutex, which only the function below
+/// also takes.
+napi_value waitPlatformQuitRequests(napi_env env, napi_callback_info info);
+/// Platform thread, in uiHandlePlatformEvent() right after its
+/// sapp_cancel_quit() call, only when the hooks are on. Takes
+/// gQuitCountMutex (file-local to ui_test_hooks.cpp) and wakes
+/// waitPlatformQuitRequests().
+void uiTestHookQuitCancelled();
 
 } // namespace node_compat
 } // namespace hermes

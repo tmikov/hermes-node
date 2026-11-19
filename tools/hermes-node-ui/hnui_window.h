@@ -126,6 +126,18 @@ struct hnui_window {
     void *user = nullptr;
   };
 
+  /// Whether a close request (`kCloseRequested`) is being delivered: true
+  /// from before its first native listener runs until the JavaScript
+  /// `emit` returns. What `hnui_cancel_close` and the `close` payload's
+  /// `preventDefault()` check, so that a call at any other time cancels
+  /// nothing.
+  bool inCloseEvent = false;
+
+  /// Whether a listener of the close request being delivered cancelled it.
+  /// Reset when `inCloseEvent` is set, so one event's cancellation never
+  /// carries over to the next.
+  bool closeCancelled = false;
+
   /// `hnui_add_event_listener` registrations, in registration order.
   std::vector<NativeEventListener> eventListeners;
   int nextListenerId = 1;

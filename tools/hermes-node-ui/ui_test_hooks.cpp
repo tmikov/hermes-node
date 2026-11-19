@@ -356,6 +356,64 @@ napi_value waitPlatformFrames(napi_env env, napi_callback_info info) {
   return result;
 }
 
+//===========================================================================
+// Platform quit-request barrier (test hook)
+//===========================================================================
+
+namespace {
+
+/// Both threads, under gQuitCountMutex: how many sapp_cancel_quit() calls
+/// uiHandlePlatformEvent() has executed since startup.
+std::mutex gQuitCountMutex;
+std::condition_variable gQuitCountChanged;
+uint64_t gQuitsCancelled = 0;
+
+} // namespace
+
+void uiTestHookQuitCancelled() {
+  {
+    std::lock_guard<std::mutex> lock(gQuitCountMutex);
+    ++gQuitsCancelled;
+  }
+  gQuitCountChanged.notify_all();
+}
+
+/// `__waitPlatformQuitRequests(total)` -> boolean. Blocks the calling
+/// thread until the platform thread has executed \p total sapp_cancel_quit()
+/// calls since startup -- an absolute count, unlike __waitPlatformFrames(),
+/// because a test knows how many close requests it has sent; false if that
+/// has not happened within 10 s. Counted after the call, so true means the
+/// cancellation ran, not that the request arrived. Works in every lifecycle
+/// state, for the reason __waitPlatformFrames() does.
+napi_value waitPlatformQuitRequests(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  int32_t total = 1;
+  napi_valuetype type = napi_undefined;
+  if (argc >= 1 && napi_typeof(env, argv[0], &type) == napi_ok &&
+      type == napi_number) {
+    napi_get_value_int32(env, argv[0], &total);
+  }
+  if (total < 0)
+    total = 0;
+
+  bool reached;
+  {
+    std::unique_lock<std::mutex> lock(gQuitCountMutex);
+    reached = gQuitCountChanged.wait_for(lock, kFrameBarrierTimeout, [&] {
+      return gQuitsCancelled >= static_cast<uint64_t>(total);
+    });
+  }
+  uiTrace(
+      "test hook: waited for platform quit requests: %s",
+      reached ? "ok" : "timed out");
+
+  napi_value result = nullptr;
+  napi_get_boolean(env, reached, &result);
+  return result;
+}
+
 namespace {
 
 /// The `SAPP_EVENTTYPE_` name without its prefix, or false.

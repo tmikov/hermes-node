@@ -784,12 +784,24 @@ void onCleanup() {
 void uiHandlePlatformEvent(
     const sapp_event &event,
     const PlatformSource &source) {
-  // Ruling 54: the close button emits `close` and the window stays open.
-  // Cancelled BEFORE anything else, because Sokol acts on the flag as soon
-  // as this callback returns; what an uncancelled close does is Task 15's.
+  // Every quit request is cancelled, unconditionally and BEFORE anything
+  // else, because Sokol acts on its flag as soon as this callback returns --
+  // and a quit Sokol acted on would end sapp_run(), whose Linux teardown
+  // closes the X display the JS thread's GL context was created on while
+  // that thread still has it current (on macOS the quit path exits 0 from
+  // this thread instead, which cannot carry a status). That holds in
+  // CLOSING too: a second close request arriving while 'exit' listeners
+  // run must not be the one that tears the window down under them. Whether
+  // the window closes is the JS thread's decision, made by the `close`
+  // listeners this event is forwarded to, and carried out there by ending
+  // the process (uiCloseWindow); the platform thread is never told.
   if (event.type == SAPP_EVENTTYPE_QUIT_REQUESTED) {
     sapp_cancel_quit();
     uiTrace("quit requested: cancelled, forwarded as close");
+    // The test hooks' quit barrier (__waitPlatformQuitRequests) counts the
+    // cancellation once it has been executed.
+    if (uiTestHooksEnabled())
+      uiTestHookQuitCancelled();
   }
 
   UiEvent converted;

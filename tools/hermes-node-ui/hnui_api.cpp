@@ -264,6 +264,23 @@ bool hnui_event_dispatch_quiescent(hnui_window *w) {
   return w->events == nullptr || !w->events->dispatching();
 }
 
+bool hnui_cancel_close(hnui_window *w) {
+  if (!haveWindow(w, "hnui_cancel_close"))
+    return false;
+  requireOwnerThread(w, "hnui_cancel_close");
+  // Once CLOSING, there is no close left to cancel: the decision has been
+  // made, and whatever ended the window is ending the process.
+  if (hermes::node_compat::uiClosing())
+    return false;
+  // Outside a close request's delivery there is nothing to cancel either:
+  // deliver() decides when the event's listeners have all run, and a later
+  // call would be cancelling a decision already carried out.
+  if (!w->inCloseEvent)
+    return false;
+  w->closeCancelled = true;
+  return true;
+}
+
 void hnui_set_cursor(hnui_window *w, hnui_cursor c) {
   if (!haveWindow(w, "hnui_set_cursor"))
     return;

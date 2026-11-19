@@ -49,8 +49,10 @@
 // RUN-line shape as in ui-events.js: redirections inside `sh -c`, so the
 // trace file is the binary's own stderr whatever the display wrapper does,
 // and `timeout` because lit has no per-test timeout (dz 01a0d797-e326). Ends
-// through process.exit() (Ruling 59): closing the window still hangs (dz
-// 01a0d88a-6518).
+// with win.close(): closing is one of the window's commands, and this is the
+// one test outside test/ui-close.js that ends that way. A win.close() that
+// returned, or ended the process with the wrong status, would leave the run
+// at its `timeout` or fail CODE.
 //
 // RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
@@ -195,7 +197,7 @@ async function main() {
   report('MARKER', true);
 
   console.log('DONE');
-  process.exit(0);
+  win.close();
 }
 
 main().catch((e) => {

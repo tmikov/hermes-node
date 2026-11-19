@@ -516,6 +516,19 @@ void runFrameTick() {
     uiRunTickCallback(gEnv);
   }
 
+  // A callback closed the window -- win.close() under a process.exit that
+  // returned, since a real one does not come back here. uiEnterClosing()
+  // has already cleared the per-tick state and released the rest of the
+  // batch, and the table is closing, so nothing is submitted: a publication
+  // it would refuse is not worth a GPU submission. The slot is put back;
+  // the machine is left where it is, since no tick can be delivered again.
+  if (uiClosing()) {
+    if (slot)
+      gTable->reclaim(*slot);
+    uiTrace("frame tick: ended by CLOSING; slot reclaimed, nothing submitted");
+    return;
+  }
+
   // Whatever happened inside the batch, a handled exception included,
   // everything from here on runs: the frame an earlier callback drew is
   // still submitted, and a tick that drew nothing still goes back to idle.
@@ -1254,6 +1267,13 @@ napi_value initUiModule(napi_env env, napi_value exports) {
             env, exports, "__waitPlatformFrames", waitPlatformFrames)) {
       return nullptr;
     }
+    if (!exportFunction(
+            env,
+            exports,
+            "__waitPlatformQuitRequests",
+            waitPlatformQuitRequests)) {
+      return nullptr;
+    }
   }
   return exports;
 }
@@ -1364,6 +1384,57 @@ void uiEnterClosing(UiCloseReason reason) {
     uiRunTickCallback(gEnv);
 }
 
+bool uiCloseWindow(hnui_window *w) {
+  (void)w; // one window per process; named for the callers' symmetry
+  uiEnterClosing(UiCloseReason::kWindowClose);
+
+  // Closing the window ends the process (spec: Lifecycle), through the
+  // runtime's own process.exit() rather than an _exit() of ours: that is
+  // the path which emits 'exit', honours process.exitCode, flushes stdio
+  // and restores the terminal, and a program that has replaced it has
+  // asked for its replacement to run. The property's CURRENT value, looked
+  // up now, for the reason uiRunTickCallback() looks up _tickCallback.
+  napi_handle_scope scope = nullptr;
+  if (napi_open_handle_scope(gEnv, &scope) != napi_ok)
+    return true;
+  napi_value global = nullptr;
+  napi_value process = nullptr;
+  napi_value exitFn = nullptr;
+  napi_valuetype type = napi_undefined;
+  if (napi_get_global(gEnv, &global) != napi_ok ||
+      napi_get_named_property(gEnv, global, "process", &process) != napi_ok ||
+      napi_get_named_property(gEnv, process, "exit", &exitFn) != napi_ok ||
+      napi_typeof(gEnv, exitFn, &type) != napi_ok || type != napi_function) {
+    bool pending = false;
+    if (napi_is_exception_pending(gEnv, &pending) != napi_ok || !pending) {
+      napi_throw_type_error(
+          gEnv,
+          nullptr,
+          "closing the window: process.exit is not a function, so the "
+          "process could not be ended.");
+    }
+    napi_close_handle_scope(gEnv, scope);
+    return false;
+  }
+
+  uiTrace("close: ending the process through process.exit()");
+  napi_value result = nullptr;
+  const bool called =
+      napi_call_function(gEnv, process, exitFn, 0, nullptr, &result) == napi_ok;
+  napi_close_handle_scope(gEnv, scope);
+  if (!called)
+    return false;
+
+  // Reached only when process.exit has been replaced by something that
+  // returns. Nothing undoes CLOSING: the dispatcher is closed, the frame
+  // callbacks released and the loop handle given back, and every posted
+  // function and every event still queued is refused from here on. The
+  // process ends when the program ends it some other way, or when its loop
+  // runs dry (uiBeforeRuntimeCleanup()).
+  uiTrace("close: process.exit returned; the window stays in CLOSING");
+  return true;
+}
+
 void uiBeforeExitListeners(napi_env env, ExitReason reason) {
   // Another runtime's exit is not this window's. With no window requested
   // there is no env to compare against, and the state is recorded anyway
@@ -1387,6 +1458,16 @@ void uiBeforeRuntimeCleanup(napi_env env, int exitCode) {
   // A script that never asked for a window has nothing here to protect, and
   // ends exactly as plain hermes-node does: step 16, then UiHost::run()
   // joins the JS thread and returns its status.
+  //
+  // The two checks overlap in that case -- gEnv is still null, so the
+  // second would return as well -- and the order is not interchangeable.
+  // uiWindowRequested() reads under gMutex; gEnv is a plain variable the
+  // window's JS thread writes in createWindow() BEFORE it publishes the
+  // request under that same mutex. So a true answer here guarantees that
+  // gEnv has been published to this thread, and only then is it read. That
+  // matters when a second runtime exists, the inspector's: its JS thread
+  // reaches this hook too, and reading gEnv first would be an
+  // unsynchronized read of a variable another thread may be writing.
   if (!uiWindowRequested())
     return;
   if (env != gEnv)

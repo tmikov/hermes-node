@@ -28,29 +28,32 @@
 //           This is the resize of the REAL framebuffer --
 //           test/ui-resize-generation.js injects its resize, so there the
 //           framebuffer never changes size and only the target does.
-//  CLOSE    a real close request (WM_DELETE_WINDOW) emits `close`, and the
-//           window is still there afterwards: a frame requested from the
-//           `close` listener runs, and the driver then reports the window
-//           still viewable. This is what pins Ruling 54's
-//           sapp_cancel_quit(): only a real close request sets Sokol's
-//           quit flag, so the injected QUIT_REQUESTED of ui-events.js has
-//           nothing to cancel. (Mutation: remove the sapp_cancel_quit()
-//           call. Sokol then leaves its loop and destroys the window, no
-//           frame is ever ticked again, and the process does NOT exit --
-//           closing still hangs, dz 01a0d88a-6518. So waiting for the
-//           frame alone would only ever end at the `timeout`. The driver
-//           watches the window and reports its destruction the moment it
-//           happens, and the test races that report against the frame:
-//           the mutant prints CLOSE WRONG and exits 1 promptly.)
+//  CLOSE    a real close request (WM_DELETE_WINDOW) emits `close`, and,
+//           when a listener cancels it with e.preventDefault(), the window
+//           is still there afterwards: a frame requested from the `close`
+//           listener runs, and the driver then reports the window still
+//           viewable. Cancelled, because an uncancelled close now closes
+//           the window and ends the process (test/ui-close.js). This pins
+//           the platform thread's sapp_cancel_quit(): only a real close
+//           request sets Sokol's quit flag, so the injected QUIT_REQUESTED
+//           of ui-events.js has nothing to cancel. (Mutation: remove the
+//           sapp_cancel_quit() call. Sokol then leaves its loop and
+//           destroys the window, no frame is ever ticked again, and the
+//           JS thread is not told -- so waiting for the frame alone would
+//           only ever end at the `timeout`. The driver watches the window
+//           and reports its destruction the moment it happens, and the
+//           test races that report against the frame: the mutant prints
+//           CLOSE WRONG and exits 1 promptly.)
 //
 // The DEMO run is the reference demo's close button (F8 of the Slice C
 // fix wave): a real close request ends test/fixtures/hnui-demo/demo.js
-// with status 0, through its `close` listener. The driver's `--close`
-// waits for the demo's window to be mapped (no sleeping) and may therefore
-// send the request before the demo's script has attached that listener;
-// that it still arrives is the early-delivery guarantee (spec: JS API --
-// no event is delivered before the window's Promise continuation has
-// run). (Mutation: remove the demo's close listener; the demo stays up
+// with status 0, by the default action of a `close` nobody listens to --
+// the demo has no `close` listener at all. The driver's `--close` waits
+// for the demo's window to be mapped (no sleeping) and may therefore send
+// the request before the demo's script has run past its `await`; that it
+// still arrives is the early-delivery guarantee (spec: JS API -- no event
+// is delivered before the window's Promise continuation has run).
+// (Mutation: delete the uiCloseWindow call in deliver; the demo stays up
 // and the run ends at its `timeout` with 124.)
 //
 // REQUIRES: ui, ui-gpu
@@ -59,7 +62,7 @@
 // RUN-line shape as in ui-events.js: redirections inside `sh -c`, so the
 // trace file is the binary's own stderr whatever the display wrapper does,
 // and `timeout` because lit has no per-test timeout (dz 01a0d797-e326).
-// Ends through process.exit() (Ruling 59).
+// Ends through process.exit(): its subject is not closing.
 //
 // RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon %x11_window_driver %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
@@ -242,7 +245,8 @@ async function main() {
   // Two answers race: a frame ticked after the close request (the window
   // survived it) or the driver's report that the window is gone.
   const outcome = new Promise((resolve) => {
-    win.once('close', () => {
+    win.once('close', (e) => {
+      e.preventDefault();
       ui.requestAnimationFrame(() => resolve('frame'));
     });
     driver.onLost((line) => resolve(line));

@@ -135,6 +135,19 @@ void uiEnterClosing(UiCloseReason reason);
 /// True from uiEnterClosing() on. JS thread only.
 bool uiClosing();
 
+/// The window closing itself: the default action of a `close` nobody
+/// cancelled, and `win.close()`. Enters CLOSING (`kWindowClose`), then calls
+/// the current value of `process.exit` with `process` as its receiver and
+/// no argument, so `process.exitCode` is the status. Does not return when
+/// that exits -- the ordinary case. If a program has replaced
+/// `process.exit` with something that returns, this returns too, with the
+/// window left in CLOSING and nothing to recover it (traced). JS thread
+/// only.
+///
+/// \return false with a JavaScript exception pending if the call threw, or
+///   if `process.exit` is not a function; the caller routes it.
+bool uiCloseWindow(hnui_window *w);
+
 /// `ProcessExitHooks::beforeExitListeners`, which `main()` installs: enters
 /// CLOSING with the reason \p reason maps to. Ignores an env that is not the
 /// window's (when a window was requested). JS thread.
@@ -199,9 +212,13 @@ void uiFollowFramebufferSize(const WindowState &state);
 /// the result's window snapshot back as the platform thread's tracked
 /// state, tells the tick machine about a minimize or a restore, pushes the
 /// event onto the input queue, and posts the JS-thread dispatch -- at most
-/// one post outstanding. A `QUIT_REQUESTED` is cancelled first and
-/// forwarded as `close` (Ruling 54): what an uncancelled close does is
-/// Task 15's.
+/// one post outstanding. A `QUIT_REQUESTED` is cancelled first, always --
+/// in CLOSING too -- and forwarded as `close`: the platform thread never
+/// lets Sokol act on a quit, because `sapp_run()` returning would close the
+/// X display the JS thread's GL context was created on, under that thread,
+/// and on macOS its quit path exits 0 from the main thread. Whether the
+/// window then closes is decided on the JS thread, by the `close`
+/// listeners (`uiCloseWindow`), and carried out there.
 ///
 /// `onEvent` calls it with a source built over the real platform;
 /// `onFrame` calls it for each injected event (`event_injector.h`) with

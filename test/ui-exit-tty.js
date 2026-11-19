@@ -21,13 +21,16 @@
 // harness: the harness's child calls setsid(), so a timeout outside it
 // would not reach the program, and without --foreground timeout moves the
 // program into a background process group, where setRawMode()'s tcsetattr
-// stops it with SIGTTOU. A hang then reports `exit status: 124` instead of
-// stalling the suite. ui-gpu is a non-Apple Unix, where GNU or BSD timeout
-// has --foreground.
+// stops it with SIGTTOU. 25 s, below the harness's own 30 s read deadline:
+// a hang then ends at the inner timeout and prints `exit status: 124` and
+// `RESULT: LEFT-IN-RAW-MODE` after about 25 s. (With a longer inner timeout
+// the harness's deadline expires first, it then waits for the child, and
+// the hang prints only `RESULT: HARNESS-FAILED no report from child`.)
+// ui-gpu is a non-Apple Unix, where GNU or BSD timeout has --foreground.
 //
 // REQUIRES: ui, ui-gpu
 //
-// RUN: python3 %S/fixtures/tty/run-on-pty.py timeout --foreground 60 env HERMES_NODE_UI_GL_ROUTE=bogus %hermes-node-ui %s | %FileCheck %s
+// RUN: python3 %S/fixtures/tty/run-on-pty.py timeout --foreground 25 env HERMES_NODE_UI_GL_ROUTE=bogus %hermes-node-ui %s | %FileCheck %s
 // CHECK: exit status: 0
 // CHECK: RESULT: RESTORED
 

@@ -53,13 +53,6 @@ async function startDemo(addonPath, mode) {
     height: 480,
     title: 'hermes-node-ui demo',
   });
-  // The close button ends the program. The platform thread cancels the
-  // quit and forwards `close` (spec: Closing), so the window stays open
-  // until a listener acts; and what an uncancelled close should do is not
-  // built yet -- the window goes and the process stays (dz
-  // 01a0d88a-6518). Until it is, a script that wants to be closable ends
-  // itself, as this one does.
-  win.on('close', () => process.exit(0));
   console.log(
       'WINDOW ' + win.framebufferWidth + 'x' + win.framebufferHeight);
 
@@ -250,6 +243,15 @@ async function runConformance(addonPath, ownerPath, capturePath) {
   await nextFrame();
   print(addon.conformanceTakeLines());
 
+  // hnui_cancel_close: false outside any event, true from a native listener
+  // during a close request -- which it then cancels, so the run carries on.
+  addon.conformanceStartCloseCancel();
+  await new Promise((resolve) => {
+    win.once('close', resolve);
+    ui.__injectEvent({type: 'QUIT_REQUESTED'});
+  });
+  print(addon.conformanceCloseCancelResult());
+
   print(addon.conformanceCommands());
 
   // A normal read, from our own selection; then a timeout, against an
@@ -262,9 +264,9 @@ async function runConformance(addonPath, ownerPath, capturePath) {
   await owner.stop();
 
   print('DONE');
-  // Ends through process.exit(): closing the window still hangs (dz
-  // 01a0d88a-6518).
-  process.exit(0);
+  // Ends the way a program would: closing the window ends the process, with
+  // process.exitCode -- unset here -- as its status.
+  win.close();
 }
 
 module.exports = {startDemo};
