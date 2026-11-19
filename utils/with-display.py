@@ -41,9 +41,16 @@ machine, so instead:
    when the last descriptor closes, which happens when this process exits
    however it exits, SIGKILL included. The command does not inherit the
    descriptor (subprocess closes it), so the lock is exactly this wrapper's
-   lifetime. Waiting for it COUNTS AGAINST the time limit rather than being
-   added to it: a run that cannot get the display within its limit exits
-   124 saying so, and a run that waited is given only what is left. In
+   lifetime. Waiting for it is NOT charged to the time limit: the queue for
+   the display is a property of the machine (every window test of every lit
+   worker queues on this one lock), and a test's limit exists to bound the
+   test, so SECONDS starts once the lock is held and bounds only the
+   command. The wait has its own budget, `HERMES_NODE_UI_DISPLAY_LOCK_WAIT`
+   seconds (default 1800); a run that exhausts it exits 125 -- never 124,
+   which would read as the test timing out -- with one stderr line naming
+   the lock, and does not run its command. Under
+   `HERMES_NODE_DEBUG_NATIVE=UI` a run reports how long it waited, on this
+   wrapper's own stderr, which no RUN line captures. In
    Python, not flock(1), which macOS does not have.
 2. `HERMES_NODE_UI_TEST_NO_ACTIVATE=1`, so the window does not take the
    keyboard from whoever is at the Mac, and a unique
@@ -64,6 +71,10 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 OWN_FAILURE = 125
 LOCK_PATH = '/tmp/hermes-node-ui-display.lock'
+# How long a run may queue for the display before giving up, unless
+# HERMES_NODE_UI_DISPLAY_LOCK_WAIT says otherwise. Long, because the queue
+# is every window test of every lit worker on the machine.
+LOCK_WAIT_SECONDS = 1800
 
 
 def usage():
@@ -126,29 +137,43 @@ def run_darwin(seconds, command):
     except ValueError:
         return usage()
 
-    deadline = time.monotonic() + limit
     lock_path = os.environ.get('HERMES_NODE_UI_DISPLAY_LOCK') or LOCK_PATH
+    budget_text = os.environ.get('HERMES_NODE_UI_DISPLAY_LOCK_WAIT') or ''
+    try:
+        budget = float(budget_text) if budget_text else LOCK_WAIT_SECONDS
+    except ValueError:
+        sys.stderr.write(
+            'with-display.py: HERMES_NODE_UI_DISPLAY_LOCK_WAIT must be a '
+            'number of seconds, not %r\n' % budget_text)
+        return OWN_FAILURE
     fd = open_lock(lock_path)
     if fd is None:
         return OWN_FAILURE
     try:
-        # Bounded by the limit: polled rather than blocking, because a
-        # blocking flock() cannot be given a deadline.
+        # Polled rather than blocking, because a blocking flock() cannot be
+        # given a deadline. The budget is the queue's, not the test's.
+        started = time.monotonic()
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
                 pass
-            if time.monotonic() >= deadline:
+            if time.monotonic() - started >= budget:
                 sys.stderr.write(
-                    'with-display.py: timed out after %s s waiting for the '
-                    'display lock %s\n' % (seconds, lock_path))
-                return timeout.TIMED_OUT
+                    'with-display.py: gave up waiting for the display lock '
+                    '%s after %s s\n' % (lock_path, budget_text or
+                                         '%g' % LOCK_WAIT_SECONDS))
+                return OWN_FAILURE
             time.sleep(0.05)
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return timeout.TIMED_OUT
+        # Not on the normal path: only when the UI trace is on, and on this
+        # wrapper's own stderr, which no RUN line captures -- every window
+        # test redirects the binary's stderr INSIDE `sh -c`, below this
+        # process.
+        if 'UI' in os.environ.get('HERMES_NODE_DEBUG_NATIVE', ''):
+            sys.stderr.write(
+                'with-display.py: waited %.1f s for the display lock\n' %
+                (time.monotonic() - started))
 
         env = dict(os.environ)
         env['HERMES_NODE_UI_TEST_NO_ACTIVATE'] = '1'
@@ -156,7 +181,8 @@ def run_darwin(seconds, command):
             os.getpid(), time.time_ns())
         # subprocess closes inherited descriptors by default, so the lock is
         # held by this process alone and goes when it does.
-        return timeout.run(remaining, command, env=env, foreground=False)
+        # The test's limit starts now, and bounds only the command.
+        return timeout.run(limit, command, env=env, foreground=False)
     finally:
         os.close(fd)
 

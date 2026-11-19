@@ -83,18 +83,36 @@ print('serialised' if read(b_mark + '.start') >= read(a_mark + '.end')
 print('A status=%d' % a_status)
 print('B status=%d' % b_status)
 
-# A limit shorter than the wait: the wait counts against the limit. A's
-# marks from the first round are removed first, or the wait below would
-# return before the new A holds the lock.
-for suffix in ('.start', '.end'):
-    os.unlink(a_mark + suffix)
-a = subprocess.Popen(darwin + ['30'] + recorder(a_mark, 3.0), env=env_for('A'))
-wait_for(a_mark + '.start', 20)
-started = time.time()
-c = subprocess.run(darwin + ['1'] + recorder(c_mark, 0), env=env_for('C'),
-                   stderr=subprocess.PIPE)
-waited = time.time() - started
-a.wait()
-print('C status=%d ran=%d bounded=%d' % (
-    c.returncode, int(os.path.exists(c_mark + '.start')), int(waited < 2.5)))
-print('C said: ' + c.stderr.decode('utf-8', 'replace').strip())
+# (a) A test limit SHORTER than the wait, a lock-wait budget longer: the
+# wait is not charged to the test's limit, so C still runs and succeeds.
+# A's marks from the first round are removed first, or the wait below
+# would return before the new A holds the lock.
+def hold_and_run(name, limit, extra_env):
+    for p in (a_mark, c_mark):
+        for suffix in ('.start', '.end'):
+            if os.path.exists(p + suffix):
+                os.unlink(p + suffix)
+    holder = subprocess.Popen(darwin + ['30'] + recorder(a_mark, 3.0),
+                              env=env_for('A'))
+    wait_for(a_mark + '.start', 20)
+    env = env_for('C')
+    env.update(extra_env)
+    started = time.time()
+    c = subprocess.run(darwin + [limit] + recorder(c_mark, 0), env=env,
+                       stderr=subprocess.PIPE)
+    waited = time.time() - started
+    holder.wait()
+    return c, waited
+
+
+c, waited = hold_and_run('C', '1', {})
+print('C status=%d ran=%d waited-past-limit=%d' % (
+    c.returncode, int(os.path.exists(c_mark + '.start')), int(waited > 1.5)))
+
+# (b) A lock-wait budget smaller than the hold: D gives up with 125 -- not
+# 124, which would read as the test timing out -- without running, and
+# says so.
+d, waited = hold_and_run('D', '30', {'HERMES_NODE_UI_DISPLAY_LOCK_WAIT': '1'})
+print('D status=%d ran=%d bounded=%d' % (
+    d.returncode, int(os.path.exists(c_mark + '.start')), int(waited < 2.5)))
+print('D said: ' + d.stderr.decode('utf-8', 'replace').strip())
