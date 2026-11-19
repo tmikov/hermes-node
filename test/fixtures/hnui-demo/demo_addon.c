@@ -1097,6 +1097,21 @@ static napi_value hostApiVersion(napi_env env, napi_callback_info info) {
   return result;
 }
 
+/** `frameTargetAvailable()` -> what `hnui_frame_target` answers right now,
+    for test/ui-exit-paths.js: false outside a frame callback, and false
+    once the window is CLOSING even when called from inside one. */
+static napi_value frameTargetAvailable(napi_env env, napi_callback_info info) {
+  napi_value result;
+  hnui_target target;
+  hnui_window *w = hnui_get_window(env);
+  (void)info;
+  memset(&target, 0, sizeof(target));
+  target.size = (uint32_t)sizeof(target);
+  napi_get_boolean(
+      env, w != NULL && hnui_frame_target(w, &target), &result);
+  return result;
+}
+
 static napi_value hasWindow(napi_env env, napi_callback_info info) {
   napi_value result;
   (void)info;
@@ -1130,6 +1145,14 @@ NAPI_MODULE_INIT() {
       {"framesDrawn", NULL, framesDrawn, NULL, NULL, NULL, napi_default, NULL},
       {"lastTarget", NULL, lastTarget, NULL, NULL, NULL, napi_default, NULL},
       {"hasWindow", NULL, hasWindow, NULL, NULL, NULL, napi_default, NULL},
+      {"frameTargetAvailable",
+       NULL,
+       frameTargetAvailable,
+       NULL,
+       NULL,
+       NULL,
+       napi_default,
+       NULL},
       {"startEventLog",
        NULL,
        startEventLog,

@@ -19,6 +19,10 @@
 #include <hermes/node-compat/runtime/embedder_module_prefix.h>
 
 #ifdef HERMES_NODE_UI_HAVE_WINDOW
+#include <hermes/node-compat/process/node_process.h>
+#endif
+
+#ifdef HERMES_NODE_UI_HAVE_WINDOW
 #include <sokol_log.h>
 #endif
 
@@ -194,6 +198,14 @@ int main(int argc, char **argv) {
   // only other thread that reads it is created.
   hermes::node_compat::setUiModuleHost(&host);
   host.setWindowRunner(hermes::node_compat::uiRunPlatformLoop);
+  // The window enters CLOSING before any 'exit' listener runs, on every
+  // path that emits 'exit'. Set here for the same ordering reason as the
+  // host pointer: setProcessExitHooks() is not synchronized, and the JS
+  // thread that reads the hooks does not exist yet. The no-window build
+  // sets nothing, and its exits are exactly plain hermes-node's.
+  hermes::node_compat::ProcessExitHooks exitHooks;
+  exitHooks.beforeExitListeners = hermes::node_compat::uiBeforeExitListeners;
+  hermes::node_compat::setProcessExitHooks(exitHooks);
 #endif
 
   return host.run();

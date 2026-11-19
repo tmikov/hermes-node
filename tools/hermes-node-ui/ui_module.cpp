@@ -25,6 +25,7 @@
 #include <hermes/node-compat/compositor/owner_dispatch.h>
 #include <hermes/node-compat/compositor/surface_table.h>
 #include <hermes/node-compat/compositor/tick_machine.h>
+#include <hermes/node-compat/process/node_process.h>
 
 #include <uv.h>
 
@@ -136,6 +137,15 @@ namespace {
 /// Guarded by gMutex.
 bool gWindowRequested = false;
 
+/// Where the window is in its life (spec: Lifecycle). **JS thread only**,
+/// with no atomic: every transition and every read happens there, and the
+/// platform thread is never told -- it learns of CLOSING only through what
+/// CLOSING does (a table that refuses publication and withholds the tick, a
+/// dispatcher that refuses posts). CLOSED has no value: it is the `_exit()`,
+/// and no code observes it.
+enum class UiLifecycle { kIdle, kRequested, kRunning, kFailed, kClosing };
+UiLifecycle gLifecycle = UiLifecycle::kIdle;
+
 /// Set once by main(), before the JS thread exists.
 UiHost *gHost = nullptr;
 
@@ -167,13 +177,14 @@ int gGenerationHeight = 0;
 /// no referenced handle, `uv_run` would return, the runtime would tear
 /// down, and the window would open into a process on its way out.
 ///
-/// Nothing releases it yet. The lifecycle hook that closes it before
-/// runtime cleanup is Task 15's, and until it exists a script that calls
-/// createWindow and then simply returns will wait forever inside
-/// `UvEventLoop::close()`'s `uv_run(UV_RUN_DEFAULT)`. `process.exit()` is
-/// the path that works today, and is also the one the spec describes as how
-/// a UI process ends normally. test/ui-create-window.js says the same at
-/// its call site.
+/// Released by uiEnterClosing(), so that once the window is CLOSING the
+/// loop that `process.exit()` and the fatal path pump on their way out is
+/// not held open by it. A script that calls createWindow and then simply
+/// returns still waits inside `UvEventLoop::close()`'s
+/// `uv_run(UV_RUN_DEFAULT)`: that path reaches the runtime's own end with no
+/// CLOSING yet, because the hook it needs before runtime cleanup is not
+/// installed. `process.exit()` is the path that works, and is also the one
+/// the spec describes as how a UI process ends normally.
 bool takeReferencedHandle(uv_loop_t *loop) {
   gKeepAlive = new uv_async_t();
   // The callback never runs: nothing calls uv_async_send on this handle.
@@ -203,6 +214,9 @@ bool takeReferencedHandle(uv_loop_t *loop) {
 /// uv_close is asynchronous and its callback runs on a later turn of the
 /// loop, so the allocation is handed to that callback rather than freed
 /// here -- the same ownership split OwnerDispatch uses for its own handle.
+///
+/// Also the last step of uiEnterClosing(). Traced only when it actually
+/// closes a handle, so the line records a release that happened.
 void releaseReferencedHandle() {
   if (gKeepAlive == nullptr)
     return;
@@ -210,6 +224,7 @@ void releaseReferencedHandle() {
     delete reinterpret_cast<uv_async_t *>(h);
   });
   gKeepAlive = nullptr;
+  uiTrace("lifecycle: event-loop handle released");
 }
 
 //===========================================================================
@@ -217,6 +232,7 @@ void releaseReferencedHandle() {
 //===========================================================================
 
 void rejectWith(const std::string &message) {
+  gLifecycle = UiLifecycle::kFailed;
   napi_handle_scope scope = nullptr;
   if (napi_open_handle_scope(gEnv, &scope) != napi_ok)
     return;
@@ -428,6 +444,13 @@ void runJsFrameCallback(const FrameCallback &cb, double timestamp) {
 /// One frame tick, on the JS thread, posted by the platform thread when
 /// `TickMachine::shouldSendTick()` said so.
 void runFrameTick() {
+  // A tick posted before CLOSING began and run by the dispatcher's closing
+  // drain. Nothing about the machine is repaired: no tick can be delivered
+  // again, so whichever state it is left in is moot.
+  if (uiClosing()) {
+    uiTrace("frame tick: refused (closing)");
+    return;
+  }
   if (gTick == nullptr || gTable == nullptr || gWindow == nullptr)
     return;
 
@@ -533,6 +556,12 @@ void runEventDispatch() {
   // again rather than finding the flag stuck; that dispatch then also
   // returns here, and openEventDelivery() drains what they left.
   gDispatchPosted.store(false);
+  // Posted before CLOSING and run by the dispatcher's closing drain: what
+  // is queued stays queued and is never delivered.
+  if (uiClosing()) {
+    uiTrace("event dispatch: refused (closing)");
+    return;
+  }
   if (!gEventDeliveryOpen)
     return;
   uiDispatchEvents(gWindow);
@@ -555,6 +584,10 @@ void runEventDispatch() {
 /// the continuation. So listeners attached synchronously after the
 /// `await` see every event from the window's creation.
 void openEventDelivery() {
+  if (uiClosing()) {
+    uiTrace("event delivery: not opened (closing)");
+    return;
+  }
   gEventDeliveryOpen = true;
   uiDispatchEvents(gWindow);
 }
@@ -606,6 +639,13 @@ void destroyGeneration(GenerationId gen) {
 /// worker binds the shared context the platform thread created, which only
 /// the thread that will use it can do.
 void onSharedContextReady() {
+  // Posted by init_cb and run by the dispatcher's closing drain: the
+  // window's readiness is never delivered, gPresentReady stays false, and
+  // the platform thread presents its clear colour until _exit().
+  if (uiClosing()) {
+    uiTrace("window readiness: refused (closing)");
+    return;
+  }
   napi_handle_scope scope = nullptr;
   if (napi_open_handle_scope(gEnv, &scope) != napi_ok)
     return;
@@ -730,6 +770,7 @@ void onSharedContextReady() {
   // which its frame callback acquires. Nothing before it may be read
   // there, and nothing after it may be written here.
   gPresentReady.store(true, std::memory_order_release);
+  gLifecycle = UiLifecycle::kRunning;
 
   // "the module exports requestAnimationFrame / cancelAnimationFrame and,
   // once a window exists, installs them as globals, because libraries
@@ -760,6 +801,10 @@ void onSharedContextReady() {
 }
 
 void onStartupFailed() {
+  if (uiClosing()) {
+    uiTrace("window readiness: refused (closing)");
+    return;
+  }
   uiTrace("window failed: %s", gStartupError.c_str());
   rejectWith(gStartupError);
 }
@@ -891,6 +936,15 @@ namespace {
 /// a global once a window exists. Returns the id `cancelAnimationFrame`
 /// takes, from the id space native callbacks share.
 napi_value requestAnimationFrame(napi_env env, napi_callback_info info) {
+  // Refused rather than thrown, even for a bad argument: an 'exit' listener
+  // that schedules a frame must not have the rest of its body skipped by an
+  // exception nobody will report.
+  if (uiClosing()) {
+    uiTrace("requestAnimationFrame: refused (closing)");
+    napi_value zero = nullptr;
+    napi_create_int32(env, 0, &zero);
+    return zero;
+  }
   size_t argc = 1;
   napi_value argv[1] = {nullptr};
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
@@ -981,6 +1035,13 @@ void installFrameGlobals() {
 }
 
 napi_value createWindow(napi_env env, napi_callback_info info) {
+  // From an 'exit' listener, or after any path that entered CLOSING: a
+  // window opened now would open into a process on its way out.
+  if (uiClosing()) {
+    napi_throw_error(env, nullptr, "createWindow: the process is exiting.");
+    return nullptr;
+  }
+
   // One window per process, and a second request THROWS rather than
   // returning the first window's handle (spec: Lifecycle; sokol_app
   // supports no more, sokol#437). Synchronously, not as a rejected
@@ -1080,6 +1141,7 @@ napi_value createWindow(napi_env env, napi_callback_info info) {
     gRequest = std::move(request);
     gWindowRequested = true;
   }
+  gLifecycle = UiLifecycle::kRequested;
 
   uiTrace(
       "createWindow: %dx%d '%s'",
@@ -1163,8 +1225,106 @@ napi_value initUiModule(napi_env env, napi_value exports) {
             failPendingClipboardReads)) {
       return nullptr;
     }
+    if (!exportFunction(
+            env, exports, "__waitPlatformFrames", waitPlatformFrames)) {
+      return nullptr;
+    }
   }
   return exports;
+}
+
+namespace {
+
+const char *closeReasonName(UiCloseReason reason) {
+  switch (reason) {
+    case UiCloseReason::kWindowClose:
+      return "close";
+    case UiCloseReason::kExitCall:
+      return "exit";
+    case UiCloseReason::kFatalException:
+      return "fatal";
+    case UiCloseReason::kRuntimeReturn:
+      return "return";
+  }
+  return "exit";
+}
+
+} // namespace
+
+bool uiClosing() {
+  return gLifecycle == UiLifecycle::kClosing;
+}
+
+void uiEnterClosing(UiCloseReason reason) {
+  if (gLifecycle == UiLifecycle::kClosing)
+    return;
+  // First, so that everything below -- and everything any function the
+  // dispatcher's drain runs -- already sees CLOSING.
+  gLifecycle = UiLifecycle::kClosing;
+  if (!uiWindowRequested())
+    return;
+  uiTrace("lifecycle: CLOSING (reason=%s)", closeReasonName(reason));
+
+  // Each step is null-guarded: CLOSING can be entered while the window is
+  // still only requested, before the table, the window or its surfaces
+  // exist.
+
+  // No further acquire() or publish(), and the platform thread's tick
+  // gate answers no from now on. A frame whose GPU work is in flight is
+  // refused at publication and reclaimed by onProducerComplete().
+  if (gTable != nullptr)
+    gTable->beginClosing();
+
+  // The per-tick state off first, so hnui_frame_target answers false
+  // even when this was reached from inside a frame callback -- then every
+  // registration still in the list, the rest of a running batch included,
+  // is released rather than run. The batch's own loop in runFrameTick()
+  // finds the list empty if control ever returns to it.
+  if (gWindow != nullptr) {
+    gWindow->inFrameCallback = false;
+    gWindow->haveSlot = false;
+    int released = 0;
+    gWindow->frameCallbacks.releaseAll([&](const FrameCallback &cb) {
+      releaseFrameCallback(gWindow, cb);
+      ++released;
+    });
+    uiTrace("lifecycle: frame callbacks released=%d", released);
+  }
+
+  // The synchronized sender shutdown. It drains what was already
+  // posted -- every function that can be posted checks uiClosing() and
+  // refuses -- and post() returns false on any thread afterwards. Closed,
+  // never deleted or nulled: the platform thread reads the pointer with no
+  // synchronization. Safe from inside a function this dispatcher is itself
+  // running (an event dispatch, a frame tick): the pass already extracted
+  // runs to its end, and nothing after close() runs
+  // (OwnerDispatchTest.CloseFromInsideAPostedFunctionRunsTheRestAndRefusesLaterPosts).
+  if (gDispatch != nullptr) {
+    gDispatch->close();
+    uiTrace("lifecycle: dispatcher closed");
+  }
+
+  // The loop is no longer held open on the window's behalf.
+  releaseReferencedHandle();
+}
+
+void uiBeforeExitListeners(napi_env env, ExitReason reason) {
+  // Another runtime's exit is not this window's. With no window requested
+  // there is no env to compare against, and the state is recorded anyway
+  // (see uiEnterClosing()).
+  if (uiWindowRequested() && env != gEnv)
+    return;
+  switch (reason) {
+    case ExitReason::kExitCall:
+      uiEnterClosing(UiCloseReason::kExitCall);
+      return;
+    case ExitReason::kFatalException:
+      uiEnterClosing(UiCloseReason::kFatalException);
+      return;
+    case ExitReason::kRuntimeReturn:
+      uiEnterClosing(UiCloseReason::kRuntimeReturn);
+      return;
+  }
 }
 
 bool uiWindowRequested() {

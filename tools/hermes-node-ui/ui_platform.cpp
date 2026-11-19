@@ -638,6 +638,18 @@ void onInit() {
 /// reads, and send the frame tick if one is due (spec: Architecture,
 /// `frame_cb`), and drain the command queue and the clipboard reads.
 void onFrame() {
+  // The test hooks' frame barrier (__waitPlatformFrames) counts every call,
+  // whichever of the returns below it leaves by.
+  struct FrameBarrierGuard {
+    bool active;
+    ~FrameBarrierGuard() {
+      if (active)
+        uiTestHookFrameEnded();
+    }
+  } frameBarrier{uiTestHooksEnabled()};
+  if (frameBarrier.active)
+    uiTestHookFrameBegan();
+
   if (gBackend == nullptr)
     return;
 
@@ -736,26 +748,21 @@ void onFrame() {
   // through a pointer conversion and silently mean "a slot is always
   // free"; TickMachine deletes that overload so it cannot compile.
   //
-  // **Known edge, owned by Task 15's teardown.** shouldSendTick() CONSUMES
-  // the request: a true return has already cleared `pending_` and moved
-  // the machine to kTickQueued. So if gDispatch is null, or post() returns
-  // false -- which happens once the dispatcher is closed -- nothing ever
-  // calls beginCallbacks(), the machine stays in kTickQueued, and every
-  // later shouldSendTickLocked() refuses on `state_ != kIdle`. The
-  // animation is then dead with nothing printed. It is unreachable until
-  // something closes the dispatcher, which only the lifecycle hook will.
-  //
-  // Putting the tick back is declined on semantics, not on absence: it IS
-  // expressible with the methods that exist -- requestFrame() then
-  // beginCallbacks() then endCallbacksDrew(false) returns the machine to
-  // kIdle with the request pending, and beginCallbacks()'s assert holds --
-  // but it would mean calling two methods that mean "the callbacks began"
-  // and "the callbacks ended" when no callback ran. Whoever writes the
-  // teardown should add a real entry point if one is needed, rather than
-  // conclude from this comment that the class is missing something.
-  // Recorded here so that edge is found rather than rediscovered as a hang.
-  if (gTick->shouldSendTick(*gTable) && gDispatch != nullptr)
-    gDispatch->post(runFrameTick);
+  // **A refused post is not repaired.** shouldSendTick() CONSUMES the
+  // request: a true return has already cleared `pending_` and moved the
+  // machine to kTickQueued, so a post the dispatcher refuses leaves it
+  // there. post() refuses only once the window is CLOSING has closed the
+  // dispatcher, and from then on no tick can ever be delivered again, so
+  // the machine's state is moot and TickMachine needs no entry point to
+  // put the tick back. The edge is also nearly unreachable: CLOSING calls
+  // SurfaceTable::beginClosing() before it closes the dispatcher, and a
+  // closing table makes this gate answer no
+  // (TickMachineTest.NoTickIsSentOnceTheTableIsClosing), so what remains is
+  // a window of a few instructions between this thread's gate and its post.
+  if (gTick->shouldSendTick(*gTable)) {
+    if (gDispatch == nullptr || !gDispatch->post(runFrameTick))
+      uiTrace("frame tick: post refused (dispatcher closed)");
+  }
 }
 
 void onEvent(const sapp_event *event) {

@@ -185,6 +185,12 @@ int hnui_request_animation_frame(hnui_window *w, hnui_frame_cb cb, void *user) {
   requireOwnerThread(w, "hnui_request_animation_frame");
   if (cb == nullptr)
     return 0;
+  // Once the window is CLOSING no tick will ever run what this registers
+  // (uiEnterClosing() released the list), so nothing is registered.
+  if (hermes::node_compat::uiClosing()) {
+    uiTrace("hnui_request_animation_frame: refused (closing)");
+    return 0;
+  }
 
   // The function pointer travels as the list's opaque `fn`; the list
   // knows nothing about hnui types (frame_callbacks.h).

@@ -99,7 +99,10 @@ extern WindowState gMetrics;
 extern std::string gStartupError;
 /// Created by createWindow() (JS) before requestWindow(), which the platform
 /// thread's wake is ordered after (UiHost's mutex); post() is then called
-/// from both threads under OwnerDispatch's own lock.
+/// from both threads under OwnerDispatch's own lock. Closed by
+/// uiEnterClosing() (JS) and never deleted or nulled after the request is
+/// published, because the platform thread reads the pointer unsynchronized;
+/// a closed dispatcher refuses every post().
 extern OwnerDispatch *gDispatch;
 /// JS thread only (ui_module.cpp, ui_test_hooks.cpp). Written by
 /// createWindow().
@@ -190,6 +193,16 @@ napi_value releaseProducerCompletions(napi_env env, napi_callback_info info);
 napi_value failPendingClipboardReads(napi_env env, napi_callback_info info);
 /// JS thread (NAPI); exported by initUiModule() only when the hooks are on.
 napi_value injectEvent(napi_env env, napi_callback_info info);
+/// JS thread (NAPI); exported by initUiModule() only when the hooks are on.
+/// Blocks the JS thread on gFrameCountMutex, which only the two functions
+/// below also take.
+napi_value waitPlatformFrames(napi_env env, napi_callback_info info);
+/// Platform thread, first line of onFrame(), only when the hooks are on.
+/// Takes gFrameCountMutex (file-local to ui_test_hooks.cpp).
+void uiTestHookFrameBegan();
+/// Platform thread, on every return of onFrame(), only when the hooks are
+/// on. Takes gFrameCountMutex and wakes waitPlatformFrames().
+void uiTestHookFrameEnded();
 
 } // namespace node_compat
 } // namespace hermes

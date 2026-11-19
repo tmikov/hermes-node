@@ -365,3 +365,52 @@ TEST_F(NodeProcessTest, KillSendSignalZero) {
                "  catch(e) { return false; }"
                "})()"));
 }
+
+namespace {
+
+/// What the hooks in ProcessExitHooksTest saw.
+int gHookExitCalls = 0;
+ExitReason gHookExitReason = ExitReason::kRuntimeReturn;
+int gHookCleanupCalls = 0;
+int gHookCleanupCode = -1;
+
+void recordBeforeExitListeners(napi_env, ExitReason reason) {
+  ++gHookExitCalls;
+  gHookExitReason = reason;
+}
+
+void recordBeforeRuntimeCleanup(napi_env, int exitCode) {
+  ++gHookCleanupCalls;
+  gHookCleanupCode = exitCode;
+}
+
+} // namespace
+
+TEST(ProcessExitHooksTest, HooksReceiveWhatTheCallSitePassed) {
+  // With nothing set, both are no-ops -- the plain hermes-node case, and
+  // the one every runtime without an embedder module is in.
+  runBeforeExitListenersHook(nullptr, ExitReason::kExitCall);
+  runBeforeRuntimeCleanupHook(nullptr, 3);
+  EXPECT_EQ(gHookExitCalls, 0);
+  EXPECT_EQ(gHookCleanupCalls, 0);
+
+  ProcessExitHooks hooks;
+  hooks.beforeExitListeners = recordBeforeExitListeners;
+  hooks.beforeRuntimeCleanup = recordBeforeRuntimeCleanup;
+  setProcessExitHooks(hooks);
+
+  // Not kExitCall, the enumerator a hard-coded forwarder would most likely
+  // pass, so that one fails here.
+  runBeforeExitListenersHook(nullptr, ExitReason::kFatalException);
+  EXPECT_EQ(gHookExitCalls, 1);
+  EXPECT_EQ(gHookExitReason, ExitReason::kFatalException);
+
+  runBeforeRuntimeCleanupHook(nullptr, 7);
+  EXPECT_EQ(gHookCleanupCalls, 1);
+  EXPECT_EQ(gHookCleanupCode, 7);
+
+  // Process-wide state: leave it as the next test expects to find it.
+  setProcessExitHooks(ProcessExitHooks{});
+}
+// Mutation: make runBeforeExitListenersHook pass ExitReason::kExitCall
+// regardless of its argument. The reason expectation fails.

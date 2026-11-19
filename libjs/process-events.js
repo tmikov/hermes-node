@@ -91,6 +91,10 @@
         if (!process._exiting) {
           process._exiting = true;
           process.exitCode = 1;
+          // The embedder's exit hook (ProcessExitHooks in node_process.h),
+          // before the listeners, as process.exit() calls it. Native, and
+          // a no-op when no embedder set one.
+          process._preExit();
           process.emit('exit', 1);
         }
       } catch (e) {

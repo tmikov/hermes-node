@@ -1200,6 +1200,46 @@ TEST(OwnerDispatchTest, AQueuedFunctionMayPostAgainWithoutDeadlock) {
 // re-acquire mutex_ from the same thread and deadlocks -- caught by
 // TestWatchdog rather than hanging the suite.
 
+TEST(
+    OwnerDispatchTest,
+    CloseFromInsideAPostedFunctionRunsTheRestAndRefusesLaterPosts) {
+  // The window's CLOSING closes its dispatcher from inside a function that
+  // same dispatcher is running: an uncancelled `close` is delivered from a
+  // posted event dispatch, and process.exit() can be called from a posted
+  // frame tick. The pass that was already extracted must finish, nothing
+  // posted after close() may run, and the drain that called the function
+  // must not touch the handle close() has already given to uv_close().
+  //
+  // A raw loop rather than TestLoop: this test asserts uv_loop_close()'s
+  // answer itself, and a closed loop must not be closed a second time.
+  uv_loop_t loop{};
+  ASSERT_EQ(uv_loop_init(&loop), 0);
+  std::vector<char> order;
+  bool postedD = true;
+  {
+    OwnerDispatch d(&loop);
+    EXPECT_TRUE(d.post([&] { order.push_back('A'); }));
+    EXPECT_TRUE(d.post([&] {
+      order.push_back('B');
+      d.close();
+      postedD = d.post([&] { order.push_back('D'); });
+    }));
+    EXPECT_TRUE(d.post([&] { order.push_back('C'); }));
+
+    uv_run(&loop, UV_RUN_DEFAULT);
+  }
+
+  EXPECT_EQ(std::string(order.begin(), order.end()), "ABC")
+      << "the rest of the pass runs once each, in order, and D never does";
+  EXPECT_FALSE(postedD) << "a post() after close() must be refused";
+  uv_run(&loop, UV_RUN_DEFAULT);
+  EXPECT_EQ(uv_loop_close(&loop), 0)
+      << "the dispatcher's handle must have finished closing";
+}
+// Mutation: delete the `if (closed_) return;` in
+// OwnerDispatch::updateAsyncRef. The outer drain's re-evaluation then reads
+// the async_ close() nulled and hands it to uv_unref -- a null dereference.
+
 //===========================================================================
 // TickMachine
 //
@@ -1289,6 +1329,23 @@ TEST(TickMachineTest, TheComposedTickGateReadsTheTableUnderOneLock) {
 // measured conclusion (see the sweep tests above) is that it cannot aim at
 // such a window. The composition is here because the gap is unnecessary,
 // not because a test can catch it.
+
+TEST(TickMachineTest, NoTickIsSentOnceTheTableIsClosing) {
+  // CLOSING begins with SurfaceTable::beginClosing(), and from then on the
+  // platform thread must not post another tick: the dispatcher it would be
+  // posted to is about to be closed, and a tick the machine has already
+  // counted as queued could never be delivered (ui_platform.cpp, onFrame).
+  SurfaceTable table([](GenerationId) {});
+  table.newGeneration(64, 64);
+  TickMachine m;
+  m.requestFrame();
+  table.beginClosing();
+  EXPECT_FALSE(m.shouldSendTick(table))
+      << "every slot is free, and only the closing table can refuse";
+  EXPECT_EQ(m.state(), TickState::kIdle);
+}
+// Mutation: delete the closing_ check in SurfaceTable::anyFreeSlotLocked.
+// The free slots answer yes, the tick is sent, and both expectations fail.
 
 TEST(TickMachineTest, EmptyTickReturnsToIdleImmediately) {
   TickMachine m;

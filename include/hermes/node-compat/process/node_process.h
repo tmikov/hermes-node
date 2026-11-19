@@ -91,6 +91,42 @@ void setProcessExitLoop(uv_loop_t *loop);
 /// run.
 void flushPendingWrites(uv_loop_t *loop);
 
+/// Which path is ending the process, as a ProcessExitHooks hook is told.
+enum class ExitReason {
+  /// `process.exit()`, called with or without a receiver.
+  kExitCall,
+  /// An exception nothing handled, reported by `process._fatalException`.
+  kFatalException,
+  /// `runHermesNode` reaching the end of its run.
+  kRuntimeReturn,
+};
+
+/// What an embedder is told on the way out, whichever path ends the process.
+///
+/// Exists because three paths emit `'exit'` -- `process.exit()`,
+/// `process._fatalException` and the end of `runHermesNode` -- and an
+/// embedder that owns state the program must not touch any more (a window,
+/// say) has to stop accepting work before the program's `'exit'` listeners
+/// run, on every one of them. Both hooks are optional; with neither set,
+/// every path behaves exactly as it does without this struct.
+struct ProcessExitHooks {
+  /// Called before 'exit' listeners run, on every path that emits 'exit'.
+  /// May be called more than once (a nested process.exit()); must be
+  /// idempotent. Runs on env's JS thread.
+  void (*beforeExitListeners)(napi_env env, ExitReason reason) = nullptr;
+  /// Called by runHermesNode after step 15 (listeners ran, status settled,
+  /// stdio flushed) and before step 16 tears anything down. May not return.
+  void (*beforeRuntimeCleanup)(napi_env env, int exitCode) = nullptr;
+};
+
+/// One embedder per process. Call before any runtime starts; not
+/// synchronized.
+void setProcessExitHooks(const ProcessExitHooks &hooks);
+/// Calls ProcessExitHooks::beforeExitListeners if one is set; else nothing.
+void runBeforeExitListenersHook(napi_env env, ExitReason reason);
+/// Calls ProcessExitHooks::beforeRuntimeCleanup if one is set; else nothing.
+void runBeforeRuntimeCleanupHook(napi_env env, int exitCode);
+
 } // namespace node_compat
 } // namespace hermes
 

@@ -31,6 +31,13 @@ namespace node_compat {
 class UiHost;
 struct PlatformSource;
 
+/// node_process.h's enumeration, declared opaquely rather than included:
+/// that header pulls in `uv.h`, and this one is also compiled by the
+/// no-window stub on a platform whose hand-compile check passes no libuv
+/// include path. An opaque `enum class` declaration has the same underlying
+/// type (`int`) as the definition, so the two agree by the language's rule.
+enum class ExitReason;
+
 /// The `hermes-node:ui` module, and the platform-thread half of the window
 /// it creates.
 ///
@@ -99,6 +106,39 @@ hnui_window *uiWindowForEnv(napi_env env);
 ///   which is why nothing downstream of this may rely on getting control
 ///   back.
 int uiRunPlatformLoop();
+
+/// Why the window is entering CLOSING. Traced as `close`, `exit`, `fatal`
+/// and `return` respectively.
+enum class UiCloseReason {
+  /// The window itself: `win.close()`, or a `close` nobody cancelled.
+  kWindowClose,
+  /// `process.exit()`.
+  kExitCall,
+  /// An uncaught exception, through `process._fatalException`.
+  kFatalException,
+  /// `runHermesNode` reaching the end of its run.
+  kRuntimeReturn,
+};
+
+/// Enter CLOSING (spec: Lifecycle). JS thread only. Idempotent: a second
+/// call returns at once.
+///
+/// From here on no frame callback, event, readiness or capture result
+/// reaches the program, and `requestAnimationFrame` (both forms) registers
+/// nothing. The window stays on screen, presenting its last published
+/// surface, until the process `_exit()`s. Called with no window ever
+/// requested it records the state and does nothing else, so that a
+/// `createWindow` called from an `'exit'` listener throws rather than
+/// opening a window into a process on its way out.
+void uiEnterClosing(UiCloseReason reason);
+
+/// True from uiEnterClosing() on. JS thread only.
+bool uiClosing();
+
+/// `ProcessExitHooks::beforeExitListeners`, which `main()` installs: enters
+/// CLOSING with the reason \p reason maps to. Ignores an env that is not the
+/// window's (when a window was requested). JS thread.
+void uiBeforeExitListeners(napi_env env, ExitReason reason);
 
 /// Whether `createWindow` has been called. JS thread. What
 /// `ui.writeClipboard` checks: with no window ever requested nothing would

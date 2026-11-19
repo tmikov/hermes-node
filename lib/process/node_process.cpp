@@ -561,6 +561,25 @@ void flushPendingWrites(uv_loop_t *loop) {
   }
 }
 
+/// The embedder's exit hooks. Written once by setProcessExitHooks() before
+/// any runtime starts, and read afterwards only on the JS thread, so it
+/// needs no lock -- the same ordering argument exitLoop relies on.
+static ProcessExitHooks exitHooks;
+
+void setProcessExitHooks(const ProcessExitHooks &hooks) {
+  exitHooks = hooks;
+}
+
+void runBeforeExitListenersHook(napi_env env, ExitReason reason) {
+  if (exitHooks.beforeExitListeners != nullptr)
+    exitHooks.beforeExitListeners(env, reason);
+}
+
+void runBeforeRuntimeCleanupHook(napi_env env, int exitCode) {
+  if (exitHooks.beforeRuntimeCleanup != nullptr)
+    exitHooks.beforeRuntimeCleanup(env, exitCode);
+}
+
 /// process.exit([code])
 static napi_value processExit(napi_env env, napi_callback_info info) {
   size_t argc = 1;
@@ -636,6 +655,16 @@ static napi_value processExit(napi_env env, napi_callback_info info) {
       napi_get_value_int32(env, value, &code);
     }
   }
+
+  // The embedder's turn, before any 'exit' listener runs (ProcessExitHooks,
+  // node_process.h). After the argument is validated -- a call that throws
+  // a TypeError above is not an exit -- and unconditionally, outside the
+  // once-only block below: a detached `const e = process.exit; e()` has no
+  // receiver and emits nothing, but it still runs the loop in
+  // flushPendingWrites(), and whatever the embedder stops accepting must be
+  // stopped by then too. A nested call reaches the hook again; the hook is
+  // idempotent by contract.
+  runBeforeExitListenersHook(env, ExitReason::kExitCall);
 
   // Emit 'exit' before going, because that is where a program does the work
   // that has to happen whatever else it skipped. blessed restores the
@@ -724,6 +753,16 @@ static napi_value processExit(napi_env env, napi_callback_info info) {
   // terminating immediately.
   _exit(code);
   // Unreachable, but satisfy the compiler.
+  return nullptr;
+}
+
+/// process._preExit() -- not Node's. The embedder's exit hook, for the one
+/// path that emits 'exit' from JavaScript: process._fatalException
+/// (libjs/process-events.js) calls it just before it emits, so that an
+/// uncaught exception reaches ProcessExitHooks::beforeExitListeners exactly
+/// as process.exit() does. With no hook set it does nothing.
+static napi_value processPreExit(napi_env env, napi_callback_info /*info*/) {
+  runBeforeExitListenersHook(env, ExitReason::kFatalException);
   return nullptr;
 }
 
@@ -1135,6 +1174,7 @@ napi_status NodeProcess::create(napi_env env, napi_value *result) {
       setMethod(env, process, "memoryUsage", processMemoryUsage));
   NAPI_RETURN_IF_NOT_OK(setMethod(env, process, "uptime", processUptime, this));
   NAPI_RETURN_IF_NOT_OK(setMethod(env, process, "exit", processExit));
+  NAPI_RETURN_IF_NOT_OK(setMethod(env, process, "_preExit", processPreExit));
   NAPI_RETURN_IF_NOT_OK(setMethod(env, process, "abort", processAbort));
   NAPI_RETURN_IF_NOT_OK(setMethod(env, process, "umask", processUmask));
   NAPI_RETURN_IF_NOT_OK(setMethod(env, process, "dlopen", processDlopen));
