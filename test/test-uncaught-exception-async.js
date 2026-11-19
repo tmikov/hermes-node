@@ -63,6 +63,19 @@ var cases = [
    'process.on("exit",function(){console.log("EXITED")});' +
    THROW + 'setTimeout(f,1)', 1, 'EXITED'],
 
+  // process._preExit is this runtime's, not Node's, and is captured when
+  // the bootstrap installs _fatalException: a program that deletes it, or
+  // assigns over it, must not make the fatal path skip its 'exit' listeners.
+  // (Node has no such property, so there this is the case above.)
+  ["'exit' still fires when process._preExit was deleted",
+   'delete process._preExit;' +
+   'process.on("exit",function(){console.log("EXITED")});' +
+   THROW + 'setTimeout(f,1)', 1, 'EXITED'],
+  ["'exit' still fires when process._preExit was overwritten",
+   'process._preExit = function(){ throw new Error("not mine"); };' +
+   'process.on("exit",function(){console.log("EXITED")});' +
+   THROW + 'setTimeout(f,1)', 1, 'EXITED'],
+
   // Output already written must survive the exit, or the diagnostic that
   // explains the failure is lost with it.
   ['output before the throw is not swallowed',

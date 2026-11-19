@@ -79,6 +79,13 @@
   // Reproduced here is what this runtime can support; there is no
   // setUncaughtExceptionCaptureCallback, so that branch of Node's version
   // has no equivalent yet.
+  //
+  // process._preExit is captured here, once, rather than looked up when the
+  // error arrives: the call sits inside a try whose catch swallows, so a
+  // program that deleted or reassigned the property would otherwise skip
+  // every 'exit' listener with nothing said. node_process.cpp installs it
+  // before this file runs.
+  var preExit = process._preExit;
   process._fatalException = function(er, fromPromise) {
     var type = fromPromise ? 'unhandledRejection' : 'uncaughtException';
     process.emit('uncaughtExceptionMonitor', er, type);
@@ -94,7 +101,7 @@
           // The embedder's exit hook (ProcessExitHooks in node_process.h),
           // before the listeners, as process.exit() calls it. Native, and
           // a no-op when no embedder set one.
-          process._preExit();
+          if (typeof preExit === 'function') preExit.call(process);
           process.emit('exit', 1);
         }
       } catch (e) {
