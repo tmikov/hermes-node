@@ -14,7 +14,7 @@ namespace hermes {
 namespace node_compat {
 
 /// The body of every Sokol logger in hermes-node-ui -- sokol_app's
-/// (ui_module.cpp) and both sokol_gfx instances' (gl_backend.cpp,
+/// (ui_platform.cpp) and both sokol_gfx instances' (gl_backend.cpp,
 /// gl_present.cpp). Each of those is a thin `slog_func`-shaped wrapper that
 /// names its instance, so a message says which one produced it.
 ///

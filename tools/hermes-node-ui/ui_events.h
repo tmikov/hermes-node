@@ -22,9 +22,9 @@ namespace node_compat {
 /// events to native listeners and to JavaScript.
 ///
 /// Everything here runs on the window's owner thread and reaches its state
-/// only through the `hnui_window` it is given -- never through
-/// `ui_module.cpp`'s statics, which belong to that file's two threads and
-/// are documented there.
+/// only through the `hnui_window` it is given -- never through the statics
+/// of `ui_module.cpp` and `ui_platform.cpp`, which belong to the window's
+/// two threads and are documented there and in `ui_internal.h`.
 
 /// Build the JavaScript window object for \p w: an instance of Node's
 /// `EventEmitter`, obtained through `globalThis.require('events')` (Ruling

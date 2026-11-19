@@ -36,9 +36,10 @@ struct PlatformSource;
 ///
 /// This header exists because the two halves live on different threads and
 /// in different files: `main.cpp` registers the module and owns the
-/// `UiHost`, `ui_host.cpp` runs the platform thread, and `ui_module.cpp`
-/// holds both the NAPI surface the JS thread calls and the `sokol_app`
-/// callbacks the platform thread runs. Task 8's brief lists only
+/// `UiHost`, `ui_host.cpp` runs the platform thread, `ui_module.cpp` holds
+/// the NAPI surface the JS thread calls, and `ui_platform.cpp` the
+/// `sokol_app` callbacks the platform thread runs (what the two share is
+/// declared in `ui_internal.h`). Task 8's brief lists only
 /// `ui_module.cpp`; without a header, `ui_host.cpp` could not call into it.
 ///
 /// `initUiModule` is implemented in EVERY build: `ui_module.cpp` where a GPU

@@ -8,8 +8,8 @@
 /// The one and only `sokol_app` implementation in this process.
 ///
 /// A translation unit of its own, rather than a `#define SOKOL_APP_IMPL` at
-/// the top of `ui_module.cpp`, for the reason that split is usually worth
-/// making: `ui_module.cpp` includes `sokol_app.h` for its declarations, and
+/// the top of `ui_platform.cpp`, for the reason that split is usually worth
+/// making: `ui_platform.cpp` includes `sokol_app.h` for its declarations, and
 /// a file that both defines a 15,000-line implementation and writes code
 /// against it gives every compile error in either half the other half's
 /// line numbers.

@@ -26,7 +26,7 @@ namespace node_compat {
 
 namespace {
 
-// Property setters. Errors are dropped on purpose, as in ui_module.cpp's
+// Property setters. Errors are dropped on purpose, as in ui_test_hooks.cpp's
 // own: each sets a plain value on an object this file holds, so the only
 // way one fails is an env that is already throwing, and the caller's next
 // call -- emit, or the tick callback -- is where that gets reported.
@@ -414,7 +414,7 @@ void deliver(hnui_window *w, const UiEvent &event) {
 
 /// The cursor names JavaScript uses, and the `hnui_cursor` each stands for.
 /// The mapping from `hnui_cursor` to Sokol's enumeration is the platform
-/// thread's (ui_module.cpp), so that `hnui_set_cursor` can push the same
+/// thread's (ui_platform.cpp), so that `hnui_set_cursor` can push the same
 /// command.
 struct CursorName {
   const char *name;

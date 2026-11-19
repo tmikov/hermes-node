@@ -86,7 +86,7 @@ class UiHost {
   ///
   /// **A function pointer rather than a direct call**, and that is a build
   /// constraint rather than a taste: `uiRunPlatformLoop()` lives in
-  /// `ui_module.cpp`, which is compiled into the hermes-node-ui executable
+  /// `ui_platform.cpp`, which is compiled into the hermes-node-ui executable
   /// and not into `hermesNodeUiHost`. `unittests/UiHostTest.cpp` links that
   /// library, so a direct call from here would leave the test with an
   /// undefined symbol -- and satisfying it would mean dragging sokol_app,
