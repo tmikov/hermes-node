@@ -28,15 +28,20 @@ namespace node_compat {
 /// `setActivationPolicy:` into the Accessory policy, so a test window never
 /// takes the keyboard from whoever is using the Mac and puts no icon in the
 /// Dock. Traced, after reading the class and the mode back from the
-/// installed instance, as `app: HnuiApplication installed (activate=<0|1>)`.
+/// installed instance, as `app: HnuiApplication installed (activate=<0|1>)`
+/// -- which says the overrides are armed, not what they achieved. The
+/// policy's effect is traced separately, by uiPlatformAfterInit().
 void uiMacInstallApplication();
 
-/// Whether the installed `HnuiApplication` refuses activation -- the mode
-/// read back from the instance. False before uiMacInstallApplication().
+/// Whether the installed `HnuiApplication`'s two overrides are armed -- the
+/// mode read back from the instance. False before
+/// uiMacInstallApplication().
 bool uiMacRefusesActivation();
 
-/// The `NSWindow` Sokol created (`sapp_macos_get_window()`), or null before
-/// it exists. `void *` so this header stays C++.
+/// The `NSWindow` Sokol created (`sapp_macos_get_window()`). **Must not be
+/// called before `init_cb`**: Sokol asserts that the window exists (in a
+/// build where `SOKOL_ASSERT` is compiled out it returns null instead).
+/// `void *` so this header stays C++.
 void *uiMacWindow();
 
 } // namespace node_compat

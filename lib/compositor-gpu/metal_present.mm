@@ -107,6 +107,9 @@ fragment float4 fs_main(vs_out in [[stage_in]],
 //===========================================================================
 
 struct MetalPresenter::State {
+  /// The device the presenting instance was set up on: Sokol's, from
+  /// sokol_app's environment. Held strongly.
+  id<MTLDevice> device = nil;
   sg_shader shader{};
   sg_pipeline pipeline{};
   sg_sampler sampler{};
@@ -130,19 +133,13 @@ MetalPresenter::~MetalPresenter() {
 // Setup
 //===========================================================================
 
-bool MetalPresenter::setup(void *mtlDevice, std::string &error) {
-  state_ = new State();
-
+bool MetalPresenter::setup(std::string &error) {
   sg_desc desc = {};
   desc.environment = sglue_environment();
-  // The backend's device and sokol_app's must be one object: the producer
-  // will allocate the surfaces on the backend's device and this instance
-  // will sample them, and a texture belongs to the device that made it.
-  if (desc.environment.metal.device == nullptr ||
-      desc.environment.metal.device != mtlDevice) {
+  if (desc.environment.metal.device == nullptr) {
     error =
-        "sokol_app's Metal device is not the one the backend selected, so "
-        "the presenting instance could not sample what the producer draws.";
+        "sokol_app reported no Metal device, so there is nothing to set the "
+        "presenting sokol_gfx instance up on.";
     return false;
   }
   desc.logger.func = presentLog;
@@ -153,6 +150,14 @@ bool MetalPresenter::setup(void *mtlDevice, std::string &error) {
         "sokol_app's Metal device.";
     return false;
   }
+
+  // **Only now**, with a live instance. A refused setup must leave state_
+  // null: _sapp_frame calls frame_cb straight after init_cb, and
+  // acquireSwapchain()/clear() take a non-null state_ to mean that sgp_*
+  // calls are safe -- a state_ left behind by an early return would carry
+  // the first frame into sg_begin_pass on an instance never set up.
+  state_ = new State();
+  state_->device = (__bridge id<MTLDevice>)desc.environment.metal.device;
 
   // Recorded for the producer, which must allocate its surfaces in the
   // swapchain's colour format and cannot ask sokol_app itself.
@@ -222,6 +227,10 @@ bool MetalPresenter::setup(void *mtlDevice, std::string &error) {
 // Per frame
 //===========================================================================
 
+void *MetalPresenter::device() const {
+  return state_ != nullptr ? (__bridge void *)state_->device : nullptr;
+}
+
 bool MetalPresenter::acquireSwapchain() {
   if (state_ == nullptr)
     return false;
@@ -265,15 +274,18 @@ void MetalPresenter::clear() {
   sg_commit();
   if (!state_->tracedClear) {
     state_->tracedClear = true;
-    // Committed means Sokol let go of the buffer and Metal has it.
+    // Committed means Sokol let go of the buffer and Metal has it. Error
+    // is a later status than Committed: the buffer was committed and then
+    // failed on the GPU, which is a third outcome, not "not committed".
     MTLCommandBufferStatus status = commandBuffer != nil
         ? commandBuffer.status
         : MTLCommandBufferStatusNotEnqueued;
     bool committed = commandBuffer != nil &&
         hnui_sgp_mtl_command_buffer() == nullptr &&
-        status >= MTLCommandBufferStatusCommitted &&
-        status != MTLCommandBufferStatusError;
-    if (committed)
+        status >= MTLCommandBufferStatusCommitted;
+    if (committed && status == MTLCommandBufferStatusError)
+      uiTrace("present: first clear committed, status error");
+    else if (committed)
       uiTrace("present: first clear committed");
     else
       uiTrace(

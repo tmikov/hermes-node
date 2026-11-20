@@ -28,8 +28,18 @@ namespace node_compat {
 /// # Threading
 ///
 /// **Every method belongs to the platform thread**, which owns `sokol_app`
-/// and the `sgp_*` instance. On macOS that is also the main thread, which
-/// Metal does not require but AppKit and `sokol_app` do.
+/// and the `sgp_*` instance -- except the three getters `device()`,
+/// `colorFormat()` and `sampleCount()`. On macOS the platform thread is
+/// also the main thread, which Metal does not require but AppKit and
+/// `sokol_app` do.
+///
+/// Those three are written once, by `setup()` in `init_cb`, and read by
+/// the producing half on the JS thread (the worker) for its own
+/// `sg_setup()` (Task 16c). That is safe without a lock because of an
+/// ordering, not by luck: `init_cb` returns from `setup()` and only then
+/// posts `onSharedContextReady` through the dispatcher, whose post and
+/// drain are a mutex hand-off, and the worker reads them inside that
+/// posted call or later. Nothing writes them again.
 ///
 /// # What exists in Task 16b
 ///
@@ -50,11 +60,17 @@ class MetalPresenter {
   /// sampler, and the pipeline state matched to the swapchain. Called from
   /// `init_cb`.
   ///
-  /// \p mtlDevice is the `id<MTLDevice>` the backend holds (`__bridge`, not
-  /// retained). It must be the device `sokol_app` created its layer on; a
-  /// different one is refused, since the two instances share textures and
-  /// a texture belongs to one device.
-  bool setup(void *mtlDevice, std::string &error);
+  /// A refusal before the instance is live leaves this presenter inert:
+  /// `acquireSwapchain()` then returns false on every frame, so `onFrame`
+  /// presents nothing rather than reaching an instance never set up.
+  bool setup(std::string &error);
+
+  /// The `id<MTLDevice>` the presenting instance was set up on -- Sokol's,
+  /// from `sokol_app`'s environment, the device its layer draws with --
+  /// as a `__bridge` (not retained) pointer, or null before `setup()` made
+  /// the instance live. The producer must allocate on this device: the two
+  /// instances share textures, and a texture belongs to one device.
+  void *device() const;
 
   /// The swapchain's colour format (an `sg_pixel_format`) and sample count,
   /// as the presenting instance was set up with them. The producer needs

@@ -116,9 +116,18 @@ class MetalBackend final : public CompositorBackend {
   void workerLoopTurn() override;
 
  private:
-  /// The device selectContextRoute() found, held strongly. sokol_app
-  /// creates its layer on MTLCreateSystemDefaultDevice() too, and the
-  /// presenter checks the two are one object.
+  /// The Metal device, held strongly. selectContextRoute() sets it from
+  /// MTLCreateSystemDefaultDevice() only to refuse a machine with none
+  /// before AppKit is touched; createSharedContext() then replaces it with
+  /// Sokol's, the one the layer and the presenting instance use and so the
+  /// one the producer must share textures on. Two calls returning the same
+  /// object is not something Metal documents, so it is adopted, not
+  /// compared.
+  ///
+  /// Both writes are on the platform thread, before init_cb posts
+  /// onSharedContextReady; the worker (the JS thread) reads it only from
+  /// that posted call onward, so the dispatcher's mutex orders the read
+  /// after the last write (metal_present.h, Threading).
   id<MTLDevice> device_ = nil;
   MetalPresenter presenter_;
 
@@ -170,7 +179,18 @@ bool MetalBackend::selectContextRoute(std::string &error) {
 bool MetalBackend::createSharedContext(std::string &error) {
   // Nothing to create: on Metal the device is what both threads share
   // (spikes 2 and 5). What init_cb sets up here is the presenting instance.
-  return presenter_.setup((__bridge void *)device_, error);
+  if (!presenter_.setup(error))
+    return false;
+  id<MTLDevice> sokolDevice = (__bridge id<MTLDevice>)presenter_.device();
+  if (sokolDevice != device_) {
+    @autoreleasepool {
+      uiTrace(
+          "route: metal: adopting sokol's device (%s)",
+          [sokolDevice.name UTF8String]);
+    }
+  }
+  device_ = sokolDevice;
+  return true;
 }
 
 bool MetalBackend::makeCurrentOnWorker(std::string &error) {

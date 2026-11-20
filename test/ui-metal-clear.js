@@ -13,27 +13,41 @@
 //  - `route: metal (device=...)` names the MTLDevice that
 //    MTLCreateSystemDefaultDevice() actually returned;
 //  - `app: HnuiApplication installed` is printed after NSApp was read back
-//    and found to be the subclass, and `activate=0` after the activation
-//    policy was read back -- the no-activate arrangement %with-display asks
-//    for, which keeps the suite's windows from taking focus;
+//    and found to be the subclass; its `activate=0` says the two
+//    no-activate overrides are armed, which is the request, not the effect;
 //  - `presenting instance ready` follows sgp_setup() and the MSL blit
 //    shader's compilation, with the colour format the swapchain reported
 //    (28 is SG_PIXELFORMAT_BGRA8, what sokol_app gives a CAMetalLayer);
+//  - `app: activation policy=accessory` is the effect: NSApp's policy read
+//    back after Sokol's launch code set it to Regular, which the
+//    setActivationPolicy: override turned into Accessory -- the
+//    no-activate arrangement %with-display asks for, which keeps the
+//    suite's windows out of the Dock. The other override,
+//    activateIgnoringOtherApps:, has no read-back in-process (Sokol posts
+//    itself an application-activated event, so NSApp.isActive reads true
+//    either way) and nothing here checks it;
 //  - `present: drawable acquired (320x240)` is the size of the drawable's
 //    own texture, not sapp_width();
-//  - `present: first clear committed` follows sgp_commit()'s return.
+//  - `present: first clear committed` is read back from the frame's
+//    command buffer, held across sgp_commit(): Sokol has let go of it and
+//    its status is Committed or later.
 //
 // `FRAMES true` is the platform-thread barrier: three frames ran after the
 // rejection was delivered, so the clear is still being presented once the
 // worker has refused -- a FAILED window keeps its platform thread alive
 // until the process exits.
 //
-// (Mutations, each made and reverted once: skip sgp_commit() in
-// MetalPresenter::clear() -- `first clear committed` is missing; drop the
-// orderFrontRegardless in uiPlatformAfterInit() -- no frame is ever drawn,
-// `drawable acquired` is missing and the run ends at its timeout; return
-// true from MetalPresenter::acquireSwapchain() without calling
-// sglue_swapchain() -- no valid drawable reaches the clear.)
+// (Mutations, each made and reverted: skip sgp_commit() in
+// MetalPresenter::clear() -- `first clear NOT committed` is printed and
+// `first clear committed` is missing; delete the setActivationPolicy:
+// override in mac_app.mm -- the policy reads `regular`; return true from
+// MetalPresenter::acquireSwapchain() without calling sglue_swapchain() --
+// under lit this breaks the display probe first, so this test reports
+// UNSUPPORTED and what goes red is test/ui-display-feature.js (with
+// HERMES_NODE_UI_EXPECT_DISPLAY=1); only a direct run shows Sokol's
+// validation panic in sg_begin_pass. No test observes the
+// orderFrontRegardless in uiPlatformAfterInit(): with it removed the window
+// sits behind another application's and every check here still passes.)
 //
 // REQUIRES: ui, ui-backend-metal, display
 //
@@ -66,5 +80,6 @@ ui.createWindow({width: 320, height: 240, title: 'metal clear'}).then(
 // ERR: [ui] route: metal (device={{.+}})
 // ERR: [ui] app: HnuiApplication installed (activate=0)
 // ERR: [ui] presenting instance ready: color_format 28, sample_count 1
+// ERR: [ui] app: activation policy=accessory
 // ERR: [ui] present: drawable acquired (320x240)
 // ERR: [ui] present: first clear committed

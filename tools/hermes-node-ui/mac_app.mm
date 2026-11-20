@@ -33,6 +33,13 @@
 /// (`applicationDidFinishLaunching:`). Refused under the no-activate mode:
 /// the window is put on screen by `orderFrontRegardless` instead
 /// (`uiPlatformAfterInit`), which does not make the application active.
+///
+/// **No trace can show this refusal working.** Sokol posts itself a
+/// synthetic application-activated event right after
+/// `makeKeyAndOrderFront:`, so `NSApp.isActive` reads true whether or not
+/// this override ran, and key and focus state follow it. Whether the
+/// application took focus is only visible from outside the process
+/// (`lsappinfo front`), which is where the plan's checks look.
 - (void)activateIgnoringOtherApps:(BOOL)flag {
   if (self.hnuiRefusesActivation)
     return;

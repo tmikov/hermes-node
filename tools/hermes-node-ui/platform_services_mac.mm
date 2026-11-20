@@ -18,6 +18,7 @@
 #include "platform_services.h"
 
 #include "mac_app.h"
+#include "ui_trace.h"
 
 #import <Cocoa/Cocoa.h>
 
@@ -57,6 +58,8 @@ std::string uiPlatformDescribeClipboardWrite(size_t bytesWritten) {
 
 bool uiPlatformWindowTitle(std::string &out) {
   // Read back from the window AppKit holds, not from the title requested.
+  // Only ever called after init_cb, when the window exists; the nil test
+  // is for a build where Sokol's assert is compiled out (mac_app.h).
   NSWindow *window = (__bridge NSWindow *)uiMacWindow();
   if (window == nil)
     return false;
@@ -74,15 +77,36 @@ void uiPlatformBeforeRun() {
   uiMacInstallApplication();
 }
 
+/// NSApp's activation policy, by name, for the trace.
+static const char *activationPolicyName(NSApplicationActivationPolicy policy) {
+  switch (policy) {
+    case NSApplicationActivationPolicyRegular:
+      return "regular";
+    case NSApplicationActivationPolicyAccessory:
+      return "accessory";
+    case NSApplicationActivationPolicyProhibited:
+      return "prohibited";
+  }
+  return "unknown";
+}
+
 void uiPlatformAfterInit() {
+  // After Sokol's launch code has set its policy: read back from NSApp, so
+  // this is the setActivationPolicy: override's effect rather than the
+  // mode it was asked for. Printed in either mode.
+  uiTrace(
+      "app: activation policy=%s",
+      activationPolicyName(NSApp.activationPolicy));
   if (!uiMacRefusesActivation())
     return;
   // Sokol's makeKeyAndOrderFront: orders the window front within an
   // application that, under the no-activate mode, never became active --
   // so another application's windows may cover it. orderFrontRegardless
   // puts it above them without activating anything (Mac probe P1). Only
-  // for whoever watches a test run: a covered window still gets a drawable
-  // every frame (measured in Task 16b), so no test can see this line go.
+  // for whoever watches a test run: a window covered from the moment it
+  // opens still gets a valid swapchain and a drawable -- measured on every
+  // one of 600 frames, in two runs, with another application's window on
+  // top throughout -- so no test can see this line go.
   NSWindow *window = (__bridge NSWindow *)uiMacWindow();
   [window orderFrontRegardless];
 }
