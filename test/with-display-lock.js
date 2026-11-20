@@ -28,6 +28,16 @@
 // path is pointed into %t through HERMES_NODE_UI_DISPLAY_LOCK, so a real
 // Mac's lock is never touched.
 //
+// CLEANER is macOS's tmp_cleaner, which can unlink a lock file under its
+// holder (test/fixtures/with-display/cleaner_check.py): the holder of the
+// unlinked file and the creator of its replacement overlap -- asserted
+// honestly, nothing can prevent it -- but a later run queues behind the
+// new holder, and so does a waiter that had already opened the OLD file:
+// after flock succeeds, the descriptor is compared with the path, and a
+// mismatch reopens. A lock file 10 days old is refreshed by its holder.
+// (Mutations: remove the inode comparison -- W after-B=0; remove the
+// refresh -- refreshed=0.)
+//
 // HARD is the lock file's hardening (test/fixtures/with-display/
 // lock_hardening.py): the default path is in world-writable /tmp, so what
 // another local user can plant there must not be turned against the user
@@ -50,6 +60,8 @@
 // RUN: rm -rf %t.d && mkdir -p %t.d
 // RUN: %python %S/fixtures/with-display/lock_check.py %source_dir/utils/with-display.py %t.d/display.lock %t.d | %FileCheck %s
 
+// RUN: rm -rf %t.c && mkdir -p %t.c
+// RUN: %python %S/fixtures/with-display/cleaner_check.py %source_dir/utils/with-display.py %t.c | %FileCheck --check-prefix=CLEANER %s
 // RUN: rm -rf %t.h && mkdir -p %t.h
 // RUN: %python %S/fixtures/with-display/lock_hardening.py %source_dir/utils/with-display.py %t.h | %FileCheck --check-prefix=HARD %s
 
@@ -74,3 +86,9 @@
 // HARD-NEXT: {{^}}budget -1 status=125 ran=0 said: {{.*}}not '-1'{{$}}
 // HARD-NEXT: {{^}}default (TMPDIR=one): /tmp/hermes-node-ui-display.lock{{$}}
 // HARD-NEXT: {{^}}default (TMPDIR=two): /tmp/hermes-node-ui-display.lock{{$}}
+
+// CLEANER: {{^}}A-B overlap=1 (the unlinked file: unavoidable){{$}}
+// CLEANER-NEXT: {{^}}W after-B=1 (W status 0){{$}}
+// CLEANER-NEXT: {{^}}W reopened=1{{$}}
+// CLEANER-NEXT: {{^}}C after-B=1 launched-while-B=1 (C status 0){{$}}
+// CLEANER-NEXT: {{^}}refreshed=1{{$}}

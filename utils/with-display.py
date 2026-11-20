@@ -44,7 +44,16 @@ machine, so instead:
    when the last descriptor closes, which happens when this process exits
    however it exits, SIGKILL included. The command does not inherit the
    descriptor (subprocess closes it), so the lock is exactly this wrapper's
-   lifetime. Waiting for it is NOT charged to the time limit: the queue for
+   lifetime. A lock file can still be UNLINKED under its holder: macOS
+   14+'s daily /usr/libexec/tmp_cleaner deletes /tmp files whose atime,
+   mtime and ctime are all over 3 days old. So the holder refreshes the
+   file's times on acquiring (when it can: it created or owns the file),
+   and after every successful flock the descriptor is compared with the
+   path (st_dev/st_ino); a mismatch means the lock was replaced, and the
+   run reopens and queues again. A holder of an unlinked file and the
+   holder of its replacement do overlap -- nothing can prevent that once
+   the file is gone -- but nobody else joins them. Waiting for it is NOT
+   charged to the time limit: the queue for
    the display is a property of the machine (every window test of every lit
    worker queues on this one lock), and a test's limit exists to bound the
    test, so SECONDS starts once the lock is held and bounds only the
@@ -191,6 +200,102 @@ def describe_owner(path):
         return 'uid %d' % uid
 
 
+def refuse(path, problem):
+    # Neither running unserialised nor hanging is acceptable. One line a
+    # person can act on: what, whose, and what to do about it.
+    sys.stderr.write(
+        'with-display.py: refusing the display lock %s: it %s (owner: '
+        '%s); remove it (as that user or with sudo), or set '
+        'HERMES_NODE_UI_DISPLAY_LOCK to another path\n' %
+        (path, problem, describe_owner(path)))
+
+
+def still_the_lock(fd, path):
+    """Is the file `fd` locks still the one at `path`?
+
+    macOS 14+ runs /usr/libexec/tmp_cleaner daily, deleting files under
+    /tmp whose atime, mtime and ctime are all over 3 days old -- and neither
+    open(O_RDONLY) nor flock touches any of them. So a long-lived lock file
+    can be unlinked under its holder, and the next run creates and locks a
+    NEW file. A waiter that had already opened the old one would then get
+    the old inode as soon as its holder lets go, and run alongside whoever
+    holds the new one. Comparing st_dev/st_ino of the descriptor with the
+    path after flock succeeds is the standard guard: a mismatch means
+    reopen and queue again.
+    """
+    try:
+        held = os.fstat(fd)
+        current = os.lstat(path)
+    except OSError:
+        return False
+    return (held.st_dev, held.st_ino) == (current.st_dev, current.st_ino)
+
+
+def refresh(fd):
+    """Bump the held lock file's atime/mtime (and so its ctime), so a file
+    in regular use never ages into tmp_cleaner's reach. Possible only when
+    this user created or owns the file; a read-only file owned by someone
+    else simply is not refreshed. Never fails, and never chmods."""
+    try:
+        if os.utime in os.supports_fd:
+            os.utime(fd)
+    except OSError:
+        pass
+
+
+def acquire(fcntl, path, budget, budget_text, debug):
+    """An fd holding the lock on the file now at `path`, or None having
+    printed why. Polled rather than blocking, because a blocking flock()
+    cannot be given a deadline; the budget is the queue's, not the test's,
+    and covers every reopen too."""
+    started = time.monotonic()
+    said_waiting = False
+    fd = None
+    while True:
+        if fd is None:
+            fd, problem = open_lock(path)
+            if fd is None:
+                refuse(path, problem)
+                return None
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        else:
+            if still_the_lock(fd, path):
+                refresh(fd)
+                break
+            # The path now names another file (or none): what we hold
+            # serialises nothing. Start again on whatever is there.
+            if debug:
+                sys.stderr.write(
+                    'with-display.py: the display lock %s was replaced '
+                    'while waiting; reopening\n' % path)
+            os.close(fd)
+            fd = None
+            continue
+        if debug and not said_waiting:
+            said_waiting = True
+            sys.stderr.write(
+                'with-display.py: waiting for the display lock %s\n' % path)
+        if time.monotonic() - started >= budget:
+            os.close(fd)
+            sys.stderr.write(
+                'with-display.py: gave up waiting for the display lock '
+                '%s after %s s\n' % (path, budget_text or
+                                     '%g' % LOCK_WAIT_SECONDS))
+            return None
+        time.sleep(0.05)
+    # Not on the normal path: only when the UI trace is on, and on this
+    # wrapper's own stderr, which no RUN line captures -- every window test
+    # redirects the binary's stderr INSIDE `sh -c`, below this process.
+    if debug:
+        sys.stderr.write(
+            'with-display.py: waited %.1f s for the display lock\n' %
+            (time.monotonic() - started))
+    return fd
+
+
 def run_darwin(seconds, command):
     import fcntl
 
@@ -211,42 +316,11 @@ def run_darwin(seconds, command):
             'with-display.py: HERMES_NODE_UI_DISPLAY_LOCK_WAIT must be a '
             'finite, non-negative number of seconds, not %r\n' % budget_text)
         return OWN_FAILURE
-    fd, problem = open_lock(path)
+    debug = 'UI' in os.environ.get('HERMES_NODE_DEBUG_NATIVE', '')
+    fd = acquire(fcntl, path, budget, budget_text, debug)
     if fd is None:
-        # Neither running unserialised nor hanging is acceptable. One line
-        # a person can act on: what, whose, and what to do about it.
-        sys.stderr.write(
-            'with-display.py: refusing the display lock %s: it %s (owner: '
-            '%s); remove it (as that user or with sudo), or set '
-            'HERMES_NODE_UI_DISPLAY_LOCK to another path\n' %
-            (path, problem, describe_owner(path)))
         return OWN_FAILURE
     try:
-        # Polled rather than blocking, because a blocking flock() cannot be
-        # given a deadline. The budget is the queue's, not the test's.
-        started = time.monotonic()
-        while True:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                pass
-            if time.monotonic() - started >= budget:
-                sys.stderr.write(
-                    'with-display.py: gave up waiting for the display lock '
-                    '%s after %s s\n' % (path, budget_text or
-                                         '%g' % LOCK_WAIT_SECONDS))
-                return OWN_FAILURE
-            time.sleep(0.05)
-        # Not on the normal path: only when the UI trace is on, and on this
-        # wrapper's own stderr, which no RUN line captures -- every window
-        # test redirects the binary's stderr INSIDE `sh -c`, below this
-        # process.
-        if 'UI' in os.environ.get('HERMES_NODE_DEBUG_NATIVE', ''):
-            sys.stderr.write(
-                'with-display.py: waited %.1f s for the display lock\n' %
-                (time.monotonic() - started))
-
         env = dict(os.environ)
         env['HERMES_NODE_UI_TEST_NO_ACTIVATE'] = '1'
         env['HERMES_NODE_UI_TEST_PASTEBOARD'] = 'hnui-test-%d%d' % (

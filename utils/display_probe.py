@@ -27,14 +27,16 @@ every window test:
    command's process group. If the outer timeout fires anyway, everything
    in the wrapper's SESSION is killed -- the wrapper is started as a session
    leader, and the command, which with-display.py puts in a process group
-   of its own, is still in that session -- so nothing with a window
-   survives lit's configuration step.
+   of its own, is still in that session; the members are found by
+   `ps -A -o pid=` plus os.getsid(), with no pkill (macOS's has no -s) --
+   so nothing with a window survives lit's configuration step.
 """
 
 import importlib.util
 import os
 import signal
 import subprocess
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -59,12 +61,66 @@ def outer_timeout(lock_wait=LOCK_WAIT_SECONDS, limit=LIMIT_SECONDS):
     return lock_wait + limit + _kill_grace_seconds() + MARGIN_SECONDS
 
 
-# The pkill this uses; a module variable so test/display-probe.js can make
-# it unavailable.
-PKILL = 'pkill'
+# The ps this uses; a module variable so test/display-probe.js can make it
+# unavailable.
+PS = 'ps'
 # How long to wait for the wrapper to be reaped after SIGKILL.
 REAP_SECONDS = 10
+# How long killed session members get to disappear (be reaped by init)
+# before they are counted as survivors.
+GONE_SECONDS = 3
 UNKILLABLE = "the probe's session could not be killed; a window may survive"
+
+
+def _session_members(sid):
+    """Live pids whose session is `sid`, this process excluded; None if the
+    process table could not be read.
+
+    `ps -A -o pid=` is the one spelling Linux procps and BSD ps share, and
+    os.getsid() does the filtering: macOS's pkill has no -s, and its
+    `ps -o sess` prints 0 for every process.
+    """
+    try:
+        out = subprocess.run([PS, '-A', '-o', 'pid='],
+                             stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    members = []
+    for token in out.stdout.split():
+        try:
+            pid = int(token)
+        except ValueError:
+            continue
+        if pid == os.getpid():
+            continue
+        try:
+            if os.getsid(pid) == sid:
+                members.append(pid)
+        except (ProcessLookupError, PermissionError):
+            continue
+    return members
+
+
+def _kill_members(members):
+    groups = set()
+    for pid in members:
+        try:
+            groups.add(os.getpgid(pid))
+        except (ProcessLookupError, PermissionError):
+            pass
+    for group in groups:
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    for pid in members:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
 
 
 def _kill_session(proc):
@@ -75,16 +131,16 @@ def _kill_session(proc):
         with-display.py (timeout.run) forwards SIGTERM to the command's
         process group and waits for it; while it is still queueing for the
         lock there is no command, and SIGTERM ends it. So the ordinary case
-        needs no external tool.
-    (b) Then, to be sure nothing of the session is left -- a command that
-        ignores SIGTERM, a wrapper that did not exit -- `pkill -KILL -s
-        <sid>` (the wrapper is the session leader, so its pid is the sid;
-        the command, in a process group of its own, is still in the
-        session), and killpg of the wrapper's own group. killpg alone
-        cannot reach the command's group, so a pkill that could not run
-        (missing, or exit 2/3: usage or internal error on procps and BSD
-        alike) is REPORTED, never swallowed.
-    (c) The final reap is bounded.
+        needs nothing more.
+    (b) Then the session is enumerated (_session_members: the wrapper is the
+        session leader, so its pid is the sid; the command, in a process
+        group of its own, is still in the session) and every member's
+        process group and every member is SIGKILLed. killpg of the
+        wrapper's own group alone cannot reach the command's group.
+    (c) The wrapper's reap is bounded.
+    (d) The session is enumerated again; members still alive then, or a
+        process table that could not be read at all, are REPORTED, never
+        swallowed.
     """
     problems = []
     try:
@@ -95,25 +151,29 @@ def _kill_session(proc):
         proc.wait(timeout=_kill_grace_seconds() + 2)
     except subprocess.TimeoutExpired:
         pass
-    pkill_ok = True
-    try:
-        result = subprocess.run([PKILL, '-KILL', '-s', str(proc.pid)],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, timeout=10)
-        if result.returncode not in (0, 1):
-            pkill_ok = False
-    except (OSError, subprocess.TimeoutExpired):
-        pkill_ok = False
-    if not pkill_ok:
+    sid = proc.pid
+    members = _session_members(sid)
+    if members is None:
         problems.append(UNKILLABLE)
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
+        try:
+            os.killpg(sid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    else:
+        _kill_members(members + [sid])
     try:
         proc.wait(timeout=REAP_SECONDS)
     except subprocess.TimeoutExpired:
         problems.append('the wrapper did not exit after SIGKILL')
+    if members is not None:
+        deadline = time.monotonic() + GONE_SECONDS
+        left = _session_members(sid)
+        while left and time.monotonic() < deadline:
+            _kill_members(left)
+            time.sleep(0.1)
+            left = _session_members(sid)
+        if left is None or left:
+            problems.append(UNKILLABLE)
     return '; '.join(problems)
 
 

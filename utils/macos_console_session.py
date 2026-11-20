@@ -45,7 +45,13 @@ IOREG = ['ioreg', '-n', 'Root', '-d1', '-a']
 
 
 def _find_console_users(node, depth=0):
-    """The `IOConsoleUsers` value in a parsed ioreg plist, or None."""
+    """The dictionary holding `IOConsoleUsers` in a parsed ioreg plist, or
+    None.
+
+    The real shape (macOS 27.2, measured): a top-level DICT with
+    `IOConsoleUsers` directly in it, beside `IOConsoleLocked`. Nesting under
+    `IORegistryEntryChildren`, or a top-level array, is still accepted.
+    """
     if depth > 3:
         return None
     if isinstance(node, list):
@@ -57,7 +63,7 @@ def _find_console_users(node, depth=0):
     if not isinstance(node, dict):
         return None
     if 'IOConsoleUsers' in node:
-        return node['IOConsoleUsers']
+        return node
     return _find_console_users(node.get('IORegistryEntryChildren'), depth + 1)
 
 
@@ -98,9 +104,10 @@ def classify(plist_bytes, uid=None):
         root = plistlib.loads(plist_bytes)
     except Exception:  # plistlib raises several unrelated types
         return False, 'ioreg output could not be parsed as a plist'
-    users = _find_console_users(root)
-    if users is None:
+    holder = _find_console_users(root)
+    if holder is None:
         return False, 'ioreg output has no IOConsoleUsers'
+    users = holder['IOConsoleUsers']
     if not isinstance(users, list):
         return False, 'IOConsoleUsers in ioreg output is not a list'
     if not users:
@@ -110,13 +117,61 @@ def classify(plist_bytes, uid=None):
         return False, why
     if session.get('CGSSessionScreenIsLocked'):
         return False, 'console session is locked'
+    # The registry's own top-level flag, a cross-check: true means locked
+    # whatever the entry says; false adds nothing.
+    if holder.get('IOConsoleLocked'):
+        return False, 'console is locked'
     if not session.get('kCGSSessionOnConsoleKey'):
         return False, 'session is not on console'
     return True, 'console session is unlocked and on console'
 
 
+CORE_GRAPHICS = '/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics'
+
+
+def display_asleep():
+    """True if the main display is asleep, False if awake, None if it could
+    not be asked. Best-effort and advisory.
+
+    With the display asleep but the session unlocked, a sokol_app program
+    gets no frames, so the window probe would burn its whole timeout; this
+    lets stage 1 say so first. IODisplayWrangler does not exist on Apple
+    silicon; CGDisplayIsAsleep(CGMainDisplayID()) through ctypes needs no
+    PyObjC. **UNVERIFIED: that it returns nonzero when the display really
+    is asleep** -- the Mac round saw only False, with the display awake.
+    """
+    if sys.platform != 'darwin':
+        return None
+    try:
+        import ctypes
+        cg = ctypes.CDLL(CORE_GRAPHICS)
+        cg.CGMainDisplayID.restype = ctypes.c_uint32
+        cg.CGMainDisplayID.argtypes = []
+        cg.CGDisplayIsAsleep.restype = ctypes.c_int
+        cg.CGDisplayIsAsleep.argtypes = [ctypes.c_uint32]
+        return bool(cg.CGDisplayIsAsleep(cg.CGMainDisplayID()))
+    except Exception:
+        return None
+
+
+def combine(verdict, asleep_probe=display_asleep):
+    """The classifier's verdict, overridden only by a display the probe
+    positively reports asleep. Any failure of the probe -- None, an
+    exception -- leaves the verdict unchanged."""
+    usable, reason = verdict
+    if not usable:
+        return verdict
+    try:
+        asleep = asleep_probe()
+    except Exception:
+        return verdict
+    if asleep is True:
+        return False, 'display is asleep'
+    return verdict
+
+
 def query():
-    """(usable, reason) for this machine, by running ioreg."""
+    """(usable, reason) for this machine: ioreg, then the display."""
     try:
         proc = subprocess.run(
             IOREG, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -127,7 +182,7 @@ def query():
         return False, 'ioreg could not be run (%s)' % e.__class__.__name__
     if proc.returncode != 0:
         return False, 'ioreg exited with status %d' % proc.returncode
-    return classify(proc.stdout)
+    return combine(classify(proc.stdout))
 
 
 def _sample(users):
@@ -143,6 +198,26 @@ SELF_TEST_UID = 501
 def _me(**flags):
     entry = {'kCGSSessionUserIDKey': SELF_TEST_UID}
     entry.update(flags)
+    return entry
+
+
+def _real_entry(**extra):
+    """One IOConsoleUsers entry with the keys seen on macOS 27.2 -- two of
+    them spelled with ONE S (kCGSessionLoginDoneKey,
+    kCGSessionLongUserNameKey), as Apple spells them."""
+    entry = {
+        'CGSSessionUniqueSessionUUID': '00000000-0000-0000-0000-000000000000',
+        'kCGSSessionAuditIDKey': 100001,
+        'kCGSSessionGroupIDKey': 20,
+        'kCGSSessionIDKey': 257,
+        'kCGSSessionLoginwindowSafeLogin': False,
+        'kCGSSessionOnConsoleKey': True,
+        'kCGSSessionUserIDKey': SELF_TEST_UID,
+        'kCGSSessionUserNameKey': 'tester',
+        'kCGSessionLoginDoneKey': True,
+        'kCGSessionLongUserNameKey': 'Test User',
+    }
+    entry.update(extra)
     return entry
 
 
@@ -174,6 +249,21 @@ SELF_TEST = [
         {'kCGSSessionUserIDKey': 502, 'kCGSSessionOnConsoleKey': False}])),
     ('two-entries-for-uid', _sample([_me(kCGSSessionOnConsoleKey=True),
                                      _me(kCGSSessionOnConsoleKey=True)])),
+    # The REAL shape, macOS 27.2: a top-level dict with IOConsoleUsers and
+    # IOConsoleLocked; unlocked, the entry has NO CGSSessionScreenIsLocked.
+    ('real-unlocked', plistlib.dumps({
+        'IOConsoleLocked': False,
+        'IOConsoleUsers': [_real_entry()]})),
+    # Locked: the flag present and true, with CGSSessionScreenLockedTime,
+    # and IOConsoleLocked true.
+    ('real-locked', plistlib.dumps({
+        'IOConsoleLocked': True,
+        'IOConsoleUsers': [_real_entry(CGSSessionScreenIsLocked=True,
+                                       CGSSessionScreenLockedTime=1234)]})),
+    # The entry lacks the lock key, but the registry says locked.
+    ('ioconsolelocked-only', plistlib.dumps({
+        'IOConsoleLocked': True,
+        'IOConsoleUsers': [_real_entry()]})),
     # A lock flag of an unexpected type reads as locked.
     ('integer-lock-flag', _sample([_me(CGSSessionScreenIsLocked=1,
                                        kCGSSessionOnConsoleKey=True)])),
@@ -188,6 +278,22 @@ def main(argv):
         for name, data in SELF_TEST:
             usable, reason = classify(data, uid=SELF_TEST_UID)
             print('%s: usable=%d reason=%s' % (name, int(usable), reason))
+        # The display-asleep signal combined with a usable verdict, the
+        # probe stubbed so this runs anywhere.
+        usable_verdict = (True, 'console session is unlocked and on console')
+
+        def raises():
+            raise OSError('no CoreGraphics')
+
+        for name, probe in (('asleep', lambda: True), ('awake', lambda: False),
+                            ('unknown', lambda: None), ('raising', raises)):
+            usable, reason = combine(usable_verdict, probe)
+            print('display %s: usable=%d reason=%s' % (
+                name, int(usable), reason))
+        usable, reason = combine((False, 'console session is locked'),
+                                 lambda: True)
+        print('display asleep, already locked: usable=%d reason=%s' % (
+            int(usable), reason))
         return 0
     if argv:
         sys.stderr.write(

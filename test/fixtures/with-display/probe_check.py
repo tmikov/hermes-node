@@ -108,9 +108,9 @@ def ignores_term(path):
             'time.sleep(300)\n', path]
 
 
-def outer_case(name, command_for, pkill):
+def outer_case(name, command_for, ps):
     """The outer timeout fires; report what survived and the reason."""
-    probe.PKILL = pkill
+    probe.PS = ps
     mark = os.path.join(work, name + '.pid')
     _, _, _, reason = probe.run(wrapper, command_for(mark), env,
                                 lock_wait=5, limit=60, outer=3)
@@ -118,17 +118,18 @@ def outer_case(name, command_for, pkill):
     survived = pid != 0 and not gone_within(pid, 5)
     if survived:
         os.kill(pid, 9)
-    probe.PKILL = 'pkill'
+    probe.PS = 'ps'
     print('%s command-started=%d command-survived=%d unkillable=%d' % (
         name, int(pid != 0), int(survived),
         int(probe.UNKILLABLE in (reason or ''))))
 
 
-# (3) A command that dies on SIGTERM is gone even with no pkill at all: the
-# probe's SIGTERM to the wrapper is forwarded to the command's group. The
-# missing pkill is still reported.
-outer_case('term-nopkill', pid_writer, '/nonexistent/pkill')
-# (4) A command that ignores SIGTERM needs pkill: gone with it, and without
-# it the reason says the session could not be killed.
-outer_case('ignore-pkill', ignores_term, 'pkill')
-outer_case('ignore-nopkill', ignores_term, '/nonexistent/pkill')
+# (3) A command that dies on SIGTERM is gone even when the session cannot
+# be enumerated (ps unavailable): the probe's SIGTERM to the wrapper is
+# forwarded to the command's group. The missing ps is still reported.
+outer_case('term-nops', pid_writer, '/nonexistent/ps')
+# (4) A command that ignores SIGTERM, in a process group of its own, needs
+# the session enumeration: gone with it, and without it (ps unavailable)
+# it survives and the reason says the session could not be killed.
+outer_case('ignore-ps', ignores_term, 'ps')
+outer_case('ignore-nops', ignores_term, '/nonexistent/ps')
