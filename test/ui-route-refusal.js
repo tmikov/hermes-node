@@ -115,8 +115,10 @@ ui.createWindow({width: 320, height: 240, title: 'route refusal'}).then(
 // stays under the plain prefix.
 // RET: REJECTED
 // RET-gl-SAME: unknown value for HERMES_NODE_UI_GL_ROUTE: 'bogus'
+// RET-metal-SAME: HERMES_NODE_UI_GL_ROUTE is set ('bogus') but does not apply to this build, which presents through Metal and has no GL context route. Unset it.
 // RET-NEXT: RAF 0
 // RETCODE: EXITCODE 5
+// RETERR-metal: hermes-node-ui: HERMES_NODE_UI_GL_ROUTE is set ('bogus') but does not apply to this build, which presents through Metal and has no GL context route. Unset it.
 // RETERR: lifecycle: FAILED
 // RETERR: lifecycle: event-loop handle released
 // RETERR: lifecycle: runtime returned, exiting with status 5
@@ -128,15 +130,18 @@ ui.createWindow({width: 320, height: 240, title: 'route refusal'}).then(
 // BOGUS-gl-SAME: unknown value for HERMES_NODE_UI_GL_ROUTE: 'bogus'
 // BOGUS-gl-SAME: surfaceless (built)
 // BOGUS-gl-SAME: pbuffer (not built in v1)
+// BOGUS-metal-SAME: HERMES_NODE_UI_GL_ROUTE is set ('bogus') but does not apply to this build, which presents through Metal and has no GL context route. Unset it.
 // BOGUSCODE: EXITCODE 3
 
 // Also on stderr, before any of the JS ran: a route refusal must be
 // legible even to someone whose script swallows the rejection.
 // BOGUSERR: hermes-node-ui:
 // BOGUSERR-gl-SAME: unknown value for HERMES_NODE_UI_GL_ROUTE
+// BOGUSERR-metal-SAME: HERMES_NODE_UI_GL_ROUTE is set ('bogus') but does not apply to this build, which presents through Metal and has no GL context route. Unset it.
 
 // PB: REJECTED
 // PB-gl-SAME: pbuffer GL context route is not built in v1
+// PB-metal-SAME: HERMES_NODE_UI_GL_ROUTE is set ('pbuffer') but does not apply to this build, which presents through Metal and has no GL context route. Unset it.
 // PBCODE: EXITCODE 3
 //
 // The native half of the refusal, checked for the same reason BOGUSERR is:
@@ -147,3 +152,4 @@ ui.createWindow({width: 320, height: 240, title: 'route refusal'}).then(
 // nothing would have noticed.
 // PBERR: hermes-node-ui:
 // PBERR-gl-SAME: the pbuffer GL context route is not built in v1
+// PBERR-metal-SAME: HERMES_NODE_UI_GL_ROUTE is set ('pbuffer') but does not apply to this build, which presents through Metal and has no GL context route. Unset it.

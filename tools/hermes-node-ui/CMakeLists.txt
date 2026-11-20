@@ -116,6 +116,23 @@ if(TARGET hermesNodeCompositorGpu)
       x11_clipboard.cpp
     )
   endif()
+  if(APPLE)
+    # macOS (Task 16): the NSApplication subclass and the window helpers
+    # (mac_app.mm), and the platform services, which Task 16b implements as
+    # far as a window needs and Task 16e completes. sokol_app's Metal
+    # implementation is Objective-C, so its unit is compiled as
+    # Objective-C++ under its .cpp name, the way lib/compositor-gpu compiles
+    # the two sokol_gfx units; ARC on every Objective-C(++) unit, which
+    # sokol_config.h enforces for the Sokol ones.
+    target_sources(hermes-node-ui PRIVATE
+      mac_app.mm
+      platform_services_mac.mm
+    )
+    set_source_files_properties(sokol_app_impl.cpp
+      PROPERTIES COMPILE_OPTIONS "-xobjective-c++;-fobjc-arc")
+    set_source_files_properties(mac_app.mm platform_services_mac.mm
+      PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  endif()
   # Plain signature, matching the call above -- CMake refuses to mix plain
   # and keyword forms on one target, and hermes_node_link_setup() already
   # links this one plainly.
