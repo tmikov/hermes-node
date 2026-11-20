@@ -32,9 +32,15 @@
 #include <sokol_glue.h>
 
 #import <Metal/Metal.h>
+#import <AppKit/AppKit.h>
 #import <QuartzCore/CAMetalLayer.h>
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
+#include <map>
+#include <mutex>
 
 namespace hermes {
 namespace node_compat {
@@ -106,10 +112,50 @@ fragment float4 fs_main(vs_out in [[stage_in]],
 // State
 //===========================================================================
 
+/// One generation's wrappers on this instance.
+struct Wrapped {
+  sg_image images[kSlotsPerGeneration]{};
+  sg_view views[kSlotsPerGeneration]{};
+  int width = 0;
+  int height = 0;
+};
+
 struct MetalPresenter::State {
   /// The device the presenting instance was set up on: Sokol's, from
   /// sokol_app's environment. Held strongly.
   id<MTLDevice> device = nil;
+  /// Keyed by GenerationId::value, like SurfaceTable's own map.
+  std::map<uint32_t, Wrapped> wrapped;
+
+  /// The test hooks' read-back (enableCapture(), blit(), readPixels()).
+  bool captureEnabled = false;
+  /// The staging buffer the drawable is copied into. Reallocated when the
+  /// drawable's size changes; the old one is kept alive by the blit that
+  /// last used it (see blit()).
+  id<MTLBuffer> staging = nil;
+  int stagingWidth = 0;
+  int stagingHeight = 0;
+  /// The last blit's command buffer and what its copy describes, held
+  /// strongly so readPixels() can wait on it.
+  id<MTLCommandBuffer> keptBuffer = nil;
+  id<MTLBuffer> keptStaging = nil;
+  int keptWidth = 0;
+  int keptHeight = 0;
+  MTLPixelFormat keptFormat = MTLPixelFormatInvalid;
+  /// Which blit the kept buffer is, and the last blit whose consumer
+  /// handler has finished: readPixels() waits for the second to reach the
+  /// first, so everything the handler does -- its trace and the read
+  /// reference it releases -- has happened before a capture is reported.
+  /// waitUntilCompleted alone does not order the handler (it runs on a
+  /// Metal thread, and Metal promises nothing about which returns first).
+  uint64_t blitSerial = 0;
+  uint64_t keptSerial = 0;
+  std::mutex handledMutex;
+  std::condition_variable handledCv;
+  uint64_t handledSerial = 0;
+
+  /// Set by the first consumer handler, on a Metal thread.
+  std::atomic<bool> tracedConsumerHandler{false};
   sg_shader shader{};
   sg_pipeline pipeline{};
   sg_sampler sampler{};
@@ -293,6 +339,293 @@ void MetalPresenter::clear() {
           commandBuffer != nil ? "present" : "absent",
           (int)status);
   }
+}
+
+//===========================================================================
+// The test hooks' read-back
+//===========================================================================
+
+void MetalPresenter::enableCapture() {
+  if (state_ == nullptr)
+    return;
+  // Sokol's layer is its view's, and the view is the window's content view
+  // (_sapp_macos_mtl_init); sokol_app has no getter for the layer itself.
+  NSWindow *window = (__bridge NSWindow *)sapp_macos_get_window();
+  CALayer *layer = window.contentView.layer;
+  if (![layer isKindOfClass:[CAMetalLayer class]]) {
+    uiTrace(
+        "capture: staging copy NOT enabled (the view's layer is %s, not a "
+        "CAMetalLayer)",
+        layer != nil ? [NSStringFromClass([layer class]) UTF8String]
+                     : "nil");
+    return;
+  }
+  CAMetalLayer *metalLayer = (CAMetalLayer *)layer;
+  // Sokol creates the layer framebufferOnly (_sapp_macos_mtl_init), and a
+  // copy out of a framebufferOnly texture is an API-validation abort at
+  // encode time (probe P3).
+  metalLayer.framebufferOnly = NO;
+  const bool framebufferOnly = metalLayer.framebufferOnly;
+  state_->captureEnabled = !framebufferOnly;
+  uiTrace(
+      "capture: staging copy %s (framebufferOnly=%d)",
+      framebufferOnly ? "NOT enabled" : "enabled",
+      framebufferOnly ? 1 : 0);
+}
+
+bool MetalPresenter::readPixels(int width, int height, uint8_t *out) {
+  if (state_ == nullptr || out == nullptr || !state_->captureEnabled ||
+      state_->keptBuffer == nil)
+    return false;
+  // The size asked for must be the presented drawable's: a read-back of
+  // some other size would be of something that was not presented.
+  if (width != state_->keptWidth || height != state_->keptHeight)
+    return false;
+  // BGRA is what sokol_app gives a CAMetalLayer; anything else is refused
+  // by name rather than converted by guess.
+  if (state_->keptFormat != MTLPixelFormatBGRA8Unorm &&
+      state_->keptFormat != MTLPixelFormatBGRA8Unorm_sRGB)
+    return false;
+
+  [state_->keptBuffer waitUntilCompleted];
+  if (state_->keptBuffer.status != MTLCommandBufferStatusCompleted)
+    return false;
+  {
+    // Bounded, because a handler that never ran is a defect to report, not
+    // a reason to hang the platform thread: the capture then fails, and
+    // says so.
+    std::unique_lock<std::mutex> lock(state_->handledMutex);
+    const uint64_t wanted = state_->keptSerial;
+    if (!state_->handledCv.wait_for(lock, std::chrono::seconds(10), [&] {
+          return state_->handledSerial >= wanted;
+        }))
+      return false;
+  }
+
+  // Rows are already top first: a Metal texture's row 0 is its top row, and
+  // the copy wrote them in that order.
+  const uint8_t *src =
+      static_cast<const uint8_t *>([state_->keptStaging contents]);
+  const size_t count = static_cast<size_t>(width) * height;
+  for (size_t i = 0; i < count; ++i) {
+    out[i * 4 + 0] = src[i * 4 + 2];
+    out[i * 4 + 1] = src[i * 4 + 1];
+    out[i * 4 + 2] = src[i * 4 + 0];
+    out[i * 4 + 3] = src[i * 4 + 3];
+  }
+  return true;
+}
+
+//===========================================================================
+// Wrappers
+//===========================================================================
+
+bool MetalPresenter::wrap(
+    GenerationId gen,
+    void *const *mtlTextures,
+    int count,
+    int width,
+    int height,
+    std::string &error) {
+  if (state_ == nullptr) {
+    error = "the presenting instance has not been set up.";
+    return false;
+  }
+  if (state_->wrapped.count(gen.value) != 0)
+    return true;
+  if (count != kSlotsPerGeneration) {
+    error = "a generation must have exactly kSlotsPerGeneration surfaces.";
+    return false;
+  }
+
+  Wrapped wrapped;
+  wrapped.width = width;
+  wrapped.height = height;
+  for (int i = 0; i < kSlotsPerGeneration; ++i) {
+    sg_image_desc imageDesc = {};
+    imageDesc.type = SG_IMAGETYPE_2D;
+    imageDesc.width = width;
+    imageDesc.height = height;
+    imageDesc.num_mipmaps = 1;
+    imageDesc.pixel_format = static_cast<sg_pixel_format>(colorFormat_);
+    imageDesc.sample_count = 1;
+    // Texture injection, ONE texture: the image is immutable, so it has a
+    // single slot (spike 2). Sokol retains it under ARC and releases its
+    // own reference when the wrapper is destroyed; the producer keeps its
+    // own.
+    imageDesc.mtl_textures[0] = mtlTextures[i];
+    imageDesc.label = "hnui-surface-wrapper";
+    wrapped.images[i] = sg_make_image(&imageDesc);
+    if (sg_query_image_state(wrapped.images[i]) != SG_RESOURCESTATE_VALID) {
+      error = "a presenting wrapper image could not be created.";
+      return false;
+    }
+
+    sg_view_desc viewDesc = {};
+    viewDesc.texture.image = wrapped.images[i];
+    viewDesc.label = "hnui-surface-view";
+    wrapped.views[i] = sg_make_view(&viewDesc);
+    if (sg_query_view_state(wrapped.views[i]) != SG_RESOURCESTATE_VALID) {
+      error = "a presenting wrapper view could not be created.";
+      return false;
+    }
+  }
+
+  state_->wrapped.emplace(gen.value, wrapped);
+  uiTrace(
+      "wrapped generation %u for presenting (%dx%d)", gen.value, width, height);
+  return true;
+}
+
+void MetalPresenter::releaseWrappers(GenerationId gen) {
+  if (state_ == nullptr)
+    return;
+  auto it = state_->wrapped.find(gen.value);
+  if (it == state_->wrapped.end())
+    return;
+  // Sokol defers the Metal release to a later sg_commit(); this instance
+  // commits a real pass every valid frame, so its clock advances on its own
+  // (the plan's Maintenance, presenter half).
+  for (int i = 0; i < kSlotsPerGeneration; ++i) {
+    sg_destroy_view(it->second.views[i]);
+    sg_destroy_image(it->second.images[i]);
+  }
+  state_->wrapped.erase(it);
+  uiTrace("released presenting wrappers for generation %u", gen.value);
+}
+
+bool MetalPresenter::isWrapped(GenerationId gen) const {
+  return state_ != nullptr && state_->wrapped.count(gen.value) != 0;
+}
+
+//===========================================================================
+// The blit
+//===========================================================================
+
+bool MetalPresenter::blit(
+    SurfaceRef ref,
+    void (*onComplete)(void *user, SurfaceRef ref, bool ok),
+    void *user) {
+  if (state_ == nullptr || !state_->swapchainValid)
+    return false;
+  auto it = state_->wrapped.find(ref.gen.value);
+  if (it == state_->wrapped.end() || ref.slot >= kSlotsPerGeneration)
+    return false;
+
+  // Taken before the pass: sg_end_pass() forgets it (it hands it to
+  // presentDrawable: and nils its own pointer).
+  id<CAMetalDrawable> drawable =
+      (__bridge id<CAMetalDrawable>)state_->swapchain.metal.current_drawable;
+
+  sg_pass pass = {};
+  // CLEAR, as gl_present.cpp does: a blit that did not draw shows the clear
+  // colour rather than undefined drawable contents.
+  pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
+  pass.action.colors[0].store_action = SG_STOREACTION_STORE;
+  pass.action.colors[0].clear_value = sg_color{
+      kPresenterClearLevel, kPresenterClearLevel, kPresenterClearLevel, 1.0f};
+  pass.swapchain = state_->swapchain;
+  sg_begin_pass(&pass);
+  sg_apply_pipeline(state_->pipeline);
+  sg_bindings bindings = {};
+  bindings.views[0] = it->second.views[ref.slot];
+  bindings.samplers[0] = state_->sampler;
+  sg_apply_bindings(&bindings);
+  sg_draw(0, 3, 1);
+  sg_end_pass();
+
+  // THIS instance's frame command buffer -- the presenting one, which is
+  // what the isolation check's user-object rule holds this file to.
+  id<MTLCommandBuffer> commandBuffer =
+      (__bridge id<MTLCommandBuffer>)hnui_sgp_mtl_command_buffer();
+  if (commandBuffer == nil) {
+    // A pass always makes one, so this is not expected; if it happened,
+    // nothing would complete, and false makes the caller release the read
+    // reference inline.
+    sg_commit();
+    return false;
+  }
+
+  // The staging copy, in the same command buffer and after the pass --
+  // after sg_end_pass() registered presentDrawable: -- which is the order
+  // probe P3b used, and there the copy read back the pass's pixels exactly.
+  id<MTLBuffer> stagingForThisBlit = nil;
+  uint64_t serial = 0;
+  if (state_->captureEnabled && drawable != nil) {
+    id<MTLTexture> texture = drawable.texture;
+    const int width = static_cast<int>(texture.width);
+    const int height = static_cast<int>(texture.height);
+    if (state_->staging == nil || state_->stagingWidth != width ||
+        state_->stagingHeight != height) {
+      state_->staging = [state_->device
+          newBufferWithLength:static_cast<NSUInteger>(width) * height * 4
+                      options:MTLResourceStorageModeShared];
+      state_->stagingWidth = width;
+      state_->stagingHeight = height;
+    }
+    if (state_->staging != nil) {
+      id<MTLBlitCommandEncoder> encoder = [commandBuffer blitCommandEncoder];
+      [encoder copyFromTexture:texture
+                       sourceSlice:0
+                       sourceLevel:0
+                      sourceOrigin:MTLOriginMake(0, 0, 0)
+                        sourceSize:MTLSizeMake(width, height, 1)
+                          toBuffer:state_->staging
+                 destinationOffset:0
+            destinationBytesPerRow:static_cast<NSUInteger>(width) * 4
+          destinationBytesPerImage:static_cast<NSUInteger>(width) * height *
+          4];
+      [encoder endEncoding];
+      stagingForThisBlit = state_->staging;
+      serial = ++state_->blitSerial;
+      state_->keptSerial = serial;
+      state_->keptBuffer = commandBuffer;
+      state_->keptStaging = state_->staging;
+      state_->keptWidth = width;
+      state_->keptHeight = height;
+      state_->keptFormat = texture.pixelFormat;
+    }
+  }
+
+  // The consumer handler, on the presenting instance's buffer and BEFORE
+  // its commit -- a handler added after commit is a Metal error. Sokol's
+  // command buffers hold unretained references, so the block holds the
+  // staging buffer it copied into until the GPU is done with it; the
+  // sampled surface is kept alive by the read reference this handler
+  // releases.
+  // state_ outlives every handler: the presenter is never destroyed (see
+  // the destructor).
+  State *state = state_;
+  [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+    (void)stagingForThisBlit;
+    const MTLCommandBufferStatus status = buffer.status;
+    const bool ok = status == MTLCommandBufferStatusCompleted;
+    if (status == MTLCommandBufferStatusError) {
+      @autoreleasepool {
+        std::fprintf(
+            stderr,
+            "hermes-node-ui: a presented frame failed on the GPU: %s\n",
+            [[buffer.error localizedDescription] UTF8String]);
+      }
+    }
+    if (!state->tracedConsumerHandler.exchange(true)) {
+      uiTrace(
+          "completion: consumer handler ran (status=%s)",
+          ok ? "completed" : "error");
+    }
+    if (onComplete != nullptr)
+      onComplete(user, ref, ok);
+    if (serial != 0) {
+      {
+        std::lock_guard<std::mutex> lock(state->handledMutex);
+        if (serial > state->handledSerial)
+          state->handledSerial = serial;
+      }
+      state->handledCv.notify_all();
+    }
+  }];
+  sg_commit();
+  return true;
 }
 
 } // namespace node_compat

@@ -385,6 +385,17 @@ main().catch((e) => {
 // the hand-off was picked up there.
 // POLLERR-gl: [ui] completion mode: polling
 // POLLERR-gl: [ui] completion: polling submission handed the fence to the platform thread
+// On Metal there is one completion mechanism and no mode to choose, so the
+// three runs make the same claims. Each `handler ran` line is printed
+// from inside a Metal completion handler after it read the buffer's
+// status, once per run: evidence that a handler executed on a real buffer,
+// where the mode line only says which mechanism this build has. The
+// staging line is printed from init_cb, before the worker starts, with
+// framebufferOnly read back from Sokol's layer after it was cleared.
+// POLLERR-metal: [ui] capture: staging copy enabled (framebufferOnly=0)
+// POLLERR-metal: [ui] completion mode: handler (metal)
+// POLLERR-metal: [ui] completion: producer handler ran (status=completed)
+// POLLERR-metal: [ui] completion: consumer handler ran (status=completed)
 // POLLERR: [ui] capture: written generation 1 publication 1
 // POLLERR: [ui] capture: no match after 240 presented frame(s)
 
@@ -408,6 +419,10 @@ main().catch((e) => {
 //
 // BLOCKERR-gl: [ui] completion mode: blocking
 // BLOCKERR-gl: [ui] completion: blocking submission waited on the producer thread
+// BLOCKERR-metal: [ui] capture: staging copy enabled (framebufferOnly=0)
+// BLOCKERR-metal: [ui] completion mode: handler (metal)
+// BLOCKERR-metal: [ui] completion: producer handler ran (status=completed)
+// BLOCKERR-metal: [ui] completion: consumer handler ran (status=completed)
 // BLOCKERR: [ui] capture: written generation 1 publication 1
 
 // --- The probe run. -------------------------------------------------
@@ -441,3 +456,10 @@ main().catch((e) => {
 // which arm a given driver selects is not this test's business, and pinning
 // either would make this a statement about the machine.
 // PROBEERR-gl: [ui] completion: {{(polling submission handed the fence|blocking submission waited)}}
+//
+// Metal: no probe and no mode, so the probe run's claims are the other
+// two runs' (see POLLERR-metal above).
+// PROBEERR-metal: [ui] capture: staging copy enabled (framebufferOnly=0)
+// PROBEERR-metal: [ui] completion mode: handler (metal)
+// PROBEERR-metal: [ui] completion: producer handler ran (status=completed)
+// PROBEERR-metal: [ui] completion: consumer handler ran (status=completed)

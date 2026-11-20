@@ -8,6 +8,9 @@
 #ifndef HERMES_NODE_COMPAT_COMPOSITOR_GPU_METAL_PRESENT_H
 #define HERMES_NODE_COMPAT_COMPOSITOR_GPU_METAL_PRESENT_H
 
+#include <hermes/node-compat/compositor/surface_table.h>
+
+#include <cstdint>
 #include <string>
 
 namespace hermes {
@@ -41,12 +44,11 @@ namespace node_compat {
 /// drain are a mutex hand-off, and the worker reads them inside that
 /// posted call or later. Nothing writes them again.
 ///
-/// # What exists in Task 16b
+/// # What exists after Task 16c
 ///
-/// Setup, the per-frame swapchain acquisition and the clear. Task 16c adds
-/// `wrap`, `releaseWrappers`, `isWrapped`, `blit` and `readPixels`; the blit
-/// shader and pipeline are already built here, so that compiling MSL is part
-/// of the toolchain this task proves.
+/// Setup, the per-frame swapchain acquisition, the clear, the wrappers, the
+/// blit with its consumer completion handler, and the test hooks' read-back
+/// of the presented drawable. Task 16d adds the invalid-swapchain traces.
 class MetalPresenter {
  public:
   MetalPresenter() = default;
@@ -106,6 +108,51 @@ class MetalPresenter {
   /// published. No completion handler: nothing holds a reference to
   /// anything this frame reads.
   void clear();
+
+  /// Test hooks only, from `init_cb` after `setup()`: clear
+  /// `framebufferOnly` on Sokol's `CAMetalLayer` so the drawable can be
+  /// copied out, read it back, and arm the staging copy `blit()` encodes
+  /// only if the read-back says it is clear. Traced as `capture: staging
+  /// copy enabled (framebufferOnly=0)`, or `NOT enabled` with what was read.
+  void enableCapture();
+
+  /// Wrap one generation's surfaces for this instance, by texture
+  /// injection (`mtl_textures[0]`): \p mtlTextures are \p count
+  /// `id<MTLTexture>` as `__bridge` pointers, the producer's, which must stay
+  /// alive for the duration of the call. Idempotent: a generation already
+  /// wrapped is left alone and succeeds.
+  bool wrap(
+      GenerationId gen,
+      void *const *mtlTextures,
+      int count,
+      int width,
+      int height,
+      std::string &error);
+
+  /// Destroy this instance's wrappers for \p gen. The caller decides when
+  /// (`SurfaceTable::wrappersReleasable`).
+  void releaseWrappers(GenerationId gen);
+
+  /// Whether \p gen has wrappers here right now.
+  bool isWrapped(GenerationId gen) const;
+
+  /// Draw \p ref into this frame's swapchain and commit. \p onComplete is
+  /// installed on that frame's command buffer before the commit and runs
+  /// when the buffer finished, on a Metal thread, with ok=false if it ended
+  /// in error. False if nothing was submitted -- no valid swapchain, no
+  /// wrapper for the generation -- in which case \p onComplete is never
+  /// called. Under the test hooks the drawable is also copied into a
+  /// staging buffer in the same command buffer, for readPixels().
+  bool blit(
+      SurfaceRef ref,
+      void (*onComplete)(void *user, SurfaceRef ref, bool ok),
+      void *user);
+
+  /// The last blit's drawable, as RGBA rows top first: waits for that
+  /// command buffer, then converts the staging copy from BGRA. False if the
+  /// capture is not armed, no blit has been encoded since, the size asked
+  /// for is not the drawable's, or the buffer did not complete.
+  bool readPixels(int width, int height, uint8_t *out);
 
  private:
   /// Opaque here for the reason the class comment gives: the members are

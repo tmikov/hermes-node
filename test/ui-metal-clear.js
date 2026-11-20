@@ -5,8 +5,9 @@
 
 // The macOS toolchain, end to end (Task 16b): hermes-node-ui opens a window
 // through sokol_app's Metal backend, and the presenting sokol_gfx instance
-// puts its clear colour on screen -- while the worker's drawing half, which
-// is Task 16c's, refuses and rejects createWindow with a sentence saying so.
+// puts its clear colour on screen. Since Task 16c the window also resolves
+// -- the worker's drawing half is built -- but this script draws nothing,
+// so nothing is ever published and the presenter keeps clearing.
 //
 // Every line checked below is a trace of something that was executed or read
 // back, never of what was requested:
@@ -33,9 +34,8 @@
 //    its status is Committed or later.
 //
 // `FRAMES true` is the platform-thread barrier: three frames ran after the
-// rejection was delivered, so the clear is still being presented once the
-// worker has refused -- a FAILED window keeps its platform thread alive
-// until the process exits.
+// window resolved, so the clear is still what is presented while nothing
+// has been published.
 //
 // (Mutations, each made and reverted: skip sgp_commit() in
 // MetalPresenter::clear() -- `first clear NOT committed` is printed and
@@ -59,22 +59,18 @@ const ui = require('hermes-node:ui');
 
 ui.createWindow({width: 320, height: 240, title: 'metal clear'}).then(
     () => {
-      // The drawing half is not built, so nothing can have resolved this.
-      console.log('RESOLVED');
-      process.exit(1);
-    },
-    (e) => {
-      const message = (e && e.message) || '';
-      console.log(
-          /not built yet/.test(message) ? 'REJECTED ok' :
-                                          'REJECTED wrong: ' + message);
+      console.log('RESOLVED ok');
       console.log('FRAMES ' + ui.__waitPlatformFrames(3));
       process.exit(0);
+    },
+    (e) => {
+      console.log('REJECTED ' + ((e && e.message) || ''));
+      process.exit(1);
     });
 
 // CODE: EXITCODE 0
 
-// OUT: REJECTED ok
+// OUT: RESOLVED ok
 // OUT-NEXT: FRAMES true
 
 // ERR: [ui] route: metal (device={{.+}})
