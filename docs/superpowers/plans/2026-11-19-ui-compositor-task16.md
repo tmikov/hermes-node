@@ -1352,6 +1352,13 @@ terminate             -> SENT terminate          (16e uses it)
 state                 -> STATE viewable=<0|1> <w>x<h> miniaturized=<0|1>
 ```
 
+**Corrected after measurement (Task 16d as built):** that table is not
+what `ui.__driveWindow` returns. `state` answers `viewable=<0|1> <w>x<h>`,
+with no `miniaturized=` field, because `ui-real-events.js`'s CLOSE compares
+`STATE viewable=1 400x300` exactly. An action answers with its read-back,
+and `window_driver.js` is what turns that into `SENT <verb>` and prefixes
+`STATE ` to the `state` answer.
+
 `viewable` is `occlusionState & NSWindowOcclusionStateVisible`; `<w>x<h>`
 is the content view's bounds. The implementation is `dispatch_async` to
 the main queue plus a mutex, a condition variable and a deadline, like
@@ -1408,6 +1415,14 @@ the Metal resource pool is nearly exhausted (<n> slots free): surface generation
   `sapp_cancel_quit()` -- the window closes, AppKit terminates because
   Sokol answers `applicationShouldTerminateAfterLastWindowClosed:` YES,
   and the run ends with status 0 and `cleanup_cb` in the trace.*
+  **Corrected after measurement:** without `desc.event_cb` nothing goes
+  red by name. No `keydown` arrives, the script waits for it with no
+  bound, and the run ends at the wrapper's 120 s limit with status 124
+  and empty stdout; there is no `KEY WRONG` line and CLOSE is never
+  reached. The second mutation went as predicted, with two additions:
+  stdout stops after `GEN ok`, and `quit requested: cancelled, forwarded
+  as close` is printed even with the cancel removed, so the line that
+  catches it is the driver's `drive: close applied (visible=0)`.
 - [ ] **Step 3: Write `test/ui-metal-maintenance.js`** (`REQUIRES: ui,
   ui-backend-metal, display`). The script draws one frame calling
   `churnBufferThisFrame()`, then issues twelve `resize` commands
@@ -1449,6 +1464,14 @@ the Metal resource pool is nearly exhausted (<n> slots free): surface generation
   `swapchain.invalid` -- Sokol's validation panics on the nil drawable
   (Debug), or the guard returns false anyway; then also remove the nil
   guard -- the run dies in `sg_begin_pass`.*
+  **Corrected after measurement:** "dies in `sg_begin_pass`" is wrong.
+  Ignoring `swapchain.invalid` alone leaves the test green with an
+  identical trace: a miniaturized window's drawable is nil, so the nil
+  guard refuses the frame. With the nil guard removed as well the run
+  still exits 0 and writes both captures, with no `[sokol-` line and no
+  ASAN report, because Sokol's Metal `begin_pass` skips a nil drawable
+  itself. The only thing red is the missing `present: swapchain invalid;
+  nothing submitted` line.
 - [ ] **Step 7: Commit** ("Reclaim Metal resources between generations,
   and drive real window events") and report. In the report, state what
   happened when the display was put to sleep by hand during a run of
@@ -1558,6 +1581,11 @@ that order is what `test/ui-terminate.js` matches.
   cancelled` before `app: terminate requested`. Run with the driver's `terminate` command: it
   fails -- AppKit terminates, status 0, `cleanup_cb` in the trace. That
   failing run is the record of the defect Task 15's review found.
+  **Noted after Task 16d:** the driver's `terminate` is `[NSApp
+  terminate:nil]` and answers only after that call returns. Unfixed,
+  AppKit exits inside the call, so the answer never arrives and the
+  process ends with the JS thread still waiting for it. Nothing in the
+  script can bound that run; its RUN line's limit does.
 - [ ] **Step 2: Implement `terminate:`.** The three cases pass. If P4
   passed, add a fourth, REAL: the script spawns `%mac_quit_sender` with
   its own pid and expects the same lines as DEFAULT; build the tool. If
@@ -1602,6 +1630,9 @@ that order is what `test/ui-terminate.js` matches.
   `window_driver.js`'s `closeOnce`. LATE (a second close during CLOSING)
   and REPLACED need care: report any case whose premise does not
   translate, with the trace, instead of changing its checks.
+  **Noted after Task 16d:** `ui-close.js` already passes on Metal, all
+  nine cases, LATE and REPLACED included; the window driver was what it
+  lacked. What is left of this step is to confirm that it still does.
 - [ ] **Step 7: `ui-conformance.js` on Metal.** `demo.js`'s darwin branch
   replaces the mute owner with `hnui_read_clipboard_sync(w, 0, &out)`;
   the stdout line says `(zero deadline)` and is a `CHECK-metal` line. The
@@ -2255,3 +2286,104 @@ on 2026-11-20; where a statement above disagrees, this section is right.
   unsupported, 3 failed.** `ui-close.js` and `ui-real-events.js` fail on
   the missing window driver, which is 16d's; `ui-conformance.js` fails on
   the clipboard read, which is 16e's.
+
+## Task 16d as built
+
+Task 16d is "Reclaim Metal resources; drive real window events". Measured
+on the Mac on 2026-11-20; where a statement above disagrees, this section
+is right. The three predictions it refuted are corrected in place under
+Task 16d.
+
+Seven departures from the plan:
+
+- **The subject line** is shorter than the plan's, which ran past the 50
+  characters the commit rules allow.
+- **`ui_module.cpp` has two `__APPLE__` blocks, not one**: the export the
+  plan names, and the include of `mac_test_driver.h` that lets it compile.
+  `ui-real-events.js`'s trace RUN line became
+  `--check-prefixes=TRACE,TRACE-%ui-backend` to carry its `-metal` lines.
+- **The driver's answers follow `window_driver.js`**, not the plan's
+  table: see the correction beside the table.
+- **`miniaturize` and `deminiaturize` answer from AppKit's
+  did-miniaturize and did-deminiaturize notifications.** Both are
+  animated, and a read-back taken straight after the call was wrong both
+  ways (`miniaturized=0` after `miniaturize`, `=1` after `deminiaturize`)
+  while the test passed anyway. `ui-metal-occlusion.js` now asserts both
+  read-backs.
+- **`ui-metal-maintenance.js` yields one loop turn after each `resize`.**
+  Without it all twelve resizes ran inside one event-delivery pass: the
+  in-process driver applies a resize synchronously, and the script's
+  `await` chain resumed inside the delivery of the previous `resize`. The
+  destroys posted meanwhile waited for the pass to end, then ran back to
+  back, and one maintenance pass collected them all. The same nesting
+  applies to any 16e case that issues a driver command from an event
+  listener. What it means outside a test is tracker issue 01a1fb5a-ceb0.
+- **Generations 2 to 12 are asserted, not 1 to 12.** Generation 1 holds
+  the presented frame until the final capture and is destroyed only
+  during CLOSING, where no maintenance runs. Each of the eleven is
+  asserted by number, with no other `surfaces destroyed` line between its
+  destroy and its maintenance line, so each pass is shown to collect one
+  generation.
+- **Maintenance was implemented before its test**, so Step 3's failing
+  run is mutation 4(a)'s instead.
+
+What each mutation showed:
+
+- **Step 1, an injected RESIZED instead of `setContentSize:`:** red at
+  `GEN ok`. The capture of generation 2 never matched in 900 frames, the
+  read-back said `content=320x240`, and CLOSE was wrong too, since the
+  window really was still 320x240.
+- **Step 2, no `desc.event_cb`:** red by time limit only, status 124.
+  **No `sapp_cancel_quit()`:** status 0, stdout stops after `GEN ok`,
+  `cleanup_cb` in the trace, `drive: close applied (visible=0)`.
+- **Step 4(a), maintenance never run:** red at the first maintenance
+  line. Nothing then prints the free count, so "falls by about nine per
+  generation" was not observable.
+- **Step 4(b), one commit instead of the loop:** red. The flag is never
+  cleared, so one commit runs per loop turn, and `pending` reads 4, 7,
+  then 9 steadily.
+- **Step 4(c), no `producerInFlight_ == 0`:** green, as the plan says.
+- **Step 6, ignore `swapchain.invalid`:** green, identical trace. **And
+  no nil guard:** red only at the missing `swapchain invalid` line; the
+  run does not die.
+
+**The in-flight guard could not be made to fail** (Step 4(c)). The plan's
+20-run loop under API and GPU validation gave twenty `0 0` pairs with the
+condition removed, as it does unmutated: in that test maintenance never
+overlaps producer work. A scratch script that does overlap them -- a
+frame loop drawing the pattern and calling `churnBufferThisFrame()` while
+30 resizes land, 10 runs under the same validation -- had 8 to 14
+maintenance passes per run commit with producer work in flight, and
+produced no finding. The hazard needs a resource the in-flight frame
+uses and that was destroyed in that same frame; the churn buffer is never
+bound, and a generation's textures are held by the frame's reference. A
+demo-addon function that binds and destroys a buffer inside one frame
+would be the first thing able to show it, and has not been written.
+
+Also measured: `ui-resize-generation.js` passes unchanged on Metal,
+STRETCHED included, and needed no `-metal` lines. Step 5's open question
+is answered for this machine: the last reference of the generation was
+dropped on the main thread in five runs of five, never on a Metal
+completion thread or the JS thread. The Main Thread Checker reported
+nothing over `ui-real-events.js`; a run under `caffeinate` does not count,
+because that binary strips `DYLD_*` and the checker never loads.
+
+Follow-ups the review asked of the Mac, open when this was written:
+
+- Maintenance that was deferred because producer work was in flight is
+  not retried in a program that then goes idle.
+- `ui-metal-occlusion.js` ignores the result of `__waitPlatformFrames(10)`.
+- That test's "no `frame tick:` while invalid" check is guarded twice, by
+  `swapchain.invalid` and by the nil-drawable guard, so no single mutation
+  turns it red.
+
+Not covered by anything green: the driver's `terminate` (built; 16e's
+Step 1 is its first user), `key` beyond `a`, and maintenance after
+generation 1's destruction. **Display sleep was still not tried** (Step 7):
+nobody had agreed to `pmset displaysleepnow` at the machine.
+
+**Suite on the Mac at 16d: 456 unit tests passed; JS 233 passed, 6
+unsupported, 1 failed.** `ui-close.js` and `ui-real-events.js` went from
+failing to passing, `ui-metal-maintenance.js` and `ui-metal-occlusion.js`
+are new, and `ui-conformance.js` still fails on the clipboard read, which
+is 16e's.
