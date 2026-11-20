@@ -1244,13 +1244,18 @@ text, because shared tests match them.
 - [ ] **Step 4: Wrapping and the blit.** *Mutations after Step 6:* (a)
   skip the draw call -- the capture is the 32/255 clear colour; (b) use
   `uv = p` -- the top and bottom quadrants swap; (c) never call the
-  consumer sink -- after three presented frames no slot is FREE and
-  `ui-raf.js` stalls; (d) nearest instead of linear -- `ui-present.js`
+  consumer sink -- after three presented frames no slot is FREE.
+  (Measured at 16c: the suite stayed green, `ui-raf.js` included, because
+  no test published more than three frames in one generation. The
+  RECYCLED step of `test/ui-present.js`'s js mode, added afterwards, is
+  what turns this mutation red: `RECYCLED matched=false`.) (d) nearest
+  instead of linear -- `ui-present.js`
   still passes (1:1), `ui-resize-generation.js` STRETCHED is 16d's check.
 - [ ] **Step 5: The per-turn pool.** Run `test/ui-raf.js` and, by direct
   invocation, `test/ui-exit-paths.js`'s `frame` and `listener` cases; all
-  pass and stderr of one run shows `first drain`. (The file as a whole
-  waits for 16e: its READS case needs the clipboard read.) *Mutation: remove the pop -- `first drain` is missing;
+  pass and stderr of one run shows `first drain`. (Measured at 16c: the
+  file as a whole passes on the Mac already. Its READS lines are CLOSING
+  refusals and need no clipboard read.) *Mutation: remove the pop -- `first drain` is missing;
   add it as a `-metal` line to `ui-raf.js`'s TRACE.*
 - [ ] **Step 6: Capture.** Clear `framebufferOnly` in
   `createSharedContext` when `uiTestHooksEnabled()`; allocate the staging
@@ -1298,7 +1303,9 @@ Metal's own), and 22 on the main thread after `sapp_run` starts
 (`NSConcreteValue`, `_sapp_macos_app_delegate`). Each line carries the
 thread it was on. So 16c traces the JS thread's `pthread_self()` once and
 the criterion is: **zero lines on the JS thread**, no line on any thread
-naming an `MTL*`, `CAMetalDrawable` or `AGX*` class, and a main-thread
+naming `CAMetalDrawable`, an `AGX*` class or a class name beginning with
+`MTL` (beginning with, not containing: `FPMTLMetricsMetricsBundleInternal`
+contains `MTL` and is not Metal's), and a main-thread
 count no higher than the same run of the commit before. Report the
 per-thread, per-class table.
 
@@ -1959,8 +1966,12 @@ text of a task, this section wins.
   Sokol's own command buffer (the accessor) copying the drawable's texture
   to a shared `MTLBuffer` between `sg_end_pass` and `sg_commit` reads back
   the clear colour exactly on frames 1 and 100, with no validation message.
-  `sg_commit` encodes `presentDrawable:` after that blit. The swapchain was
-  valid from the first frame.
+  `presentDrawable:` is already registered on the command buffer by then:
+  Sokol calls it in `_sg_mtl_end_pass` (`sokol_gfx.h`), for a swapchain
+  pass, not in `sg_commit`. So the copy is encoded after the present was
+  registered and before the buffer is committed, which is the order Design
+  (f) marked UNVERIFIED and this measurement shows to work. The swapchain
+  was valid from the first frame.
 - **The drawable is `MTLPixelFormatBGRA8Unorm` (80), storage mode Managed.**
   A clear of (32, 64, 128, 255) reads back as bytes `80 40 20 ff`. Capture
   code must swap to the RGBA order the GL path and the tests use.
@@ -2224,3 +2235,23 @@ right.
   true and nothing draws yet. That state must never be the head of a pull
   request: CI builds the UI option on macOS.
 
+## Task 16c as built
+
+Task 16c is "Draw, complete and blit through Metal". Measured on the Mac
+on 2026-11-20; where a statement above disagrees, this section is right.
+
+- **The pattern fixture needed a Metal spelling of its shaders.** The demo
+  addon's fixed pattern (`test/fixtures/hnui-demo/demo_addon.c`) was GLSL
+  only, so nothing could draw it on Metal until it had an MSL pair too.
+- **`readPixels` waits for the captured blit's consumer handler**, bounded
+  at 10 s, before it copies the staging buffer out. So `consumer handler
+  ran` precedes `capture: written` in the trace by construction, not by
+  scheduling.
+- **`worker autorelease pool: first drain` is proven by a sentinel.** The
+  line is printed when an object autoreleased into the pool is freed by
+  the pop, so it reports a drain that happened and not a pop that was
+  called.
+- **Suite on the Mac at 16c: 452 unit tests passed; JS 229 passed, 6
+  unsupported, 3 failed.** `ui-close.js` and `ui-real-events.js` fail on
+  the missing window driver, which is 16d's; `ui-conformance.js` fails on
+  the clipboard read, which is 16e's.

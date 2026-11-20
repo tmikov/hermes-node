@@ -184,8 +184,9 @@ uv_loop_t *gLoop = nullptr;
 /// holds. JS thread only.
 uv_check_t *gWorkerTurn = nullptr;
 
-/// Created on the JS thread with gTable above; read off it only by
-/// onOwnerThread().
+/// Created on the JS thread with gTable above and never reset; read off
+/// it only by onOwnerThread(), from the platform thread or, on Metal, the
+/// thread its completion handlers run on.
 hnui_window *gWindow = nullptr;
 
 /// The current generation and the framebuffer size it was allocated at.
@@ -379,8 +380,16 @@ double frameTimestampMs() {
 namespace {
 
 /// The producer's GPU work for \p ref has finished -- or could not be
-/// shown to have finished. **May run on any thread**: the platform thread
-/// in polling mode, the JS thread in the blocking fallback.
+/// shown to have finished. **May run on any thread**, and three do run
+/// it. On GL: the platform thread in polling mode, the JS thread in the
+/// blocking fallback. On Metal: the thread Metal runs a command buffer's
+/// completed handlers on, which is neither -- a queue of Metal's own -- and
+/// the JS thread for a frame that had no command buffer to complete.
+///
+/// Nothing below depends on which: the tick machine and the surface table
+/// take their own locks, and a generation whose last reference this drops
+/// is destroyed by a post to the owner thread, never here (see the destroy
+/// callback where gTable is created).
 void onProducerComplete(void *user, SurfaceRef ref, bool ok) {
   (void)user;
   auto action = [ref, ok]() {
@@ -428,7 +437,9 @@ void onProducerComplete(void *user, SurfaceRef ref, bool ok) {
 
 /// A blit against \p ref has completed on the GPU, so the read reference
 /// the frame callback took before submitting it can go. May run on any
-/// thread.
+/// thread: the platform thread on GL, which polls its own fences, and
+/// Metal's completion-handler thread on Metal -- or the platform thread
+/// there too, inline, for a blit that submitted nothing.
 void onConsumerComplete(void *user, SurfaceRef ref, bool ok) {
   (void)user;
   auto action = [ref, ok]() {
@@ -680,11 +691,18 @@ namespace {
 /// Whether the calling thread is the one owning the producing context --
 /// `hnui_window::ownerThread`, the JS thread. Any thread.
 ///
-/// Reading `gWindow` from the platform thread is safe for the one caller
-/// that does, the destroy callback: a generation can only die once it is
-/// no longer current, which takes a second one, and every generation after
+/// Reading `gWindow` off the JS thread is safe for the one caller that
+/// does, the destroy callback, which runs on whichever thread dropped the
+/// generation's last reference: the platform thread, or on Metal the
+/// thread its completion handlers run on. `gWindow` is written once, on
+/// the JS thread, before `gPresentReady` is stored, and is never reset or
+/// rewritten -- the window is not torn down on any path. And the read
+/// cannot come before the write: a generation can only die once it is no
+/// longer current, which takes a second one, and every generation after
 /// the first is started from an event delivered after `gPresentReady`
-/// published the window.
+/// published the window. A Metal handler adds no earlier reader, since
+/// its command buffer was committed by one of the two threads that had
+/// the window by then.
 bool onOwnerThread() {
   return gWindow != nullptr &&
       std::this_thread::get_id() == gWindow->ownerThread;
@@ -815,8 +833,9 @@ void onSharedContextReady() {
   //
   // **`dispatch.post(...)`, never an inline free.** A generation's last
   // reference is dropped by whichever thread ran the completion that
-  // dropped it -- the platform thread for a consumer read, a driver's
-  // thread in principle -- and destroying a generation means deleting GL
+  // dropped it -- on GL the platform thread, for a consumer read; on
+  // Metal the thread its completion handlers run on, which belongs to
+  // neither instance -- and destroying a generation means deleting its
   // textures and Sokol resources, which may only happen on the thread
   // that owns the producing context. SurfaceTable already guarantees the
   // half it can (the callback runs with its lock released, never inline
