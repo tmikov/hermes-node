@@ -374,9 +374,9 @@ bool MetalBackend::createGenerationSurfaces(
       }
       // The texture Sokol made, read back so the presenting instance can
       // wrap the same object (spike 2). An immutable image has one slot.
-      surfaces.textures[i] = (__bridge id<MTLTexture>)sg_mtl_query_image_info(
-                                 surfaces.images[i])
-                                 .tex[0];
+      surfaces.textures[i] =
+          (__bridge id<MTLTexture>)sg_mtl_query_image_info(surfaces.images[i])
+              .tex[0];
       if (surfaces.textures[i] == nil) {
         error = "a surface image has no Metal texture behind it.";
         return false;

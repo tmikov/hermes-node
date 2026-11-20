@@ -31,8 +31,8 @@
 #define SOKOL_GLUE_IMPL
 #include <sokol_glue.h>
 
-#import <Metal/Metal.h>
 #import <AppKit/AppKit.h>
+#import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <atomic>
@@ -356,8 +356,7 @@ void MetalPresenter::enableCapture() {
     uiTrace(
         "capture: staging copy NOT enabled (the view's layer is %s, not a "
         "CAMetalLayer)",
-        layer != nil ? [NSStringFromClass([layer class]) UTF8String]
-                     : "nil");
+        layer != nil ? [NSStringFromClass([layer class]) UTF8String] : "nil");
     return;
   }
   CAMetalLayer *metalLayer = (CAMetalLayer *)layer;
@@ -573,8 +572,7 @@ bool MetalPresenter::blit(
                           toBuffer:state_->staging
                  destinationOffset:0
             destinationBytesPerRow:static_cast<NSUInteger>(width) * 4
-          destinationBytesPerImage:static_cast<NSUInteger>(width) * height *
-          4];
+          destinationBytesPerImage:static_cast<NSUInteger>(width) * height * 4];
       [encoder endEncoding];
       stagingForThisBlit = state_->staging;
       serial = ++state_->blitSerial;
