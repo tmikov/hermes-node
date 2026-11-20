@@ -580,7 +580,7 @@ void onInit() {
 
   // The window exists and the backend is set up: whatever the platform
   // still owes the window (macOS: putting it on screen without activating
-  // the application, under the test hooks) happens now.
+  // the application, when HERMES_NODE_UI_TEST_NO_ACTIVATE asks) happens now.
   uiPlatformAfterInit();
 
   refreshTrackedState();

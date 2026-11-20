@@ -7,15 +7,17 @@
 # blitting, plus BOTH sokol_gfx instances. The top-level CMakeLists.txt only
 # add_subdirectory()s this when HERMES_NODE_ENABLE_UI is on.
 
-# v1 is Linux GL (X11, GLX, desktop GL 4.3 core) and macOS Metal. Any other
-# platform has no backend, and this whole directory is skipped there.
+# v1 is GL on X11 (GLX, desktop GL 4.3 core) for Linux and any other
+# non-Apple Unix, and Metal on macOS. A platform that is not Unix has no
+# backend, and this whole directory is skipped there.
 #
 # A message(FATAL_ERROR) here would be the louder choice and is deliberately
-# NOT what this does, because of where the option is actually set: CI turns
-# HERMES_NODE_ENABLE_UI on for the asan-debug-o1 configuration
-# (.github/workflows/ci.yml). Instead the library is not built,
-# hermes-node-ui keeps exactly the windowless behaviour Task 6 gave it, and
-# the `display` lit feature reports the window tests UNSUPPORTED there.
+# NOT what this does: the option is one a build configuration turns on for
+# every platform it covers (CI's asan-debug-o1 does, in
+# .github/workflows/ci.yml), and a platform without a backend should still
+# build the rest. There the library is not built, hermes-node-ui keeps
+# exactly the windowless behaviour Task 6 gave it, and the `ui-gpu` lit
+# feature reports the window tests UNSUPPORTED.
 if(NOT UNIX)
   message(STATUS
     "hermes-node UI: no GPU backend for this platform "

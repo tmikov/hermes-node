@@ -108,7 +108,8 @@ if(TARGET hermesNodeCompositorGpu)
   # a preprocessor conditional in ui_platform.cpp. X11's sits on our own
   # clipboard read, which replaces Sokol's (Ruling 55), and is built under
   # the condition the GL backend is built under, which is what provides X11.
-  # macOS's (platform_services_mac.mm) is Task 16e's.
+  # macOS's is platform_services_mac.mm, added with the Metal sources
+  # further down; Task 16b wrote its window half and Task 16e completes it.
   if(UNIX AND NOT APPLE)
     target_sources(hermes-node-ui PRIVATE
       platform_services_x11.cpp
