@@ -1899,3 +1899,258 @@ application differently.
 Whether GitHub's macOS runners provide a Metal device and a window-server
 session cannot be measured from either machine. 16f's informational CI
 step measures it, and Design (g) says what each outcome leads to.
+
+---
+
+## Probe results (Mac, 2026-11-19 and 2026-11-20)
+
+Run on an Apple M4 Max, macOS 27.2, Xcode 27.1, Apple clang 21. These
+settle every `UNVERIFIED:` item above; where one of them contradicts the
+text of a task, this section wins.
+
+**Confirmed.**
+
+- `[NSApplication sharedApplication]` called later (as Sokol does) returns
+  the instance of our subclass created first.
+- A window shown with `orderFrontRegardless` under the two activation
+  overrides (`activateIgnoringOtherApps:` refused, `setActivationPolicy:`
+  forced to Accessory) is visible to occlusion tracking, yields a drawable,
+  and never becomes the frontmost application: 9 of 9 runs, `isKeyWindow`
+  and `isActive` false throughout. Without the overrides the probe took
+  focus in 6 of 7 runs. `miniaturize:` gives `occlusionState` not visible,
+  `deminiaturize:` gives visible again.
+- `-[NSWindow sendEvent:]` delivers a synthesized key event to the first
+  responder of a window that is not key. `setContentSize:` raises
+  `windowDidResize:`. `performClose:` reaches `windowShouldClose:` and
+  leaves the window open on NO, including when called from inside an
+  overridden `terminate:`.
+- The command-buffer accessor (`_sg.mtl.cmd_buffer`, read from a function
+  defined in our own `SOKOL_GFX_IMPL` unit) is nil before the first pass,
+  non-nil between `sg_end_pass` and `sg_commit` on every one of 2,000
+  frames, and nil after `sg_commit`. A completion handler added in that
+  window ran once per frame, 2,000 of 2,000, all
+  `MTLCommandBufferStatusCompleted`, in frame order, on the queue
+  `com.Metal.CompletionQueueDispatch`: a Metal thread that is neither the
+  worker nor main. The same under `MTL_DEBUG_LAYER=1
+  MTL_SHADER_VALIDATION=1` with no message.
+- Four empty `sg_commit()` calls return the id pool's free count to its
+  value before one image and two views were created and destroyed
+  (`_sg.mtl.idpool.free_queue_top`). Those three resources took two pool
+  slots, not three.
+- `objc_autoreleasePoolPush` / `objc_autoreleasePoolPop`, declared by hand,
+  compile and link from an ARC unit. Under `OBJC_DEBUG_MISSING_POOLS=YES`
+  the count of objects autoreleased with no pool was 4,095 with no pools,
+  100 with a pool per frame only (all from setup, resource creation and
+  shutdown, which run outside the frame loop), and **zero** with a pool per
+  frame plus one around every other backend entry on the worker.
+- Sokol's layer is a `CAMetalLayer` with `framebufferOnly` YES as created;
+  clearing it in `init_cb` reads back NO. With it cleared, a blit encoder on
+  Sokol's own command buffer (the accessor) copying the drawable's texture
+  to a shared `MTLBuffer` between `sg_end_pass` and `sg_commit` reads back
+  the clear colour exactly on frames 1 and 100, with no validation message.
+  `sg_commit` encodes `presentDrawable:` after that blit. The swapchain was
+  valid from the first frame.
+- **The drawable is `MTLPixelFormatBGRA8Unorm` (80), storage mode Managed.**
+  A clear of (32, 64, 128, 255) reads back as bytes `80 40 20 ff`. Capture
+  code must swap to the RGBA order the GL path and the tests use.
+- With `framebufferOnly` left YES the copy aborts under validation with
+  `-[MTLDebugBlitCommandEncoder validateCopyFromTexture:...]: failed
+  assertion 'Copy From Texture Validation sourceTexture must not be a
+  framebufferOnly texture.'`. That is the failure a future Sokol bump would
+  reintroduce.
+
+**Refuted.**
+
+- `-[NSRunningApplication terminate]` from a second process does NOT reach
+  `terminate:`. The quit Apple event is sent and is received by the target
+  (visible with `AEDebugReceives=1`), and then reaches no handler at all:
+  not the overridden `terminate:`, not `applicationShouldTerminate:`, not a
+  handler installed for `kAEQuitApplication` through
+  `NSAppleEventManager`. The same locked and unlocked, under the Regular
+  and the Accessory policy, and in a minimal control application that does
+  nothing else. **So `test/ui-terminate.js` drives `terminate:` in-process
+  only** (`__driveWindow('terminate')`), which is the fallback Design (f)
+  names. Whether a real Dock Quit or a Cmd-Q menu item reaches the override
+  is not shown by any probe; it needs a person at the machine.
+
+**A locked or sleeping machine.** With the console session locked and the
+display asleep, a `sokol_app` program gets no frame at all: Sokol starts on
+a `CADisplayLink`, which does not fire, and moves to its obscured timer only
+on an occlusion change, which a window that was never visible never has. So
+`init_cb` never runs. Forced onto the obscured path, every swapchain is
+invalid. A bare `CAMetalLayer` still hands out drawables in that state. This
+is why the `display` lit feature asks the system about the console session
+before it opens anything (Task 16a, as built, below).
+
+**Tools on that machine.** `pkill` has no `-s` option. `/usr/bin/timeout`
+exists (Apple's). There is no `python`, only `python3`, and no `llvm-nm`,
+only Apple's `nm`. `/usr/libexec/tmp_cleaner` deletes `/tmp` files whose
+access, modification and change times are all more than three days old,
+daily at midnight, and an open or locked file is not exempt.
+
+---
+
+## Task 16a as built: the contract for the Mac tasks
+
+Task 16a is done on Linux. What follows is its implementer's statement of
+every interface, file, definition, lit feature, substitution, check prefix
+and environment variable a Metal implementer needs, checked against the
+code by two reviews. Where it differs from the text of Task 16a above, this
+section describes the tree.
+
+
+C++ interfaces:
+
+- `lib/compositor-gpu/backend.h`
+  - `virtual void workerLoopTurn() = 0;` on `CompositorBackend`. Worker (JS) thread, once per loop turn, never while CLOSING or with a frame callback on the stack. Called from `onWorkerLoopTurn` (`tools/hermes-node-ui/ui_module.cpp`), which is a `uv_check_t` started right after `makeCurrentOnWorker()` succeeds.
+  - `CompositorBackend *createCompositorBackend();`: exactly one backend file defines it.
+  - `const char *compositorBackendName();`: must return `"metal"`, which is what `--version` prints.
+  - `CompositorBackend::~CompositorBackend()` is still defined in `gl_backend.cpp`. **`metal_backend.mm` must define it too**, or move it to a shared file.
+- `lib/compositor-gpu/present_constants.h`: `hermes::node_compat::kPresenterClearLevel` (32/255).
+- `lib/compositor-gpu/sokol_gfx_ext.h`: `hnui_sg_mtl_command_buffer`, `hnui_sgp_mtl_command_buffer` (both `const void *(void)`, `__bridge`, not retained), `hnui_sg_mtl_idpool_free` / `hnui_sgp_mtl_idpool_free` (`int(void)`, `free_queue_top`) and `hnui_sg_mtl_idpool_pending` / `hnui_sgp_mtl_idpool_pending` (`int(void)`, `(front-back) mod num_slots`).
+  - Defined by `lib/compositor-gpu/sokol_gfx_ext.inc` under `#if defined(SOKOL_METAL)`.
+  - Included at the end of `sokol_gfx_impl.cpp` (`#define HNUI_SG_EXT(name) hnui_sg_##name`) and `sokol_gfx_present_impl.cpp` (`hnui_sgp_##name`).
+  - UNVERIFIED: compiled only against a mock `_sg` on Linux, never against the real Metal `sokol_gfx.h`.
+- `lib/compositor-gpu/sokol_config.h` `#error`s when `SOKOL_METAL` is defined without `__OBJC__`, or with `__OBJC__` but without ARC. It is included by `sokol_gfx_impl.cpp`, `sokol_gfx_present_impl.cpp`, `gl_*.cpp` and `tools/hermes-node-ui/sokol_app_impl.cpp`. **On macOS those Sokol units (including `sokol_app_impl.cpp`) must be compiled `LANGUAGE OBJCXX` with `-fobjc-arc`**, or must be `.mm` files.
+- `tools/hermes-node-ui/platform_services.h` (namespace `hermes::node_compat`; platform thread only, every function):
+  - `ClipboardResult uiPlatformReadClipboard(int timeoutMs, size_t maxBytes);`
+  - `void uiPlatformWriteClipboard(const std::string &utf8);`
+  - `std::string uiPlatformDescribeClipboardWrite(size_t bytesWritten);` returns the text after `command clipboard: `.
+  - `bool uiPlatformWindowTitle(std::string &out);` returns false if no read-back; the trace is `command title: readback='...'` or `command title: no readback available`.
+  - `std::string uiPlatformDescribeIcon();` returns the text after `command icon: `.
+  - `void uiPlatformBeforeRun();` runs after `selectContextRoute` succeeds, before `sapp_run` (`uiRunPlatformLoop`).
+  - `void uiPlatformAfterInit();` runs in `onInit` after `createSharedContext` succeeds, before `refreshTrackedState()`.
+  - The X11 implementation is `platform_services_x11.cpp`. **macOS must provide `platform_services_mac.mm` (16e), or a stub, before 16b links the window files on macOS**: `ui_platform.cpp` calls all seven functions unconditionally.
+
+CMake:
+
+- Variables: `HNUI_SGP_PRODUCING_USER_OBJ`, `HNUI_SGP_PRESENTING_USER_OBJ` in `lib/compositor-gpu/CMakeLists.txt` (with PARENT_SCOPE), today `${SGP_ISOLATION_OBJ_DIR}/gl_backend.cpp.o` and `gl_present.cpp.o`. 16b sets them to `metal_backend.mm.o` / `metal_present.mm.o` inside `if(APPLE)`.
+- Lit params: `sgp_producing_user`, `sgp_presenting_user`, appended in the top-level `CMakeLists.txt` under `if(TARGET hermesNodeCompositorGpu)`.
+- The demo addons take `$<TARGET_PROPERTY:hermesNodeCompositorGpu,INTERFACE_COMPILE_DEFINITIONS>`, held in the variable `HNUI_ADDON_BACKEND_DEFINES`. Make `SOKOL_METAL` a PUBLIC define of `hermesNodeCompositorGpu` on macOS and the addons follow.
+- The guard `if(NOT (UNIX AND NOT APPLE))` in `lib/compositor-gpu/CMakeLists.txt` and the `ui-gpu` predicate in `lit.cfg` are unchanged. 16b flips both in one commit.
+- `tools/hermes-node-ui/CMakeLists.txt`: the X11 sources and `platform_services_x11.cpp` stay under `if(UNIX AND NOT APPLE)`. Add `platform_services_mac.mm` under `if(APPLE)`. The compile definition `HERMES_NODE_UI_HAVE_X11` no longer exists.
+- `utils/check-sgp-isolation.py` takes `--producing-user` and `--presenting-user`, both repeatable.
+
+`--version` (main.cpp): line 1 `hermes-node-ui <ver>`; line 2 `sokol_gfx validation: on|off` (window builds only); line 3 `gpu backend: gl|metal|none` (every build).
+
+lit (`test/lit.cfg`):
+
+- Features:
+  - `ui-backend-gl` / `ui-backend-metal`, from `--version` line 3; a value outside {gl, metal, none} is read as none;
+  - `display-expected` (ci and not darwin, or ambient `HERMES_NODE_UI_EXPECT_DISPLAY=1`);
+  - `display` (now `(ok, reason)`; darwin in two stages).
+- Substitutions:
+  - `%ui-backend` (`gl` | `metal` | `none`);
+  - `%ui-backend-expected` (`metal` on darwin, else `gl`; registered before `%ui-backend`);
+  - `%gl-completion-poll` / `%gl-completion-block` (`HERMES_NODE_UI_GL_COMPLETION=poll|block` on gl, empty otherwise);
+  - `%with-display` (`<python> <src>/utils/with-display.py`, used as `%with-display <seconds> CMD`);
+  - `%timeout` (`timeout` on Linux, `<python> <src>/utils/timeout.py` on darwin; accepts `--foreground`);
+  - `%display-reason`;
+  - `%sgp_producing_user`, `%sgp_presenting_user`;
+  - `%with-xvfb` is GONE.
+- Check-prefix mechanism: `--check-prefixes=X,X-%ui-backend`. GL lines are under `X-gl`; the Mac agent adds `X-metal` (or `X-metal-SAME` / `-NEXT`). FileCheck errors if NONE of the selected prefixes has a directive, so every prefix the Mac run selects must have at least one line.
+  - Files and prefixes now using it: `ui-present.js` (POLLERR, BLOCKERR, PROBEERR); `ui-route-refusal.js` (BOGUS, BOGUSERR, PB, PBERR, RET, RETERR); `ui-commands.js` (TRACE); `ui-abi-sizes.js` (APPLIED); `ui-conformance.js` (CHECK, TRACE).
+  - For `ui-route-refusal`, a Metal `-metal-SAME` line follows the neutral `X: REJECTED` / `X: hermes-node-ui:` line.
+- Script arguments: `test/ui-commands.js` takes `%ui-backend` as argv[2] (it skips the fullscreen pair on `metal`). `test/fixtures/hnui-demo/demo.js conformance <owner> <ppm> <gl|metal>` runs the mute-owner read only on gl; the Metal zero-deadline read is 16e's to add, along with its `CHECK-metal-NEXT` line in place of the gl one.
+- The darwin display probe:
+  - stage 1 is `utils/macos_console_session.py`'s `query()`: `ioreg -n Root -d1 -a`; the `IOConsoleUsers` entry whose `kCGSSessionUserIDKey` is `os.getuid()` (else the single on-console entry; ambiguity is refused with a reason); any truthy `CGSSessionScreenIsLocked` means locked (absent means unlocked); `kCGSSessionOnConsoleKey` must be truthy. The plist-to-list step is `_find_console_users()`, the session choice `_select_session()`;
+  - stage 2 requires `ui-backend-metal` and runs `with-display.py 60 hermes-node-ui test/fixtures/hnui-demo/display_probe.js` with `HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI`, needing exit 0, `DISPLAY_PROBE_OK` on stdout and **`present: drawable acquired` on stderr**: 16d must emit exactly that trace line;
+  - **UNVERIFIED on Linux: the real shape of `ioreg -a` output.** `classify()` looks for `IOConsoleUsers` at the top level of the root dict, under `IORegistryEntryChildren`, or inside a top-level array, up to 3 levels deep. The Mac round must check `python3 utils/macos_console_session.py` on an unlocked and on a locked session.
+- The canary `test/ui-display-feature.js` (`REQUIRES: ui-gpu, display-expected`) goes red when either stage fails, and its FileCheck input line shows `%display-reason`.
+
+Wrappers and environment:
+
+- `utils/with-display.py SECONDS CMD...`: darwin takes the lock `/tmp/hermes-node-ui-display.lock`. It is machine-wide: every lit invocation, every worker, every hand run and every user of the machine shares it. `HERMES_NODE_UI_DISPLAY_LOCK` overrides the path, and only test/with-display-lock.js uses that. Two budgets (since fix round 2):
+  - **SECONDS bounds only the command.** It starts once the lock is held, and expiry is 124 as before.
+  - **The wait for the lock has its own budget**, `HERMES_NODE_UI_DISPLAY_LOCK_WAIT` seconds (default 1800). Exhausting it exits **125**, never 124, without running the command, and prints `with-display.py: gave up waiting for the display lock <path> after <N> s`. A non-numeric value is refused with 125 and a message.
+  - Under `HERMES_NODE_DEBUG_NATIVE=UI` the wrapper prints `with-display.py: waited <t> s for the display lock` to its own stderr; nothing is printed on the normal path. The wrapper also sets `HERMES_NODE_UI_TEST_NO_ACTIVATE=1` and `HERMES_NODE_UI_TEST_PASTEBOARD=hnui-test-<digits>`, runs the command in its own process group, and exits 124 on expiry.
+- `utils/timeout.py [--foreground] SECONDS CMD...`
+- `utils/lit-run.sh <build dir> [lit options] <tests...>`
+- Environment variables the Mac code must honour (it reads them; nothing in 16a consumes them on Linux): `HERMES_NODE_UI_TEST_NO_ACTIVATE`, `HERMES_NODE_UI_TEST_PASTEBOARD`, and `HERMES_NODE_UI_EXPECT_DISPLAY` (read by lit.cfg).
+
+Window driver:
+
+- `test/fixtures/hnui-demo/window_driver.js`: `startDriver({ui, driverPath, title})` resolves to `{send, onLost, stop}`; `closeOnce({ui, driverPath, title})` returns a boolean.
+- The darwin branch assumes **`ui.__driveWindow(command)` is SYNCHRONOUS and returns a string**:
+  - for `state` the string is `viewable=<0|1> <w>x<h>` (the wrapper prefixes `STATE `);
+  - for an action, anything not starting with `ERROR`, which the wrapper turns into `SENT <verb>`;
+  - a refusal starts with `ERROR` and is passed through.
+- Commands: `key <c>`, `resize <w> <h>`, `close`, `state`, `miniaturize`, `deminiaturize`, `terminate`.
+- This is a design choice made here (the brief left sync or async open). If 16d returns a Promise instead, only `driveLine()` in that file changes.
+
+Trace lines added (exact): `worker loop: first turn`, `worker loop: turn skipped (closing)`, `worker loop: turn skipped (frame callback)`, each printed once at most, by the shared check callback. **`worker loop: turn skipped (frame callback)` is asserted by no test, and none can be written today.** The only nested `uv_run` under a frame callback is `process.exit()` -> `flushPendingWrites`, and that enters CLOSING first, which clears `inFrameCallback`, so the closing guard acts. Removing the frame-callback guard leaves the suite green. It is a second line of defence for Metal, and the comment at the guard says the same.
+
+### Added in fix round 1 (each checked against the code)
+
+- **Platform services vs. the backend-neutral checks.** A "not available" answer is acceptable only where nothing neutral checks it:
+  - `uiPlatformWindowTitle`: REQUIRED. `test/ui-commands.js` `TRACE: command title: readback='commands test title'` and `test/ui-exit-paths.js` `COMMANDS-TRACE: command title: readback='early title'` are neutral, so returning false (`no readback available`) turns both red.
+  - `uiPlatformReadClipboard` / `uiPlatformWriteClipboard`: REQUIRED to round-trip. `test/ui-conformance.js` neutral `CHECK-NEXT: hnui_read_clipboard_sync status=HNUI_OK text="hnui conformance"` and `TRACE: clipboard read sync #1: status=ok bytes=16`; `test/ui-exit-paths.js` READS/COMMANDS lines (these are CLOSING refusals, backend-independent). `ui-clipboard.js` is gl-only.
+  - `uiPlatformDescribeClipboardWrite`: free text. Neutrally, `test/ui-abi-sizes.js` NCLIP counts exactly one `command clipboard` line, so it must print one line per write (any text). Every exact-text check is `-gl`.
+  - `uiPlatformDescribeIcon`: free text. Every check on it is `-gl` (`ui-commands`). A Metal `-metal` line should pin the dock-tile read-back.
+  - `uiPlatformBeforeRun` / `uiPlatformAfterInit`: no test observes them directly.
+- **The FileCheck rule.** FileCheck exits 2 with `no check strings found with prefixes 'X:', 'X-metal:'` if NONE of the selected prefixes has a directive (verified with this tree's FileCheck). Every RUN whose neutral prefix has zero lines therefore needs a `-metal` line: **only `test/ui-present.js` PROBEERR**. The other per-backend prefixes all keep neutral lines: POLLERR and BLOCKERR (capture lines), BOGUS/PB/RET (`REJECTED`), BOGUSERR/PBERR (`hermes-node-ui:`), RETERR, ui-commands TRACE, ui-abi-sizes APPLIED, and ui-conformance CHECK/TRACE.
+- **What `test/ui-route-refusal.js`'s neutral lines bind a backend to**, when `HERMES_NODE_UI_GL_ROUTE` is `bogus` or `pbuffer`:
+  - createWindow rejects (`REJECTED`, with the message on the same line);
+  - stderr carries a line starting `hermes-node-ui:` (the `fprintf` in `uiRunPlatformLoop`, printing `selectContextRoute`'s error);
+  - the script's own exit statuses are 3 for bogus and pbuffer, and 5 in the return arm via `process.exitCode`, so the refusal must not exit the process itself;
+  - in the return arm, `RAF 0` on the next line, and the three RETERR lines in order: `lifecycle: FAILED`, `lifecycle: event-loop handle released`, `lifecycle: runtime returned, exiting with status 5`;
+  - `test/ui-exit-tty.js` additionally needs `exit status: 0` and a restored terminal under the same bogus route.
+- **Placeholder arguments on macOS.** `%x11_selection_owner` and `%x11_window_driver` have no CMake target there, so lit registers `/nonexistent/x11_selection_owner-was-not-configured` (and the same for the driver). These reach `ui-conformance.js` (demo.js's owner argument), `ui-close.js` and `ui-real-events.js` (driverPath).
+  - `demo.js conformance` requires a NON-EMPTY owner path and uses it only on `gl`, so the placeholder is fine as is. 16e should leave the RUN line alone, or give the Metal path its own argument.
+  - The darwin branch of `window_driver.js` ignores `driverPath`, so the placeholder is harmless there.
+  - Nothing should create those paths.
+- **`desc.gl.major_version` / `minor_version`** stay in the shared `ui_platform.cpp`. sokol_app reads `desc.gl` only on its GL backends, so on Metal they are inert. Left in shared code deliberately rather than moved behind the seam.
+- **Never run two lit invocations over one build directory at once.** They share `test_exec_root`, so each overwrites the other's `%t` files and both fail spuriously. The machine-wide display lock does NOT make that safe: it serialises windows, not lit's temporary files.
+- **Exit 125 from `with-display.py` (darwin)** means one of these, and the stderr line names which:
+  - `gave up waiting for the display lock <path> after <N> s` (the lock-wait budget ran out);
+  - `refusing the display lock <path>: it is a symbolic link | is not a regular file | cannot be opened (...) | cannot be created (...)`;
+  - `HERMES_NODE_UI_DISPLAY_LOCK_WAIT must be a finite, non-negative number of seconds, not '<v>'`.
+
+  In none of these cases does the command run. `with-display.py --print-lock-path` prints the path the darwin branch would lock: the override if set, else `/tmp/hermes-node-ui-display.lock`.
+- **The `display` probe** (`utils/display_probe.py`, called by `test/lit.cfg`) uses lock wait 120 s and a wrapper limit of 60 s. Its outer timeout is derived as `lock wait + limit + KILL_GRACE_SECONDS (5) + margin 15 = 200` s, so it never kills the wrapper while the command may be alive. If the outer timeout fires anyway, the whole session is killed: its members are enumerated in Python (see the kill order below). There is no `pkill`. Outcomes:
+  - wrapper 125 after giving up the wait gives `display busy: another run held the display lock for 120 s`. That reason sets the feature `display-busy`, which makes `test/ui-display-busy.js` RED on any machine and makes the `display-expected` canary red too, with the reason printed;
+  - 124 gives `display probe timed out after 60 s`;
+  - the outer timeout gives `display probe killed after N s; the wrapper never returned`.
+- **The probe's outer-timeout kill** (since fix round 4) goes in this order:
+  1. SIGTERM to the wrapper alone, then a wait of `KILL_GRACE_SECONDS + 2`; the wrapper forwards the signal to the command's group;
+  2. the session is enumerated in Python: `ps -A -o pid=` (bounded at 10 s), keeping each pid whose `os.getsid()` is the wrapper's, with `ProcessLookupError` and `PermissionError` ignored. The distinct `os.getpgid()` of the members are `killpg`ed, then each member is SIGKILLed, with ESRCH ignored. **No `pkill`**: macOS's has no `-s`, and `ps -o sess` prints 0 there;
+  3. a reap of the wrapper bounded at 10 s;
+  4. the session is enumerated again for up to 3 s.
+
+  Members still alive then, or a `ps` that could not be run at all, append `the probe's session could not be killed; a window may survive` to the reason. The seam for the test is `display_probe.PS`. `%display-reason` is sanitised: anything outside `[A-Za-z0-9 _.,:;()/=+-]` becomes `?`.
+- **Confirmed on the Mac (fix round 5, macOS 27.2):**
+  - `O_NOFOLLOW` on a symlink gives ELOOP;
+  - `O_CREAT|O_EXCL` on a dangling link gives EEXIST;
+  - a non-blocking read-only open of a FIFO returns at once;
+  - `flock` works on an `O_RDONLY` descriptor (EAGAIN for a second one);
+  - a created file is mode 0666 under umask 077;
+  - the session enumeration (`ps -A -o pid=` plus `os.getsid`) finds a leader and its `setpgrp`'d grandchild, and SIGKILLing them leaves the grandchild dead;
+  - the classifier gives the right verdict on the real `ioreg` output, both unlocked and locked.
+- **Still to verify on a Mac:**
+  - that a second USER can lock the 0666 file created through `/tmp` (a link to `/private/tmp`);
+  - how long lit's configuration takes when the display is busy (about 120 s expected);
+  - that `CGDisplayIsAsleep(CGMainDisplayID())` returns nonzero for a display that really is asleep (UNVERIFIED: only False, with the display awake, was seen);
+  - the tmp_cleaner refresh in practice: that `os.utime(fd)` on the held lock file updates all three times as the cleaner reads them.
+- **macOS's `/usr/libexec/tmp_cleaner`** (macOS 14+, daily at midnight, `-atime +3 -mtime +3 -ctime +3` over `/tmp`) can unlink a lock file under its holder, since neither `open(O_RDONLY)` nor `flock` touches any of the three times. `with-display.py` defends in two ways:
+  - after every successful `flock` it compares `fstat(fd)` with `lstat(path)` (`st_dev`/`st_ino`), and on a mismatch or a vanished path it closes, reopens and queues again, inside the same lock-wait budget and with the same refusals;
+  - the holder refreshes the file's times with `os.utime(fd)` when it can (it created or owns the file). A read-only file owned by someone else is simply not refreshed: never a failure, never a chmod.
+
+  A holder of the unlinked file and the creator of its replacement still overlap, which cannot be prevented once the file is gone; no third run joins them. Under `HERMES_NODE_DEBUG_NATIVE=UI` the wrapper also prints `waiting for the display lock <path>` once, and `the display lock <path> was replaced while waiting; reopening`, on its own stderr.
+- **The real `ioreg -n Root -d1 -a` shape** (macOS 27.2): a top-level DICT with `IOConsoleUsers` directly in it (one entry) and `IOConsoleLocked` beside it (True when locked, False when unlocked).
+  - In the entry, `CGSSessionScreenIsLocked` is ABSENT when unlocked and true when locked, together with `CGSSessionScreenLockedTime`.
+  - The other keys seen are `CGSSessionUniqueSessionUUID`, `kCGSSessionAuditIDKey`, `kCGSSessionGroupIDKey`, `kCGSSessionIDKey`, `kCGSSessionLoginwindowSafeLogin`, `kCGSSessionOnConsoleKey`, `kCGSSessionUserIDKey`, `kCGSSessionUserNameKey`, plus `kCGSessionLoginDoneKey` and `kCGSessionLongUserNameKey`, both spelled with one S.
+  - `IOConsoleLocked` is a cross-check: if it is true, the verdict is not usable with `console is locked`, whatever the entry says; if it is false it adds nothing.
+- **Display-asleep signal** (`macos_console_session.display_asleep()`, combined by `combine()` only in `query()`, so `classify()` stays pure):
+  - `ctypes.CDLL('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')`, then `CGDisplayIsAsleep(CGMainDisplayID())`, with `CGMainDisplayID` returning `uint32`, `CGDisplayIsAsleep` taking `uint32` and returning `int`;
+  - nonzero turns a usable verdict into `display is asleep`;
+  - any failure leaves the verdict unchanged;
+  - the positive case is UNVERIFIED on a real Mac.
+- **A `gpu backend: none` build** makes `display` false at once (`hermes-node-ui has no Metal backend`), before ioreg, CoreGraphics or any window is asked anything.
+- **The lock's real scope**: machine-wide (see the wrapper entry above). The limit and the lock-wait budget are separate, and so are their exit statuses: 124 means the test timed out, 125 means it gave up waiting for the display. It is held by the wrapper process for exactly its lifetime and is never inherited by the command. An `flock` belongs to the open file, and the kernel drops it when the last descriptor closes, SIGKILL included, so it cannot be left stale. One consequence: if the wrapper itself is SIGKILLed while its command runs, the command (in its own process group) can outlive the lock.
+
+Items in the brief marked UNVERIFIED that these seams depend on:
+
+- P2: `objc_autoreleasePoolPush` / `objc_autoreleasePoolPop` via hand-written extern "C" under ARC. `workerLoopTurn` is the hook it needs.
+- P1 / P4: the `HnuiApplication` subclass, and `[window orderFrontRegardless]` under no-activate. `uiPlatformBeforeRun` and `uiPlatformAfterInit` are those hooks.
+- (b): the appended-accessor approach, which is not yet compiled against real Metal Sokol.
+
