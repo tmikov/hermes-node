@@ -45,33 +45,60 @@ struct Pending {
 /// sapp_keycode (_sapp_translate_key), so the code is what makes `KeyA`.
 int keyCodeFor(char c) {
   switch (c) {
-    case 'a': return 0x00;
-    case 's': return 0x01;
-    case 'd': return 0x02;
-    case 'f': return 0x03;
-    case 'h': return 0x04;
-    case 'g': return 0x05;
-    case 'z': return 0x06;
-    case 'x': return 0x07;
-    case 'c': return 0x08;
-    case 'v': return 0x09;
-    case 'b': return 0x0B;
-    case 'q': return 0x0C;
-    case 'w': return 0x0D;
-    case 'e': return 0x0E;
-    case 'r': return 0x0F;
-    case 'y': return 0x10;
-    case 't': return 0x11;
-    case 'o': return 0x1F;
-    case 'u': return 0x20;
-    case 'i': return 0x22;
-    case 'p': return 0x23;
-    case 'l': return 0x25;
-    case 'j': return 0x26;
-    case 'k': return 0x28;
-    case 'n': return 0x2D;
-    case 'm': return 0x2E;
-    default: return -1;
+    case 'a':
+      return 0x00;
+    case 's':
+      return 0x01;
+    case 'd':
+      return 0x02;
+    case 'f':
+      return 0x03;
+    case 'h':
+      return 0x04;
+    case 'g':
+      return 0x05;
+    case 'z':
+      return 0x06;
+    case 'x':
+      return 0x07;
+    case 'c':
+      return 0x08;
+    case 'v':
+      return 0x09;
+    case 'b':
+      return 0x0B;
+    case 'q':
+      return 0x0C;
+    case 'w':
+      return 0x0D;
+    case 'e':
+      return 0x0E;
+    case 'r':
+      return 0x0F;
+    case 'y':
+      return 0x10;
+    case 't':
+      return 0x11;
+    case 'o':
+      return 0x1F;
+    case 'u':
+      return 0x20;
+    case 'i':
+      return 0x22;
+    case 'p':
+      return 0x23;
+    case 'l':
+      return 0x25;
+    case 'j':
+      return 0x26;
+    case 'k':
+      return 0x28;
+    case 'n':
+      return 0x2D;
+    case 'm':
+      return 0x2E;
+    default:
+      return -1;
   }
 }
 
