@@ -1085,8 +1085,8 @@ no Metal device is available (MTLCreateSystemDefaultDevice returned nil), so the
 - [ ] **Step 7: Run `test/ui-metal-clear.js`** until it passes. Then make
   each mutation, watch it fail, revert: (a) skip `sgp_commit()` in
   `clear()` -- `first clear committed` is missing; (b) drop the
-  `orderFrontRegardless` call (if Step 5 kept it) -- `drawable acquired`
-  is missing and the test ends at its timeout; (c) return true from
+  `orderFrontRegardless` call (if Step 5 kept it) -- measured: the test
+  STAYS GREEN, see "Task 16b as built"; no test observes this call; (c) return true from
   `acquireSwapchain` without calling `sglue_swapchain()` -- Sokol panics
   or the size is wrong.
 - [ ] **Step 8: Add the `-metal` lines to `test/ui-route-refusal.js`** for
@@ -1108,7 +1108,7 @@ no Metal device is available (MTLCreateSystemDefaultDevice returned nil), so the
 
 ```bash
 cmake --build $B --target hermes-node-ui hnui_demo_addon hnui_bad_version_addon check-sgp-isolation 2>&1 | tail -8
-# expect: "sokol_gfx symbol isolation: ok" (the script's own success line), 0 warnings in lib/compositor-gpu and tools/hermes-node-ui
+# expect: the script's two success lines, "sgp isolation OK: ..." and "sgp users OK: ...", 0 warnings in lib/compositor-gpu and tools/hermes-node-ui
 nm -gU $B/bin/hermes-node-ui | grep -c ' _sg_'      # expect >= 156
 nm -gU $B/bin/hermes-node-ui | grep -c ' _hnui_'    # expect >= 15
 $B/bin/hermes-node-ui --version | sed -n 3p          # expect: gpu backend: metal
@@ -1282,14 +1282,21 @@ HERMES_NODE_UI_TEST_HOOKS=1 python3 utils/with-display.py 60 $B/bin/hermes-node-
 for e in "MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1" "NSZombieEnabled=YES OBJC_DEBUG_MISSING_POOLS=YES"; do
   env $e HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI python3 utils/with-display.py 120 \
     $B/bin/hermes-node-ui $S/test/ui-exit-paths.js frame $B/hnui_demo_addon.node > /tmp/hnui-c.out 2> /tmp/hnui-c.err
-  echo "$e -> status $? ; $(grep -ci 'zombie\|autoreleased with no pool\|failed assertion\|Metal API Validation.*error' /tmp/hnui-c.err) finding(s)"
+  echo "$e -> status $? ; $(grep -ci 'zombie\|failed assertion\|Metal API Validation.*error' /tmp/hnui-c.err) finding(s), $(grep -c 'autoreleased with no pool' /tmp/hnui-c.err) missing-pool line(s)"
 done
 # expect: the status ui-exit-paths.js FRAME documents, and 0 findings, twice
 ```
 
-Report `OBJC_DEBUG_MISSING_POOLS` output verbatim if non-empty: a line
-there names an object autoreleased on the worker with no pool, which is
-the defect the per-turn pool exists to prevent.
+**Missing-pool lines are judged per thread, not counted to zero.** Task
+16b measured 179 of them in one run with no code of ours at fault: about
+157 on four threads this project never runs code on (AppKit's and
+Metal's own), and 22 on the main thread after `sapp_run` starts
+(`NSConcreteValue`, `_sapp_macos_app_delegate`). Each line carries the
+thread it was on. So 16c traces the JS thread's `pthread_self()` once and
+the criterion is: **zero lines on the JS thread**, no line on any thread
+naming an `MTL*`, `CAMetalDrawable` or `AGX*` class, and a main-thread
+count no higher than the same run of the commit before. Report the
+per-thread, per-class table.
 
 ---
 
@@ -2153,4 +2160,54 @@ Items in the brief marked UNVERIFIED that these seams depend on:
 - P2: `objc_autoreleasePoolPush` / `objc_autoreleasePoolPop` via hand-written extern "C" under ARC. `workerLoopTurn` is the hook it needs.
 - P1 / P4: the `HnuiApplication` subclass, and `[window orderFrontRegardless]` under no-activate. `uiPlatformBeforeRun` and `uiPlatformAfterInit` are those hooks.
 - (b): the appended-accessor approach, which is not yet compiled against real Metal Sokol.
+
+---
+
+## Task 16b as built: what it measured, and what that corrects above
+
+Task 16b is "Build the Metal toolchain and clear the window". Measured on
+the Mac on 2026-11-20; where a statement above disagrees, this section is
+right.
+
+- **A window covered from the moment it opens keeps a valid swapchain.**
+  Sokol marks the swapchain invalid only while its obscured timer runs,
+  and starts that timer on an occlusion *change*. A window that was never
+  visible has no change, so it gets a drawable every frame and its clear
+  commits -- over the few frames `test/ui-metal-clear.js` runs; a long
+  run was not measured. So Design (f)'s "the covered one loses
+  `NSWindowOcclusionStateVisible`, its swapchain goes invalid, and its
+  capture never matches" is unproven for a window born covered, and the
+  locked-screen wording in Design (e) holds only for a change that
+  happens while the window exists. Serialising window tests stays: it
+  costs nothing now and a long run may still differ. Miniaturizing does
+  produce a change, which is what Task 16d's occlusion test uses.
+- **No test observes `orderFrontRegardless`.** With the call removed the
+  window sits behind another application's and every check still passes.
+  It is kept for whoever watches a run.
+- **`NSApp.isActive` reads true in the real binary** while the frontmost
+  application, by `lsappinfo front`, never changes. Sokol posts itself a
+  synthetic application-activated event right after
+  `makeKeyAndOrderFront:`, so AppKit believes it is active and the window
+  server was never asked. Probe P1's "`isActive` false throughout" came
+  from a probe without that event. Neither `isActive` nor key/focus state
+  is evidence of anything in Tasks 16d and 16e; "did not take focus" is
+  judged from `lsappinfo front` only.
+- **`check-sgp-isolation` requires the producing object to reference at
+  least one `sg_*` symbol**, so a producing half that only refuses fails
+  it. Task 16b's worker half therefore calls `sg_isvalid()` before
+  refusing. Task 16c replaces that with the real precondition in front of
+  `sg_setup()`.
+- **The device.** `selectContextRoute` takes
+  `MTLCreateSystemDefaultDevice()` before AppKit is touched, so a machine
+  with no device refuses before a window exists (Design (a) named
+  `sapp_get_environment()`, which exists only after `sapp_run`). The
+  presenter uses the device Sokol's own environment reports.
+- **`present: first clear committed` is read back**: the frame's command
+  buffer is held across the commit and the line is printed only when
+  Sokol's own pointer is nil afterwards and the buffer's status is
+  Committed or later.
+- **Suite on the Mac between 16b and 16c: 17 window tests fail**, each on
+  the worker half's `not built yet` rejection, because `display` is now
+  true and nothing draws yet. That state must never be the head of a pull
+  request: CI builds the UI option on macOS.
 
