@@ -12,14 +12,13 @@
 /// and it holds the presenter, whose `sgp_*` calls live in
 /// `metal_present.mm` for the reason `metal_present.h` gives.
 ///
-/// # What exists after Task 16c
+/// # What exists after Task 16d
 ///
 /// The route refusals, the device, both instances, the surfaces, completion
 /// through Metal's handlers on both instances' frame command buffers, the
-/// blit and the test hooks' read-back, and the worker's per-turn autorelease
-/// pool. Task 16d adds maintenance (the marked hook in workerLoopTurn() and
-/// the id-pool guard in createGenerationSurfaces()) and the invalid-swapchain
-/// traces.
+/// blit and the test hooks' read-back, the worker's per-turn autorelease
+/// pool, the producer's maintenance and id-pool guard, and the traces of
+/// the swapchain going invalid and valid again.
 
 #include "backend.h"
 
@@ -111,6 +110,16 @@ static_assert(
 
 namespace {
 
+/// createGenerationSurfaces() refuses below this many free id-pool slots
+/// (Ruling 82): a generation's destruction queues at most nine releases
+/// against a pool of 2,688, so this is far from any steady state and well
+/// before Sokol's own assert.
+constexpr int kIdPoolGuard = 256;
+
+/// The most empty commits one maintenance pass issues. Four suffice from
+/// an idle instance; eight leaves room without making a stuck release spin.
+constexpr int kMaxMaintenanceCommits = 8;
+
 /// The GL backend's two variables. Read here only to be refused by name.
 constexpr const char *kGlRouteEnvVar = "HERMES_NODE_UI_GL_ROUTE";
 constexpr const char *kGlCompletionEnvVar = "HERMES_NODE_UI_GL_COMPLETION";
@@ -194,8 +203,17 @@ class MetalBackend final : public CompositorBackend {
 
   /// Producer frames committed whose handler has not finished. Incremented
   /// on the worker, decremented at the end of the handler on a Metal
-  /// thread. Task 16d's maintenance runs only when it is zero.
+  /// thread. Maintenance runs only when it is zero (workerLoopTurn() says
+  /// why).
   std::atomic<int> producerInFlight_{0};
+
+  /// Set by destroyGenerationSurfaces(), cleared by maintenance once
+  /// nothing is pending. Worker only.
+  bool maintenancePending_ = false;
+
+  /// Whether the last frame found the swapchain unusable, so that each
+  /// transition is traced once. Platform thread only.
+  bool swapchainInvalid_ = false;
 
   /// Once per run each, set from whichever thread ran the path.
   std::atomic<bool> tracedProducerHandler_{false};
@@ -351,8 +369,21 @@ bool MetalBackend::createGenerationSurfaces(
     int width,
     int height,
     std::string &error) {
-  // Task 16d: refuse here when hnui_sg_mtl_idpool_free() is below the
-  // guard (the plan's Ruling 82).
+  // The plan's Ruling 82. A generation change is not held back until the
+  // previous one's releases are collected; what is enforced is the bound
+  // that rule exists for. A generation's destruction queues at most nine
+  // releases against Sokol's pool, every idle loop turn collects them, and
+  // this replaces the assert Sokol would hit on an empty pool (compiled out
+  // in Release) with a sentence the shared code turns into a terminated
+  // session.
+  const int freeSlots = hnui_sg_mtl_idpool_free();
+  if (freeSlots < kIdPoolGuard) {
+    error = "the Metal resource pool is nearly exhausted (" +
+        std::to_string(freeSlots) +
+        " slots free): surface generations are being replaced faster than "
+        "their GPU resources can be reclaimed.";
+    return false;
+  }
   @autoreleasepool {
     GenerationSurfaces surfaces;
     surfaces.width = width;
@@ -432,9 +463,10 @@ void MetalBackend::destroyGenerationSurfaces(GenerationId gen) {
       surfaces = it->second;
       surfaces_.erase(it);
     }
-    // Sokol defers each Metal release to a later sg_commit() (Task 16d
-    // collects them; until then each waits for up to four later producer
-    // commits, the frame index it is due at).
+    // Sokol defers each Metal release to a later sg_commit(): each is due
+    // up to four commits on. Maintenance (workerLoopTurn) issues those
+    // commits when nothing else would -- an idle program commits nothing.
+    maintenancePending_ = true;
     for (int i = 0; i < kSlotsPerGeneration; ++i) {
       sg_destroy_view(surfaces.colorViews[i]);
       sg_destroy_view(surfaces.resolveViews[i]);
@@ -557,7 +589,14 @@ bool MetalBackend::wrapForPresenting(GenerationId gen, std::string &error) {
 }
 
 bool MetalBackend::acquireFrameSwapchain() {
-  return presenter_.acquireSwapchain();
+  const bool valid = presenter_.acquireSwapchain();
+  // Traced here, on the transition and after the acquisition succeeded, so
+  // the line is evidence that a usable drawable came back.
+  if (valid && swapchainInvalid_) {
+    swapchainInvalid_ = false;
+    uiTrace("present: swapchain valid again");
+  }
+  return valid;
 }
 
 void MetalBackend::presentClear() {
@@ -579,8 +618,15 @@ void MetalBackend::releaseWrappers(GenerationId gen) {
 }
 
 void MetalBackend::presentInvalid() {
-  // Submits nothing and commits nothing. Task 16d traces each transition
-  // into and out of the invalid state.
+  // Submits nothing and commits nothing: onFrame calls this only after
+  // acquireFrameSwapchain() returned false -- Sokol's obscured timer is
+  // running (a miniaturized window, a locked screen), or there is no
+  // drawable. No read reference exists to release; the shared onFrame
+  // takes one only on the blit path. Traced on the transition only.
+  if (!swapchainInvalid_) {
+    swapchainInvalid_ = true;
+    uiTrace("present: swapchain invalid; nothing submitted");
+  }
 }
 
 void MetalBackend::pollCompletions() {
@@ -622,8 +668,45 @@ void MetalBackend::workerLoopTurn() {
     tracedFirstDrain_ = true;
     uiTrace("worker autorelease pool: first drain");
   }
-  // Task 16d: run maintenance here when it is pending and
-  // producerInFlight_ is zero.
+
+  // Maintenance (the plan's Design (a)). Sokol collects a destroyed
+  // resource's release only inside sg_commit(), once the frame index has
+  // passed the one it is due at, so an idle program -- one that draws
+  // nothing after a resize -- would never get its generation's textures
+  // back. So: commit until nothing is pending, at most eight times. From an
+  // idle instance that is four commits, because _sg_mtl_commit collects
+  // with the frame index before sg_commit increments it.
+  //
+  // **Why producerInFlight_ == 0 is a condition, and why no test fails
+  // without it** (Review focus 2). Sokol's command buffers hold unretained
+  // references, and an empty commit takes no semaphore: it only advances
+  // the release clock. Committing past a frame whose GPU work is still in
+  // flight could free a resource an addon destroyed in that frame while
+  // the GPU still reads it -- a use-after-free on the GPU, which no
+  // assertion sees and which shows, if at all, as a wrong pixel once in a
+  // great many runs. The counter is "no producer GPU work outstanding and
+  // no completion handler pending"; the loop-turn guard in the caller is
+  // "no open pass". Nothing in the suite can observe the hazard, so this
+  // comment and the verification's runs under GPU validation are what
+  // stand for it.
+  if (maintenancePending_ && producerInFlight_.load() == 0) {
+    const int freeBefore = hnui_sg_mtl_idpool_free();
+    int commits = 0;
+    while (hnui_sg_mtl_idpool_pending() > 0 && commits < kMaxMaintenanceCommits) {
+      sg_commit();
+      ++commits;
+    }
+    // Read back, both counts, after the commits.
+    const int pending = hnui_sg_mtl_idpool_pending();
+    if (pending == 0)
+      maintenancePending_ = false;
+    uiTrace(
+        "maintenance: %d commit(s), idpool free %d -> %d, pending %d",
+        commits,
+        freeBefore,
+        hnui_sg_mtl_idpool_free(),
+        pending);
+  }
 }
 
 } // namespace

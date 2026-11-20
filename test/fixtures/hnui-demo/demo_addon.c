@@ -289,6 +289,35 @@ static napi_value drawFixedPattern(napi_env env, napi_callback_info info) {
   return result;
 }
 
+/**
+ * `churnBufferThisFrame()` -> true if one small `sg_buffer` was created
+ * and destroyed. For test/ui-metal-maintenance.js, which calls it inside a
+ * frame callback: on Metal, Sokol defers the destroyed buffer's release to
+ * a later commit, so this queues a release in a frame that is about to be
+ * submitted. The buffer is never bound, so the GPU never reads it: an early
+ * release would harm nothing, and this exercises the release bookkeeping,
+ * not the in-flight hazard maintenance is guarded against. On GL the
+ * release is immediate and this is just a create and a destroy.
+ */
+static napi_value churnBufferThisFrame(napi_env env, napi_callback_info info) {
+  static const float kData[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  sg_buffer_desc desc;
+  sg_buffer buffer;
+  bool made;
+  napi_value result;
+
+  (void)info;
+  memset(&desc, 0, sizeof(desc));
+  desc.data.ptr = kData;
+  desc.data.size = sizeof(kData);
+  desc.label = "hnui-demo-churn";
+  buffer = sg_make_buffer(&desc);
+  made = sg_query_buffer_state(buffer) == SG_RESOURCESTATE_VALID;
+  sg_destroy_buffer(buffer);
+  napi_get_boolean(env, made, &result);
+  return result;
+}
+
 static napi_value startNativeFrames(napi_env env, napi_callback_info info) {
   napi_value result;
   hnui_window *w = hnui_get_window(env);
@@ -1206,6 +1235,14 @@ NAPI_MODULE_INIT() {
       {"startNativeFrames",
        NULL,
        startNativeFrames,
+       NULL,
+       NULL,
+       NULL,
+       napi_default,
+       NULL},
+      {"churnBufferThisFrame",
+       NULL,
+       churnBufferThisFrame,
        NULL,
        NULL,
        NULL,

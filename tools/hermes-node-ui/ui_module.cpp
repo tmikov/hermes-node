@@ -13,6 +13,9 @@
 #include "ui_internal.h"
 
 #include <backend.h>
+#if defined(__APPLE__)
+#include "mac_test_driver.h"
+#endif
 #include <test_hooks.h>
 #include <ui_trace.h>
 #include <algorithm>
@@ -1451,6 +1454,13 @@ napi_value initUiModule(napi_env env, napi_value exports) {
             waitPlatformQuitRequests)) {
       return nullptr;
     }
+#if defined(__APPLE__)
+    // The in-process window driver (mac_test_driver.h): macOS has no second
+    // process that may drive this window without consent, so the driver
+    // lives here, behind the same gate as the other hooks.
+    if (!exportFunction(env, exports, "__driveWindow", driveWindow))
+      return nullptr;
+#endif
   }
   return exports;
 }

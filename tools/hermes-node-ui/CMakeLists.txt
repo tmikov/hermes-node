@@ -127,12 +127,13 @@ if(TARGET hermesNodeCompositorGpu)
     # sokol_config.h enforces for the Sokol ones.
     target_sources(hermes-node-ui PRIVATE
       mac_app.mm
+      mac_test_driver.mm
       platform_services_mac.mm
     )
     set_source_files_properties(sokol_app_impl.cpp
       PROPERTIES COMPILE_OPTIONS "-xobjective-c++;-fobjc-arc")
-    set_source_files_properties(mac_app.mm platform_services_mac.mm
-      PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_source_files_properties(mac_app.mm mac_test_driver.mm
+      platform_services_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   endif()
   # Plain signature, matching the call above -- CMake refuses to mix plain
   # and keyword forms on one target, and hermes_node_link_setup() already

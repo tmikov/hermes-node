@@ -60,7 +60,7 @@
 //
 // RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon %x11_window_driver %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --check-prefix=TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' %s < %t.err
+// RUN: %FileCheck --check-prefixes=TRACE,TRACE-%ui-backend --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' %s < %t.err
 
 // CODE: EXITCODE 0
 
@@ -72,8 +72,18 @@
 
 // The close came through the real path and was cancelled where it is
 // APPLIED, on the platform thread; and Sokol never left its loop.
+//
+// On macOS the in-process driver also says what AppKit reported after each
+// action: the key went to Sokol's view as first responder, the content
+// view is the requested size, and the window is still visible once
+// performClose: has returned -- after the cancellation, which ran inside
+// it.
+// TRACE-metal: [ui] drive: key a applied (first_responder_is_view=1)
+// TRACE-metal: [ui] drive: resize 400 300 applied (content=400x300)
 // TRACE: quit requested: cancelled, forwarded as close
 // TRACE-NOT: sapp_run returned
+// TRACE-metal: [ui] drive: close applied (visible=1)
+// TRACE-metal-NOT: sapp_run returned
 
 'use strict';
 
