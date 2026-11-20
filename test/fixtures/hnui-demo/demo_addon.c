@@ -86,6 +86,30 @@
  * `#version 410` is Sokol's lower floor for desktop GL
  * (`sokol_gfx.h:924`); nothing here needs 430.
  */
+#if defined(SOKOL_METAL)
+/**
+ * The same two shaders in MSL, for the Metal build: the six corners from
+ * `[[vertex_id]]`, and the same clip-space quadrant, since Metal's clip
+ * space has y up as GL's does. Sokol needs the entry points named
+ * (`vertex_func.entry` / `fragment_func.entry`) where GLSL's are `main`.
+ */
+static const char *kPatternVertexSource =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "vertex float4 vs_main(uint vid [[vertex_id]]) {\n"
+    "  const float2 corners[6] = {\n"
+    "    float2(-1.0, 0.0), float2(0.0, 0.0), float2(0.0, 1.0),\n"
+    "    float2(-1.0, 0.0), float2(0.0, 1.0), float2(-1.0, 1.0)};\n"
+    "  return float4(corners[vid], 0.0, 1.0);\n"
+    "}\n";
+
+static const char *kPatternFragmentSource =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "fragment float4 fs_main() {\n"
+    "  return float4(1.0, 1.0, 0.0, 1.0);\n"
+    "}\n";
+#else
 static const char *kPatternVertexSource =
     "#version 410\n"
     "void main() {\n"
@@ -101,6 +125,7 @@ static const char *kPatternFragmentSource =
     "void main() {\n"
     "  frag_color = vec4(1.0, 1.0, 0.0, 1.0);\n"
     "}\n";
+#endif
 
 /* ------------------------------------------------------------------ */
 /* State                                                               */
@@ -135,6 +160,10 @@ static bool ensureResources(void) {
   memset(&shaderDesc, 0, sizeof(shaderDesc));
   shaderDesc.vertex_func.source = kPatternVertexSource;
   shaderDesc.fragment_func.source = kPatternFragmentSource;
+#if defined(SOKOL_METAL)
+  shaderDesc.vertex_func.entry = "vs_main";
+  shaderDesc.fragment_func.entry = "fs_main";
+#endif
   shaderDesc.label = "hnui-demo-shader";
   g_shader = sg_make_shader(&shaderDesc);
   if (sg_query_shader_state(g_shader) != SG_RESOURCESTATE_VALID) {
