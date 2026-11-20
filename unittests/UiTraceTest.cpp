@@ -182,8 +182,8 @@ TEST(UiTraceTest, ConcurrentLinesDoNotInterleave) {
     int t = -1;
     int i = -1;
     int consumed = 0;
-    if (std::sscanf(line.c_str(), "[ui] thread %d line %d%n", &t, &i, &consumed) !=
-            2 ||
+    if (std::sscanf(
+            line.c_str(), "[ui] thread %d line %d%n", &t, &i, &consumed) != 2 ||
         static_cast<size_t>(consumed) != line.size() || t < 0 ||
         t >= kThreads || i != next[t]) {
       if (bad++ < 5)
