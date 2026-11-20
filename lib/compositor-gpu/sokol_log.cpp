@@ -7,10 +7,11 @@
 
 #include "sokol_log.h"
 
+#include "ui_trace.h"
+
 #include <uv.h>
 
 #include <unistd.h>
-#include <cstdio>
 
 namespace hermes {
 namespace node_compat {
@@ -25,9 +26,10 @@ void uiSokolLog(
     const char *panicNote) {
   static const char *const kLevels[] = {"panic", "error", "warning", "info"};
   const char *level = logLevel < 4 ? kLevels[logLevel] : "?";
-  std::fprintf(
-      stderr,
-      "[%s:%s] item %u%s%s (%s:%u)\n",
+  // One write per line, like the trace lines these interleave with: the
+  // tests match "[sokol-...]" lines out of the same stream.
+  uiStderrLine(
+      "[%s:%s] item %u%s%s (%s:%u)",
       instance ? instance : "sokol",
       level,
       logItemId,
@@ -35,14 +37,12 @@ void uiSokolLog(
       message ? message : "",
       filename ? filename : "sokol",
       lineNr);
-  std::fflush(stderr);
 
   if (logLevel != 0)
     return;
 
   if (panicNote != nullptr) {
-    std::fprintf(stderr, "%s\n", panicNote);
-    std::fflush(stderr);
+    uiStderrLine("%s", panicNote);
   }
   uv_tty_reset_mode();
   _exit(1);

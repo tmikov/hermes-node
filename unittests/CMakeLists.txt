@@ -170,6 +170,11 @@ if(HERMES_NODE_ENABLE_UI)
   if(TARGET hermesNodeCompositorGpu)
     add_node_compat_unittest(TestHooksTest TestHooksTest.cpp)
     target_link_libraries(TestHooksTest hermesNodeCompositorGpu)
+
+    # A binary of its own, because it turns tracing on for the whole
+    # process: HERMES_NODE_DEBUG_NATIVE is read once, on first use.
+    add_node_compat_unittest(UiTraceTest UiTraceTest.cpp)
+    target_link_libraries(UiTraceTest hermesNodeCompositorGpu)
   endif()
 endif()
 
