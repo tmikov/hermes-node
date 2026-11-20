@@ -64,6 +64,11 @@ def outer_timeout(lock_wait=LOCK_WAIT_SECONDS, limit=LIMIT_SECONDS):
 # The ps this uses; a module variable so test/display-probe.js can make it
 # unavailable.
 PS = 'ps'
+# How long the probe waits for the wrapper after SIGTERM before it starts
+# killing. None means KILL_GRACE_SECONDS + 2: long enough for the
+# wrapper's own escalation. A module variable so test/display-probe.js can
+# shorten it; production never sets it.
+TERM_WAIT_SECONDS = None
 # How long to wait for the wrapper to be reaped after SIGKILL.
 REAP_SECONDS = 10
 # How long killed session members get to disappear (be reaped by init)
@@ -148,7 +153,8 @@ def _kill_session(proc):
     except ProcessLookupError:
         pass
     try:
-        proc.wait(timeout=_kill_grace_seconds() + 2)
+        proc.wait(timeout=TERM_WAIT_SECONDS if TERM_WAIT_SECONDS is not None
+                  else _kill_grace_seconds() + 2)
     except subprocess.TimeoutExpired:
         pass
     sid = proc.pid

@@ -57,13 +57,15 @@
 // the fchmod -- umask 077 mode=600; accept nan -- budget nan runs;
 // derive the default from TMPDIR -- default lines differ.)
 //
-// RUN: rm -rf %t.d && mkdir -p %t.d
-// RUN: %python %S/fixtures/with-display/lock_check.py %source_dir/utils/with-display.py %t.d/display.lock %t.d | %FileCheck %s
-
-// RUN: rm -rf %t.c && mkdir -p %t.c
-// RUN: %python %S/fixtures/with-display/cleaner_check.py %source_dir/utils/with-display.py %t.c | %FileCheck --check-prefix=CLEANER %s
-// RUN: rm -rf %t.h && mkdir -p %t.h
-// RUN: %python %S/fixtures/with-display/lock_hardening.py %source_dir/utils/with-display.py %t.h | %FileCheck --check-prefix=HARD %s
+// The three fixtures are independent (each has its own directory and lock
+// files), so they run at once; each one's status is still checked, and its
+// output is checked by a FileCheck run of its own.
+//
+// RUN: rm -rf %t.d %t.c %t.h && mkdir -p %t.d %t.c %t.h
+// RUN: %python %S/fixtures/with-display/lock_check.py %source_dir/utils/with-display.py %t.d/display.lock %t.d > %t.d.out & D=$!; %python %S/fixtures/with-display/cleaner_check.py %source_dir/utils/with-display.py %t.c > %t.c.out & C=$!; %python %S/fixtures/with-display/lock_hardening.py %source_dir/utils/with-display.py %t.h > %t.h.out & H=$!; wait $D && wait $C && wait $H
+// RUN: %FileCheck %s < %t.d.out
+// RUN: %FileCheck --check-prefix=CLEANER %s < %t.c.out
+// RUN: %FileCheck --check-prefix=HARD %s < %t.h.out
 
 // CHECK: {{^}}serialised{{$}}
 // CHECK-NEXT: {{^}}A status=0{{$}}
