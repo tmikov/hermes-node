@@ -38,7 +38,6 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <cstdio>
 #include <map>
 #include <mutex>
 
@@ -83,9 +82,6 @@ void presentLog(
 /// 0. GL's texture origin is the bottom row, which is why its shader uses
 /// `p` unchanged. test/ui-present.js's quadrant pattern is asymmetric top
 /// to bottom, so a wrong flip is a red test (Task 16c), not a convention.
-///
-/// Nothing draws with this until 16c; it is compiled now so that MSL
-/// compilation through Sokol is part of the toolchain Task 16b proves.
 const char *const kBlitShaderSource = R"(#include <metal_stdlib>
 using namespace metal;
 struct vs_out {
@@ -141,7 +137,9 @@ struct MetalPresenter::State {
   id<MTLBuffer> keptStaging = nil;
   int keptWidth = 0;
   int keptHeight = 0;
-  MTLPixelFormat keptFormat = MTLPixelFormatInvalid;
+  /// Set the first time a drawable's format kept the copy from being
+  /// encoded (blit()).
+  bool tracedFormatRefusal = false;
   /// Which blit the kept buffer is, and the last blit whose consumer
   /// handler has finished: readPixels() waits for the second to reach the
   /// first, so everything the handler does -- its trace and the read
@@ -161,6 +159,11 @@ struct MetalPresenter::State {
   sg_sampler sampler{};
   sg_swapchain swapchain{};
   bool swapchainValid = false;
+  /// This frame's drawable, held strongly from acquireSwapchain() until
+  /// the frame's commit. sokol_app hands it out as a __bridge cast and
+  /// keeps no strong reference of its own, so without this the pointer in
+  /// `swapchain` would be borrowed across the whole frame.
+  id<CAMetalDrawable> drawable = nil;
   /// Each of the two traces below is printed once, the first time its
   /// event happens.
   bool tracedDrawable = false;
@@ -283,13 +286,16 @@ bool MetalPresenter::acquireSwapchain() {
   // Exactly once per frame callback (`sokol_app.h:1935`): on Metal this is
   // what takes the next drawable from the layer.
   state_->swapchain = sglue_swapchain();
-  id<CAMetalDrawable> drawable =
+  state_->drawable =
       (__bridge id<CAMetalDrawable>)state_->swapchain.metal.current_drawable;
-  state_->swapchainValid = !state_->swapchain.invalid && drawable != nil;
-  if (!state_->swapchainValid)
+  state_->swapchainValid =
+      !state_->swapchain.invalid && state_->drawable != nil;
+  if (!state_->swapchainValid) {
+    state_->drawable = nil;
     return false;
+  }
 
-  id<MTLTexture> texture = drawable.texture;
+  id<MTLTexture> texture = state_->drawable.texture;
   swapchainWidth_ = static_cast<int>(texture.width);
   swapchainHeight_ = static_cast<int>(texture.height);
   if (!state_->tracedDrawable) {
@@ -302,8 +308,22 @@ bool MetalPresenter::acquireSwapchain() {
   return true;
 }
 
+void MetalPresenter::clearKept() {
+  // A capture must be of the blit that was just encoded or of nothing: a
+  // frame that encodes no copy leaves no earlier frame's state behind for
+  // readPixels() to attribute to this one.
+  state_->keptBuffer = nil;
+  state_->keptStaging = nil;
+  state_->keptSerial = 0;
+  state_->keptWidth = 0;
+  state_->keptHeight = 0;
+}
+
 void MetalPresenter::clear() {
-  if (state_ == nullptr || !state_->swapchainValid)
+  if (state_ == nullptr)
+    return;
+  clearKept();
+  if (!state_->swapchainValid)
     return;
   sg_pass pass = {};
   pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
@@ -318,6 +338,7 @@ void MetalPresenter::clear() {
   id<MTLCommandBuffer> commandBuffer =
       (__bridge id<MTLCommandBuffer>)hnui_sgp_mtl_command_buffer();
   sg_commit();
+  state_->drawable = nil;
   if (!state_->tracedClear) {
     state_->tracedClear = true;
     // Committed means Sokol let go of the buffer and Metal has it. Error
@@ -380,11 +401,7 @@ bool MetalPresenter::readPixels(int width, int height, uint8_t *out) {
   // some other size would be of something that was not presented.
   if (width != state_->keptWidth || height != state_->keptHeight)
     return false;
-  // BGRA is what sokol_app gives a CAMetalLayer; anything else is refused
-  // by name rather than converted by guess.
-  if (state_->keptFormat != MTLPixelFormatBGRA8Unorm &&
-      state_->keptFormat != MTLPixelFormatBGRA8Unorm_sRGB)
-    return false;
+  // The kept copy is BGRA: blit() encodes one only for a BGRA8 drawable.
 
   [state_->keptBuffer waitUntilCompleted];
   if (state_->keptBuffer.status != MTLCommandBufferStatusCompleted)
@@ -397,8 +414,14 @@ bool MetalPresenter::readPixels(int width, int height, uint8_t *out) {
     const uint64_t wanted = state_->keptSerial;
     if (!state_->handledCv.wait_for(lock, std::chrono::seconds(10), [&] {
           return state_->handledSerial >= wanted;
-        }))
+        })) {
+      // Said, because every other refusal above is silent and this one is
+      // a defect rather than a capture that simply did not apply.
+      uiStderrLine(
+          "hermes-node-ui: capture: the blit's completion handler did not "
+          "run within 10 s");
       return false;
+    }
   }
 
   // Rows are already top first: a Metal texture's row 0 is its top row, and
@@ -449,11 +472,15 @@ bool MetalPresenter::wrap(
     imageDesc.pixel_format = static_cast<sg_pixel_format>(colorFormat_);
     imageDesc.sample_count = 1;
     // Texture injection, ONE texture: the image is immutable, so it has a
-    // single slot (spike 2). Sokol retains it under ARC and releases its
-    // own reference when the wrapper is destroyed; the producer keeps its
-    // own.
+    // single slot (spike 2). Sokol retains it under ARC and lets go of its
+    // reference at this instance's deferred release, a few commits after
+    // the wrapper is destroyed; the producer keeps its own.
+    //
+    // No label: under SOKOL_DEBUG, Sokol sets an image's label on its
+    // texture, and this texture is the producer's -- labelling it here
+    // would rename the producer's `hnui-surface` from this thread. The
+    // view keeps its own label.
     imageDesc.mtl_textures[0] = mtlTextures[i];
-    imageDesc.label = "hnui-surface-wrapper";
     wrapped.images[i] = sg_make_image(&imageDesc);
     if (sg_query_image_state(wrapped.images[i]) != SG_RESOURCESTATE_VALID) {
       error = "a presenting wrapper image could not be created.";
@@ -505,16 +532,18 @@ bool MetalPresenter::blit(
     SurfaceRef ref,
     void (*onComplete)(void *user, SurfaceRef ref, bool ok),
     void *user) {
-  if (state_ == nullptr || !state_->swapchainValid)
+  if (state_ == nullptr)
+    return false;
+  clearKept();
+  if (!state_->swapchainValid)
     return false;
   auto it = state_->wrapped.find(ref.gen.value);
   if (it == state_->wrapped.end() || ref.slot >= kSlotsPerGeneration)
     return false;
 
-  // Taken before the pass: sg_end_pass() forgets it (it hands it to
-  // presentDrawable: and nils its own pointer).
-  id<CAMetalDrawable> drawable =
-      (__bridge id<CAMetalDrawable>)state_->swapchain.metal.current_drawable;
+  // Ours, held since acquireSwapchain() (State::drawable says why); the
+  // copy below reads its texture after the pass.
+  id<CAMetalDrawable> drawable = state_->drawable;
 
   sg_pass pass = {};
   // CLEAR, as gl_present.cpp does: a blit that did not draw shows the clear
@@ -542,6 +571,7 @@ bool MetalPresenter::blit(
     // nothing would complete, and false makes the caller release the read
     // reference inline.
     sg_commit();
+    state_->drawable = nil;
     return false;
   }
 
@@ -550,7 +580,19 @@ bool MetalPresenter::blit(
   // probe P3b used, and there the copy read back the pass's pixels exactly.
   id<MTLBuffer> stagingForThisBlit = nil;
   uint64_t serial = 0;
-  if (state_->captureEnabled && drawable != nil) {
+  const bool bgra8 = drawable != nil &&
+      (drawable.texture.pixelFormat == MTLPixelFormatBGRA8Unorm ||
+       drawable.texture.pixelFormat == MTLPixelFormatBGRA8Unorm_sRGB);
+  if (state_->captureEnabled && drawable != nil && !bgra8 &&
+      !state_->tracedFormatRefusal) {
+    // The copy below assumes four bytes per pixel in BGRA order; any other
+    // format is refused before encoding, not misread after.
+    state_->tracedFormatRefusal = true;
+    uiTrace(
+        "capture: drawable format %d is not BGRA8; not captured",
+        (int)drawable.texture.pixelFormat);
+  }
+  if (state_->captureEnabled && bgra8) {
     id<MTLTexture> texture = drawable.texture;
     const int width = static_cast<int>(texture.width);
     const int height = static_cast<int>(texture.height);
@@ -581,7 +623,6 @@ bool MetalPresenter::blit(
       state_->keptStaging = state_->staging;
       state_->keptWidth = width;
       state_->keptHeight = height;
-      state_->keptFormat = texture.pixelFormat;
     }
   }
 
@@ -600,9 +641,8 @@ bool MetalPresenter::blit(
     const bool ok = status == MTLCommandBufferStatusCompleted;
     if (status == MTLCommandBufferStatusError) {
       @autoreleasepool {
-        std::fprintf(
-            stderr,
-            "hermes-node-ui: a presented frame failed on the GPU: %s\n",
+        uiStderrLine(
+            "hermes-node-ui: a presented frame failed on the GPU: %s",
             [[buffer.error localizedDescription] UTF8String]);
       }
     }
@@ -623,6 +663,7 @@ bool MetalPresenter::blit(
     }
   }];
   sg_commit();
+  state_->drawable = nil;
   return true;
 }
 

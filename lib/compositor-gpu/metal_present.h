@@ -31,18 +31,19 @@ namespace node_compat {
 /// # Threading
 ///
 /// **Every method belongs to the platform thread**, which owns `sokol_app`
-/// and the `sgp_*` instance -- except the three getters `device()`,
-/// `colorFormat()` and `sampleCount()`. On macOS the platform thread is
-/// also the main thread, which Metal does not require but AppKit and
-/// `sokol_app` do.
+/// and the `sgp_*` instance -- except `colorFormat()`. On macOS the
+/// platform thread is also the main thread, which Metal does not require
+/// but AppKit and `sokol_app` do.
 ///
-/// Those three are written once, by `setup()` in `init_cb`, and read by
-/// the producing half on the JS thread (the worker) for its own
-/// `sg_setup()` (Task 16c). That is safe without a lock because of an
-/// ordering, not by luck: `init_cb` returns from `setup()` and only then
-/// posts `onSharedContextReady` through the dispatcher, whose post and
-/// drain are a mutex hand-off, and the worker reads them inside that
-/// posted call or later. Nothing writes them again.
+/// `colorFormat()` is written once, by `setup()` in `init_cb`, and read on
+/// the JS thread (the worker) by the producing half: for its `sg_setup()`,
+/// for every generation's surfaces, and on every `frameTarget()`. That is
+/// safe without a lock because of an ordering, not by luck: `init_cb`
+/// returns from `setup()` and only then posts `onSharedContextReady`
+/// through the dispatcher, whose post and drain are a mutex hand-off, and
+/// the worker reads it inside that posted call or later. Nothing writes it
+/// again. (`device()` is read on the platform thread only; the worker uses
+/// the backend's own copy, `MetalBackend::device_`.)
 ///
 /// # What exists after Task 16c
 ///
@@ -74,15 +75,13 @@ class MetalPresenter {
   /// instances share textures, and a texture belongs to one device.
   void *device() const;
 
-  /// The swapchain's colour format (an `sg_pixel_format`) and sample count,
-  /// as the presenting instance was set up with them. The producer needs
-  /// both for its own `sg_setup()` (Task 16c); plain ints so this header
-  /// names no Sokol type.
+  /// The swapchain's colour format (an `sg_pixel_format`), as the
+  /// presenting instance was set up with it: the format the producer
+  /// allocates its surfaces in. A plain int so this header names no Sokol
+  /// type. (The producer's sample count is not read from here: it is 1, by
+  /// the spec's environment defaults.)
   int colorFormat() const {
     return colorFormat_;
-  }
-  int sampleCount() const {
-    return sampleCount_;
   }
 
   /// `sapp_acquire_swapchain()` through `sglue_swapchain()`, **exactly once
@@ -148,13 +147,22 @@ class MetalPresenter {
       void (*onComplete)(void *user, SurfaceRef ref, bool ok),
       void *user);
 
-  /// The last blit's drawable, as RGBA rows top first: waits for that
-  /// command buffer, then converts the staging copy from BGRA. False if the
-  /// capture is not armed, no blit has been encoded since, the size asked
-  /// for is not the drawable's, or the buffer did not complete.
+  /// The pixels of this frame's blit, as RGBA rows top first. Only a blit
+  /// that encoded a staging copy in this same frame can be read: blit() and
+  /// clear() forget any earlier frame's copy first, so a frame that
+  /// encoded none answers false rather than an older picture. Waits for
+  /// that command buffer, and then -- for at most 10 s -- for its consumer
+  /// handler to have run, so the handler's trace and its released read
+  /// reference precede whatever the caller reports; a handler that misses
+  /// the bound prints one stderr line and answers false. Also false if the
+  /// capture is not armed, the size asked for is not the drawable's, or
+  /// the buffer did not complete.
   bool readPixels(int width, int height, uint8_t *out);
 
  private:
+  /// Forget the last frame's staging copy (see readPixels()).
+  void clearKept();
+
   /// Opaque here for the reason the class comment gives: the members are
   /// Sokol handles and Objective-C objects.
   struct State;

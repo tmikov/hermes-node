@@ -39,7 +39,6 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <mutex>
@@ -202,6 +201,11 @@ class MetalBackend final : public CompositorBackend {
   std::atomic<bool> tracedProducerHandler_{false};
   std::atomic<bool> tracedInlineCompletion_{false};
 
+  /// The consumer sink. Written on the worker, in onSharedContextReady
+  /// (ui_module.cpp), before that function's release-store of the
+  /// present-ready flag; read on the platform thread, in blit(), which
+  /// onFrame reaches only after the acquire-load of that flag sees it set.
+  /// That pair orders the read after the write; nothing writes it again.
   void (*consumerComplete_)(void *user, SurfaceRef ref, bool ok) = nullptr;
   void *consumerUser_ = nullptr;
 };
@@ -429,7 +433,8 @@ void MetalBackend::destroyGenerationSurfaces(GenerationId gen) {
       surfaces_.erase(it);
     }
     // Sokol defers each Metal release to a later sg_commit() (Task 16d
-    // collects them; until then they wait for the next producer frame).
+    // collects them; until then each waits for up to four later producer
+    // commits, the frame index it is due at).
     for (int i = 0; i < kSlotsPerGeneration; ++i) {
       sg_destroy_view(surfaces.colorViews[i]);
       sg_destroy_view(surfaces.resolveViews[i]);
@@ -476,9 +481,12 @@ void MetalBackend::submitAndTrackCompletion(
         (__bridge id<MTLCommandBuffer>)hnui_sg_mtl_command_buffer();
     if (commandBuffer == nil) {
       // The frame began no pass, so Sokol has no buffer to commit
-      // (_sg_mtl_commit commits only if it has one). Nothing will
-      // complete; nothing was drawn either, so this is complete now --
-      // what GL does for such a frame, whose fence signals at once.
+      // (_sg_mtl_commit commits only if it has one), and nothing will
+      // complete. Nothing was drawn either -- by the addon contract, not by
+      // a check: an addon never calls sg_commit(), so no earlier buffer of
+      // this frame can have been committed behind our back. So this is
+      // complete now, which is what GL does for such a frame, whose fence
+      // signals at once.
       sg_commit();
       if (!tracedInlineCompletion_.exchange(true))
         uiTrace("completion: frame had no command buffer; completed inline");
@@ -498,10 +506,9 @@ void MetalBackend::submitAndTrackCompletion(
       const bool ok = status == MTLCommandBufferStatusCompleted;
       if (status == MTLCommandBufferStatusError) {
         @autoreleasepool {
-          std::fprintf(
-              stderr,
+          uiStderrLine(
               "hermes-node-ui: a frame the producer committed failed on the "
-              "GPU: %s\n",
+              "GPU: %s",
               [[buffer.error localizedDescription] UTF8String]);
         }
       }
@@ -604,7 +611,6 @@ void MetalBackend::workerLoopTurn() {
       // Freed before any pop: the read-back below would prove nothing, so
       // it is never printed, and this says why.
       uiTrace("worker autorelease pool: probe freed before the pop");
-      poolProbePlaced_ = true;
       poolProbeFreed_ = false;
       tracedFirstDrain_ = true;
     }
