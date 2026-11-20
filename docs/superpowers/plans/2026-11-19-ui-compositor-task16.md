@@ -445,10 +445,14 @@ CLAUDE.md, the spec's Lifecycle, `hnui.h`'s Closing section):
   macOS, on every release, so the suite does not depend on which macOS
   ships `/usr/bin/timeout`. It accepts `--foreground`.
 
-Serialising is not optional. Sokol centres every window, so two tests'
-windows of the same size cover each other exactly; the covered one loses
-`NSWindowOcclusionStateVisible`, its swapchain goes invalid, and its
-capture never matches.
+Serialising was designed as not optional, on this reasoning: Sokol
+centres every window, so two tests' windows of the same size cover each
+other exactly; the covered one loses `NSWindowOcclusionStateVisible`, its
+swapchain goes invalid, and its capture never matches. **Measured false
+for a window covered from the moment it opens** (see "Task 16b as
+built"): it keeps a valid swapchain indefinitely. What remains true is a
+window covered *after* it opened, which is what a second test's window
+appearing does to the first's, so the lock stays.
 
 **Not stealing focus.** Sokol calls `[NSApp activateIgnoringOtherApps:YES]`
 and sets the Regular activation policy on every launch -- roughly sixty
@@ -2173,13 +2177,14 @@ right.
   Sokol marks the swapchain invalid only while its obscured timer runs,
   and starts that timer on an occlusion *change*. A window that was never
   visible has no change, so it gets a drawable every frame and its clear
-  commits -- over the few frames `test/ui-metal-clear.js` runs; a long
-  run was not measured. So Design (f)'s "the covered one loses
+  commits: measured on every one of 600 frames, in two runs, with
+  another application's window on top throughout and `occlusionState`
+  reporting not visible. So Design (f)'s "the covered one loses
   `NSWindowOcclusionStateVisible`, its swapchain goes invalid, and its
-  capture never matches" is unproven for a window born covered, and the
+  capture never matches" is false for a window born covered, and the
   locked-screen wording in Design (e) holds only for a change that
-  happens while the window exists. Serialising window tests stays: it
-  costs nothing now and a long run may still differ. Miniaturizing does
+  happens while the window exists. Serialising window tests stays, for
+  the window that gets covered after it opened. Miniaturizing does
   produce a change, which is what Task 16d's occlusion test uses.
 - **No test observes `orderFrontRegardless`.** With the call removed the
   window sits behind another application's and every check still passes.
@@ -2206,6 +2211,14 @@ right.
   buffer is held across the commit and the line is printed only when
   Sokol's own pointer is nil afterwards and the buffer's status is
   Committed or later.
+- **The activation policy is read back** (`app: activation policy=...`,
+  from `NSApp.activationPolicy` after Sokol's launch code ran); the
+  `activate=` field of the install line is only the request. Nothing can
+  read back the refusal of `activateIgnoringOtherApps:`.
+- **A refused presenter setup leaves no presenter state**: `sokol_app`
+  calls the frame callback straight after the init callback, so state
+  left by an early return carried the first frame into a pass on an
+  instance never set up (an assert in Debug).
 - **Suite on the Mac between 16b and 16c: 17 window tests fail**, each on
   the worker half's `not built yet` rejection, because `display` is now
   true and nothing draws yet. That state must never be the head of a pull
