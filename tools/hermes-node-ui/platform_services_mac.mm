@@ -131,10 +131,9 @@ std::string uiPlatformDescribeIcon() {
     NSView *view = NSApp.dockTile.contentView;
     if (![view isKindOfClass:[NSImageView class]])
       return "no dock tile image";
-    CGImageRef image = [((NSImageView *)view).image
-        CGImageForProposedRect:NULL
-                       context:nil
-                         hints:nil];
+    CGImageRef image = [((NSImageView *)view).image CGImageForProposedRect:NULL
+                                                                   context:nil
+                                                                     hints:nil];
     if (image == nullptr)
       return "dock tile image has no CGImage";
     char buffer[64];
