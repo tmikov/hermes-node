@@ -266,10 +266,13 @@ refuse `[sapp:warning`, and cannot: every healthy GL run prints
 before `init_cb`, so no window test can reach its first positive line.
 
 **What a healthy run prints.** GL (measured): the one `[sapp:warning]`
-line, nothing else. Metal: `UNVERIFIED:` no `[sapp:` or `[sokol-` line at
-all. The only evidence is indirect -- the Metal tests that already carry
-the rule pass, and the Mac reports count zero `[sokol-` lines in their
-stress runs. 17d Step 1 measures it.
+line, nothing else. Metal (measured by 17d Step 1 on 2026-11-21, on the
+one Apple-silicon Mac; this sentence was `UNVERIFIED:` until then): no
+`[sapp:` line at any level and no `[sokol-present` line, so Metal has no
+counterpart to GL's DPI warning. The only `[sokol-` lines in a run of all
+41 UI files were the five that `ui-sokol-panic.js` and
+`ui-sokol-validation.js` provoke on purpose. The census is quoted in
+"Task 17d as built".
 
 A window RUN line is a `// RUN:` line containing `%with-display`. 44 of
 them in 25 files:
@@ -1022,8 +1025,8 @@ cmake --build $B --target hermes-node hermes-node-ui 2>&1 | tail -1
 
 **Steps (Linux):**
 
-- [ ] **Step 1:** Send the block; wait for the report.
-- [ ] **Step 2:** If the census found a Sokol line a healthy Metal run
+- [x] **Step 1:** Send the block; wait for the report.
+- [x] **Step 2:** If the census found a Sokol line a healthy Metal run
   prints, decide per line: a real defect is filed (`dz add --type bug`)
   and the exclusion stays, with the test red on the Mac until it is fixed;
   a line that is the platform's ordinary speech (as the DPI warning is
@@ -1031,11 +1034,11 @@ cmake --build $B --target hermes-node hermes-node-ui 2>&1 | tail -1
   rule does not refuse -- so a refused line is a defect or a
   `[sokol-` line, and either is reported to the user before anything is
   relaxed.
-- [ ] **Step 3:** Add "Task 17d as built" to this file: the census output
+- [x] **Step 3:** Add "Task 17d as built" to this file: the census output
   verbatim, the three red counts with the lists, where W's report was,
   the loop's result and the five-row table as measured on Metal. Update
   the "Survey" section's `UNVERIFIED:` sentence with what was found.
-- [ ] **Step 4:** Format, run `check-hermes-node`, commit ("Record the Mac
+- [x] **Step 4:** Format, run `check-hermes-node`, commit ("Record the Mac
   check of Task 17 on Metal").
 
 ---
@@ -1283,3 +1286,106 @@ Places where this plan guesses, stated so the guess can be overruled:
 - **No step leaves a choice open** except 17d Step 2, which is a decision
   the Mac's census has to inform and which goes to the user if the
   census surprises.
+
+## Task 17d as built
+
+Task 17d is the Mac's run of the 17d block and one Linux commit, "Record
+the Mac check of Task 17 on Metal", which added this section. Measured on
+2026-11-21 on the Apple-silicon Mac (Apple M4 Max, macOS 27.2), in the
+ASAN UI build, at "Stop relying on one drain for injected events", with
+the screen unlocked throughout. The Mac made no commit, and no RUN line
+needed a Metal-only form. Every prediction in the block held; the one
+place the report differs from the block's text is W's exit status, below.
+
+- **Step 1, the census: 37 passed, 4 unsupported, 0 failed, of 41**, as
+  derived. The four unsupported are the four predicted: `ui-clipboard`,
+  `ui-display-busy`, `ui-real-events-demo`, `ui-sokol-validation-ci`. The
+  block's `rm -f $B/test/Output/ui-*` complained that
+  `ui-bundle-argv.js.tmp.uiargv` is a directory; every `.err` file was
+  still removed and regenerated (52 after the run). The `uniq -c` output,
+  whole and verbatim:
+
+  ```
+     1 [sokol-produce:error] item N: VALIDATE_BEGINPASS_COLORATTACHMENTVIEW_SAMPLECOUNT: sg_begin_pass: when resolve attachments are provided, the color attachment sample count must be > 1
+     1 [sokol-produce:error] item N: VALIDATE_BEGINPASS_COLORATTACHMENTVIEW_TYPE: sg_begin_pass: color attachment view has wrong type (must be sg_view_desc.color_attachment)
+     1 [sokol-produce:error] item N: VALIDATE_BEGINPASS_RESOLVEATTACHMENTVIEW_TYPE: sg_begin_pass: resolve attachment view has wrong type (must be sg_view_desc.resolve_attachment)
+     1 [sokol-produce:panic] item N: raised deliberately by hnui_demo_addon
+     1 [sokol-produce:panic] item N: VALIDATION_FAILED: validation layer checks failed
+  ```
+
+  A second grep, for `[sapp:` or `[sokol-` anywhere in a line of any
+  `ui-*` output file, found them in two files only:
+  `ui-sokol-panic.js.tmp.logger.err` (one line) and
+  `ui-sokol-validation.js.tmp.err` (four). So **a healthy Metal run
+  prints no `[sapp:` line at any level and no `[sokol-present` line**.
+  Open question 1's assumption held, and Step 2 (Linux) had nothing to
+  decide: no line was refused that a healthy run prints.
+- **Step 2, the checker on BSD userland:** `ui stderr rule: 41 file(s),
+  0 violation(s)`.
+- **Step 3, the exclusions fire: M1 24 red, M2 24 red, M3 23 red**, as
+  derived. Each run had the same four unsupported, so the mutations did
+  not disturb the `display` probe (open question 7). Each list is the
+  block's list of 24: `ui-abi-sizes`, `ui-clipboard-mac`, `ui-close`,
+  `ui-commands`, `ui-conformance`, `ui-create-window`, `ui-demo-visual`,
+  `ui-early-events`, `ui-event-exceptions`, `ui-events`, `ui-exit-paths`,
+  `ui-late-rejection`, `ui-metal-clear`, `ui-metal-maintenance`,
+  `ui-metal-maintenance-wake`, `ui-metal-occlusion`, `ui-present`,
+  `ui-raf`, `ui-real-events`, `ui-resize-generation`, `ui-sokol-panic`,
+  `ui-sokol-validation`, `ui-terminate`, `ui-wrong-thread`. Under M3
+  `ui-sokol-validation` is the one that stays green. All 71 failures name
+  the mutation line as FileCheck's `found here`; none failed for another
+  reason. One first error per mutation, as reported:
+  - M1, `ui-terminate`: `DEFAULT-TRACE-NOT: excluded string found in
+    input`, from `--implicit-check-not='[sapp:error'`, at
+    `[sapp:error] item 0: mutation (sokol:0)`.
+  - M2, `ui-metal-maintenance-wake`: `TRACE-NOT`, from
+    `--implicit-check-not='[sokol-'`, at
+    `[sokol-present:warning] item 0: mutation (sokol:0)`.
+  - M3, `ui-close`: `DEFAULT-TRACE-NOT`, from
+    `--implicit-check-not='[sokol-'`, at
+    `[sokol-produce:error] item 0: mutation (sokol:0)`.
+
+  That covers the five Metal-run tests 17a edited without being able to
+  run them (open question 11): each passed clean and went red under the
+  mutations.
+- **Step 4, the late rejection:** `ui-late-rejection.js` passed 6 of 6
+  on the clean build. Under W it failed, and the AddressSanitizer report
+  is a heap-use-after-free **in `onWorkerLoopTurn`**, the same place as
+  on Linux, reached from `uv__run_check`; the window was freed by the
+  `abandon` lambda in `onSharedContextReady()` and allocated in
+  `onSharedContextReady()`. The status differs from Linux's: the REQUIRE
+  run aborted with 134 (`Abort trap: 6`) where Linux exits 1, so lit
+  stopped at `CODE: EXITCODE 0`. The test's header says "status 1"; on
+  the Mac it is 134. Red either way.
+- **Step 5, one dispatch pass under vsync:** the 32-run loop over
+  `ui-events.js`, `ui-close.js` and `ui-event-exceptions.js` printed
+  `32 0`. The five mutation rows, three runs each:
+
+  | Applied | `ui-events.js` | `ui-close.js` | Runs |
+  |---|---|---|---|
+  | S | green | green | 3 of 3 |
+  | T | **red** | green | 3 of 3 |
+  | S + T | **red** | green | 3 of 3 |
+  | K | green | **red** | 3 of 3 |
+  | S + K | green | **red** | 3 of 3 |
+
+  T and S + T print the line Linux printed: `TICKS WRONG barrier true,
+  promise at 4, char at 2`. K and S + K print `KEY-AFTER-CLOSE` after
+  `REPLACED-EXIT args=0`; FileCheck's first error there is
+  `REPLACED-NEXT: RAF 0 is not on the line after the previous match`, so
+  the `-NEXT` sequence reports it before the
+  `--implicit-check-not=KEY-AFTER-CLOSE` exclusion is consulted.
+  **S's 50 ms sleep made no difference under vsync**: every row reads the
+  same with S as without it. Whether S actually split a batch on that
+  display was not checked; the rows show only that nothing changed.
+- **Step 6:** `git status --porcelain` empty, clean binaries rebuilt.
+
+**What this does not cover**, from the Mac's report:
+
+- The census saw the paths these 41 files take on one display. A Sokol
+  error on a path no test takes is unseen, as Review Focus item 3 says.
+- Step 3 proves the exclusions fire on a line printed in `onInit`. A line
+  printed later in a run is caught by the same flag; no test injects one.
+- Step 5 ran on one vsynced display. A display without vsync, or a
+  ProMotion one, was not tried.
+
