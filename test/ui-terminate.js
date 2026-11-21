@@ -58,9 +58,14 @@
 // the main thread). Probe P4 measured that a second process cannot reach
 // it: NSRunningApplication's quit Apple event arrives and reaches no
 // handler at all -- not terminate:, not applicationShouldTerminate:, not a
-// kAEQuitApplication handler. So what this file leaves unproved is that a
-// real Dock Quit, a Cmd-Q, or a quit Apple event reaches the override. The
-// first two need a person at the Mac.
+// kAEQuitApplication handler. So no case here shows a request from outside
+// the process reaching the override. A real Dock Quit was checked by hand
+// on 2026-11-21 and does reach it, through performClose:. That run also
+// showed something DEFAULT cannot: with nothing preventing the close, the
+// JS thread can end the process before the main thread prints `app:
+// terminate requested`. Here the line always precedes the exit only
+// because the driver blocks the JS thread until `[NSApp terminate:nil]`
+// returns. A Cmd-Q and a quit Apple event remain unproved.
 //
 // The driver's answer is read back after `[NSApp terminate:nil]` returned
 // -- which it does only because terminate: is ours: `visible=1` once the

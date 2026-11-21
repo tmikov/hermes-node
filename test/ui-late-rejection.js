@@ -33,8 +33,9 @@
 //
 // Mutation: in onSharedContextReady(), move `gWindow = w;` up to just
 // after `new hnui_window()`. Under ASAN the worker's per-turn check then
-// reads the deleted window (heap-use-after-free, status 1, nothing after
-// BEFORE); without ASAN the line reads `AFTER true`.
+// reads the deleted window (heap-use-after-free, status 1 on Linux and
+// 134 on macOS, nothing after BEFORE); without ASAN the line reads
+// `AFTER true`.
 //
 // REQUIRES: ui, ui-gpu
 // REQUIRES: display
