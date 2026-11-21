@@ -1087,14 +1087,14 @@ suite to hide it.
 
 **Steps (Linux):**
 
-- [ ] **Step 1:** Send the block; wait for the report.
-- [ ] **Step 2:** Add "Task 17e as built" to this file with the Release
+- [x] **Step 1:** Send the block; wait for the report.
+- [x] **Step 2:** Add "Task 17e as built" to this file with the Release
   totals and unsupported list, and the three ASAN totals.
-- [ ] **Step 3:** Tracker: `dz comment 01a1fbb5-8545` with the Release
+- [x] **Step 3:** Tracker: `dz comment 01a1fbb5-8545` with the Release
   result (the whole suite, once, the totals). The issue stays open for
   display sleep unless the user's list was done; if it was, close it here.
   Stage `dz/`.
-- [ ] **Step 4:** Format, run `check-hermes-node`, commit ("Record the Mac
+- [x] **Step 4:** Format, run `check-hermes-node`, commit ("Record the Mac
   suite runs for Task 17").
 
 ---
@@ -1388,4 +1388,96 @@ place the report differs from the block's text is W's exit status, below.
   printed later in a run is caught by the same flag; no test injects one.
 - Step 5 ran on one vsynced display. A display without vsync, or a
   ProMotion one, was not tried.
+
+## Task 17e as built
+
+Task 17e is the Mac's run of the 17e block, one test fix it led to, and
+one Linux commit, "Record the Mac suite runs for Task 17", which added
+this section. Measured on 2026-11-21 on the same Mac, after 17d, at
+"Stop relying on one drain for injected events". The JS totals in both
+builds are the ones predicted. The unit total in Release was not: one
+unit test failed there, every time, and it was the test that was wrong.
+
+**Release (`cmake-build-release-ui`), once.**
+
+- **The build:** no warning in `lib/compositor-gpu` or
+  `tools/hermes-node-ui`; the only warning is `ld`'s `ignoring duplicate
+  libraries`. With a caveat: the directory was last built at Task 16's
+  tip and no product source changed since, so this build recompiled the
+  version-dependent files plus `ui_module.cpp`, `ui_platform.cpp` and
+  `ui_events.cpp`. `lib/compositor-gpu` was not recompiled, so "no
+  warning there" is Task 16's build of it.
+- **Unit: 455 passed, 1 failed, of 456.** This is the first Release unit
+  run on the Mac, so the count the block asked for is 456 tests, the
+  same as the ASAN build. The failure is
+  `SurfaceTableTest.ProducerConsumerStressCompletesRealCycles`:
+  `Expected: (taken.load()) > (100), actual: 5 vs 100`, "the consumer
+  must have taken real frames".
+- **JS: 238 passed, 6 unsupported, 0 failed, of 244**, as predicted.
+  `check-hermes-node` stops at the unit failure, so the Mac ran it a
+  second time with `-- -k 0` to be sure the JS half ran: the same unit
+  failure (`9 vs 100`) and 238 + 6 again.
+- **The six unsupported are the six predicted:** `bundle-yargs`,
+  `ui-clipboard`, `ui-display-busy`, `ui-real-events-demo`,
+  `ui-sokol-validation-ci`, and `ui-sokol-validation` (a Release build
+  compiles Sokol's validation layer out, so Release Metal runs have no
+  validation-layer coverage).
+- **The clipboard's digest** was the same before and after, and the same
+  again after the ASAN runs.
+
+**The failing unit test was a test defect, and is fixed** in "Give the
+surface table stress test's consumer its turns". In isolation in Release
+it failed 8 of 8, with the consumer having taken 5, 3, 1, 1, 2, 1, 4 and
+2 frames, in about 7 ms a run; its other two checks passed (no violation,
+and the producer published more than 1000 frames). The same test passed
+in the ASAN binary. The producer is a loop of 200,000 acquire-and-publish
+calls under the table's lock; a `std::mutex` is not fair, and in an
+optimized build on that machine the producer finished before the
+consumer had won the lock more than a handful of times. So the check
+`taken > 100` depended on scheduling, which this plan's Global
+Constraints rule out. Nothing in the failure pointed at the surface
+table itself. The fix leaves the stress loop as it was and, after it,
+publishes one frame at a time and waits for the consumer to take each,
+until it has taken more than 100; the wait is bounded by a count of
+yields, not by a clock.
+
+The Mac's re-check at that commit:
+
+- The test alone, Release: OK 8 of 8, in 12 to 25 ms.
+- `check-hermes-node-unit`: **456 passed in Release and 456 in ASAN.**
+- The test's own named mutation, in Release (drop
+  `if (slot.state != SlotState::kFree) continue;` from `acquireLocked`):
+  failed 3 of 3 on the violations count (12233, 7189, 3866). So the new
+  tail did not cost the test the defect it exists to catch.
+
+Not covered by that re-check: it ran on one fast, idle machine, not
+under load, which is where the yield bound would be tested; and the
+`taken > 100` count now comes partly from the paced tail, so the
+contention loop by itself still gives the consumer no guaranteed share
+of the lock in Release.
+
+**ASAN (`cmake-build-asan-ui`), three times, last.** Each run: **456
+unit tests passed; JS 239 passed, 5 unsupported, 0 failed, of 244**, as
+derived. The five unsupported are the five predicted: `bundle-yargs`,
+`ui-clipboard`, `ui-display-busy`, `ui-real-events-demo`,
+`ui-sokol-validation-ci`. Neither known flake fired. The worktree was
+clean afterwards.
+
+**What ran on which commit.** The Release JS suite and the three ASAN
+whole-suite runs were on "Stop relying on one drain for injected
+events", the commit before the test fix. After the fix only the unit
+suites were rerun (Release and ASAN) and the one test alone. The Release
+JS suite was not rerun after it, and neither were the three ASAN
+whole-suite runs; the fix changes `unittests/CompositorTest.cpp` and
+nothing else. So "the three ASAN runs must be the last thing run, on the
+last commit" holds for every file except that one unit test, and the
+Release build has not had a single run in which both halves were green
+together.
+
+**Tracker.** 01a1fbb5-8545 covered two things, display sleep and the
+whole suite under Release. The second is the run above. The first was
+measured the same day by the user at the Mac ("Task 17f as built" has
+the record). Both of the issue's closing conditions being met, it is
+closed, with a comment that carries both measurements and what they
+leave unmeasured.
 
