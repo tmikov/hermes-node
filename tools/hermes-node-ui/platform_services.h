@@ -22,7 +22,7 @@ namespace node_compat {
 /// window system holds rather than what was requested.
 ///
 /// One implementation per platform, chosen at link time:
-/// `platform_services_x11.cpp` on Linux and, with Task 16e,
+/// `platform_services_x11.cpp` on Linux and
 /// `platform_services_mac.mm` on macOS. `ui_platform.cpp` has no platform
 /// conditional of its own.
 ///

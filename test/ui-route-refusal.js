@@ -29,8 +29,7 @@
 //
 // No window is ever opened -- stage 1 fails before sapp_run() -- so this
 // needs no display, which is why it runs where ui-create-window.js cannot.
-// `ui-gpu` is still required: a build with no GPU backend has no route to
-// refuse, and UiHost reports "no window support" instead.
+// `ui-gpu` is still required, as for every test of the window code.
 //
 // REQUIRES: ui, ui-gpu
 

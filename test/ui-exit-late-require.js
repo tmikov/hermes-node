@@ -17,9 +17,8 @@
 // with no display, Sokol's XOpenDisplay panic ends the process before
 // either line or the status 3 comes out.)
 //
-// No window is opened, so no display is needed; `ui-gpu` because the
-// backend-less build's createWindow refuses for a different reason. The
-// status is the program's own, 3.
+// No window is opened, so no display is needed. The status is the
+// program's own, 3.
 //
 // REQUIRES: ui, ui-gpu
 // RUN: %timeout 60 env HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s > %t.out 2> %t.err; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s

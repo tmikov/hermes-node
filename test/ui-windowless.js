@@ -38,9 +38,8 @@
 // And a script that LOADS the module but never calls createWindow: requiring
 // `hermes-node:ui` must not by itself make the process a windowed one. Same
 // two checks, so the same ending: its own status, through the ordinary
-// cleanup, and no lifecycle line. Portable on purpose -- on macOS the module
-// is ui_module_nowindow.cpp's, and this runs there too -- so no `timeout`
-// and nothing but POSIX `env` and `echo`. (Mutation: in uiEnterClosing, move
+// cleanup, and no lifecycle line. Portable on purpose -- it runs on macOS
+// too -- so no `timeout` and nothing but POSIX `env` and `echo`. (Mutation: in uiEnterClosing, move
 // the CLOSING trace above the `!uiWindowRequested()` return, and
 // `lifecycle: CLOSING (reason=return)` is printed -- by the run above too:
 // nothing in the code is specific to a loaded module today, and this case

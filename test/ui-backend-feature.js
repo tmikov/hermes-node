@@ -6,7 +6,7 @@
 // **The forcing function for the backend features**: `ui-backend-gl`,
 // `ui-backend-metal` and the `%ui-backend` substitution test/lit.cfg
 // computes from the third line of `hermes-node-ui --version`
-// (`gpu backend: gl|metal|none`).
+// (`gpu backend: gl|metal`).
 //
 // Those decide which per-backend check lines a window test selects
 // (`--check-prefixes=X,X-%ui-backend`) and which tests run at all
@@ -24,11 +24,9 @@
 //    on any other POSIX system), which is what this platform is supposed
 //    to build.
 //
-// The third is what catches a build that compiled the wrong backend, or
-// none, while lit faithfully agrees with it.
-//
-// Gated on `ui-gpu`: a hermes-node-ui with no GPU backend prints `none`,
-// and on such a platform no backend is expected yet.
+// The third is what catches a build that compiled the wrong backend while
+// lit faithfully agrees with it. (`none` is what lit computes for a line
+// it could not read; no build prints it.)
 //
 // THE MUTATIONS THIS MUST BREAK: (1) delete the `gpu backend:` line from
 // tools/hermes-node-ui/main.cpp -- grep finds nothing, lit computes `none`,
