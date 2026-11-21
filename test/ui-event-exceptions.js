@@ -96,7 +96,9 @@ async function main() {
         process.exit(0);
       }
     });
-    // One batch, so both are queued before the first is delivered.
+    // Injected together. Nothing below needs them in one dispatch pass: if
+    // the exception were swallowed the process would live, and the second
+    // key would be delivered by this pass or a later one.
     key(SAPP_KEYCODE_F1);
     key(SAPP_KEYCODE_F2);
     return;

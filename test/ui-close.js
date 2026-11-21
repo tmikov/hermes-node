@@ -70,23 +70,23 @@
 //            returns. An injected close request (the subject here is what
 //            the JS thread does after the default action returns, which is
 //            after the converter) is delivered in the same dispatch pass as
-//            a KEY_DOWN injected with it. The default action enters CLOSING
-//            -- closing the dispatcher from inside the function it is
-//            running -- and calls the replacement, which returns: the
-//            window stays in CLOSING, the KEY_DOWN behind it is not
-//            delivered, a frame request is refused, and a timer the
+//            a KEY_DOWN injected from its own listener. The default action
+//            enters CLOSING -- closing the dispatcher from inside the
+//            function it is running -- and calls the replacement, which
+//            returns: the window stays in CLOSING, the KEY_DOWN behind it
+//            is not delivered, a frame request is refused, and a timer the
 //            replacement set calls the original process.exit(6). Under
 //            ASAN. (Mutation: remove the closing check in
 //            uiDispatchEvents, and KEY-AFTER-CLOSE prints.)
-//            Nothing enforces "the same dispatch pass": it holds because the
-//            two back-to-back __injectEvent calls are taken by one
-//            drainInjectedEvents() call on the platform thread (measured
-//            64/64 at 16-way parallel; ui-events.js relies on the same
-//            pattern). Were they split across two frames with the JS thread
-//            running the first pass in between, the KEY_DOWN would arrive
-//            after the dispatcher closed, and the trace would read `event
-//            dispatch: post refused (dispatcher closed)` where REPLACED-TRACE
-//            expects `event keydown: not delivered (closing)`.
+//            "The same dispatch pass" holds by construction: the KEY_DOWN
+//            is injected from the `close` listener, and
+//            __waitPlatformFrames(1) holds that listener until the platform
+//            thread has converted and queued it, so it is behind the close
+//            in the pass that is delivering the close, whatever the frame
+//            timing (KEY-QUEUED prints the barrier's answer). Two
+//            back-to-back __injectEvent calls would not do: split across
+//            two frames, the KEY_DOWN arrives after the dispatcher closed
+//            and the trace reads `event dispatch: refused (closing)`.
 //  RFRAME    the same replacement, with win.close() called from a frame
 //            callback that has drawn: the tick does not go on to submit
 //            the frame, since the table is closing and the slot is put
@@ -278,13 +278,17 @@ async function main() {
       }, 1);
     };
     if (mode === 'replaced') {
-      win.on('close', () => console.log('CLOSE-EVENT'));
+      win.on('close', () => {
+        console.log('CLOSE-EVENT');
+        // Injected from inside the pass that is delivering the close, and
+        // the barrier holds this listener until the platform thread has
+        // converted and queued it: the KEY_DOWN is then behind the close
+        // in the SAME dispatch pass, whatever the frame timing.
+        ui.__injectEvent({type: 'KEY_DOWN', keyCode: SAPP_KEYCODE_A});
+        console.log('KEY-QUEUED ' + ui.__waitPlatformFrames(1));
+      });
       win.on('keydown', () => console.log('KEY-AFTER-CLOSE'));
-      // One injected batch: the platform thread pushes both in one frame,
-      // so one dispatch pass delivers them, close first. Not enforced; see
-      // REPLACED in the header.
       ui.__injectEvent({type: 'QUIT_REQUESTED'});
-      ui.__injectEvent({type: 'KEY_DOWN', keyCode: SAPP_KEYCODE_A});
       return;
     }
     nextFrame(() => {
@@ -353,6 +357,7 @@ main().catch((e) => {
 // LATE-TRACE: event dispatch: post refused (dispatcher closed)
 
 // REPLACED: CLOSE-EVENT
+// REPLACED-NEXT: KEY-QUEUED true
 // REPLACED-NEXT: REPLACED-EXIT args=0
 // REPLACED-NEXT: RAF 0
 // REPLACED-NEXT: EXIT code=6

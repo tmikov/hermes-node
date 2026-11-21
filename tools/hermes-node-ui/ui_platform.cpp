@@ -336,12 +336,13 @@ PlatformSource realPlatformSource() {
 /// (taken only once there is a first event, so an empty frame never holds
 /// it), so no dispatch is posted until every event of the batch is queued,
 /// and a batch that a test injected together is delivered by one dispatch
-/// -- which is what lets test/ui-events.js tell "promise callbacks ran
-/// between two events" apart from "they ran after the dispatch". Two
-/// cases still split a batch, and neither loses anything: a dispatch
-/// already outstanding when the batch began may run mid-batch (the events
-/// after it then post for themselves, the ordinary path), and one already
-/// running on the JS thread drains events as they land.
+/// (a convenience, not a guarantee a test may rely on: a test that needs
+/// two events in one pass injects the second from the first one's listener
+/// and waits on `__waitPlatformFrames`). Two cases still split a batch,
+/// and neither loses anything: a dispatch already outstanding when the
+/// batch began may run mid-batch (the events after it then post for
+/// themselves, the ordinary path), and one already running on the JS
+/// thread drains events as they land.
 void drainInjectedEvents() {
   InjectedPlatformEvent injected;
   if (!gInjector.takeNext(&injected))
