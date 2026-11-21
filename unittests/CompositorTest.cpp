@@ -947,6 +947,28 @@ TEST(SurfaceTableTest, ProducerConsumerStressCompletesRealCycles) {
     if (w && table.publish(*w))
       ++published;
   }
+  // The loop above does not guarantee the consumer any share of the lock: a
+  // std::mutex is not fair, and an optimized build on a fast machine was
+  // measured finishing all 200000 iterations with the consumer having taken
+  // between one and nine frames. So the count below is made up one
+  // publication at a time, each waited for. The wait is bounded by a number
+  // of yields, not by a clock, and only a consumer that has stopped taking
+  // exhausts it.
+  for (int i = 0; taken.load() <= 100 && i < 100000; ++i) {
+    const int before = taken.load();
+    auto w = table.withLock(
+        [&](SurfaceTable::LockToken &tok) -> std::optional<SurfaceRef> {
+          auto got = table.acquireLocked(tok);
+          if (got && consumerOwns[got->slot])
+            violations.fetch_add(1);
+          return got;
+        });
+    if (!w || !table.publish(*w))
+      continue;
+    ++published;
+    for (int spin = 0; taken.load() == before && spin < 10000000; ++spin)
+      std::this_thread::yield();
+  }
   stop.store(true, std::memory_order_release);
   consumer.join();
   EXPECT_EQ(violations.load(), 0)
