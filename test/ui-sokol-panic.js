@@ -35,7 +35,14 @@
 //
 // RUN: %with-display 120 sh -c '%hermes-node-ui %s %hnui_demo_addon logger > %t.logger.out 2> %t.logger.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck --check-prefix=LOGGER %s < %t.logger.out
-// RUN: %FileCheck --check-prefix=LOGGERERR %s < %t.logger.err
+// RUN: %FileCheck --check-prefix=LOGGERERR --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-present' --implicit-check-not='[sokol-produce:error' %s < %t.logger.err
+//
+// This run is one of the two exceptions to the suite-wide stderr rule
+// (test/ui-stderr-rule.js). It provokes the PRODUCING instance, so that
+// instance's panic line is asserted, and everything else is still refused:
+// a sokol_app error, anything from the presenting instance, and an error
+// from the producing one, since no `[sokol-produce:error]` precedes a panic
+// raised by calling the logger directly.
 //
 // The VALIDATION case lives in test/ui-sokol-validation.js, because lit
 // gates whole files and only that one needs `sokol-validation`.

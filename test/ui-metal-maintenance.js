@@ -49,9 +49,12 @@
 //
 // REQUIRES: ui, ui-backend-metal, display
 //
+// The TRACE run carries the suite-wide stderr rule, the `[sapp:error` /
+// `[sokol-` pair of exclusions (test/ui-stderr-rule.js).
+//
 // RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --check-prefix=TRACE --implicit-check-not='[sokol-' --implicit-check-not='pending {{[1-9]}}' %s < %t.err
+// RUN: %FileCheck --check-prefix=TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='pending {{[1-9]}}' %s < %t.err
 // RUN: awk '/maintenance:/ { split($0, a, "idpool free "); split(a[2], b, " "); sub(",", "", b[3]); if (first == "") first = b[1]; last = b[3] } END { d = last - first; if (d < 0) d = -d; print "POOL first=" first " last=" last " " ((first != "" && d <= 16) ? "ok" : "DRAINED") }' %t.err | %FileCheck --check-prefix=POOL %s
 
 // CODE: EXITCODE 0
