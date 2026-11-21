@@ -11,7 +11,7 @@ Tracks `docs/superpowers/plans/2026-09-21-ui-compositor.md`, which implements
 | A — foundations, no GPU | 1–4 | **complete** | 2026-09-22 |
 | B — one window presenting one known pattern | 5–10 | **complete** | 2026-09-25 |
 | C — the rest of the surface area | 11–14 (as 11a–11d, 12, 13, 14a, 14b) | **complete** | 2026-11-13 |
-| D — lifecycle, Metal, suite | 15–17 | Task 15 (as 15a–15f) **complete**; Task 16 (as 16a–16f) **implemented**, its final three-run Mac verification still owed; 17 not started | Task 15: 2026-11-19. Task 16: 2026-11-21 |
+| D — lifecycle, Metal, suite | 15–17 | Task 15 (as 15a–15f) **complete**; Task 16 (as 16a–16f) **complete**; 17 not started, and next | Task 15: 2026-11-19. Task 16: 2026-11-21 |
 
 Slice A: 49 tests in `unittests/CompositorTest.cpp`. Slice B: 33 commits, 75
 files, and the suite at 414 unit tests plus 201 JS tests. Slice C: eight
@@ -58,12 +58,23 @@ tests, 200 JS tests passing and 27 unsupported.
 
 **Task 16, the Metal backend, 2026-11-19 to 2026-11-21.** Six tasks (16a-16f)
 across two machines; see "What Task 16 actually produced" below. Suite
-totals: on the Mac after Task 16e, 456 unit tests and JS 237 passed, 6
-unsupported, 0 failed. On Linux after Task 16f, 456 unit tests and JS
-232 passed, 10 unsupported, 0 failed, of 242. Task 16f deleted one JS test
-(`test/ui-no-window-support.js`). **The Mac has not yet run Task 16f's
-verification block** (the whole suite three times, and two smaller
-checks); the Mac numbers above are from before 16f's commits.
+totals at the end of it, both machines at "Keep test pasteboards off the
+user's clipboard", 242 JS tests: **on the Mac, three runs, each 456 unit
+tests and JS 237 passed, 5 unsupported, 0 failed; on Linux, 456 unit
+tests and JS 232 passed, 10 unsupported, 0 failed.** Task 16f deleted one
+JS test (`test/ui-no-window-support.js`), which is why the Mac's
+unsupported count is one lower than the 6 it had after Task 16e. The
+Mac's five unsupported are `bundle-yargs.js` (`examples-installed`),
+`ui-clipboard.js` and `ui-real-events-demo.js` (`ui-backend-gl`),
+`ui-sokol-validation-ci.js` (`ci`) and `ui-display-busy.js`
+(`display-busy`, a canary that is unavailable on a healthy run). The
+Mac also ran `ui-events.js` and `ui-close.js` 32 times with no failure,
+and built a Release configuration with the UI on, whose window tests ran
+once: 34 passed, 5 unsupported, 0 failed. **Two checks of the Mac
+verification were not done**: the `display` canary with its promise
+broken (the screen stayed unlocked, and the display was not put to
+sleep), and the Dock Quit by hand (nobody was at the Mac). Task 17 is
+next.
 
 ## What Slice B actually produced
 
@@ -230,9 +241,13 @@ subject:
   Three of the plan's predictions were refuted there, among them that a
   nil drawable kills a Debug build (Sokol skips it).
 - **16e** (Mac): "Retry deferred Metal maintenance; tighten tests" and
-  "Close, terminate and read the pasteboard on macOS".
+  "Close, terminate and read the pasteboard on macOS", then the review's
+  fixes, "Keep test pasteboards off the user's clipboard": the wrapper
+  releases the private pasteboard it names, four scripts refuse to run
+  on macOS without one, and `terminate:`'s trace reads back a count.
 - **16f** (Linux): "Remove the backend-less UI build", "Probe for a
-  display on macOS CI", and the documents.
+  display on macOS CI", and the documents ("Record the Metal backend in
+  the documents", "Record the Mac verification of Task 16").
 
 Rulings 80-88 are recorded in the main plan's Task 16 paragraph. The two
 that reverse the spec: no Sokol patch was needed for the command-buffer
@@ -244,9 +259,13 @@ tracker: that a real Dock Quit, Cmd-Q or quit Apple event reaches the
 `terminate:` override (the one second-process route tried reached no
 handler at all, twice, and the check by hand was skipped); that the
 maintenance pass's in-flight guard matters (removing it changes nothing
-any tool reports, even with the hazard forced); display sleep; a Release
-build with asserts off; Intel Macs; fullscreen on macOS; and what
-GitHub's macOS runners have for a display.
+any tool reports, even with the hazard forced); display sleep; the
+whole suite under a Release build (the window tests ran there once, and
+passed); Intel Macs; fullscreen on macOS; and what GitHub's macOS
+runners have for a display. One more is not filed, because it is a
+check that was skipped rather than a defect: the `display` canary was
+not seen to fail on the Mac with its promise broken during the final
+verification.
 
 ## Things a newcomer needs to know
 
@@ -301,8 +320,9 @@ moot (the stub is deleted) and added nine: surface generations piling up
 within one event-delivery pass; fullscreen on macOS untested; no main
 menu, so Cmd-Q does nothing; a cancelled or slow `close` leaving a logout
 waiting; a real Dock Quit reaching `terminate:` unproved; the maintenance
-in-flight guard verified by nothing; display sleep and a Release build
-untried; Intel Macs untested; and whether GitHub's macOS runners have a
+in-flight guard verified by nothing; display sleep untried, and a
+Release build run only as far as its window tests, once; Intel Macs
+untested; and whether GitHub's macOS runners have a
 display.
 
 ## Obligations carried into later tasks
@@ -338,8 +358,10 @@ unenforced assumption: `test/ui-close.js` REPLACED and `test/ui-events.js`
 rely on two back-to-back `__injectEvent` calls being taken by one
 `drainInjectedEvents()` call (measured 64/64 at 16-way parallel on Linux),
 which a new platform's suite run should confirm or the injector should make
-explicit. Task 16f's Mac verification block has a 32-run loop for exactly
-that; it had not been run when this was written.
+explicit. Task 16f's Mac verification ran a 32-run loop for exactly
+that on 2026-11-21: 32 of 32 passed on macOS. That confirms it there;
+nothing enforces it, so the choice of making the injector explicit is
+still Task 17's.
 
 **Also Task 16's, found by the whole-branch review of Task 15 and checked
 against `external/sokol/sokol/sokol_app.h`.** On macOS, `[NSApp terminate:]`

@@ -1189,11 +1189,12 @@ Design `docs/superpowers/specs/2026-09-18-ui-compositor-design.md`, plan
 `docs/superpowers/plans/progress-ui-compositor.md`. Slices A, B and C are
 done, and so is Task 15 of Slice D, lifecycle and closing (written out in
 `docs/superpowers/plans/2026-11-19-ui-compositor-task15.md`). Task 16, the
-Metal backend, is implemented (written out in
+Metal backend, is done too (written out in
 `docs/superpowers/plans/2026-11-19-ui-compositor-task16.md`, whose "as
-built" sections say what was measured); what it still owes is the Mac's
-final verification of the whole suite, three runs, recorded in that file
-when done. Task 17, the full gated suite, is not started.
+built" sections say what was measured, including the Mac's final
+verification of the whole suite on 2026-11-21 and the two checks of it
+that were not done). Task 17, the full gated suite, is next and not
+started.
 
 There are two backends behind one interface
 (`lib/compositor-gpu/backend.h`): GL on X11 for Linux and other non-Apple
@@ -1281,7 +1282,11 @@ error. Everything Metal was measured on one Apple-silicon Mac.
   `HERMES_NODE_UI_TEST_PASTEBOARD` names the pasteboard both clipboard
   directions use in place of the general one (`%with-display` sets both);
   and `HERMES_NODE_UI_EXPECT_DISPLAY=1`, read by `test/lit.cfg` from the
-  ambient environment, turns on `display-expected`. `test/lit.cfg` replaces the
+  ambient environment, turns on `display-expected`. A fourth is read by
+  `utils/with-display.py` rather than by the binary:
+  `HERMES_NODE_UI_PASTEBOARD_TOOL`, the path of `mac_pasteboard_tool`,
+  which `test/lit.cfg` sets from the lit param of that name and the
+  wrapper uses to release the pasteboard it named (below). `test/lit.cfg` replaces the
   environment for ShTest, so an exported value cannot reach a lit test — that
   is load-bearing, because one run of `test/ui-present.js` depends on the
   completion variable being *unset* so the startup probe actually runs.
@@ -1317,7 +1322,14 @@ error. Everything Metal was measured on one Apple-silicon Mac.
   budget, `HERMES_NODE_UI_DISPLAY_LOCK_WAIT` (default 1800 s), and
   exhausting it is status 125 with a line naming the lock, the command
   never having run. The wrapper also sets the no-activate and pasteboard
-  variables above. RUN lines keep
+  variables above, the pasteboard to a name of its own making
+  (`hnui-test-<digits>`). A named pasteboard outlives the process that
+  wrote it (measured), so when the command ends, however it ends, the
+  wrapper runs `<tool> <name> release` with the tool
+  `HERMES_NODE_UI_PASTEBOARD_TOOL` names. A release that fails is one
+  line on the wrapper's stderr and does not change the status. In a hand
+  run without that variable the name is not released, which the wrapper
+  says only under `HERMES_NODE_DEBUG_NATIVE=UI`. RUN lines keep
   their redirections inside `sh -c '...'`. Every other UI RUN line bounds
   itself with `%timeout` (GNU `timeout` on Linux, `utils/timeout.py` on
   macOS). `utils/lit-run.sh <build dir> [lit options] <tests>` runs lit
@@ -1391,8 +1403,16 @@ error. Everything Metal was measured on one Apple-silicon Mac.
   override calls `[window performClose:]`, which takes the close button's
   path above; before that Sokol delivers no event and nothing would cancel
   the quit, so it hands a `QUIT_REQUESTED` to `uiHandlePlatformEvent`
-  directly (`uiHandleQuitRequestDirectly`). `test/ui-terminate.js` pins
-  three cases. **Every one of them enters at `[NSApp terminate:nil]`
+  directly (`uiHandleQuitRequestDirectly`). Its trace line says what was
+  read back: `through performClose:, <n> quit request(s) cancelled`,
+  where `<n>` is how far `uiQuitRequestsCancelled()` moved across the
+  call (a count kept beside `sapp_cancel_quit()` whether or not the test
+  hooks are on), or `no window yet, forwarded directly`, or `no frame
+  yet, forwarded directly`. `test/ui-terminate.js` pins
+  three cases. **None of them lands between the window's creation and
+  its first frame**, the interval the frame check is for: removing that
+  check leaves all three green, and no request can be aimed there
+  without a timing assumption. **Every one of them enters at `[NSApp terminate:nil]`
   in-process. That a real Dock Quit, Cmd-Q or quit Apple event reaches the
   override is unproved**: the one second-process route tried reached no
   handler in the target at all, and nobody has checked by hand.
@@ -1486,12 +1506,24 @@ error. Everything Metal was measured on one Apple-silicon Mac.
   is ours to choose: the general pasteboard, unless
   `HERMES_NODE_UI_TEST_PASTEBOARD` names another. `%with-display` sets a
   name unique to the run, so the suite never overwrites the clipboard of
-  whoever is using the Mac. A pasteboard with no string type reads as
-  unavailable and a string over the limit as too large; nothing is cached,
+  whoever is using the Mac, and releases that name when the run ends
+  (above). **A script that writes the clipboard refuses to run on macOS
+  without such a name**: `test/ui-clipboard-mac.js`, `test/ui-commands.js`,
+  `test/ui-abi-sizes.js` and `demo.js`'s conformance mode print
+  `REFUSED: ...` and exit 2, before any write, unless
+  `HERMES_NODE_UI_TEST_PASTEBOARD` starts `hnui-test-` -- so a hand run
+  goes through `utils/with-display.py`. Give a new clipboard-writing test
+  the same guard. A pasteboard with no string type reads as
+  unavailable, a string over the limit as too large, and string-type
+  data AppKit cannot decode (`stringForType:` answering nil) as an
+  error; nothing is cached,
   and since AppKit's read has no deadline a timeout arises only from the
   request's own deadline having passed. `test/ui-clipboard-mac.js` covers
   it, with `mac_pasteboard_tool` as the second process; that tool refuses
-  any pasteboard name not starting `hnui-test-`.
+  any pasteboard name not starting `hnui-test-`. One error path there no
+  test reaches: a string whose `UTF8String` is NULL, which no pasteboard
+  hands back (AppKit stores a lone-surrogate string as an empty one;
+  measured).
 - **On Linux the clipboard read is our own X11 read** (`x11_clipboard.cpp`), not
   Sokol's, which returns its previous buffer on timeout, INCR or oversize.
   A reply is accepted only if it echoes the server timestamp this read
@@ -1569,8 +1601,10 @@ error. Everything Metal was measured on one Apple-silicon Mac.
   `test/sokol-pin.js` checks the README agrees.
 - **macOS runs this suite, window tests included, when it has a usable
   display.** The Metal backend was built and the suite run on an
-  Apple-silicon Mac (macOS 27.2) between 2026-11-19 and 2026-11-21; the
-  totals are in the progress file. With the screen locked, the display
+  Apple-silicon Mac (macOS 27.2) between 2026-11-19 and 2026-11-21. Its
+  last three runs of the whole suite, on 2026-11-21, were each 456 unit
+  tests and JS 237 passed, 5 unsupported, 0 failed; the progress file
+  names the five. With the screen locked, the display
   asleep or no window server, `display` is false and the window tests
   report UNSUPPORTED; run with `HERMES_NODE_UI_EXPECT_DISPLAY=1` to make
   that red instead, and under `caffeinate -dimsu` to keep the display

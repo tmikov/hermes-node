@@ -589,6 +589,18 @@ assumes:
   wrapper kills the process group, so a binary that hangs on a runner
   with no window server costs a minute once per lit configuration, not a
   stuck job.
+  **Corrected 2026-11-21, from `utils/display_probe.py`:** the 60 s is
+  right and the 90 s is not. The wrapper's limit on the probe command is
+  60 s (`LIMIT_SECONDS`), and the wrapper kills the command's process
+  group when it expires. Before that the probe may queue for the display
+  lock for up to 120 s (`LOCK_WAIT_SECONDS`, passed to the wrapper as
+  `HERMES_NODE_UI_DISPLAY_LOCK_WAIT`), and the timeout around the wrapper
+  is derived from both so that the wrapper is never killed from outside
+  while its command may be alive: lock wait + limit + `utils/timeout.py`'s
+  kill grace (5 s) + a 15 s margin, which is 200 s. A hanging binary
+  still costs a minute; a display lock another run holds throughout costs
+  two, and is reported as `display busy`, which is red rather than
+  UNSUPPORTED.
 
 **How the first PR run tells us.** 16f adds one informational step to the
 macOS job, `continue-on-error: true`, after the build: it runs the probe
@@ -1759,6 +1771,15 @@ for i in $(seq 1 32); do HERMES_NODE_UI_EXPECT_DISPLAY=1 utils/lit-run.sh $B $S/
 # expect: "32 0"; anything else is reported with one failing trace, not fixed here
 ```
 
+**Corrected 2026-11-21, when the block was run:** the expected totals
+above were written with the plan, before any of Task 16 was built. The
+unit count is 456, not 452, and
+five tests are unsupported, not four. The fifth is
+`test/ui-display-busy.js`, which postdates that list: it requires
+`display-busy`, a feature set only when the probe found the display lock
+held for its whole budget, so it is unavailable on every healthy run.
+The results are in "Task 16f as built".
+
 After the first PR run, the driver reads the macOS job's probe step and
 acts as Design (g) says.
 
@@ -2453,7 +2474,8 @@ the override is therefore unproved; tracker issue 01a1fbb5-851a.
   and 1 ten frames later.
 - Mutations: calling `[super terminate:]` is red (status 133, not the
   plan's 0); always taking the direct hand-off is red at the
-  `forwarded as a close request (window=1)` line.
+  `forwarded as a close request (window=1)` line. (That line was
+  reworded by the review-fix round below, and the mutation rerun.)
 
 **The pasteboard.** Read and write are ours (`platform_services_mac.mm`),
 on the pasteboard `HERMES_NODE_UI_TEST_PASTEBOARD` names, else the general
@@ -2465,7 +2487,8 @@ has a `release` verb the test calls at the end. Mutations: caching the
 last string, reading another pasteboard and dropping the size check are
 each red. `pbpaste` before and after the verification run was identical
 (compared by digest). **Not provoked by anything: the error status**
-(`stringForType:` returning nil).
+(`stringForType:` returning nil). (The review-fix round below provokes
+it.)
 
 **Read-backs.** The icon line is the `CGImage`'s size (`command icon: dock
 tile 16x16`), not the image representation's, which reports the tile
@@ -2485,18 +2508,105 @@ passing; `ui-metal-maintenance-wake.js`, `ui-terminate.js` and
 `ui-clipboard-mac.js` are new.
 
 Not covered by anything green: a real Dock Quit or Cmd-Q; the
-`performClose:` branch before `init_cb`; the pasteboard's error status;
+`performClose:` branch before `init_cb`; the pasteboard's error status
+(covered since, see below);
 the GL build's empty `setWorkerWake` override beyond compiling and
 linking on Linux.
+
+### The review-fix round
+
+One more commit on the Mac, 2026-11-21, answering the review of 16e:
+"Keep test pasteboards off the user's clipboard". Where it disagrees
+with the section above, or with Task 16e's steps, it is right.
+
+**A named pasteboard outlives its creator.** Measured first:
+`mac_pasteboard_tool hnui-test-<name> set hello` exits, and a second
+process still reads the string 1 s and 6 s later; after `release` the
+name reads the same as one never used. So the private pasteboard
+`utils/with-display.py` names for each run was being left behind until
+the session ended. The wrapper now releases the name it made, in the
+`finally` that closes the display lock, so on every way the command can
+end; checked for a normal exit and for a timeout (status 124). It runs
+`<tool> <name> release`, and takes the tool's path from
+`HERMES_NODE_UI_PASTEBOARD_TOOL`, which `test/lit.cfg` puts in the test
+environment from the `mac_pasteboard_tool` param. A release that fails
+is one line on the wrapper's own stderr and does not change the
+command's status. **A hand run without the variable releases nothing**,
+and says so under `HERMES_NODE_DEBUG_NATIVE=UI`. The pasteboards that
+earlier runs left behind cannot be enumerated and stay until the session
+ends.
+
+**Four scripts refuse to write the general pasteboard.**
+`test/ui-clipboard-mac.js`, `test/ui-commands.js`, `test/ui-abi-sizes.js`
+and `demo.js`'s conformance mode write the clipboard, which without
+`HERMES_NODE_UI_TEST_PASTEBOARD` is the clipboard of whoever is using
+the Mac. On darwin each now prints `REFUSED: ...` and exits 2, before
+any write, unless that variable starts `hnui-test-`. Checked by hand
+without the variable: all four exited 2 and the general pasteboard's
+digest was unchanged. `test/ui-exit-paths.js` needs no guard: its
+`writeClipboard('late')` runs in an `'exit'` listener during CLOSING,
+where commands are not applied, and its own
+`--implicit-check-not='late title'` pins that.
+
+**`terminate:`'s trace lines say what was read back.** They were:
+`forwarded as a close request (window=<0|1>)` and `no window yet,
+forwarded directly`. They are now
+
+```
+app: terminate requested; through performClose:, <n> quit request(s) cancelled
+app: terminate requested; {no window yet|no frame yet}, forwarded directly
+```
+
+`<n>` is the difference across the `performClose:` call in
+`uiQuitRequestsCancelled()`, a count kept beside `sapp_cancel_quit()` in
+`ui_platform.cpp` whether or not the test hooks are on (the hooks' own
+count exists only with them, and this line prints under tracing alone).
+`test/ui-terminate.js` DEFAULT and CANCEL require `1 quit request(s)
+cancelled` on the next line after `quit requested: cancelled`; DEFAULT
+carries `--implicit-check-not='forwarded directly'`; EARLY accepts any
+of the three lines, and took `no window yet` again. The mutation that
+always takes the direct hand-off was rerun and is red at DEFAULT's
+`-NEXT` line.
+
+**Not covered: the interval between Sokol creating its window and its
+first frame.** That is the interval the `sapp_frame_count() > 0` check
+is for, and the `no frame yet` line reports. No request can be aimed at
+it without a timing assumption; EARLY's has always arrived before the
+window existed. Removing the check leaves all three cases green, and
+the test's header says so.
+
+**The pasteboard's error status is now provoked, one of its two
+causes.** `mac_pasteboard_tool` gained a `surrogate` verb, which writes
+a lone UTF-16 surrogate as data under the string type; `stringForType:`
+then answers nil, and `test/ui-clipboard-mac.js` BADDATA checks
+`ERR_CLIPBOARD_FAILED` from the Promise and `HNUI_ERROR` from the
+synchronous read (`status=error` in the trace, as read #6; the later
+reads' numbers moved up by one). The read also returns the error status
+when `UTF8String` is NULL, and **that path no test can reach**: AppKit
+stores a lone-surrogate string written with `setString:` as an empty
+string (measured), so no pasteboard hands one back. It is commented as
+untested where it is written. The tool's `set` now exits 2 on an
+argument that is not valid UTF-8.
+
+**Comments corrected, no behaviour changed:** `mac_test_driver.h` (that
+`gpu-hold`'s `held=1` and `gpu-release`'s `in_flight` are not
+read-backs after the action, and that before the window exists every
+command but `terminate` answers `ERROR no window`),
+`metal_test_hooks.h` (a hold catches at most two frames, which is
+Sokol's in-flight semaphore, `SG_NUM_INFLIGHT_FRAMES`; taken from the
+source, not measured), `metal_backend.mm` and
+`test/ui-metal-maintenance-wake.js`.
+
+Verification on the Mac for that commit: the ten tests it ran passed,
+and the real clipboard's SHA-256 was identical before and after.
 
 ## Task 16f as built
 
 Task 16f is three commits on Linux: "Remove the backend-less UI build",
-"Probe for a display on macOS CI" and the commit that adds this section.
-**The Mac verification block of Task 16f -- the whole suite three times,
-the canary with its promise broken, and the 32-run loop over
-`ui-events.js` and `ui-close.js` -- had not been run when this was
-written.** Its results belong here when it has.
+"Probe for a display on macOS CI" and "Record the Metal backend in the
+documents", which added this section; and a fourth, "Record the Mac
+verification of Task 16", once the Mac had run the task's verification
+block. The results are at the end of this section.
 
 Where it departs from the task's text:
 
@@ -2537,7 +2647,7 @@ Where it departs from the task's text:
   456 unit and 237 passed, 6 unsupported, 0 failed after Task 16e, with
   243 JS tests. This task deletes one JS test,
   `test/ui-no-window-support.js`, which could run only on a build with no
-  backend.
+  backend. A dated note beside the block now gives the right numbers.
 
 Issues filed: 01a1fbb5-84af (fullscreen on macOS is untested),
 01a1fbb5-84c4 (no main menu, so Cmd-Q does nothing), 01a1fbb5-84da (a
@@ -2550,4 +2660,57 @@ in-flight guard), 01a1fbb5-8545 (display sleep; a Release build).
 passed; JS 232 passed, 10 unsupported, 0 failed**, of 242. Before it: 232
 passed and 11 unsupported of 243; the one fewer is the deleted test.
 
-**Mac verification: to be filled in.**
+Linux measured the same totals again at "Keep test pasteboards off the
+user's clipboard": 456 unit; JS 232 passed, 10 unsupported, 0 failed.
+
+**Mac verification, 2026-11-21**, on the Apple-silicon Mac, at "Keep
+test pasteboards off the user's clipboard", in the ASAN UI build.
+Everything that could be run passed; two checks could not be run, and
+are listed after the ones that were.
+
+- **The whole suite, three times**
+  (`HERMES_NODE_UI_EXPECT_DISPLAY=1 caffeinate -dimsu cmake --build $B
+  --target check-hermes-node`): each run **456 unit tests passed; JS 237
+  passed, 5 unsupported, 0 failed**, of 242, in 31 to 33 s. That is the
+  243 after Task 16e less the deleted `ui-no-window-support.js`.
+- **The five unsupported, with the feature each lacks**
+  (`--show-unsupported`):
+  - `bundle-yargs.js`: `examples-installed`;
+    `examples/yargs-cli/node_modules` is not installed in that worktree.
+  - `ui-clipboard.js`: `ui-backend-gl`. It pins the X11 selection
+    protocol; `ui-clipboard-mac.js` covers macOS.
+  - `ui-real-events-demo.js`: `ui-backend-gl`. It needs a driver outside
+    the program, which only the X11 driver is.
+  - `ui-sokol-validation-ci.js`: `ci`, set only in CI.
+  - `ui-display-busy.js`: `display-busy`, set only when the probe found
+    the display lock held for its whole budget, so unavailable on a
+    healthy run. The verification block expected the first four; this
+    one postdates its list.
+- **The 32-run loop over `ui-events.js` and `ui-close.js`**, as written:
+  `32 0`, in 155 s. No run was UNSUPPORTED either. So the assumption
+  Task 17 inherited -- two back-to-back `__injectEvent` calls are taken
+  by one drain -- held 32 times out of 32 on macOS. It is still not
+  enforced by anything.
+- **A Release build with the UI on**, which the block did not ask for:
+  configured and built in a build directory of its own, the ASAN
+  configuration's options except `CMAKE_BUILD_TYPE=Release` and
+  `HERMES_ENABLE_ADDRESS_SANITIZER=OFF`, with no warning in our sources.
+  The window tests (`test/ui-*.js`, 39 files) run once there: 34 passed,
+  5 unsupported, 0 failed. The five are the four UI tests above plus
+  `ui-sokol-validation.js`, which requires `sokol-validation`; a Release
+  build compiles Sokol's validation out. The real clipboard's digest was
+  identical before and after. Tracker issue 01a1fbb5-8545 is updated and
+  stays open.
+
+**Not done:**
+
+- **The canary with its promise broken.** The block's third command
+  needs the screen locked or the display asleep. The screen stayed
+  unlocked for the whole round, and the display was not put to sleep. So
+  `ui-display-feature.js` failing and `ui-present.js` reporting
+  UNSUPPORTED under `HERMES_NODE_UI_EXPECT_DISPLAY=1` was not observed
+  in this round.
+- **The Dock Quit by hand** (Task 16e's block). Nobody was at the Mac.
+  Tracker issue 01a1fbb5-851a stays open.
+- **Display sleep**, and **the whole suite under Release**: only the
+  window tests were run there, once.
