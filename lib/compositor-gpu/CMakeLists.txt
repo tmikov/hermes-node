@@ -9,21 +9,19 @@
 
 # v1 is GL on X11 (GLX, desktop GL 4.3 core) for Linux and any other
 # non-Apple Unix, and Metal on macOS. A platform that is not Unix has no
-# backend, and this whole directory is skipped there.
+# backend, and turning the option on there is a configure error.
 #
-# A message(FATAL_ERROR) here would be the louder choice and is deliberately
-# NOT what this does: the option is one a build configuration turns on for
-# every platform it covers (CI's asan-debug-o1 does, in
-# .github/workflows/ci.yml), and a platform without a backend should still
-# build the rest. There the library is not built, hermes-node-ui keeps
-# exactly the windowless behaviour Task 6 gave it, and the `ui-gpu` lit
-# feature reports the window tests UNSUPPORTED.
+# This used to return() instead, leaving a hermes-node-ui whose
+# createWindow() rejected. That configuration existed for macOS before it
+# had a backend; with one on every platform CI builds, a backend-less
+# hermes-node-ui would be a binary no test can run, so the option says so
+# at configure time rather than building it.
 if(NOT UNIX)
-  message(STATUS
-    "hermes-node UI: no GPU backend for this platform "
-    "(v1 is Linux GL and macOS Metal). "
-    "hermes-node-ui will build without window support.")
-  return()
+  message(FATAL_ERROR
+    "hermes-node UI: HERMES_NODE_ENABLE_UI has no GPU backend for this "
+    "platform. The supported platforms are Linux and other non-Apple Unix "
+    "(OpenGL on X11) and macOS (Metal). Configure without "
+    "-DHERMES_NODE_ENABLE_UI=ON to build hermes-node alone.")
 endif()
 
 if(APPLE)

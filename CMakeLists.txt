@@ -128,10 +128,9 @@ if(HERMES_NODE_ENABLE_UI)
   # entirely is the fact.
   add_subdirectory(external/sokol)
   add_subdirectory(lib/compositor)
-  # The GPU half. This one returns early on any platform without a backend
-  # -- v1 GL is Linux-only and Metal is Task 16 -- so a target from it must
-  # be tested for rather than assumed; see the `if(TARGET ...)` guards
-  # below and in tools/hermes-node-ui.
+  # The GPU half: GL on Linux and other non-Apple Unix, Metal on macOS. It
+  # refuses to configure on any other platform, so hermesNodeCompositorGpu
+  # exists wherever this option is on.
   add_subdirectory(lib/compositor-gpu)
 endif()
 
@@ -171,12 +170,7 @@ endif()
 # addon built by our own CMake from test/fixtures/ -- and like that one its
 # built path is passed to the entry script rather than resolved by
 # require() from a package.
-#
-# if(TARGET ...) as well as the option, matching every other guard around
-# this feature: lib/compositor-gpu returns early on a platform with no GPU
-# backend (macOS until Task 16), where the option is on and there is
-# nothing for an addon to draw into.
-if(HERMES_NODE_ENABLE_UI AND TARGET hermesNodeCompositorGpu)
+if(HERMES_NODE_ENABLE_UI)
   # Three files, by job -- see test/fixtures/hnui-demo/demo_addon.h.
   set(HNUI_DEMO_ADDON_SOURCES
     test/fixtures/hnui-demo/demo_addon.c
@@ -256,8 +250,7 @@ endif()
 # that is not our own window. Built under the condition the GL backend --
 # and with it X11 -- is built under. find_package(X11) again here because
 # lib/compositor-gpu's X11:: targets are scoped to that directory.
-if(HERMES_NODE_ENABLE_UI AND TARGET hermesNodeCompositorGpu AND UNIX AND
-   NOT APPLE)
+if(HERMES_NODE_ENABLE_UI AND UNIX AND NOT APPLE)
   find_package(X11 REQUIRED)
   add_executable(x11_selection_owner
     test/fixtures/hnui-demo/x11_selection_owner.c
@@ -275,7 +268,7 @@ endif()
 # A second process that writes the test pasteboard, for
 # test/ui-clipboard-mac.js: the macOS counterpart of x11_selection_owner.
 # Compiled as C, which clang reads as Objective-C from the .m name.
-if(HERMES_NODE_ENABLE_UI AND TARGET hermesNodeCompositorGpu AND APPLE)
+if(HERMES_NODE_ENABLE_UI AND APPLE)
   add_executable(mac_pasteboard_tool
     test/fixtures/hnui-demo/mac_pasteboard_tool.m
   )
@@ -387,11 +380,9 @@ endif()
 # test/sokol-rename.js reads the generated sgp_rename.h and
 # test/sokol-isolation.js reads the two compiled sokol_gfx objects, so both
 # artifacts have to exist before the suite runs -- the same reasoning that
-# makes the suite DEPEND on hermes-node-kit above. if(TARGET ...) rather
-# than if(HERMES_NODE_ENABLE_UI): lib/compositor-gpu returns early on a
-# platform with no backend yet (macOS until Task 16), where the option is
-# on and this target still does not exist.
-if(TARGET hermesNodeCompositorGpu)
+# makes the suite DEPEND on hermes-node-kit above. The target exists
+# exactly when the option is on.
+if(HERMES_NODE_ENABLE_UI)
   list(APPEND HERMES_NODE_JS_TEST_DEPENDS hermesNodeCompositorGpu)
   # The backend objects that call each sokol_gfx instance, which
   # lib/compositor-gpu/CMakeLists.txt names (they differ per backend).

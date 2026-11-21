@@ -13,14 +13,13 @@
 // generates it. Re-running the generator here would test the generator
 // while saying nothing about what got compiled.
 //
-// Gated on `ui-gpu`, NOT on `ui-enabled`, and the difference is the whole
-// point. `ui-enabled` only says the option was compiled into plain
-// hermes-node, which is true on macOS too -- where lib/compositor-gpu
-// returns early and this header is therefore never generated. Gating on it
-// would fail this test on a platform that never claimed to produce the
-// artifact, in the very CI job that sets the option for macos-latest.
-// `ui-gpu` adds the platform half; see test/lit.cfg for why it is a
-// platform predicate rather than a check that the file exists.
+// Gated on `ui-gpu`, NOT on `ui-enabled`. `ui-enabled` only says the option
+// was compiled into plain hermes-node; `ui-gpu` adds the platform half,
+// mirroring the guard in lib/compositor-gpu/CMakeLists.txt, which is the
+// directory that generates this header. (The two used to differ on macOS,
+// which had the option and no backend; that guard is a configure error
+// now, so they agree wherever the option configured.) See test/lit.cfg for
+// why it is a platform predicate rather than a check that the file exists.
 //
 // Still deliberately not `display` or `ui`: nothing here needs a window or
 // the hermes-node-ui binary.

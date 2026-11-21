@@ -155,8 +155,9 @@ int UiHost::run() {
       return exitCode;
     }
 
-    // No window runner: a build without window support (macOS until Task
-    // 16 lands the Metal backend). Reported rather than silently falling
+    // No window runner was installed. hermes-node-ui's main() always
+    // installs one, so this is reached only by an embedder of this library
+    // that did not (UiHostTest, deliberately). Reported rather than falling
     // through to the windowless join below, which would report the
     // runtime's eventual exit code as the answer to a window request
     // nothing ever serviced.
@@ -192,8 +193,8 @@ int UiHost::run() {
     // pumps the loop the JS thread owns and is still live in on this branch,
     // so calling it from the main thread would be a data race, not a fix.
     // Queued stdio writes are therefore lost here. Acceptable only because
-    // this branch is unreachable until a window backend exists; whoever
-    // gives requestWindow() a real caller owns closing it properly.
+    // hermes-node-ui never reaches this branch: its main() installs a
+    // runner.
     _exit(1);
   }
 

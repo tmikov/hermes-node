@@ -143,8 +143,8 @@ if(HERMES_NODE_ENABLE_UI)
   # top level before this directory. Linking it here is what lets
   # HnuiAbiTest.cpp include sokol_gfx.h's declarations and assert
   # hnui_gpu_view against the real sg_view on EVERY platform the UI option
-  # is on for -- including macOS, where lib/compositor-gpu (and so the
-  # RULING 45 copy of those asserts) is not built at all. See RULING 46 and
+  # is on for -- including macOS, where gl_backend.cpp (and so the
+  # RULING 45 copy of those asserts) is not built. See RULING 46 and
   # the comment at those assertions.
   add_node_compat_unittest(HnuiAbiTest HnuiAbiTest.cpp HnuiAbiCProbe.c)
   target_link_libraries(HnuiAbiTest hermesNodeCompositor sokol)
@@ -160,22 +160,18 @@ if(HERMES_NODE_ENABLE_UI)
   target_include_directories(HnuiAbiTest PRIVATE
     ${PROJECT_SOURCE_DIR}/hermes/include/hermes/napi)
 
-  # test_hooks.{h,cpp} (lib/compositor-gpu/, Task 9) has no GL or X11
-  # dependency of its own -- it only touches SurfaceTable and UiEvent -- but
-  # it is compiled into hermesNodeCompositorGpu, which is Linux-only until
-  # Task 16's Metal backend (see that directory's CMakeLists.txt). Guarded
-  # the same way tools/hermes-node-ui/CMakeLists.txt guards its own window
-  # sources: if(TARGET ...), not if(HERMES_NODE_ENABLE_UI), because the
-  # option is on while this target does not exist on macOS.
-  if(TARGET hermesNodeCompositorGpu)
-    add_node_compat_unittest(TestHooksTest TestHooksTest.cpp)
-    target_link_libraries(TestHooksTest hermesNodeCompositorGpu)
+  # test_hooks.{h,cpp} (lib/compositor-gpu/, Task 9) has no GL, X11 or
+  # Metal dependency of its own -- it only touches SurfaceTable and UiEvent
+  # -- but it is compiled into hermesNodeCompositorGpu, which exists
+  # wherever the option configured (that directory refuses any platform
+  # without a backend).
+  add_node_compat_unittest(TestHooksTest TestHooksTest.cpp)
+  target_link_libraries(TestHooksTest hermesNodeCompositorGpu)
 
-    # A binary of its own, because it turns tracing on for the whole
-    # process: HERMES_NODE_DEBUG_NATIVE is read once, on first use.
-    add_node_compat_unittest(UiTraceTest UiTraceTest.cpp)
-    target_link_libraries(UiTraceTest hermesNodeCompositorGpu)
-  endif()
+  # A binary of its own, because it turns tracing on for the whole
+  # process: HERMES_NODE_DEBUG_NATIVE is read once, on first use.
+  add_node_compat_unittest(UiTraceTest UiTraceTest.cpp)
+  target_link_libraries(UiTraceTest hermesNodeCompositorGpu)
 endif()
 
 add_subdirectory(HermesParserNative)

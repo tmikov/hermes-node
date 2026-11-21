@@ -88,11 +88,10 @@ static_assert(
 //
 // The same assertions live in lib/compositor-gpu/gl_backend.cpp, where
 // RULING 45 first put them, and they are duplicated here rather than moved
-// for a reason worth stating: that file is built ONLY where a GL backend
-// is (Linux in v1), while HERMES_NODE_ENABLE_UI is turned on for macOS as
-// well -- CI does exactly that. So on macOS the Ruling 45 copy is not
-// compiled at all, and `hnui_gpu_view` would go unchecked against the real
-// `sg_view` until Task 16 lands a Metal backend.
+// for a reason worth stating: that file is built ONLY where the GL backend
+// is, while HERMES_NODE_ENABLE_UI is turned on for macOS as well -- CI does
+// exactly that -- and macOS builds the Metal backend instead. So on macOS
+// the Ruling 45 copy is not compiled at all.
 //
 // This translation unit has no such restriction: unittests/CMakeLists.txt
 // builds it under plain `if(HERMES_NODE_ENABLE_UI)`, and `sokol_gfx.h`'s

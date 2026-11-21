@@ -49,18 +49,10 @@ enum class ExitReason;
 /// declared in `ui_internal.h`). Task 8's brief lists only
 /// `ui_module.cpp`; without a header, `ui_host.cpp` could not call into it.
 ///
-/// `initUiModule` is implemented in EVERY build: `ui_module.cpp` where a GPU
-/// backend was built (Linux GL today, macOS Metal with Task 16), and
-/// `ui_module_nowindow.cpp` where none was, whose `createWindow` rejects
-/// with the sentence `UiHost::run()` prints. `main.cpp` registers the module
-/// unconditionally, because a `hermes-node:ui` that cannot be required is
-/// reported as MODULE_NOT_FOUND -- indistinguishable from a typo.
-///
-/// Everything else declared here belongs to the window and is defined only
-/// under `HERMES_NODE_UI_HAVE_WINDOW`, the compile definition
-/// `tools/hermes-node-ui/CMakeLists.txt` sets when a backend exists. A
-/// declaration costs nothing where there is no definition, and `main.cpp`
-/// calls those two under that same guard.
+/// `initUiModule` is implemented by `ui_module.cpp` in every build of
+/// hermes-node-ui: a GPU backend exists on every platform the UI option
+/// configures on (GL on Linux and other non-Apple Unix, Metal on macOS).
+/// `main.cpp` registers the module unconditionally.
 
 /// Give the module the host whose `requestWindow()` it calls to wake the
 /// platform thread. Called from `main()` before the JS thread starts, which
