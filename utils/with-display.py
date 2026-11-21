@@ -67,7 +67,15 @@ machine, so instead:
 2. `HERMES_NODE_UI_TEST_NO_ACTIVATE=1`, so the window does not take the
    keyboard from whoever is at the Mac, and a unique
    `HERMES_NODE_UI_TEST_PASTEBOARD`, so the suite never overwrites the
-   user's clipboard and parallel suite runs do not share one.
+   user's clipboard and parallel suite runs do not share one. A named
+   pasteboard outlives the process that wrote it (measured: a second
+   process still reads the string after the writer exited) and lasts
+   until the session ends, so the wrapper releases its name when the
+   command ends, however it ends, through
+   test/fixtures/hnui-demo/mac_pasteboard_tool -- whose path is in
+   `HERMES_NODE_UI_PASTEBOARD_TOOL`, which test/lit.cfg sets. Without it
+   (a hand run) the name is not released, and under
+   `HERMES_NODE_DEBUG_NATIVE=UI` the wrapper says so.
 3. The command runs in its own process group under the time limit (the
    same code as utils/timeout.py): exit 124 after killing the group on
    expiry, otherwise the command's status.
@@ -80,6 +88,7 @@ import importlib.util
 import math
 import os
 import stat
+import subprocess
 import sys
 import time
 
@@ -296,6 +305,33 @@ def acquire(fcntl, path, budget, budget_text, debug):
     return fd
 
 
+def release_pasteboard(name, debug):
+    """Release the named pasteboard the command was given (see item 2 of
+    the docstring). A failure is said on this wrapper's own stderr and does
+    not change the command's status: the test's result is the command's."""
+    tool = os.environ.get('HERMES_NODE_UI_PASTEBOARD_TOOL') or ''
+    if not tool:
+        if debug:
+            sys.stderr.write(
+                'with-display.py: pasteboard %s not released '
+                '(HERMES_NODE_UI_PASTEBOARD_TOOL is not set)\n' % name)
+        return
+    try:
+        result = subprocess.run(
+            [tool, name, 'release'], stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE, timeout=30)
+        problem = (None if result.returncode == 0 else
+                   'exit %d: %s' % (result.returncode,
+                                    result.stderr.decode(errors='replace')
+                                    .strip()))
+    except (OSError, subprocess.TimeoutExpired) as e:
+        problem = str(e)
+    if problem:
+        sys.stderr.write(
+            'with-display.py: could not release pasteboard %s with %s: %s\n'
+            % (name, tool, problem))
+
+
 def run_darwin(seconds, command):
     import fcntl
 
@@ -320,16 +356,17 @@ def run_darwin(seconds, command):
     fd = acquire(fcntl, path, budget, budget_text, debug)
     if fd is None:
         return OWN_FAILURE
+    pasteboard = 'hnui-test-%d%d' % (os.getpid(), time.time_ns())
     try:
         env = dict(os.environ)
         env['HERMES_NODE_UI_TEST_NO_ACTIVATE'] = '1'
-        env['HERMES_NODE_UI_TEST_PASTEBOARD'] = 'hnui-test-%d%d' % (
-            os.getpid(), time.time_ns())
+        env['HERMES_NODE_UI_TEST_PASTEBOARD'] = pasteboard
         # subprocess closes inherited descriptors by default, so the lock is
         # held by this process alone and goes when it does.
         # The test's limit starts now, and bounds only the command.
         return timeout.run(limit, command, env=env, foreground=False)
     finally:
+        release_pasteboard(pasteboard, debug)
         os.close(fd)
 
 

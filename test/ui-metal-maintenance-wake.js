@@ -39,8 +39,9 @@
 //
 // **What is asserted is that the wake arrives, not that nothing else would
 // have collected the release.** Any loop turn runs the check phase, and so
-// maintenance, and three ends tried for "nothing else turned the loop"
-// each let one in -- all measured with the wake's post removed. A
+// maintenance, and four ends tried for "nothing else turned the loop"
+// each let one in -- all measured with the wake's post removed. Releasing
+// synchronously from the script: that turn's own check collected it. A
 // one-second exit timer: libuv's poll returned a millisecond early and
 // that turn's check ran first. process.exit() itself: it flushes through
 // a nested uv_run, whose check phase runs maintenance. This capture's

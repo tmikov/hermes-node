@@ -77,20 +77,31 @@
 /// early: Sokol sends no event before `init_cb` (`_sapp_events_enabled`),
 /// so nothing would cancel the quit, and `windowShouldClose:` would let
 /// the window close. So the request is then handed to the shared code
-/// directly. Each trace line is printed after the call it describes
-/// returned; the shared `quit requested` line is printed inside either.
+/// directly.
+///
+/// Each trace line is printed after the call it describes returned, and
+/// says what was read back rather than what was intended: for
+/// performClose:, how many quit requests the shared code cancelled during
+/// the call (uiQuitRequestsCancelled(), before and after) -- 1 when Sokol's
+/// delegate raised one, 0 when performClose: did not reach it; for the
+/// direct hand-off, whether there was no window or a window that had drawn
+/// no frame. The shared `quit requested` line is printed inside either.
 - (void)terminate:(id)sender {
-  NSWindow *window = (__bridge NSWindow *)hermes::node_compat::uiMacWindow();
+  using namespace hermes::node_compat;
+  NSWindow *window = (__bridge NSWindow *)uiMacWindow();
   if (window != nil && sapp_frame_count() > 0) {
+    const uint64_t before = uiQuitRequestsCancelled();
     [window performClose:sender];
-    hermes::node_compat::uiTrace(
-        "app: terminate requested; forwarded as a close request (window=%d)",
-        window.isVisible ? 1 : 0);
+    uiTrace(
+        "app: terminate requested; through performClose:, %llu quit "
+        "request(s) cancelled",
+        static_cast<unsigned long long>(uiQuitRequestsCancelled() - before));
     return;
   }
-  hermes::node_compat::uiHandleQuitRequestDirectly();
-  hermes::node_compat::uiTrace(
-      "app: terminate requested; no window yet, forwarded directly");
+  uiHandleQuitRequestDirectly();
+  uiTrace(
+      "app: terminate requested; %s, forwarded directly",
+      window == nil ? "no window yet" : "no frame yet");
 }
 
 @end

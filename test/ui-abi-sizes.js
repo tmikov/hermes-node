@@ -95,6 +95,20 @@ const ui = require('hermes-node:ui');
 const addonPath = process.argv[2];
 const SAPP_KEYCODE_F6 = 295;
 
+// macOS writes the clipboard to the pasteboard HERMES_NODE_UI_TEST_PASTEBOARD
+// names, and to the general one -- the clipboard of whoever is using the
+// Mac -- without it. utils/with-display.py sets a private hnui-test-* name;
+// a run without the wrapper is refused before anything is written.
+if (process.platform === 'darwin' &&
+    !(process.env.HERMES_NODE_UI_TEST_PASTEBOARD || '').startsWith(
+        'hnui-test-')) {
+  console.log(
+      'REFUSED: HERMES_NODE_UI_TEST_PASTEBOARD does not name a hnui-test-* ' +
+      'pasteboard, so this run would write the general pasteboard. Run it ' +
+      'under utils/with-display.py.');
+  process.exit(2);
+}
+
 function report(name, ok, detail) {
   console.log(name + ' ' + (ok ? 'ok' : 'WRONG ' + (detail || '')));
 }

@@ -22,6 +22,12 @@
 //              last string would hand that back here
 //   BIG        the tool writes 1048577 bytes, past the ABI's limit: too
 //              large, both ways
+//   BADDATA    the tool leaves string-type data AppKit cannot decode (a
+//              lone UTF-16 surrogate): stringForType: answers nil, and the
+//              read fails -- ERR_CLIPBOARD_FAILED and HNUI_ERROR -- rather
+//              than passing for an empty clipboard. (The other failure the
+//              read checks for, a string UTF-8 cannot encode, no test can
+//              produce: AppKit stores such a string as an empty one.)
 //   ABANDONED  a sync read with a zero deadline times out at once, and the
 //              read after it still works
 //
@@ -30,7 +36,9 @@
 // HERMES_NODE_UI_TEST_PASTEBOARD; hermes-node-ui reads and writes only that
 // one, traced once as `clipboard: pasteboard '<name>'`, and the script
 // hands the same name to the tool. The tool refuses any name not starting
-// `hnui-test-`, and the script gives the pasteboard back at the end.
+// `hnui-test-`, and so does this script, before writing anything: run
+// without the wrapper, it exits 2 instead of writing the general pasteboard.
+// The wrapper releases the pasteboard when the run ends.
 //
 // Mutations (each must turn a named line below red):
 //   cache the last string and return it when no string type is present
@@ -60,6 +68,8 @@
 // CHECK-NEXT: NONSTRING sync ok
 // CHECK-NEXT: BIG promise ok
 // CHECK-NEXT: BIG sync ok
+// CHECK-NEXT: BADDATA promise ok
+// CHECK-NEXT: BADDATA sync ok
 // CHECK-NEXT: ABANDONED sync ok
 // CHECK-NEXT: ABANDONED after ok
 // CHECK-NEXT: RELEASED ok
@@ -76,8 +86,10 @@
 // TRACE: clipboard read sync #4: status=unavailable bytes=0
 // TRACE: clipboard read promise #5: status=too-large bytes=0
 // TRACE: clipboard read sync #5: status=too-large bytes=0
-// TRACE: clipboard read sync #6: deadline passed; skipped
-// TRACE: clipboard read sync #7: status=ok bytes=5
+// TRACE: clipboard read promise #6: status=error bytes=0
+// TRACE: clipboard read sync #6: status=error bytes=0
+// TRACE: clipboard read sync #7: deadline passed; skipped
+// TRACE: clipboard read sync #8: status=ok bytes=5
 
 'use strict';
 
@@ -87,6 +99,20 @@ const ui = require('hermes-node:ui');
 const addonPath = process.argv[2];
 const toolPath = process.argv[3];
 const pasteboard = process.env.HERMES_NODE_UI_TEST_PASTEBOARD || '';
+
+// macOS writes the clipboard to the pasteboard HERMES_NODE_UI_TEST_PASTEBOARD
+// names, and to the general one -- the clipboard of whoever is using the
+// Mac -- without it. utils/with-display.py sets a private hnui-test-* name;
+// a run without the wrapper is refused before anything is written.
+if (process.platform === 'darwin' &&
+    !(process.env.HERMES_NODE_UI_TEST_PASTEBOARD || '').startsWith(
+        'hnui-test-')) {
+  console.log(
+      'REFUSED: HERMES_NODE_UI_TEST_PASTEBOARD does not name a hnui-test-* ' +
+      'pasteboard, so this run would write the general pasteboard. Run it ' +
+      'under utils/with-display.py.');
+  process.exit(2);
+}
 
 const SYNC_TIMEOUT_MS = 2000;
 const SAPP_KEYCODE_F3 = 292;
@@ -188,6 +214,16 @@ async function main() {
       show(p));
   s = addon.readClipboardSync(SYNC_TIMEOUT_MS);
   report('BIG sync', s.status === 'HNUI_TOO_LARGE' && s.text === null, show(s));
+
+  // BADDATA
+  tool('surrogate');
+  p = await readPromise();
+  report(
+      'BADDATA promise', !p.resolved && p.code === 'ERR_CLIPBOARD_FAILED',
+      show(p));
+  s = addon.readClipboardSync(SYNC_TIMEOUT_MS);
+  report(
+      'BADDATA sync', s.status === 'HNUI_ERROR' && s.text === null, show(s));
 
   // ABANDONED
   s = addon.readClipboardSync(0);

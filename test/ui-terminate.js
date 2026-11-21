@@ -5,10 +5,12 @@
 
 // A termination request on macOS is a cancelable close (Task 16e, the
 // plan's Design (d)). AppKit's own `-[NSApplication terminate:]` asks the
-// delegate and then ends the process from inside the call, with status 0
-// and `cleanup_cb` -- so a Dock Quit or Cmd-Q would end a program no
-// matter what its `close` listeners said, and its exit code would be lost
-// (Task 15's review). HnuiApplication's `terminate:` (mac_app.mm) never
+// delegate and then ends the process from inside the call, after
+// `cleanup_cb` -- so a Dock Quit or Cmd-Q would end a program no matter
+// what its `close` listeners said, and its exit code would be lost (Task
+// 15's review). Measured with AppKit's own, run through this file: DEFAULT
+// and CANCEL ended with status 133 (SIGTRAP) right after `cleanup_cb`, and
+// EARLY with status 0. HnuiApplication's `terminate:` (mac_app.mm) never
 // calls super: it turns the request into the same close request a click on
 // the close button makes, which the shared code cancels and forwards to
 // the program's `close` listeners.
@@ -17,9 +19,10 @@
 //
 //  DEFAULT  No listener prevents it. The close proceeds as in ui-close.js's
 //           default case -- `'exit'` listeners run and the status is
-//           `process.exitCode` (7), not AppKit's 0. The request went
-//           through the window -- `performClose:`, Sokol's delegate -- and
-//           the trace says so: `(window=1)`, never `no window yet`.
+//           `process.exitCode` (7). The request went through the window --
+//           `performClose:`, Sokol's delegate -- and the trace says so,
+//           from what it read back: one quit request was cancelled during
+//           that call, and nothing was forwarded directly.
 //  CANCEL   A `close` listener calls preventDefault(). The window stays:
 //           `state` reports it viewable afterwards, as it did before the
 //           request, and the program ends on its own terms, through
@@ -29,11 +32,20 @@
 //           frames later), so a check made too soon would read 0 with the
 //           window plainly there.
 //  EARLY    The request is made between calling createWindow() and
-//           awaiting it, before the program can have listeners. Either
-//           trace line is accepted: the request may land before Sokol has
-//           a window that delivers events (handed straight to the shared
-//           code) or after (performClose:). Either way the `close` is
+//           awaiting it, before the program can have listeners. Any of the
+//           three trace lines is accepted: the request may land before
+//           Sokol has a window, after it has one that has drawn no frame
+//           -- both handed straight to the shared code -- or after the
+//           first frame (performClose:). Either way the `close` is
 //           delivered once the window is ready, and nothing prevents it.
+//           Measured: it always landed before the window existed.
+//
+// **Nothing here covers the interval between Sokol creating its window and
+// its first frame**, which is the one in which terminate: must not use
+// performClose: (mac_app.mm says why), and which the `no frame yet` branch
+// is for. Removing that check leaves all three cases green: EARLY's request
+// has always arrived before the window, and no request can be aimed at
+// that interval without a timing assumption.
 //
 // Every case's trace check matches `quit requested: cancelled` -- printed
 // inside performClose: or the direct hand-off -- before `app: terminate
@@ -54,12 +66,16 @@
 // -- which it does only because terminate: is ours: `visible=1` once the
 // close was cancelled, `window=0` when there was no window yet.
 //
+// (Mutations: call `[super terminate:]` -- DEFAULT exits 133 with
+// `cleanup_cb`; always take the direct hand-off -- the behaviour checks
+// pass, and DEFAULT's trace check is what goes red.)
+//
 // REQUIRES: ui, ui-backend-metal, display
 //
 // RUN: %with-display 120 sh -c '{ HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s default 2> %t.default.err; echo "EXITCODE $?" > %t.default.code; } | cat > %t.default.out'
 // RUN: %FileCheck --check-prefix=DEFAULT-CODE %s < %t.default.code
 // RUN: %FileCheck --check-prefix=DEFAULT %s < %t.default.out
-// RUN: %FileCheck --check-prefix=DEFAULT-TRACE --implicit-check-not='no window yet' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.default.err
+// RUN: %FileCheck --check-prefix=DEFAULT-TRACE --implicit-check-not='forwarded directly' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.default.err
 //
 // RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s cancel > %t.cancel.out 2> %t.cancel.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CANCEL-CODE %s
 // RUN: %FileCheck --check-prefix=CANCEL %s < %t.cancel.out
@@ -75,7 +91,7 @@
 // DEFAULT: EXIT-LINE 7 code=7
 // DEFAULT-CODE: EXITCODE 7
 // DEFAULT-TRACE: quit requested: cancelled, forwarded as close
-// DEFAULT-TRACE-NEXT: app: terminate requested; forwarded as a close request (window=1)
+// DEFAULT-TRACE-NEXT: app: terminate requested; through performClose:, 1 quit request(s) cancelled
 // DEFAULT-TRACE: close: not cancelled
 // DEFAULT-TRACE: lifecycle: CLOSING (reason=close)
 // DEFAULT-TRACE: close: ending the process through process.exit()
@@ -87,7 +103,7 @@
 // CANCEL-NEXT: EXIT code=0
 // CANCEL-CODE: EXITCODE 0
 // CANCEL-TRACE: quit requested: cancelled, forwarded as close
-// CANCEL-TRACE-NEXT: app: terminate requested; forwarded as a close request (window=1)
+// CANCEL-TRACE-NEXT: app: terminate requested; through performClose:, 1 quit request(s) cancelled
 // CANCEL-TRACE: close: cancelled
 
 // EARLY: ANSWERED
@@ -95,7 +111,7 @@
 // EARLY-NEXT: EXIT code=5
 // EARLY-CODE: EXITCODE 5
 // EARLY-TRACE: quit requested: cancelled, forwarded as close
-// EARLY-TRACE-NEXT: app: terminate requested; {{(forwarded as a close request \(window=1\)|no window yet, forwarded directly)}}
+// EARLY-TRACE-NEXT: app: terminate requested; {{(through performClose:, 1 quit request\(s\) cancelled|no window yet, forwarded directly|no frame yet, forwarded directly)}}
 // EARLY-TRACE: close: not cancelled
 // EARLY-TRACE: lifecycle: CLOSING (reason=close)
 

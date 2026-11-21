@@ -174,6 +174,19 @@ async function runConformance(addonPath, ownerPath, capturePath, backend) {
         'arguments: <x11_selection_owner> <capture.ppm> <gl|metal>');
     process.exit(2);
   }
+  // macOS writes the clipboard to the pasteboard
+  // HERMES_NODE_UI_TEST_PASTEBOARD names, and to the general one -- the
+  // clipboard of whoever is using the Mac -- without it. Conformance mode
+  // writes it, so a run without utils/with-display.py is refused first.
+  if (process.platform === 'darwin' &&
+      !(process.env.HERMES_NODE_UI_TEST_PASTEBOARD || '').startsWith(
+          'hnui-test-')) {
+    console.log(
+        'REFUSED: HERMES_NODE_UI_TEST_PASTEBOARD does not name a ' +
+        'hnui-test-* pasteboard, so conformance mode would write the ' +
+        'general pasteboard. Run it under utils/with-display.py.');
+    process.exit(2);
+  }
   const win = await ui.createWindow(
       {width: 320, height: 240, title: 'hnui conformance'});
   const addon = require(require('path').resolve(addonPath));
