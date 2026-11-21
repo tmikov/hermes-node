@@ -782,8 +782,7 @@ void MetalBackend::workerLoopTurn() {
   wakeWanted_.store(false);
   const int freeBefore = hnui_sg_mtl_idpool_free();
   int commits = 0;
-  while (hnui_sg_mtl_idpool_pending() > 0 &&
-         commits < kMaxMaintenanceCommits) {
+  while (hnui_sg_mtl_idpool_pending() > 0 && commits < kMaxMaintenanceCommits) {
     sg_commit();
     ++commits;
   }
