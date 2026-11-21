@@ -38,9 +38,8 @@ void uiMacInstallApplication();
 /// uiMacInstallApplication().
 bool uiMacRefusesActivation();
 
-/// The `NSWindow` Sokol created (`sapp_macos_get_window()`). **Must not be
-/// called before `init_cb`**: Sokol asserts that the window exists (in a
-/// build where `SOKOL_ASSERT` is compiled out it returns null instead).
+/// The `NSWindow` Sokol created (`sapp_macos_get_window()`), or null before
+/// Sokol has created it -- which a termination request can arrive before.
 /// `void *` so this header stays C++.
 void *uiMacWindow();
 

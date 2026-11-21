@@ -272,6 +272,17 @@ if(HERMES_NODE_ENABLE_UI AND TARGET hermesNodeCompositorGpu AND UNIX AND
   target_link_libraries(x11_window_driver PRIVATE X11::X11)
 endif()
 
+# A second process that writes the test pasteboard, for
+# test/ui-clipboard-mac.js: the macOS counterpart of x11_selection_owner.
+# Compiled as C, which clang reads as Objective-C from the .m name.
+if(HERMES_NODE_ENABLE_UI AND TARGET hermesNodeCompositorGpu AND APPLE)
+  add_executable(mac_pasteboard_tool
+    test/fixtures/hnui-demo/mac_pasteboard_tool.m
+  )
+  target_compile_options(mac_pasteboard_tool PRIVATE -fobjc-arc)
+  target_link_libraries(mac_pasteboard_tool PRIVATE "-framework AppKit")
+endif()
+
 # JS tests (Lit-based)
 set(LLVH_LIT_ARGS "-sv")
 # No enable_ui (or similar) param here for HERMES_NODE_ENABLE_UI: a param
@@ -367,6 +378,11 @@ if(TARGET x11_window_driver)
   list(APPEND HERMES_NODE_JS_TEST_DEPENDS x11_window_driver)
   list(APPEND HERMES_NODE_LIT_PARAMS
     x11_window_driver=$<TARGET_FILE:x11_window_driver>)
+endif()
+if(TARGET mac_pasteboard_tool)
+  list(APPEND HERMES_NODE_JS_TEST_DEPENDS mac_pasteboard_tool)
+  list(APPEND HERMES_NODE_LIT_PARAMS
+    mac_pasteboard_tool=$<TARGET_FILE:mac_pasteboard_tool>)
 endif()
 # test/sokol-rename.js reads the generated sgp_rename.h and
 # test/sokol-isolation.js reads the two compiled sokol_gfx objects, so both

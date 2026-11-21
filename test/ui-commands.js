@@ -70,7 +70,9 @@
 
 // The backend (`%ui-backend`) is the script's first argument and selects
 // the `TRACE-<backend>` lines. What names an X11 or GL fact -- the
-// fullscreen pair, `_NET_WM_ICON`, `owns_selection` -- is under TRACE-gl;
+// fullscreen pair, `_NET_WM_ICON`, `owns_selection` -- is under TRACE-gl,
+// and its macOS counterpart -- the dock tile's image, the pasteboard the
+// test wrapper named -- under TRACE-metal;
 // what every backend prints the same way (the title read-back, Sokol's own
 // cursor, visibility and lock read-backs) stays under TRACE. On `gl`
 // nothing is skipped. On `metal` the fullscreen pair is not issued: AppKit's
@@ -89,6 +91,7 @@
 // TRACE-gl: command fullscreen: is_fullscreen=1
 // TRACE-gl: command fullscreen: is_fullscreen=0
 // TRACE-gl: command icon: _NET_WM_ICON 16x16 first_pixel=0xff0a141e
+// TRACE-metal: command icon: dock tile 16x16
 // TRACE: command cursor 0: sapp_mouse_cursor=0
 // TRACE: command cursor 1: sapp_mouse_cursor=1
 // TRACE: command cursor 2: sapp_mouse_cursor=2
@@ -106,6 +109,8 @@
 // TRACE: command lock pointer: sapp_mouse_locked=1
 // TRACE: command lock pointer: sapp_mouse_locked=0
 // TRACE-gl: command clipboard: owns_selection=1 bytes=14
+// TRACE-metal: clipboard: pasteboard 'hnui-test-
+// TRACE-metal: command clipboard: pasteboard_bytes=14 bytes=14
 // The ending: win.close() enters CLOSING and then calls process.exit(). The
 // implicit NOT on `runtime returned` is what catches a win.close() that
 // enters CLOSING and returns: the released handle lets the loop drain, the

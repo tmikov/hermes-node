@@ -7,6 +7,7 @@
 
 #include "mac_app.h"
 
+#include "ui_module.h"
 #include "ui_trace.h"
 
 #include <sokol_app.h>
@@ -19,9 +20,9 @@
 /// The process's `NSApplication`, created before Sokol's
 /// `[NSApplication sharedApplication]` so that call returns this instance.
 ///
-/// In Task 16b it overrides only the two activation entry points; Task 16e
-/// adds `terminate:`, which turns a termination request into the
-/// cancelable close (the plan's Design (d)).
+/// It overrides the two activation entry points, and `terminate:`, which
+/// turns a termination request into the cancelable close (the plan's
+/// Design (d)).
 @interface HnuiApplication : NSApplication
 /// Set once, before `sapp_run()`, from HERMES_NODE_UI_TEST_NO_ACTIVATE.
 @property(nonatomic) BOOL hnuiRefusesActivation;
@@ -59,6 +60,37 @@
   if (self.hnuiRefusesActivation)
     policy = NSApplicationActivationPolicyAccessory;
   return [super setActivationPolicy:policy];
+}
+
+/// What a Dock Quit, Cmd-Q or `[NSApp terminate:nil]` reaches. **Never
+/// calls super**: AppKit's terminate: ends the process from inside the call
+/// (measured before this existed: `cleanup_cb`, then status 0 or a
+/// SIGTRAP), so the program's `close` listeners and exit code would be
+/// bypassed. Instead the request becomes the close request a click on the
+/// close button makes, which the shared code cancels and forwards to the
+/// JS thread, whose listeners decide.
+///
+/// Through the window -- `performClose:`, so Sokol's delegate raises
+/// QUIT_REQUESTED -- once Sokol delivers events: it has a window
+/// (sapp_isvalid()) and has called `init_cb`, which a completed frame
+/// implies. Before that, performClose: would be wrong rather than merely
+/// early: Sokol sends no event before `init_cb` (`_sapp_events_enabled`),
+/// so nothing would cancel the quit, and `windowShouldClose:` would let
+/// the window close. So the request is then handed to the shared code
+/// directly. Each trace line is printed after the call it describes
+/// returned; the shared `quit requested` line is printed inside either.
+- (void)terminate:(id)sender {
+  NSWindow *window = (__bridge NSWindow *)hermes::node_compat::uiMacWindow();
+  if (window != nil && sapp_frame_count() > 0) {
+    [window performClose:sender];
+    hermes::node_compat::uiTrace(
+        "app: terminate requested; forwarded as a close request (window=%d)",
+        window.isVisible ? 1 : 0);
+    return;
+  }
+  hermes::node_compat::uiHandleQuitRequestDirectly();
+  hermes::node_compat::uiTrace(
+      "app: terminate requested; no window yet, forwarded directly");
 }
 
 @end
@@ -111,6 +143,10 @@ bool uiMacRefusesActivation() {
 }
 
 void *uiMacWindow() {
+  // sapp_isvalid() turns true in applicationDidFinishLaunching:, once the
+  // window and its delegate exist; sapp_macos_get_window() asserts before.
+  if (!sapp_isvalid())
+    return nullptr;
   return const_cast<void *>(sapp_macos_get_window());
 }
 

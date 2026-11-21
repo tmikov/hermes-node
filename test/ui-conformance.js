@@ -52,7 +52,9 @@
 // The backend (`%ui-backend`) is demo.js's last argument and selects the
 // `CHECK-<backend>` and `TRACE-<backend>` lines. What names an X11 fact --
 // `owns_selection`, the timeout against a mute selection owner -- is under
-// `-gl`; on `gl` nothing is skipped.
+// `-gl`; on `gl` nothing is skipped. The macOS pasteboard has no owner to
+// go mute, so on `metal` the timeout is a zero deadline instead, and the
+// write's read-back is the pasteboard's.
 //
 // RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %source_dir/test/fixtures/hnui-demo/demo.js %hnui_demo_addon conformance %x11_selection_owner %t.ppm %ui-backend > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck --check-prefixes=CHECK,CHECK-%ui-backend %s < %t.out
@@ -81,6 +83,7 @@
 // CHECK-NEXT: hnui_read_clipboard_sync status=HNUI_OK text="hnui conformance"
 // CHECK-NEXT: hnui_free released the HNUI_OK copy
 // CHECK-gl-NEXT: hnui_read_clipboard_sync (owner never answers) status=HNUI_TIMEOUT out=NULL
+// CHECK-metal-NEXT: hnui_read_clipboard_sync (zero deadline) status=HNUI_TIMEOUT out=NULL
 // CHECK-NEXT: hnui_free(NULL) returned
 // CHECK-NEXT: DONE
 
@@ -92,6 +95,7 @@
 // TRACE: command lock pointer: sapp_mouse_locked=1
 // TRACE: command lock pointer: sapp_mouse_locked=0
 // TRACE-gl: command clipboard: owns_selection=1 bytes=16
+// TRACE-metal: command clipboard: pasteboard_bytes=16 bytes=16
 // TRACE: clipboard read sync #1: status=ok bytes=16
 // TRACE-gl: clipboard read sync #2: status=timeout bytes=0
 // TRACE: lifecycle: CLOSING (reason=close)

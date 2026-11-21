@@ -32,7 +32,11 @@ namespace node_compat {
 ///   close            `visible=<0|1>`
 ///   miniaturize      `miniaturized=<0|1>`
 ///   deminiaturize    `miniaturized=<0|1>`
-///   terminate        `requested` (Task 16e is what gives it a meaning)
+///   terminate        `visible=<0|1>`, or `window=0` before the window
+///                    exists -- read back after `[NSApp terminate:nil]`
+///                    returned, which it does because `terminate:` is
+///                    HnuiApplication's (mac_app.mm); allowed before the
+///                    window exists, unlike every other command
 ///   state            `viewable=<0|1> <w>x<h>`
 ///   gpu-hold         `held=<0|1>`
 ///   gpu-release      `in_flight=<n>`, read when the command runs: the
@@ -42,12 +46,11 @@ namespace node_compat {
 /// The answers are read back after the action, never echoed from the
 /// request -- for the two animated ones, `miniaturize` and
 /// `deminiaturize`, after AppKit's notification that the animation is
-/// over. Two are weaker than that, and say less than they seem to:
+/// over. One is weaker than that, and says less than it seems to:
 /// `key`'s `first_responder_is_view` is a precondition, read after the
 /// event was sent -- that the view was where a key event goes, not that
 /// this one arrived (the `keydown` event the script receives is the
-/// evidence of that); and `terminate`'s `requested` is not a read-back at
-/// all (Task 16e replaces it).
+/// evidence of that).
 ///
 /// `gpu-hold` and `gpu-release` are not about the window: they are the test
 /// hooks' hold on the producer's GPU work (`metal_test_hooks.h`), here
