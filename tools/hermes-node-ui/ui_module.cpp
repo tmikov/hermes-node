@@ -459,6 +459,17 @@ void onConsumerComplete(void *user, SurfaceRef ref, bool ok) {
     action();
 }
 
+/// The backend's request for one more worker loop turn
+/// (`CompositorBackend::setWorkerWake`). Any thread. Posts nothing but the
+/// turn itself and a trace that it arrived: the turn's check phase is what
+/// calls `workerLoopTurn()`. A refused post means the dispatcher is closed,
+/// and a closing window runs no more loop turns anyway.
+void wakeWorker(void *user) {
+  (void)user;
+  if (gDispatch != nullptr)
+    gDispatch->post([]() { uiTrace("worker loop: woken"); });
+}
+
 /// Run one JavaScript frame callback, which next() has already taken out
 /// of the list.
 ///
@@ -905,6 +916,7 @@ void onSharedContextReady() {
   // callback submitAndTrackCompletion() takes, the consumer's through
   // this sink, because blit() has nowhere to carry one.
   gBackend->setConsumerCompletion(onConsumerComplete, nullptr);
+  gBackend->setWorkerWake(wakeWorker, nullptr);
 
   // Surfaces are sized to the FRAMEBUFFER in pixels, not to the window in
   // logical units (spec: Surfaces, "sized to the framebuffer in pixels").

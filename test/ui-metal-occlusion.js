@@ -13,14 +13,16 @@
 //
 // What is asserted:
 //  - FIRST: a frame drawn before miniaturizing is presented and captured.
-//  - the miniaturize reaches the program as a `minimize` event, and the
-//    window's own read-back says it is miniaturized;
-//  - while it is, frames still arrive (from Sokol's NSTimer) and each one
-//    submits nothing: `present: swapchain invalid; nothing submitted` is
-//    printed on entering the state, and no `frame tick:` until `present:
-//    swapchain valid again` -- a requestAnimationFrame made while
-//    miniaturized does not run until the window can be seen (the plan's
-//    Ruling 88);
+//  - the miniaturize reaches the program as a `minimize` event; the
+//    driver's read-back, taken once AppKit says the animation is over, is
+//    `miniaturized=1`; and `state` then reports `viewable=0` -- the
+//    window's occlusion state no longer has NSWindowOcclusionStateVisible;
+//  - while it is, frames still arrive (from Sokol's NSTimer): the script
+//    waits for ten of them (WAITED), and each submits nothing:
+//    `present: swapchain invalid; nothing submitted` is printed on entering
+//    the state, and no `frame tick:` until `present: swapchain valid
+//    again` -- a requestAnimationFrame made while miniaturized does not run
+//    until the window can be seen (the plan's Ruling 88);
 //  - the deminiaturize reaches the program as `restore`, and a frame drawn
 //    afterwards is presented and captured: SECOND.
 //
@@ -29,9 +31,23 @@
 // which onFrame calls only when the acquisition failed, and `valid again`
 // from acquireFrameSwapchain() after one succeeded.
 //
-// (Mutations: in acquireFrameSwapchain ignore swapchain.invalid -- the nil
-// guard still refuses the frame, so this test stays green; then remove the
-// nil guard too -- the run dies in Sokol's validation of sg_begin_pass.)
+// **What the `frame tick:` check cannot pin.** Two guards each keep a
+// frame callback from running while the window is miniaturized: onFrame's
+// early return on an invalid swapchain, and TickMachine::shouldSendTick
+// declining while `minimized_` is set. Removing either one alone leaves the
+// check green, because the other still holds; it fails only if both go.
+// A test that pinned onFrame's guard alone would need an occlusion that
+// invalidates the swapchain without minimizing, and none could be produced
+// on demand: a covered window keeps a valid swapchain.
+//
+// (Mutations, as measured in Task 16d. In acquireSwapchain, ignore
+// `swapchain.invalid`: green, with an identical trace -- while the window
+// is miniaturized Sokol hands back a nil drawable, so the nil guard
+// refuses the frame anyway. Remove the nil guard too: red only at the
+// missing `swapchain invalid` line. The run still exits 0 with both
+// captures written and no `[sokol-` line, because Sokol's Metal
+// begin_pass itself skips a nil drawable -- sokol_gfx.h, "current_drawable
+// will not be valid if window is minimized".)
 //
 // REQUIRES: ui, ui-backend-metal, display
 //
@@ -44,6 +60,7 @@
 
 // CHECK: FIRST matched=true
 // CHECK-NEXT: MINIMIZED ok
+// CHECK-NEXT: WAITED true
 // CHECK-NEXT: RESTORED ok
 // CHECK-NEXT: SECOND matched=true
 // CHECK-NEXT: DONE
@@ -116,7 +133,7 @@ async function main() {
   // finding the swapchain invalid.
   // The trace's TRACE-NOT is what checks it.
   ui.requestAnimationFrame(() => {});
-  ui.__waitPlatformFrames(10);
+  console.log('WAITED ' + ui.__waitPlatformFrames(10));
 
   // --- restored ---------------------------------------------------------
   const restored = new Promise((resolve) => win.once('restore', resolve));

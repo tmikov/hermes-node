@@ -287,7 +287,8 @@ async function main() {
   // (a free-running loop) where that would bite first.
   const firstPending = capture(1, capturePath, 900);
   if (mode === 'native') {
-    addon.startNativeFrames();
+    // Four frames and no more: step 4's request is for the fourth.
+    addon.startNativeFrames(4);
   } else {
     await drawOnce();
   }
@@ -360,6 +361,21 @@ async function main() {
       });
     });
     const recycled = await recycledPending;
+    console.log(
+        'RECYCLED matched=' + recycled.matched +
+        ' publicationId=' + recycled.publicationId);
+  } else {
+    // --- 4, native mode. -----------------------------------------
+    //
+    // The same question as step 4 above, asked of the addon's own loop,
+    // which startNativeFrames(4) stops after its fourth frame. Publication
+    // 4 is drawn into a slot an earlier publication held, and as the last
+    // one it stays presented, so a request for exactly it cannot lose a
+    // race to a fifth -- a free-running loop would make that a race. A
+    // slot that never comes back stops the loop after three: the request
+    // gives up after its frame budget and reports `matched=false`.
+    const recycled =
+        await capture(4, capturePath + '.recycled', RECYCLE_FRAME_BUDGET);
     console.log(
         'RECYCLED matched=' + recycled.matched +
         ' publicationId=' + recycled.publicationId);
@@ -460,6 +476,7 @@ main().catch((e) => {
 // BLOCK-NEXT: BOTTOMRIGHT ok
 // BLOCK-NEXT: TOPLEFTDEEP ok
 // BLOCK-NEXT: PATTERN ok
+// BLOCK-NEXT: RECYCLED matched=true publicationId=4
 // BLOCK-NEXT: DONE
 // BLOCKCODE: EXITCODE 0
 //

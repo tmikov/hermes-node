@@ -38,6 +38,8 @@
 //  - for each of generations 2 to 12, `generation <g>: surfaces destroyed`
 //    and after it -- before any other generation's -- a `maintenance:`
 //    line that collected everything (`pending 0`) in one to four commits;
+//    and no maintenance line anywhere leaves anything pending, so each
+//    generation was collected by one pass;
 //  - the id pool does not drain: the last `idpool free` value is within 16
 //    of the first (awk over the trace);
 //  - the final frame, in the last generation, is presented and captured.
@@ -49,7 +51,7 @@
 //
 // RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --check-prefix=TRACE --implicit-check-not='[sokol-' %s < %t.err
+// RUN: %FileCheck --check-prefix=TRACE --implicit-check-not='[sokol-' --implicit-check-not='pending {{[1-9]}}' %s < %t.err
 // RUN: awk '/maintenance:/ { split($0, a, "idpool free "); split(a[2], b, " "); sub(",", "", b[3]); if (first == "") first = b[1]; last = b[3] } END { d = last - first; if (d < 0) d = -d; print "POOL first=" first " last=" last " " ((first != "" && d <= 16) ? "ok" : "DRAINED") }' %t.err | %FileCheck --check-prefix=POOL %s
 
 // CODE: EXITCODE 0

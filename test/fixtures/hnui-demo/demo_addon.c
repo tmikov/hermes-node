@@ -135,6 +135,9 @@ static sg_shader g_shader;
 static sg_pipeline g_pipeline;
 static bool g_resourcesReady = false;
 static int g_framesDrawn = 0;
+/* How many more frames nativeFrame() draws before it stops re-registering;
+   negative means without end. Set by startNativeFrames(). JS thread. */
+static int g_nativeFramesLeft = -1;
 /* The most recent hnui_frame_target answer, for lastTarget(). Zero until
    the first one, and zeroed again by a refusal: generation 0 is reserved
    for "no generation", so a test can mistake neither "never asked" nor
@@ -260,7 +263,8 @@ static bool drawPattern(hnui_window *w) {
  * has checked.
  *
  * Re-registers itself, which is how a native animation loop is written:
- * a callback registered inside a callback runs on the next tick.
+ * a callback registered inside a callback runs on the next tick -- until
+ * the count startNativeFrames() was given runs out, if it was given one.
  */
 static void nativeFrame(hnui_window *w, void *user, double timestampMs) {
   (void)user;
@@ -269,7 +273,12 @@ static void nativeFrame(hnui_window *w, void *user, double timestampMs) {
     return;
   }
   drawPattern(w);
-  hnui_request_animation_frame(w, nativeFrame, NULL);
+  if (g_nativeFramesLeft > 0) {
+    --g_nativeFramesLeft;
+  }
+  if (g_nativeFramesLeft != 0) {
+    hnui_request_animation_frame(w, nativeFrame, NULL);
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -318,12 +327,28 @@ static napi_value churnBufferThisFrame(napi_env env, napi_callback_info info) {
   return result;
 }
 
+/**
+ * `startNativeFrames([count])` -> the registration's id. Without `count`
+ * the loop runs without end; with a positive `count` it draws that many
+ * frames and stops, so that the last one stays presented -- which is what
+ * lets test/ui-present.js ask for a fourth publication in the native mode
+ * without racing a fifth to it.
+ */
 static napi_value startNativeFrames(napi_env env, napi_callback_info info) {
   napi_value result;
   hnui_window *w = hnui_get_window(env);
   int id = 0;
+  size_t argc = 1;
+  napi_value argv[1];
+  int32_t count = -1;
 
-  (void)info;
+  argv[0] = NULL;
+  napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+  if (argc < 1 || napi_get_value_int32(env, argv[0], &count) != napi_ok ||
+      count <= 0) {
+    count = -1;
+  }
+  g_nativeFramesLeft = count;
   if (w != NULL) {
     id = hnui_request_animation_frame(w, nativeFrame, NULL);
   }

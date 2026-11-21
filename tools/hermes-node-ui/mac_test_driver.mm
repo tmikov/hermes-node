@@ -10,6 +10,8 @@
 #include "mac_app.h"
 #include "ui_trace.h"
 
+#include <metal_test_hooks.h>
+
 #import <Cocoa/Cocoa.h>
 
 #include <chrono>
@@ -246,6 +248,19 @@ void runOnMain(const std::string &command, const Finish &finish) {
         finish);
   } else if (verb == "miniaturize" || verb == "deminiaturize") {
     changeMiniaturized(window, verb == "miniaturize", command, finish);
+  } else if (verb == "gpu-hold") {
+    // Not about the window: the test hooks' hold on the producer's GPU
+    // work (metal_test_hooks.h), here because this is the one in-process
+    // command channel a macOS test has.
+    applied(
+        command,
+        std::string("held=") + (metalTestHoldProducerGpu() ? "1" : "0"),
+        finish);
+  } else if (verb == "gpu-release") {
+    applied(
+        command,
+        "in_flight=" + std::to_string(metalTestReleaseProducerGpu()),
+        finish);
   } else if (verb == "terminate") {
     // What a Dock Quit or Cmd-Q sends. Task 16e's terminate: override is
     // what decides what it does; until then it is NSApplication's own.

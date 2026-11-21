@@ -34,11 +34,26 @@ namespace node_compat {
 ///   deminiaturize    `miniaturized=<0|1>`
 ///   terminate        `requested` (Task 16e is what gives it a meaning)
 ///   state            `viewable=<0|1> <w>x<h>`
+///   gpu-hold         `held=<0|1>`
+///   gpu-release      `in_flight=<n>`, read when the command runs: the
+///                    frames are released after the worker's next loop
+///                    turn, from another thread
 ///
-/// Every answer is read back from AppKit after the action, never echoed
-/// from the request -- for the two animated ones, `miniaturize` and
+/// The answers are read back after the action, never echoed from the
+/// request -- for the two animated ones, `miniaturize` and
 /// `deminiaturize`, after AppKit's notification that the animation is
-/// over -- and each action is traced as
+/// over. Two are weaker than that, and say less than they seem to:
+/// `key`'s `first_responder_is_view` is a precondition, read after the
+/// event was sent -- that the view was where a key event goes, not that
+/// this one arrived (the `keydown` event the script receives is the
+/// evidence of that); and `terminate`'s `requested` is not a read-back at
+/// all (Task 16e replaces it).
+///
+/// `gpu-hold` and `gpu-release` are not about the window: they are the test
+/// hooks' hold on the producer's GPU work (`metal_test_hooks.h`), here
+/// because this is the one in-process command channel a macOS test has.
+///
+/// Each command except `state` is traced as
 /// `drive: <command> applied (<answer>)`. Nothing here posts a CGEvent or
 /// needs Accessibility or Automation consent: the events are NSEvents sent
 /// to our own window, and the rest are calls on our own NSWindow.
