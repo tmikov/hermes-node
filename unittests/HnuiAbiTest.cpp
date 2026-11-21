@@ -90,14 +90,14 @@ static_assert(
 // RULING 45 first put them, and they are duplicated here rather than moved
 // for a reason worth stating: that file is built ONLY where the GL backend
 // is, while HERMES_NODE_ENABLE_UI is turned on for macOS as well -- CI does
-// exactly that -- and macOS builds the Metal backend instead. So on macOS
-// the Ruling 45 copy is not compiled at all.
+// exactly that -- and macOS builds the Metal backend instead, which
+// carries a copy of its own (metal_backend.mm).
 //
 // This translation unit has no such restriction: unittests/CMakeLists.txt
 // builds it under plain `if(HERMES_NODE_ENABLE_UI)`, and `sokol_gfx.h`'s
 // declarations need no backend. Keeping both copies costs nothing and buys
-// locality where the handles are actually used; this one buys coverage
-// today instead of after Task 16.
+// locality where the handles are actually used; this one is the copy that
+// does not depend on which backend a platform builds.
 static_assert(
     sizeof(hnui_gpu_view) == sizeof(sg_view),
     "hnui_gpu_view must be the same size as Sokol's sg_view: hnui_target "

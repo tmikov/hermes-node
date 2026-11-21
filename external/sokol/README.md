@@ -23,8 +23,9 @@ a file at a time. Upstream's directory layout is kept (`util/` for the
 utility headers), so a re-sync is the same relative path on both sides.
 
 `sokol_log.h` is here ahead of any `#include`: nothing includes it, since
-ours is the logger (below). `sokol_glue.h` is included by
-`lib/compositor-gpu/gl_present.cpp`, the presenting unit. Both are vendored
+ours is the logger (below). `sokol_glue.h` is included by the presenting
+unit, `lib/compositor-gpu/gl_present.cpp` or, on macOS, `metal_present.mm`.
+Both are vendored
 at this pin because fetching one later from a different commit is exactly
 the drift the pin exists to prevent.
 
@@ -60,18 +61,29 @@ Then, in this order:
    added or removed upstream changes it with no edit here --
    `test/sokol-rename.js` asserts the count did not go *down* past the
    design's measured floor.
-3. Rebuild. `lib/compositor-gpu/gl_backend.cpp` carries `static_assert`s
-   tying `hnui_gpu_view` to Sokol's `sg_view` and the `hnui_target::
-   color_format` range to `sg_pixel_format`; a bump that changes either
-   fails the build rather than silently shipping an ABI struct that no
-   longer matches (RULING 45).
+3. Rebuild. `lib/compositor-gpu/gl_backend.cpp` and `metal_backend.mm`
+   carry `static_assert`s tying `hnui_gpu_view` to Sokol's `sg_view` and
+   the `hnui_target::color_format` range to `sg_pixel_format`; a bump that
+   changes either fails the build rather than silently shipping an ABI
+   struct that no longer matches (RULING 45).
+4. Rebuild on macOS as well. `lib/compositor-gpu/sokol_gfx_ext.inc` reads
+   three fields of Sokol's private Metal state (`_sg.mtl.cmd_buffer` and
+   two of `_sg.mtl.idpool`), and it is compiled only under `SOKOL_METAL`,
+   so a bump that renames one of them fails the macOS build and passes the
+   Linux one.
 
 ## Digests as vendored
 
 Checked in at these SHA-256 sums. Anything else means the tree was edited,
 which the "untouched upstream" convention forbids -- carry a patch beside
-this file instead (the design requires one, for a Metal command-buffer
-accessor; it does not exist yet, and neither does the patch mechanism).
+this file instead. No patch exists and none is required today, so the
+patch mechanism is unsettled too. The design once required one, for a
+Metal command-buffer accessor; that accessor turned out to need no change
+to Sokol. `_sg` is a file-static of whichever translation unit defines
+`SOKOL_GFX_IMPL`, both of which are ours
+(`lib/compositor-gpu/sokol_gfx_impl.cpp` and
+`sokol_gfx_present_impl.cpp`), so the accessor is defined there, after the
+include, in `lib/compositor-gpu/sokol_gfx_ext.inc`.
 
 ```
 72f9367756dba68918b8955092c14503934681862eee33cc16495a02f40025ef  LICENSE

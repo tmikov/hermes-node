@@ -23,8 +23,9 @@ namespace node_compat {
 /// plan had a "Metal task" that turned out to implement only completion,
 /// because nothing had ever written down the rest of the surface it owed
 /// (finding 15); a pure-virtual interface is the form of that list which a
-/// compiler checks. GL fills it in over Tasks 8 and 10, Metal in Task 16,
-/// and neither may quietly answer a question the other answers differently
+/// compiler checks. GL (`gl_backend.cpp`, `gl_present.cpp`) and Metal
+/// (`metal_backend.mm`, `metal_present.mm`) both fill it in, and neither may
+/// quietly answer a question the other answers differently
 /// -- where the two genuinely must differ, the difference is named in a
 /// method comment here rather than discovered in an implementation.
 ///
@@ -381,9 +382,9 @@ class CompositorBackend {
 };
 
 /// The backend this binary was built with: GL (`gl_backend.cpp`) on Linux,
-/// Metal on macOS (Task 16). Exactly one implementation file defines this
-/// and `compositorBackendName()`, which is what makes the choice a link-time
-/// fact rather than a run-time one.
+/// Metal (`metal_backend.mm`) on macOS. Exactly one implementation file defines
+/// this and `compositorBackendName()`, which is what makes the choice a
+/// link-time fact rather than a run-time one.
 ///
 /// Replaces createGlBackend(). Null, having printed why, if none -- rather
 /// than an object in a state no method can be called on.

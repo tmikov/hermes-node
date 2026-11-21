@@ -2387,3 +2387,167 @@ unsupported, 1 failed.** `ui-close.js` and `ui-real-events.js` went from
 failing to passing, `ui-metal-maintenance.js` and `ui-metal-occlusion.js`
 are new, and `ui-conformance.js` still fails on the clipboard read, which
 is 16e's.
+
+## Task 16e as built
+
+Task 16e is two commits: "Retry deferred Metal maintenance; tighten
+tests", which answers the review of 16d, and "Close, terminate and read
+the pasteboard on macOS", both dated 2026-11-21. Measured on the Mac;
+where a statement above disagrees, this section is right.
+
+**The deferred maintenance retry.** A pass that `workerLoopTurn()` puts
+off because a producer frame is in flight is retried when that frame
+completes, even in a program that has gone idle: the completion handler
+that brings the in-flight count to zero calls a wake the shared code
+installed (`CompositorBackend::setWorkerWake`, a pure virtual added to
+`backend.h`, with an empty GL override), which posts a function to the
+worker's loop. A frame cannot be kept in flight by the shared completion
+hold on Metal, so the test hooks gained a GPU hold
+(`lib/compositor-gpu/metal_test_hooks.h`, an `encodeWaitForEvent:` after
+the frame's passes), reached through two more driver commands, `gpu-hold`
+and `gpu-release`. `test/ui-metal-maintenance-wake.js` pins that the wake
+**arrives** (`worker loop: woken`) together with a `pending 0` pass. It
+cannot pin that nothing else would have collected the release: any loop
+turn runs the check phase, and each of the three other ways of ending the
+run that were tried let a maintenance pass in first. Two limits of the
+hold, both measured: it catches whatever frame is committed next, and a
+frame held for more than a few seconds is ended by the GPU's watchdog,
+taking the graphics session with it.
+
+**The in-flight guard, again.** With `producerInFlight_ == 0` removed and
+a demo-addon function that creates, draws from and destroys a buffer
+inside one frame: free-running, 8 to 17 maintenance passes per run
+committed with a frame in flight, ten runs, no finding; and with that
+frame held in flight by `gpu-hold` while the unguarded pass released its
+buffer, five runs, no finding and no GPU error. The GPU read a released
+buffer and nothing reported it. That function was removed again, since a
+test built on it could not fail. Tracker issue 01a1fbb5-852f.
+
+**The bounded native loop.** `startNativeFrames([count])` in the demo
+addon stops after `count` frames when given one, which is what lets
+`test/ui-present.js`'s native run check `RECYCLED matched=true
+publicationId=4` and so turn red when the consumer sink is never called.
+
+**Termination.** Probe P4 was run again and refuted again, so there is no
+second-process case and no `mac_quit_sender.m`: every case of
+`test/ui-terminate.js` enters at `[NSApp terminate:nil]` through the
+in-process driver. **The manual Dock Quit check was skipped**: nobody was
+at the Mac. Whether a real Dock Quit, Cmd-Q or quit Apple event reaches
+the override is therefore unproved; tracker issue 01a1fbb5-851a.
+
+- *Without the override* (the record run): DEFAULT and CANCEL end with
+  status 133 (SIGTRAP) after `cleanup_cb`, with no `quit requested` line;
+  EARLY ends with status 0 after `cleanup_cb`, before `window ready`. The
+  plan's "status 0" held for EARLY only.
+- *"Window present" is narrower than the plan's.* Sokol sends no event
+  before `init_cb`, so a `performClose:` then would leave the quit
+  uncancelled and the window would close. `terminate:` uses
+  `performClose:` only when the window exists and `sapp_frame_count() >
+  0`; otherwise it hands a `QUIT_REQUESTED` to the shared code through
+  `uiHandleQuitRequestDirectly()` (`ui_platform.cpp`, a shared addition
+  the plan did not list). EARLY took that direct path in every run; the
+  `performClose:` branch before `init_cb` is refused by construction and
+  was never reached by a run.
+- CANCEL waits for `state` to report `viewable=1` before it terminates:
+  straight after `createWindow` the occlusion state read `viewable=0`,
+  and 1 ten frames later.
+- Mutations: calling `[super terminate:]` is red (status 133, not the
+  plan's 0); always taking the direct hand-off is red at the
+  `forwarded as a close request (window=1)` line.
+
+**The pasteboard.** Read and write are ours (`platform_services_mac.mm`),
+on the pasteboard `HERMES_NODE_UI_TEST_PASTEBOARD` names, else the general
+one. `test/ui-clipboard-mac.js` covers own and foreign text, no content,
+non-string content, oversize, a passed deadline and a later read, with
+`mac_pasteboard_tool` as the second process; that tool refuses any name
+not starting `hnui-test-`, so it cannot reach the general pasteboard, and
+has a `release` verb the test calls at the end. Mutations: caching the
+last string, reading another pasteboard and dropping the size check are
+each red. `pbpaste` before and after the verification run was identical
+(compared by digest). **Not provoked by anything: the error status**
+(`stringForType:` returning nil).
+
+**Read-backs.** The icon line is the `CGImage`'s size (`command icon: dock
+tile 16x16`), not the image representation's, which reports the tile
+(256x256 pixels for a 128-point tile at 2x). The clipboard line is
+`command clipboard: pasteboard_bytes=<n> bytes=<n>`.
+
+**`test/ui-close.js` already passed after 16d**, all nine cases; Step 6
+had nothing to do. `test/ui-conformance.js` passes with the zero-deadline
+read under `CHECK-metal-NEXT`.
+
+The Main Thread Checker reported nothing over `ui-clipboard-mac.js`, run
+without `caffeinate` so that the checker loads.
+
+**Suite on the Mac after Task 16e: 456 unit tests passed; JS 237 passed,
+6 unsupported, 0 failed.** `ui-conformance.js` went from failing to
+passing; `ui-metal-maintenance-wake.js`, `ui-terminate.js` and
+`ui-clipboard-mac.js` are new.
+
+Not covered by anything green: a real Dock Quit or Cmd-Q; the
+`performClose:` branch before `init_cb`; the pasteboard's error status;
+the GL build's empty `setWorkerWake` override beyond compiling and
+linking on Linux.
+
+## Task 16f as built
+
+Task 16f is three commits on Linux: "Remove the backend-less UI build",
+"Probe for a display on macOS CI" and the commit that adds this section.
+**The Mac verification block of Task 16f -- the whole suite three times,
+the canary with its promise broken, and the 32-run loop over
+`ui-events.js` and `ui-close.js` -- had not been run when this was
+written.** Its results belong here when it has.
+
+Where it departs from the task's text:
+
+- **`HERMES_NODE_UI_HAVE_WINDOW` is gone, not unconditional.** Once
+  `main.cpp` lost its conditionals nothing read it.
+- **`ui_host.cpp` had no `#ifndef` half to lose.** Its no-runner branch is
+  a run-time check of a null function pointer, and it stays:
+  `hermesNodeUiHost` is a library, and `UiHostTest` links it without a
+  runner to test exactly that branch. Its comments now say that
+  hermes-node-ui itself always installs one.
+- **The `if(TARGET hermesNodeCompositorGpu)` guards went with the early
+  return**, in `tools/hermes-node-ui/CMakeLists.txt`, the top-level
+  `CMakeLists.txt` and `unittests/CMakeLists.txt`: with the directory
+  refusing any platform without a backend, the target exists exactly when
+  the option is on.
+- **`ui-gpu` keeps its `os.name == 'posix'` predicate**, which now agrees
+  with `ui-enabled` wherever the option configured at all. It is kept so
+  the tests that read the backend's build artifacts stay tied to the guard
+  that produces them.
+- **The tracker issue about the no-window stub never being executed was
+  closed as moot** in the first commit.
+- **The CI step** also prints `utils/macos_console_session.py`'s verdict,
+  bounds the wrapper's wait for the display lock at 120 s and itself at
+  five minutes, and runs even when the tests before it failed. The probe
+  invocation is the one `utils/display_probe.py` makes.
+- **No "nil drawable aborts a Debug build inside Sokol" issue was
+  filed.** Task 16d measured the opposite: with both the
+  `swapchain.invalid` check and our nil guard removed, the run exits 0,
+  because Sokol's Metal `begin_pass` skips a nil drawable itself. Review
+  focus 5's "in a Debug build Sokol asserts on it before our guard can
+  run" is wrong for this Sokol.
+- **Three issues beyond the task's list were filed**, for things the
+  documents must say are unverified and that would otherwise live only in
+  a report: a real Dock Quit reaching `terminate:`, the in-flight
+  maintenance guard, and display sleep together with a Release build.
+- **The expected Mac totals in the verification block are out of date.**
+  It says 452 unit tests and exactly four unsupported; the Mac stood at
+  456 unit and 237 passed, 6 unsupported, 0 failed after Task 16e, with
+  243 JS tests. This task deletes one JS test,
+  `test/ui-no-window-support.js`, which could run only on a build with no
+  backend.
+
+Issues filed: 01a1fbb5-84af (fullscreen on macOS is untested),
+01a1fbb5-84c4 (no main menu, so Cmd-Q does nothing), 01a1fbb5-84da (a
+cancelled or slow `close` leaves a logout waiting), 01a1fbb5-84ef
+(whether GitHub's macOS runners have a display), 01a1fbb5-8505 (Intel
+Macs), 01a1fbb5-851a (a real Dock Quit is unproved), 01a1fbb5-852f (the
+in-flight guard), 01a1fbb5-8545 (display sleep; a Release build).
+
+**Suite on Linux after "Remove the backend-less UI build": 456 unit tests
+passed; JS 232 passed, 10 unsupported, 0 failed**, of 242. Before it: 232
+passed and 11 unsupported of 243; the one fewer is the deleted test.
+
+**Mac verification: to be filled in.**

@@ -78,7 +78,8 @@
 // nothing is skipped. On `metal` the fullscreen pair is not issued: AppKit's
 // toggleFullScreen: is an animated transition into a new Space, and what it
 // does with a second toggle during the first is not something this test
-// should depend on (Task 16e).
+// should depend on. Fullscreen is therefore untested on macOS: tracker
+// issue 01a1fbb5-84af.
 //
 // Each line is the value READ BACK after the call. `command cursor N` is the
 // hnui_cursor value pushed (default, arrow, ibeam, crosshair, pointer,

@@ -109,7 +109,11 @@ several decisions, so they are recorded here.
   under way.
 - **The Metal device is public** through `sapp_get_environment().metal.device`,
   and `sg_mtl_command_queue()` exposes **the queue only, not the frame's
-  command buffer** (`sokol_gfx.h:28324`).
+  command buffer** (`sokol_gfx.h:28324`). The buffer is nonetheless
+  reachable with no change to Sokol: `_sg` is a file-static of whichever
+  translation unit defines `SOKOL_GFX_IMPL`, and those units are ours, so
+  an accessor defined in them after the include reads `_sg.mtl.cmd_buffer`
+  directly (`lib/compositor-gpu/sokol_gfx_ext.inc`; see Surfaces).
 - **One window per process**; multi-window is "not in the immediate future"
   (sokol#437).
 - **Startup-only window settings**, fixed at `sapp_run()`: width, height,
@@ -211,7 +215,7 @@ request, when no JS-side call can be outstanding.
 | `lib/compositor/` | Slot pool, generations, tick state machine, queues. No GPU, no VM, unit-testable. |
 | `lib/compositor-gpu/` | Per-backend sharing, completion and blitting; both `sokol_gfx` copies. `.mm` on macOS. |
 | `tools/hermes-node-ui/` | `main()`, `sokol_app` callbacks, the `hermes-node:ui` module; exports `hnui_*` and `sg_*`. |
-| `external/sokol/sokol` | Vendored upstream, pinned, plus our patches (see Build). |
+| `external/sokol/sokol` | Vendored upstream, pinned and unmodified (see Build). |
 | `test/fixtures/hnui-demo/` | The reference addon and its entry script; built when `HERMES_NODE_ENABLE_UI` is on. |
 
 ## Surfaces
@@ -241,11 +245,30 @@ publishes (producer) or releases the read reference (consumer), and
 `MTLCommandBufferStatusError` is a terminal graphics failure carrying the
 buffer's `error`. Nothing waits, retries or polls.
 
-**This requires a Sokol patch, and it is the design's only required one.**
-`sg_mtl_command_queue()` exposes the queue and not the current buffer
-(`sokol_gfx.h:28324`), and `_sg_mtl_commit` nils `_sg.mtl.cmd_buffer` as it
-commits (`sokol_gfx.h:17218`), so the buffer is reachable only through a new
-accessor called while it still exists. The patch is a few lines; see Build.
+**The buffer is reached through an accessor of our own, and no Sokol patch
+is needed for it.** `sg_mtl_command_queue()` exposes the queue and not the
+current buffer (`sokol_gfx.h:28324`), and `_sg_mtl_commit` nils
+`_sg.mtl.cmd_buffer` as it commits (`sokol_gfx.h:17218`), so the buffer is
+reachable only through a new accessor called while it still exists. An
+earlier revision of this document concluded that the accessor had to be a
+patch to `sokol_gfx.h`. It does not: `_sg` is `static` in whichever
+translation unit defines `SOKOL_GFX_IMPL`, and `sokol_gfx_impl.cpp` and
+`sokol_gfx_present_impl.cpp` are those units, so a function defined in them
+after `#include <sokol_gfx.h>` sees `_sg` directly. The accessors live in
+`lib/compositor-gpu/sokol_gfx_ext.inc`, included at the end of both units
+and declared in `sokol_gfx_ext.h`: the frame command buffer, the Metal
+id-pool's free count and its count of releases queued and not yet
+collected, once per instance (`hnui_sg_mtl_*` and `hnui_sgp_mtl_*`). No
+vendored byte changes, the digests in `external/sokol/README.md` stay true,
+and a Sokol bump that renames one of those fields stops compiling, which is
+how a patch would have failed too. `utils/check-sgp-isolation.py` checks
+that each backend object references only its own instance's family, which
+is what catches the presenter installing its handler on the producer's
+buffer. Measured on the Mac, 2026-11-19: the accessor is nil before a
+frame's first pass, non-nil between `sg_end_pass` and `sg_commit` on every
+one of 2,000 frames and nil after `sg_commit`, and a handler added in that
+window ran once per frame, in frame order, on a Metal-owned queue that is
+neither the worker nor the main thread.
 
 **An earlier design used a second, empty "marker" command buffer committed
 after `sg_commit()`, and it is recorded here because the reason it was
@@ -307,41 +330,71 @@ consumer to justify them. See "What this does not do".
 - **One commit reclaims nothing**, which is why the module's own generation
   churn cannot simply commit once and proceed. A release is scheduled for
   `frame_index + SG_NUM_INFLIGHT_FRAMES + 1` and `_sg.frame_index` advances
-  once per `sg_commit()`, so the module issues safe commits until the frame
-  index has passed that threshold -- at least `SG_NUM_INFLIGHT_FRAMES + 1`
-  after the last release -- and **does not begin a further generation change
-  until the previous one's releases have been collected**.
-- **Progress is guaranteed, not waited for.** While maintenance is pending
-  the module **suspends the submissions that prevent its safe point**: the
-  main thread stops issuing new blits, keeps servicing events and platform
-  commands throughout, lets outstanding completions drain, runs the
-  maintenance commits, then resumes. Without that rule a visible window
-  starves maintenance forever, because `frame_cb` re-presents unconditionally
-  and submits its blit *before* releasing completed reads -- so a read
-  reference is outstanding on every pass and "no read reference held" never
-  becomes true. **PRESENTING ownership is held across the pause**: submission
-  stops, presentation does not, and the last frame stays on screen.
-- **The suspension is Metal-only and must not be applied on GL**, where it is
-  unnecessary (destruction is immediate, per the backend split above) *and*
-  would not work: `_sapp_linux_frame` swaps unconditionally after `frame_cb`
-  returns (`sokol_app.h:14232`), so a frame callback that skipped its blit
-  would present undefined back-buffer contents rather than preserving the
-  last image. Anything that later wants to skip presenting on GL -- an idle
-  optimisation, say -- has to suppress the swap itself, which `sokol_app`
-  offers no way to do.
+  once per `sg_commit()`, so the module issues safe commits until Sokol
+  reports no release pending. **From an idle instance that is four commits,
+  not three**, as an earlier revision of this document had it:
+  `_sg_mtl_commit` collects with the frame index *before* `sg_commit`
+  increments it, so a release made at index F and due at F+3 is collected
+  by the fourth commit. Measured: four empty commits return the pool's free
+  count to its earlier value, and the implementation's trace reads
+  `maintenance: 4 commit(s), idpool free 2669 -> 2672, pending 0` after
+  each retired generation. A pass is bounded at eight commits.
+- **A further generation change is not held back until the previous one's
+  releases have been collected** (Ruling 82 of the Task 16 plan; an earlier
+  revision of this document required that gate). Holding a resize back
+  until a producer frame completes would need a deferred-generation state
+  in the shared code. What is enforced is the bound that gate existed for:
+  a retired generation holds three id-pool slots, one per surface texture
+  (measured; its six attachment views take none, because Sokol makes a
+  Metal object only for a texture or storage-image view), the pool has
+  2,688, every worker loop turn with no producer frame in flight collects
+  what is pending, and creating a generation is **refused with an error**
+  -- which ends the graphics session with a message -- when fewer than 256
+  slots are free. That replaces a Sokol assert, compiled out of a Release
+  build, with a sentence.
+- **The presenting instance needs no maintenance, and nothing suspends its
+  blits** (Ruling 81 of the Task 16 plan). An earlier revision of this
+  document had the main thread stop issuing blits while maintenance was
+  pending, so that empty maintenance commits could run on the presenting
+  instance. The presenter needs no empty commits: it commits a real pass on
+  every valid frame, each `sg_begin_pass` waits on Sokol's semaphore, and so
+  its release clock advances under exactly the back-pressure Sokol was
+  designed for. Wrappers are released only on their trigger, by which time
+  every blit that sampled them has completed, and while the swapchain is
+  invalid no wrapper is created, so nothing accumulates then either. (The
+  suspension would also not have worked on GL, where `_sapp_linux_frame`
+  swaps unconditionally after `frame_cb` returns, `sokol_app.h:14232`, so a
+  frame callback that skipped its blit would present undefined back-buffer
+  contents. Anything that later wants to skip presenting on GL has to
+  suppress the swap itself, which `sokol_app` offers no way to do.)
+- **A producer maintenance pass runs only at a safe point**: once per worker
+  loop turn (a `uv_check_t` on the JS loop, which is also where the worker's
+  autorelease pool is drained and replaced), never with a frame callback on
+  the stack and never in CLOSING, and only when **no producer frame is in
+  flight** -- a counter the backend raises when it submits a frame and
+  lowers at the end of that frame's completion handler. Empty commits pass
+  no back-pressure -- the throttling semaphore is waited on in `begin_pass`
+  alone -- and Sokol's command buffers hold unretained references, so
+  advancing the release clock past a frame still in flight could free a
+  resource an addon destroyed in that frame while the GPU still reads it.
+- **A pass put off because a frame was in flight is retried when that frame
+  completes, even in a program that has gone idle**: the completion handler
+  that brings the counter to zero wakes the worker's loop, which nothing
+  else would turn.
+- **The in-flight condition is not verified by any test, and no tool
+  available detects its absence.** With the condition removed, 8 to 17
+  maintenance passes per run committed with a frame in flight under Metal
+  API and shader validation, with no finding; and with a frame held in
+  flight deterministically while an unguarded pass released a buffer that
+  frame used, the GPU read the released buffer and nothing reported it,
+  five runs of five. The condition is kept on the reasoning above.
+- **Each maintenance commit is a Sokol frame boundary.** Commit listeners
+  run and the frame index advances, so `sokol_gl` commands recorded, or
+  buffer data appended, outside a frame callback can be lost across a
+  pass, on Metal only. The C API section states the rule this implies.
 - Maintenance stays pending indefinitely only when GPU work never completes
   at all, which is a driver or hardware failure rather than something the
   compositor is itself replenishing.
-- **A maintenance commit runs only at a safe point for that instance**: no
-  producer GPU work outstanding, no read reference held, no completion
-  handler pending, and **no open pass**. Empty commits pass no back-pressure
-  -- the throttling semaphore is waited on in `begin_pass` alone -- so
-  advancing the release clock is safe only when nothing is in flight to
-  outrun. Maintenance serialises with that instance's own submissions, and
-  **the module reaches that safe point rather than waiting for one to occur**
-  -- by suspending submissions, per the rule above. On the presenting
-  instance that means pausing blits; on the producer it means withholding the
-  frame tick, which the tick machine already does.
 - **The rule is per instance**, each having its own pool and queue, and it
   does **not** license freeing anything a still-PRESENTING surface may yet be
   blitted from: a momentary zero read count is not permission, because the
@@ -409,7 +462,7 @@ consumer latency; it is not a stronger correctness guarantee.
 
 | Backend | Producer completion | Consumer completion |
 |---|---|---|
-| Metal | A completion handler installed on Sokol's own frame command buffer, reached through the accessor patch **before** `sg_commit()` nils it, carrying the slot and generation captured before submission. `Completed` publishes; `Error` is a terminal graphics failure. | The same, on the presenting instance's frame command buffer: the handler releases the read reference. No second command buffer and no cross-buffer ordering assumption on either side -- see the Surfaces rules above for why the marker design was abandoned. |
+| Metal | A completion handler installed on Sokol's own frame command buffer, reached through our accessor (see Surfaces) **before** `sg_commit()` nils it, carrying the slot and generation captured before submission. `Completed` publishes; `Error` is a terminal graphics failure. | The same, on the presenting instance's frame command buffer: the handler releases the read reference. No second command buffer and no cross-buffer ordering assumption on either side -- see the Surfaces rules above for why the marker design was abandoned. |
 | GL | `glFenceSync` followed by `glFlush` on the producer context. The fence is created by the producer and **ownership transfers to the main thread**, which polls `glClientWaitSync` with timeout 0 in `frame_cb` and deletes it; the producer never touches it again. | A fence inserted after the blit, polled the same way. |
 
 `GL_WAIT_FAILED` **does not establish completion**: the slot is quarantined,
@@ -572,7 +625,19 @@ GPU_PENDING -> PUBLISHED_AWAITING_TAKE -> IDLE.
   compare its timestamp against `process.uptime() * 1000` directly.
 - A callback registered inside a callback runs on the next tick. Cancelling a
   later callback in the current batch prevents it.
-- No ticks while the window is minimized.
+- No ticks while the window is minimized. **On macOS, none while it is
+  occluded either** (Ruling 88 of the Task 16 plan): Sokol reports its
+  swapchain invalid while its obscured timer runs, which it starts when the
+  window is miniaturized and whenever the window's occlusion state stops
+  being visible -- covered by another window, a locked screen, a sleeping
+  display -- and a frame with an invalid swapchain presents nothing and
+  sends no tick. That is what a browser does for a hidden tab. A frame
+  whose GPU work was in flight still completes and publishes, and is taken
+  when the window can be seen again. Two limits of what was measured: the
+  timer starts on an occlusion *change*, so a window covered from the
+  moment it opens keeps a valid swapchain and keeps ticking (600 of 600
+  frames, twice); and of the causes only miniaturizing is exercised by a
+  test (`test/ui-metal-occlusion.js`). Display sleep was not tried.
 - **Rendering happens only inside a frame callback.** After the last callback
   of a tick the module calls `sg_commit()` and arranges completion.
 
@@ -643,6 +708,20 @@ closing is decided and carried out on the JS thread (see Closing, below).
   cancelled request's slot is still there.
 - Shutdown and setup failure complete outstanding requests with an error.
 - `clipboard_size` is set well above Sokol's 8 KB default.
+- **On macOS both directions are ours** (Ruling 87 of the Task 16 plan):
+  the read is `NSPasteboard` on the main thread, behind the same result
+  type as the X11 read, and the write is `clearContents` plus
+  `setString:forType:` rather than `sapp_set_clipboard_string`. The reason
+  for owning the write is that the pasteboard's *name* must be ours to
+  choose: it is the general pasteboard unless
+  `HERMES_NODE_UI_TEST_PASTEBOARD` names another, which the test wrapper
+  sets to a name unique to the run, so the suite never overwrites the
+  clipboard of whoever is using the Mac. A pasteboard with no string type
+  is "unavailable", a string over the limit is "too large", and nothing is
+  cached, so no read returns an earlier read's text. AppKit's read offers
+  no deadline, so a timeout arises only from the request's own deadline
+  having passed before the main thread reached it. The error status
+  (`stringForType:` returning nil) is provoked by no test.
 
 **Drag-and-drop** is enabled explicitly, and the public contract states the
 file-count limit, the path-length limit, and that one oversized path discards
@@ -659,6 +738,39 @@ the payload's `preventDefault()` (JavaScript) or `hnui_cancel_close`
 (native). A `close` that no listener cancels enters CLOSING and ends the
 process, from the JS thread, as `process.exit()` with no argument would; the
 main thread is never told.
+
+**Termination on macOS.** `NSApp` is an instance of our own `NSApplication`
+subclass, created before `sapp_run()` (Sokol's later
+`[NSApplication sharedApplication]` returns that instance), and its
+`terminate:` never calls `super` (Ruling 84 of the Task 16 plan). AppKit's
+own `terminate:` ends the process from inside the call -- measured without
+the override: `cleanup_cb`, then status 0 or a SIGTRAP -- which would bypass
+the program's `close` listeners and its exit status. The override turns the
+request into the cancelable close instead: `[window performClose:]` once
+Sokol has a window and has completed a frame, so that Sokol's delegate
+raises `QUIT_REQUESTED` as a click on the close button does; before that,
+when Sokol delivers no event and nothing would cancel the quit, a
+`QUIT_REQUESTED` handed to our own event handler directly. An
+`applicationShouldTerminate:` answer was rejected because it must be
+`NSTerminateCancel`, which cancels a logout or shutdown outright; overriding
+`terminate:` neither cancels nor confirms.
+
+What is established and what is not: `[NSApp terminate:nil]` called
+in-process reaches the override and behaves as above in all three cases
+(default, cancelled, before the window exists; `test/ui-terminate.js`).
+**Whether a real Dock Quit, Cmd-Q or quit Apple event reaches the override
+is unproved.** `-[NSRunningApplication terminate]` from a second process
+was tried twice and reached no handler at all in the target, including in
+a minimal control application, and the check by hand at the Dock was not
+made.
+
+What remains impossible, and is documented rather than fixed: a `close`
+listener that cancels, or a JS thread busy in synchronous code, leaves a
+logout or shutdown waiting until the system gives up and reports the
+application, and a request carries no reason, so a program cannot tell
+logout from Quit; Force Quit and `SIGKILL` run no `'exit'` listener, as
+everywhere; and Sokol creates no main menu, so Cmd-Q has nothing to
+invoke.
 
 **Inherited limits, documented not fixed:** no IME, no Wayland, Linux DPI
 scale read once at startup.
@@ -759,7 +871,11 @@ rejected with `ERR_CLIPBOARD_FAILED`; `createWindow` throws.
 honoured, stdio is flushed, the terminal is restored, then `_exit()` ends both
 threads. Outstanding Promises and native operations are abandoned by that
 `_exit()`; `cleanup_cb` never runs, and `sapp_run()` never returns, on any
-path. CLOSED is that `_exit()`: no code observes it, and until it the window
+path. **That holds on macOS too, and takes one thing more there**: besides
+cancelling every quit request, `NSApp`'s `terminate:` is overridden and
+never reaches AppKit's (see Termination, above), because AppKit's would run
+`applicationWillTerminate:` and `cleanup_cb` and exit from the main thread
+with a status that is not the program's. CLOSED is that `_exit()`: no code observes it, and until it the window
 stays on screen, presenting its last published surface, while `'exit'`
 listeners run. A program that has replaced `process.exit` with a function
 that returns gets control back with the window in CLOSING, and nothing
@@ -999,15 +1115,18 @@ ImGui addon exists**, and that is the risk accepted by deferring it.
 
 ## Build and integration
 
-**Sokol** is vendored at `external/sokol/sokol`, pinned, with our patches
-carried alongside; the `external/` convention expects unmodified upstream, so
-the patch-carrying mechanism is settled by the first patch, which this design
-requires rather than anticipates:
+**Sokol** is vendored at `external/sokol/sokol`, pinned and unmodified, as
+the `external/` convention expects. **No patch is required today**, so the
+patch-carrying mechanism is still unsettled; the first patch that is
+actually needed settles it. An earlier revision of this document listed one
+as required and the two below as contingent:
 
-- **Required: a Metal command-buffer accessor.** The completion protocol
-  installs its handler on Sokol's own frame command buffer, which nothing
-  public exposes. A few lines, and it must also appear in the rename list so
-  the presenting instance gets its own copy.
+- **Not a patch: the Metal command-buffer accessor.** The completion
+  protocol installs its handler on Sokol's own frame command buffer, which
+  nothing public exposes. It is defined in our own two `SOKOL_GFX_IMPL`
+  translation units, after the include, where `_sg` is visible (see
+  Surfaces); each instance has its own copy under its own prefix, so the
+  rename list is unaffected.
 - **Contingent: the GLX framebuffer-config filter** (`GLX_PBUFFER_BIT`),
   needed only where the surfaceless route fails -- neither driver measured so
   far needs it, and stage 1 of startup decides.
@@ -1120,7 +1239,41 @@ empty ticks, abandoned generations, quarantined slots and shutdown.
 of content, not of ordering. Ticks, publishes, takes and releases are
 asserted from `HERMES_NODE_DEBUG_NATIVE=UI` tracing, never from timing.
 
-macOS is tested locally; whether CI macOS runners expose Metal is unverified.
+**macOS** has no Xvfb, so its window tests run on the machine's one real
+display and differ in three ways.
+
+- *The `display` feature is decided by a probe*: the console session is
+  asked first (unlocked, on console, display not reported asleep), and then
+  the binary itself opens a small window and must yield a drawable. A
+  locked screen, a sleeping display, no window server and no Metal device
+  all make it false, and the window tests then report UNSUPPORTED.
+- *Window tests are serialised machine-wide* by a lock the wrapper takes,
+  and run with the application refusing activation and a private named
+  pasteboard, so a run neither takes the keyboard nor touches the
+  clipboard of whoever is using the Mac.
+- *Real window events come from an in-process driver*, a test hook that
+  runs one AppKit call on the main thread and returns what it read back
+  (Ruling 85 of the Task 16 plan). A second process cannot drive another's
+  window on macOS without Accessibility or Automation consent, which is
+  neither assumed nor used. The driver enters above Sokol's own classes --
+  `performClose:`, `sendEvent:` with a synthesized key event,
+  `setContentSize:`, `miniaturize:`, `[NSApp terminate:]` -- so it
+  exercises Sokol's delegate, view and resize path and our `event_cb`. It
+  does not exercise the path from the window server into AppKit: hit
+  testing, key-window routing, the live-resize loop, or the Apple-event
+  handler in front of `terminate:`.
+
+The exact-pixel comparison holds on Metal: with test hooks on,
+`framebufferOnly` is cleared on Sokol's layer and each blit encodes, into
+the same command buffer that presents it, a copy of the drawable into a
+buffer the capture reads, converted from the drawable's BGRA order.
+
+Measured on an Apple M4 Max (macOS 27.2); Intel Macs are untested. Display
+sleep was not tried, a Release build with asserts off was not run, and
+fullscreen is skipped on macOS. **Whether GitHub's macOS runners have a
+Metal device and a window-server session will be reported by the first CI
+run**: the workflow carries an informational step that runs the probe and
+prints what it saw, and until that run nothing here claims either answer.
 
 ## Spike, before the implementation plan
 
@@ -1139,7 +1292,9 @@ is recorded in the sections above, not here.
   only.** The Linux round covered compilation and linking, not concurrent
   execution, and the AMD probe uses raw GL rather than either instance. **The
   concurrent GL case is outstanding**, and the first implementation milestone
-  is where it gets exercised.
+  is where it gets exercised. *Exercised by the implementation, 2026-11:*
+  the suite's window tests run both instances concurrently on GL (Linux)
+  and on Metal (macOS, Task 16).
 
 **The two questions software rendering could not settle were answered on AMD
 hardware** (Radeon 780M, Mesa radeonsi 25.2.8) on 2026-09-21 --
@@ -1211,7 +1366,10 @@ and Intel Macs.
    now a handler on Sokol's own frame command buffer, so nothing infers one
    buffer's completion from another's. The measurement survives as the reason
    that design was abandoned, and `sg_mtl_command_queue()` exposing only the
-   queue (`sokol_gfx.h:28324`) is precisely why the accessor patch exists.
+   queue (`sokol_gfx.h:28324`) is precisely why the accessor exists (it
+   turned out to need no patch; see Surfaces). *Exercised by the
+   implementation, 2026-11:* completion on Metal is the handler on Sokol's
+   own frame command buffer, on both instances.
    Autorelease pools were measured at the same time and their requirement
    widened; see the Surfaces section.
 6. **`llvmpipe` under Xvfb** running all of the above.

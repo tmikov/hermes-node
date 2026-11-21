@@ -1189,7 +1189,16 @@ Design `docs/superpowers/specs/2026-09-18-ui-compositor-design.md`, plan
 `docs/superpowers/plans/progress-ui-compositor.md`. Slices A, B and C are
 done, and so is Task 15 of Slice D, lifecycle and closing (written out in
 `docs/superpowers/plans/2026-11-19-ui-compositor-task15.md`). Task 16, the
-Metal backend, and Task 17, the full gated suite, are not.
+Metal backend, is implemented (written out in
+`docs/superpowers/plans/2026-11-19-ui-compositor-task16.md`, whose "as
+built" sections say what was measured); what it still owes is the Mac's
+final verification of the whole suite, three runs, recorded in that file
+when done. Task 17, the full gated suite, is not started.
+
+There are two backends behind one interface
+(`lib/compositor-gpu/backend.h`): GL on X11 for Linux and other non-Apple
+Unix, Metal for macOS. Turning the option on anywhere else is a configure
+error. Everything Metal was measured on one Apple-silicon Mac.
 
 - **All of it is behind `HERMES_NODE_ENABLE_UI`, default OFF.** As of the
   embedder-module work that option is a real **preprocessor define**, not
@@ -1214,28 +1223,29 @@ Metal backend, and Task 17, the full gated suite, are not.
   else stays file-local. Keep the rule when adding a shared name: in the
   single file this replaced, thread ownership was enforced by comments, and
   one of them was already false.
-- **Five lit features, and the names mislead.** `ui-enabled` probes the
-  *plain* `hermes-node` binary for `--test-embedder-module` and really means
-  "the CMake option was compiled in" — it is the one that sounds like it
-  means the UI and is the one that does not. `ui` probes the separate
-  `hermes-node-ui` binary. `ui-gpu` is `ui-enabled` **and** a backend
-  platform, mirroring `if(NOT (UNIX AND NOT APPLE))` in
-  `lib/compositor-gpu/CMakeLists.txt` rather than testing for the artifacts,
-  so a missing header still fails loudly. `display` starts a real Xvfb
-  through the same wrapper the tests use. `sokol-validation` is read from the
-  second line of `hermes-node-ui --version` and means the drawing thread's
-  `sokol_gfx` was compiled with its validation layer (a Debug build), which
-  the one test that provokes a real validation failure needs. A sixth, `ci`,
-  is not about the UI: it only narrows the canaries below to machines that
-  promised to have what they check. Since Task 16a there are more:
-  `ui-backend-gl` / `ui-backend-metal` and the `%ui-backend` substitution
-  (`gl`, `metal` or `none`) are read from the third `--version` line,
-  `gpu backend: <name>`; `display-expected` (Linux CI, or
-  `HERMES_NODE_UI_EXPECT_DISPLAY=1` in the environment) is what narrows the
-  `display` canary. A test whose trace differs per backend checks
-  `--check-prefixes=X,X-%ui-backend`, with GL facts under `X-gl`. On macOS
-  `display` is decided in two stages: the console session from `ioreg`
-  (`utils/macos_console_session.py`), then a real window probe.
+- **The lit features, and the names mislead.**
+
+  | Feature | Means | Decided by |
+  |---|---|---|
+  | `ui-enabled` | The CMake option was compiled in. It sounds like it means the UI and does not. | Probing the *plain* `hermes-node` binary for `--test-embedder-module`. |
+  | `ui` | The separate `hermes-node-ui` binary exists and runs. | Running it. |
+  | `ui-gpu` | This platform builds a GPU backend. | `ui-enabled` **and** `os.name == 'posix'`, mirroring the guard `if(NOT UNIX)` in `lib/compositor-gpu/CMakeLists.txt`. That guard is a `FATAL_ERROR` now, so wherever the option configured at all the two features agree; the predicate, rather than a test for the artifacts, is what makes a missing header fail loudly. |
+  | `ui-backend-gl`, `ui-backend-metal` | Which backend the binary was linked with. | The third `--version` line, `gpu backend: <name>`. |
+  | `display` | A window opened here would be drawn. | Linux: starting a real Xvfb through the wrapper the tests use. macOS: the console session from `ioreg` (`utils/macos_console_session.py`: unlocked, on console, display not reported asleep), then running the binary on `test/fixtures/hnui-demo/display_probe.js` and requiring a drawable (`utils/display_probe.py`). |
+  | `display-expected` | This machine promised a display, so `display` being off is a defect. | Linux CI, or `HERMES_NODE_UI_EXPECT_DISPLAY=1` in the ambient environment. Not macOS CI. |
+  | `sokol-validation` | The drawing thread's `sokol_gfx` was compiled with its validation layer (a Debug build), which the one test that provokes a real validation failure needs. | The second `--version` line. |
+  | `ci` | Not about the UI: it narrows canaries to machines that promised what they check. | `CI` or `GITHUB_ACTIONS` in the environment. |
+
+  `%ui-backend` is `gl` or `metal` (`none` only when lit could not read
+  the line; no build prints it). A test whose trace differs per backend
+  checks `--check-prefixes=X,X-%ui-backend`: lines every backend prints
+  under `X`, GL facts under `X-gl`, Metal's under `X-metal`. FileCheck
+  errors if none of the selected prefixes has a directive. A test that is
+  about one backend's machinery is gated on its `ui-backend-*` feature
+  (`ui-clipboard.js` and `ui-real-events-demo.js` on GL; `ui-metal-*.js`,
+  `ui-terminate.js` and `ui-clipboard-mac.js` on Metal). One more feature,
+  `display-busy`, exists only to turn `test/ui-display-busy.js` red when
+  another run held the macOS display lock for the probe's whole budget.
 - **Every one of those features is decided by running something**, never by
   trusting a CMake param. A param lit believes rather than verifies can be
   deleted and leave the tests it gates reporting UNSUPPORTED forever, in the
@@ -1255,10 +1265,23 @@ Metal backend, and Task 17, the full gated suite, are not.
   JS thread until the platform thread has finished `n` frames begun after
   the call, and `ui.__waitPlatformQuitRequests(total)` until it has
   cancelled `total` quit requests since startup, each giving up after 10 s
-  and returning false),
+  and returning false; on macOS also `ui.__driveWindow`, below),
   `HERMES_NODE_UI_GL_ROUTE` forces the GL context route,
   `HERMES_NODE_UI_GL_COMPLETION` overrides the completion mode, and
-  `HERMES_NODE_DEBUG_NATIVE=UI` turns on tracing. `test/lit.cfg` replaces the
+  `HERMES_NODE_DEBUG_NATIVE=UI` turns on tracing. **The Metal backend
+  refuses the two GL variables by name**, before `sapp_run()`, when either
+  is set: a setting that silently does nothing is what this codebase
+  refuses, and it is also how `test/ui-route-refusal.js` and
+  `test/ui-exit-tty.js` reach "fails before a window exists" on both
+  backends. RUN lines that force a GL completion mode take it from
+  `%gl-completion-poll` / `%gl-completion-block`, which are empty on
+  Metal. Three more are macOS-only: `HERMES_NODE_UI_TEST_NO_ACTIVATE`
+  makes the application refuse activation, so a test window does not take
+  the keyboard from whoever is at the Mac;
+  `HERMES_NODE_UI_TEST_PASTEBOARD` names the pasteboard both clipboard
+  directions use in place of the general one (`%with-display` sets both);
+  and `HERMES_NODE_UI_EXPECT_DISPLAY=1`, read by `test/lit.cfg` from the
+  ambient environment, turns on `display-expected`. `test/lit.cfg` replaces the
   environment for ShTest, so an exported value cannot reach a lit test — that
   is load-bearing, because one run of `test/ui-present.js` depends on the
   completion variable being *unset* so the startup probe actually runs.
@@ -1283,8 +1306,18 @@ Metal backend, and Task 17, the full gated suite, are not.
   the same display about 1-4% of the time, failing before any of our code
   ran — or, worse, sharing one server, which corrupts a clipboard test
   because a selection belongs to the server. with-xvfb.py has Xvfb claim its
-  own display (`-displayfd`) and tears it down, `timeout` included. On macOS
-  with-display.py serialises window tests on a lock instead. RUN lines keep
+  own display (`-displayfd`) and tears it down, `timeout` included. **On
+  macOS there is one real display, so with-display.py takes a machine-wide
+  lock instead** (`/tmp/hermes-node-ui-display.lock`) and window tests run
+  one at a time however many lit workers there are. The reason: Sokol
+  centres every window, so a second test's window covers the first's, and
+  a window covered *after* it opened loses its drawable. (A window covered
+  from the moment it opens keeps one; measured.) `<seconds>` bounds only
+  the command and expiry is status 124; the wait for the lock has its own
+  budget, `HERMES_NODE_UI_DISPLAY_LOCK_WAIT` (default 1800 s), and
+  exhausting it is status 125 with a line naming the lock, the command
+  never having run. The wrapper also sets the no-activate and pasteboard
+  variables above. RUN lines keep
   their redirections inside `sh -c '...'`. Every other UI RUN line bounds
   itself with `%timeout` (GNU `timeout` on Linux, `utils/timeout.py` on
   macOS). `utils/lit-run.sh <build dir> [lit options] <tests>` runs lit
@@ -1305,8 +1338,8 @@ Metal backend, and Task 17, the full gated suite, are not.
   own display (`createSharedContext` in `lib/compositor-gpu/gl_backend.cpp`
   takes `glXGetCurrentDisplay()`), and Sokol's Linux teardown after a quit
   ends in `XCloseDisplay()`, under a context the live JS thread still has
-  current. (On macOS the quit path exits 0 from the main thread, which
-  cannot carry a status.) Every windowed process therefore ends in `_exit()`
+  current. (On macOS the quit path exits from the main thread, which
+  cannot carry the program's status.) Every windowed process therefore ends in `_exit()`
   on the JS thread: `processExit` for `process.exit()`, `win.close()` and an
   uncancelled `close`; `triggerUncaughtException` for the fatal path; and
   `uiBeforeRuntimeCleanup` for a runtime that returns with a window
@@ -1349,6 +1382,20 @@ Metal backend, and Task 17, the full gated suite, are not.
   window system asked -- and otherwise does the same. A program that has
   replaced `process.exit` with a function that returns is left with its
   window in CLOSING, and nothing recovers it.
+- **On macOS a request to quit the application becomes a close request.**
+  `NSApp` is our own `NSApplication` subclass (`HnuiApplication`,
+  `tools/hermes-node-ui/mac_app.mm`), created before `sapp_run()`, and its
+  `terminate:` never calls `super`: AppKit's runs `cleanup_cb` and ends
+  the process from inside the call, bypassing `close` listeners and the
+  program's status. Once Sokol has a window and has finished a frame the
+  override calls `[window performClose:]`, which takes the close button's
+  path above; before that Sokol delivers no event and nothing would cancel
+  the quit, so it hands a `QUIT_REQUESTED` to `uiHandlePlatformEvent`
+  directly (`uiHandleQuitRequestDirectly`). `test/ui-terminate.js` pins
+  three cases. **Every one of them enters at `[NSApp terminate:nil]`
+  in-process. That a real Dock Quit, Cmd-Q or quit Apple event reaches the
+  override is unproved**: the one second-process route tried reached no
+  handler in the target at all, and nobody has checked by hand.
 - **The presented-pixel test compares exactly — 0 or 255, no tolerance.**
   That is stronger than a threshold, not weaker, and it is affordable because
   the capture's agreement rule forces target size to equal framebuffer size:
@@ -1357,7 +1404,10 @@ Metal backend, and Task 17, the full gated suite, are not.
   RGBA8, not sRGB). The presenter's own clear is `32/255`, deliberately a
   value the pattern never produces, so a missing blit is legible rather than
   ambiguous. Samples stay 8px from any edge, which is what pays for the
-  exactness. **A capture is keyed to a publication id, not a generation** — a
+  exactness. It holds on Metal too: with the test hooks on, the backend
+  clears `framebufferOnly` on Sokol's layer and each blit encodes, into the
+  command buffer that presents it, a copy of the drawable that the capture
+  reads back, swapped from the drawable's BGRA order. **A capture is keyed to a publication id, not a generation** — a
   generation spans many publications, and a re-blit of the still-presenting
   surface would otherwise answer a request for the next frame with a picture
   of the previous one.
@@ -1380,12 +1430,69 @@ Metal backend, and Task 17, the full gated suite, are not.
   after the converter and a real event for anything that involves Sokol or
   the window system — an injected `QUIT_REQUESTED` in particular never sets
   Sokol's quit flag, so a close test built on it cannot fail.
+- **On macOS real events come from an in-process driver,
+  `ui.__driveWindow(command)`** (test hooks only;
+  `tools/hermes-node-ui/mac_test_driver.mm`). A second process cannot
+  drive another's window there without Accessibility or Automation
+  consent, which is neither assumed nor used. The call is synchronous: it
+  runs one AppKit call on the main thread and returns what it **read
+  back** afterwards. `test/fixtures/hnui-demo/window_driver.js` is the one
+  place tests reach a driver, the X11 child on Linux and this on macOS.
+
+  | Command | Call | Answer |
+  |---|---|---|
+  | `key <c>` | `[window sendEvent:]` with a synthesized key down and up | `first_responder_is_view=<0\|1>`, a precondition; the `keydown` the script receives is the evidence |
+  | `resize <w> <h>` | `[window setContentSize:]` | `content=<w>x<h>` |
+  | `close` | `[window performClose:nil]` | `visible=<0\|1>` |
+  | `miniaturize`, `deminiaturize` | `[window miniaturize:]` and its inverse | `miniaturized=<0\|1>`, after AppKit's notification that the animation ended |
+  | `terminate` | `[NSApp terminate:nil]` | `visible=<0\|1>`, or `window=0` before the window exists |
+  | `state` | reads only | `viewable=<0\|1> <w>x<h>` |
+  | `gpu-hold`, `gpu-release` | not window commands: they hold the producer's frames in flight on the GPU and release them (`lib/compositor-gpu/metal_test_hooks.h`) | `held=<0\|1>`, `in_flight=<n>` |
+
+  **What it proves and does not.** Every window command enters *above*
+  Sokol's own classes, so it exercises Sokol's window delegate, view and
+  resize path, `sapp_cancel_quit()` and our `event_cb` — the property
+  `test/ui-real-events.js` exists for, and what `__injectEvent` cannot do.
+  It does not exercise the path from the window server into AppKit: hit
+  testing of the title-bar button, key-window routing, the live-resize
+  loop a drag runs in, occlusion by another window, or the Apple-event
+  handler in front of `terminate:`. A hold is for milliseconds: a frame
+  held for a few seconds is ended by the GPU's watchdog and the graphics
+  session goes with it, and the hold catches whatever frame is committed
+  next.
+- **A driver command issued from inside an event listener nests in one
+  dispatcher pass; yield a loop turn first.** The in-process driver
+  applies a command synchronously, so the event it causes is queued while
+  the current event's delivery is still running, and event delivery keeps
+  going until its queue is empty. A script that awaits one `resize` and
+  issues the next from the continuation runs all of them inside one pass,
+  and everything posted meanwhile (generation destruction, and so
+  maintenance) waits for the pass to end. `test/ui-metal-maintenance.js`
+  yields with `setImmediate` after each `resize` for this reason. The X11
+  driver is a second process and does not nest this way.
 - **A resize starts a new surface generation**, switched on the JS thread
   before that event's listeners run. The old generation's last reference is
   its presenting wrappers, which only the platform thread releases, so its
   destruction is always *posted* to the owner thread — the trace's
   `owner=0` then `owner=1` pair is structural, not luck.
-- **The clipboard read is our own X11 read** (`x11_clipboard.cpp`), not
+- **The platform services are one seam, implemented per platform**
+  (`tools/hermes-node-ui/platform_services.h`: the clipboard in both
+  directions, and the read-backs the trace prints for the title, the icon
+  and a clipboard write). `platform_services_x11.cpp` and
+  `platform_services_mac.mm` are chosen by CMake; `ui_platform.cpp` has no
+  platform conditional of its own.
+- **On macOS the clipboard is `NSPasteboard`, both directions ours.** The
+  write is ours, rather than Sokol's, only so that the pasteboard's name
+  is ours to choose: the general pasteboard, unless
+  `HERMES_NODE_UI_TEST_PASTEBOARD` names another. `%with-display` sets a
+  name unique to the run, so the suite never overwrites the clipboard of
+  whoever is using the Mac. A pasteboard with no string type reads as
+  unavailable and a string over the limit as too large; nothing is cached,
+  and since AppKit's read has no deadline a timeout arises only from the
+  request's own deadline having passed. `test/ui-clipboard-mac.js` covers
+  it, with `mac_pasteboard_tool` as the second process; that tool refuses
+  any pasteboard name not starting `hnui-test-`.
+- **On Linux the clipboard read is our own X11 read** (`x11_clipboard.cpp`), not
   Sokol's, which returns its previous buffer on timeout, INCR or oversize.
   A reply is accepted only if it echoes the server timestamp this read
   converted with, so a late reply to an earlier read can never answer the
@@ -1400,6 +1507,53 @@ Metal backend, and Task 17, the full gated suite, are not.
   exception through `handleCallbackException`; whatever follows the batch —
   reclaiming the slot or submitting the frame — runs exactly once either
   way.
+- **On Metal the producing instance needs a maintenance pass, and GL does
+  not.** GL destroys a texture at once. Sokol's Metal backend defers each
+  release and collects only inside `sg_commit()`, so a program that draws
+  nothing after a resize would never get the retired generation's textures
+  back. `MetalBackend::workerLoopTurn()` (`lib/compositor-gpu/
+  metal_backend.mm`) therefore runs once per JS loop turn, from a
+  `uv_check_t` the shared code starts, never with a frame callback on the
+  stack and never in CLOSING: it drains and replaces the worker's
+  autorelease pool, and when a generation was destroyed it issues empty
+  commits until Sokol reports nothing pending — four from an idle
+  instance, eight at most — traced as `maintenance: <n> commit(s), idpool
+  free <a> -> <b>, pending <p>`, all read back. It runs only with **no
+  producer frame in flight**, because Sokol's command buffers hold
+  unretained references and an empty commit takes no semaphore. A pass put
+  off for that reason is retried when the frame completes: the completion
+  handler, on a Metal-owned thread, calls the wake the shared code
+  installed (`setWorkerWake`), which posts to the worker's loop
+  (`maintenance: woken by completion`, `worker loop: woken`). A generation
+  change is not held back for any of this; instead
+  `createGenerationSurfaces` refuses, ending the graphics session with a
+  message, below 256 free id-pool slots. The presenting instance needs no
+  such pass: it commits a real frame whenever the swapchain is valid.
+  **No test fails with the in-flight condition removed, and no tool
+  reports the hazard even when it is forced**; the condition rests on
+  reasoning. Each maintenance commit is a Sokol frame boundary, which is
+  why `hnui.h` says frame-scoped `sokol_gfx` state must be produced and
+  consumed inside one frame callback.
+- **On macOS an occluded window gets no frame ticks.** Sokol reports its
+  swapchain invalid while its obscured timer runs (miniaturized, or the
+  occlusion state no longer visible), and the backend then submits
+  nothing and sends no tick, tracing each transition once (`present:
+  swapchain invalid; nothing submitted`, `present: swapchain valid
+  again`). `test/ui-metal-occlusion.js` produces it by miniaturizing.
+- **The Metal command buffer is reached without patching Sokol.**
+  `external/sokol/sokol` is still unmodified. `_sg` is a file-static of
+  whichever unit defines `SOKOL_GFX_IMPL`, and those two units are ours,
+  so `lib/compositor-gpu/sokol_gfx_ext.inc`, included at the end of each,
+  defines the accessors there (`hnui_sg_mtl_*` for the producing instance,
+  `hnui_sgp_mtl_*` for the presenting one). `check-sgp-isolation` also
+  checks that each backend object references only its own instance's
+  family. A Sokol bump that renames one of those private fields breaks the
+  macOS build only.
+- **Every Objective-C++ unit is compiled with ARC** (`-fobjc-arc`), the
+  Sokol implementation units included, which are compiled as
+  Objective-C++ under their `.cpp` names. `sokol_config.h` refuses a Metal
+  Sokol unit without it: Sokol's texture injection releases an injected
+  texture under manual reference counting.
 - **A Sokol panic terminates the process on all three loggers** (the
   `sokol_app` one and both `sokol_gfx` instances), through one function,
   `uiSokolLog`. Sokol's code after a panic assumes no return; before this a
@@ -1413,23 +1567,29 @@ Metal backend, and Task 17, the full gated suite, are not.
   probes). The vendored Sokol commit is single-sourced as
   `HNUI_SOKOL_COMMIT_PINNED` in `hnui.h`; CMake reads it from there and
   `test/sokol-pin.js` checks the README agrees.
-- **macOS runs part of this suite.** On 2026-11-19 the tree was built and
-  the suite run on an Apple-silicon Mac with `HERMES_NODE_ENABLE_UI=ON`.
-  There is no GPU backend there yet, so window tests are unsupported and
-  `ui_module_nowindow.cpp` is what runs; every UI test not gated on `ui-gpu`
-  or `display` runs there, and must be written for BSD userland without
-  relying on a `timeout` command: macOS 27 ships one in `/usr/bin` (Apple's
-  own, which accepts `timeout <n> <command>` and `--foreground` but not
-  GNU's other spellings), older releases ship none, and no test on `master`
-  uses one. Such a test bounds itself from inside the script, with an
-  unref'd watchdog timer (`test/ui-no-window-support.js`,
-  `test/test-dns-timeout.js`). That is a weaker bound than `timeout`: it
-  ends a run that a handle is holding open, and cannot fire while the JS
-  thread is blocked or after the script has finished. Tests gated on
-  `ui-gpu` or `display` run only on Linux today and bound their RUN lines
-  with `%timeout` or `%with-display <n>`, which on macOS are our own Python
-  (`utils/timeout.py`, `utils/with-display.py`) rather than whatever
-  `/usr/bin/timeout` the release ships.
+- **macOS runs this suite, window tests included, when it has a usable
+  display.** The Metal backend was built and the suite run on an
+  Apple-silicon Mac (macOS 27.2) between 2026-11-19 and 2026-11-21; the
+  totals are in the progress file. With the screen locked, the display
+  asleep or no window server, `display` is false and the window tests
+  report UNSUPPORTED; run with `HERMES_NODE_UI_EXPECT_DISPLAY=1` to make
+  that red instead, and under `caffeinate -dimsu` to keep the display
+  awake (it does not unlock a locked screen). A test must be written for
+  BSD userland and must not rely on a `timeout` command: macOS 27 ships
+  one in `/usr/bin` (Apple's own, which accepts `timeout <n> <command>`
+  and `--foreground` but not GNU's other spellings) and older releases
+  ship none. UI RUN lines bound themselves with `%timeout` or
+  `%with-display <n>`, which on macOS are our own Python
+  (`utils/timeout.py`, `utils/with-display.py`). A few tests bound
+  themselves from inside the script instead, with an unref'd watchdog
+  timer (`test/ui-module-requirable.js`, `test/test-dns-timeout.js`); that
+  is a weaker bound, which ends a run a handle is holding open and cannot
+  fire while the JS thread is blocked or after the script has finished. Two things about working on the Mac:
+  **it cannot run the formatter** (`utils/format.sh` needs clang-format
+  18), so `.mm` and `.m` files are formatted on Linux with
+  `./utils/format.sh -a`; and a checker loaded through `DYLD_*` (the Main
+  Thread Checker) never loads under `caffeinate`, which strips those
+  variables.
 - Known defects and limitations live in `dz/`, not here — `dz list`.
 
 ## Test Infrastructure
