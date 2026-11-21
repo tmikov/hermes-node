@@ -332,7 +332,7 @@ runs them.)
 
 **Steps:**
 
-- [ ] **Step 1: The checker.** Create `utils/check-ui-stderr-rule.py`
+- [x] **Step 1: The checker.** Create `utils/check-ui-stderr-rule.py`
   (executable, the repository's Python header and
   `Copyright (c) Tzvetan Mikov.`):
 
@@ -416,7 +416,7 @@ runs them.)
       sys.exit(main())
   ```
 
-- [ ] **Step 2: Run it and watch it fail.**
+- [x] **Step 2: Run it and watch it fail.**
 
   ```bash
   python3 utils/check-ui-stderr-rule.py test | tail -1; echo "rc=$?"
@@ -426,7 +426,7 @@ runs them.)
   The 23 are 8 in `ui-close.js`, 6 in `ui-exit-paths.js`, 3 in
   `ui-terminate.js`, and one each in the other six files (measured).
 
-- [ ] **Step 3: The lit test.** Create `test/ui-stderr-rule.js`. No
+- [x] **Step 3: The lit test.** Create `test/ui-stderr-rule.js`. No
   `REQUIRES`: it reads text and needs no binary, so it also runs in a
   build without the UI, where the rule would otherwise go unwatched.
 
@@ -464,7 +464,7 @@ runs them.)
   line of output, so it sees everything; the count line alone would do,
   and the `-NOT` is there to put the offending line in FileCheck's error.)
 
-- [ ] **Step 4: The mechanical edits.** In `test/ui-close.js` (8 lines),
+- [x] **Step 4: The mechanical edits.** In `test/ui-close.js` (8 lines),
   `test/ui-exit-paths.js` (6) and `test/ui-terminate.js` (3), on every
   line that begins `// RUN: %FileCheck --check-prefix=<X>-TRACE `, insert
   `--implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' `
@@ -475,7 +475,7 @@ runs them.)
   Add one sentence to each file's RUN-line comment saying the pair is the
   suite-wide rule (`test/ui-stderr-rule.js`).
 
-- [ ] **Step 5: The four tests the bullet named.**
+- [x] **Step 5: The four tests the bullet named.**
 
   `test/ui-sokol-panic.js`, the LOGGERERR run becomes:
 
@@ -520,7 +520,7 @@ runs them.)
   run of that exact command on Linux. `window ready` is deliberately not
   one of them: the close request can arrive before it.)
 
-- [ ] **Step 6: Run.**
+- [x] **Step 6: Run.**
 
   ```bash
   python3 utils/check-ui-stderr-rule.py test | tail -1
@@ -534,7 +534,7 @@ runs them.)
   is red and its output names `ui-events.js:67`, the `%with-display` line
   whose stderr is no longer covered. Restore.
 
-- [ ] **Step 7: The mutations that prove each exclusion can fire.** For
+- [x] **Step 7: The mutations that prove each exclusion can fire.** For
   each of M1, M2, M3: apply, build both binaries, run every UI test,
   restore.
 
@@ -554,7 +554,7 @@ runs them.)
   this task M1 and M2 each turned 13 red (measured); these numbers were
   measured against a prototype of Steps 4 and 5.
 
-- [ ] **Step 8: Format, run `check-hermes-node`, commit.**
+- [x] **Step 8: Format, run `check-hermes-node`, commit.**
 
   ```bash
   ./utils/format.sh -a
@@ -604,7 +604,7 @@ that is running the script.
 
 **Steps:**
 
-- [ ] **Step 1: Write the test**, exactly:
+- [x] **Step 1: Write the test**, exactly:
 
   ```js
   // Copyright (c) Tzvetan Mikov.
@@ -720,7 +720,7 @@ that is running the script.
   The four TRACE lines are all printed by shared code (`ui_platform.cpp`,
   `ui_module.cpp`), so they need no per-backend prefix.
 
-- [ ] **Step 2: Run it.**
+- [x] **Step 2: Run it.**
 
   ```bash
   for i in 1 2 3 4 5 6; do utils/lit-run.sh $B -v $S/test/ui-late-rejection.js 2>&1 | grep '^PASS\|^FAIL'; done
@@ -732,14 +732,14 @@ that is running the script.
   This test passes as soon as it is written: it pins behaviour that
   exists. The red run is Step 3.
 
-- [ ] **Step 3: Mutation W.** Apply, build both binaries, run the test.
+- [x] **Step 3: Mutation W.** Apply, build both binaries, run the test.
   Expected: FAIL; `%t.require.out` holds `BEFORE false` and nothing else,
   the status is 1, and the stderr file has
   `ERROR: AddressSanitizer: heap-use-after-free` in `onWorkerLoopTurn`
   (measured). Restore and rebuild. Then M1: the test is red on its
   `[sapp:error` exclusion. Restore and rebuild.
 
-- [ ] **Step 4: Format, run `check-hermes-node`, commit.**
+- [x] **Step 4: Format, run `check-hermes-node`, commit.**
 
   ```bash
   ./utils/format.sh -a
@@ -799,7 +799,7 @@ holds whatever the frame timing, which mutation S demonstrates.
 
 **Steps:**
 
-- [ ] **Step 1: Show the hole first.** Apply S, build both binaries:
+- [x] **Step 1: Show the hole first.** Apply S, build both binaries:
 
   ```bash
   for i in 1 2 3; do utils/lit-run.sh $B $S/test/ui-*.js 2>&1 | grep '^FAIL'; done
@@ -815,7 +815,7 @@ holds whatever the frame timing, which mutation S demonstrates.
 
   Restore (`git checkout tools`) and rebuild.
 
-- [ ] **Step 2: `test/ui-close.js`, REPLACED.** Replace the body of
+- [x] **Step 2: `test/ui-close.js`, REPLACED.** Replace the body of
   `if (mode === 'replaced') { ... }`:
 
   ```js
@@ -845,7 +845,7 @@ holds whatever the frame timing, which mutation S demonstrates.
   the first sentence of REPLACED says "delivered in the same dispatch pass
   as a KEY_DOWN injected from its own listener".
 
-- [ ] **Step 3: `test/ui-events.js`, TICKS.** Four edits.
+- [x] **Step 3: `test/ui-events.js`, TICKS.** Four edits.
 
   Add `const SAPP_KEYCODE_F7 = 296;` after `SAPP_KEYCODE_F6`.
 
@@ -896,7 +896,7 @@ holds whatever the frame timing, which mutation S demonstrates.
   callback queued by a keydown listener runs before a CHAR that the same
   listener queued behind it, in one dispatch pass".
 
-- [ ] **Step 4: The two comments.** `test/ui-event-exceptions.js`: replace
+- [x] **Step 4: The two comments.** `test/ui-event-exceptions.js`: replace
   "One batch, so both are queued before the first is delivered." with
   "Injected together. Nothing below needs them in one dispatch pass: if
   the exception were swallowed the process would live, and the second key
@@ -908,7 +908,7 @@ holds whatever the frame timing, which mutation S demonstrates.
   injects the second from the first one's listener and waits on
   `__waitPlatformFrames`)".
 
-- [ ] **Step 5: Run, clean build.**
+- [x] **Step 5: Run, clean build.**
 
   ```bash
   cmake --build $B --target hermes-node hermes-node-ui 2>&1 | tail -1
@@ -916,7 +916,7 @@ holds whatever the frame timing, which mutation S demonstrates.
   # expect: "32 0" (measured against a prototype of Steps 2 and 3)
   ```
 
-- [ ] **Step 6: The mutations, in the five combinations that matter.**
+- [x] **Step 6: The mutations, in the five combinations that matter.**
   Build both binaries each time; restore between.
 
   | Applied | `ui-events.js` | `ui-close.js` | Measured |
@@ -927,7 +927,7 @@ holds whatever the frame timing, which mutation S demonstrates.
   | K | green | **red**: `KEY-AFTER-CLOSE` after `REPLACED-EXIT args=0` | 3 of 3 |
   | S + K | green | **red** | 3 of 3 |
 
-- [ ] **Step 7: Format, run `check-hermes-node`, commit.**
+- [x] **Step 7: Format, run `check-hermes-node`, commit.**
 
   ```bash
   ./utils/format.sh -a
@@ -1110,7 +1110,7 @@ suite to hide it.
 
 **Steps:**
 
-- [ ] **Step 1: Final Linux numbers.**
+- [x] **Step 1: Final Linux numbers.**
 
   ```bash
   cmake --build cmake-build-asan --target check-hermes-node 2>&1 | tail -15
@@ -1126,7 +1126,7 @@ suite to hide it.
   242. The nine UI names were measured while writing this plan;
   `bundle-yargs` is the tenth, from Task 16f's record.)
 
-- [ ] **Step 2: The main plan.** In
+- [x] **Step 2: The main plan.** In
   `docs/superpowers/plans/2026-09-21-ui-compositor.md`: tick Task 17 with
   its sub-tasks by commit subject, in the form Task 16's paragraph uses;
   the Slice D line under "Slices" becomes "Task 17 done (date)"; add a
@@ -1136,13 +1136,13 @@ suite to hide it.
   Task 11d; only `holdConsumer` has no JS surface, and nothing needed
   one); in "Known gaps", replace the Task 17 sentence with what stays
   open, by tracker id.
-- [ ] **Step 3: The progress file.** Status row D becomes complete with
+- [x] **Step 3: The progress file.** Status row D becomes complete with
   its date; add "What Task 17 actually produced" (the rule and its test,
   the late-rejection test, the two rewritten assertions and why a hook was
   not added, the Metal census, the Release run); record the totals for
   both machines; in the obligations paragraph, mark Task 17's as
   discharged, naming the test for each.
-- [ ] **Step 4: CLAUDE.md, UI Compositor section.** Three edits. The
+- [x] **Step 4: CLAUDE.md, UI Compositor section.** Three edits. The
   status sentence: Task 17 done, written out in this file. A new bullet
   after the FileCheck `-NOT` one: every `%with-display` RUN line's stderr
   is read with `--implicit-check-not='[sapp:error'
@@ -1154,7 +1154,7 @@ suite to hide it.
   not guaranteed one dispatch pass; a test that needs that injects the
   second from the first one's listener and waits on
   `__waitPlatformFrames(1)`.
-- [ ] **Step 5: The tracker** (`dz`, per CLAUDE.md "Which `dz` to run";
+- [x] **Step 5: The tracker** (`dz`, per CLAUDE.md "Which `dz` to run";
   stage `dz/` with this commit).
   - `dz add --type task "The GL backend is untested on NVIDIA's driver, native Xorg and Intel GL"`
     with a body saying what was measured (Mesa llvmpipe under Xvfb in the
@@ -1172,10 +1172,10 @@ suite to hide it.
   - 01a1fbb5-851a and 01a1fbb5-8545: updated from the user's list below
     if it was done, otherwise one line saying it was not.
   - Close nothing that was not measured.
-- [ ] **Step 6: This file.** Tick every step; make sure each task has its
+- [x] **Step 6: This file.** Tick every step; make sure each task has its
   "as built" section; in "Open questions" strike what the Mac rounds
   answered.
-- [ ] **Step 7: Format, run `check-hermes-node`, commit** ("Close Slice D
+- [x] **Step 7: Format, run `check-hermes-node`, commit** ("Close Slice D
   of the UI compositor"). `git status --porcelain` is empty.
 
 ---
@@ -1187,10 +1187,21 @@ person's consent to something the agent must not do unasked (sleeping the
 display, locking the screen). Each has a tracker issue that records the
 result. `S`, `B` as in the Mac commands above.
 
+**All three were done on 2026-11-21; the results are in "Task 17f as
+built".** The two hand commands below were changed afterwards in one
+respect: each now sets
+`HERMES_NODE_UI_PASTEBOARD_TOOL=$B/mac_pasteboard_tool`. As first
+written they did not, and outside lit nothing sets it, so the wrapper
+had no tool to release the pasteboard it named and each run left one
+behind (the wrapper said so; the three were released by hand). Item 1's
+"Expected" paragraph also turned out to be wrong on one point, which is
+corrected in place.
+
 1. **A real Dock Quit** (01a1fbb5-851a).
 
    ```bash
-   HERMES_NODE_DEBUG_NATIVE=UI python3 utils/with-display.py 300 env -u HERMES_NODE_UI_TEST_NO_ACTIVATE \
+   HERMES_NODE_DEBUG_NATIVE=UI HERMES_NODE_UI_PASTEBOARD_TOOL=$B/mac_pasteboard_tool \
+     python3 utils/with-display.py 300 env -u HERMES_NODE_UI_TEST_NO_ACTIVATE \
      $B/bin/hermes-node-ui $S/test/fixtures/hnui-demo/demo.js $B/hnui_demo_addon.node js 2> /tmp/hnui-dock.err; echo "status $?"
    # at the Mac: right-click the program's Dock icon, choose Quit
    grep -n 'app: terminate requested\|quit requested\|close:\|lifecycle: CLOSING' /tmp/hnui-dock.err
@@ -1202,10 +1213,20 @@ result. `S`, `B` as in the Mac commands above.
    AppKit's own path ran: record the status and the last twenty trace
    lines. Either way the result goes into the issue.
 
+   **Corrected by the measurement.** "No such line means AppKit's own
+   path ran" is wrong for this command. The line is printed after
+   `performClose:` returns, and with nothing preventing the close the JS
+   thread's `process.exit()` can end the process before that. What tells
+   the two paths apart in such a run is `cleanup_cb` or `sapp_run
+   returned` in the trace, and the status (AppKit's path does not end
+   with the program's). To see the line itself, run a program whose
+   `close` listener calls `preventDefault()`.
+
 2. **Display sleep with a window open** (01a1fbb5-8545).
 
    ```bash
-   HERMES_NODE_DEBUG_NATIVE=UI python3 utils/with-display.py 300 env -u HERMES_NODE_UI_TEST_NO_ACTIVATE \
+   HERMES_NODE_DEBUG_NATIVE=UI HERMES_NODE_UI_PASTEBOARD_TOOL=$B/mac_pasteboard_tool \
+     python3 utils/with-display.py 300 env -u HERMES_NODE_UI_TEST_NO_ACTIVATE \
      $B/bin/hermes-node-ui $S/test/fixtures/hnui-demo/demo.js $B/hnui_demo_addon.node js 2> /tmp/hnui-sleep.err &
    sleep 5; pmset displaysleepnow; sleep 15; caffeinate -u -t 2; sleep 5
    # at the Mac: unlock if asked, then close the window with its close button
@@ -1235,17 +1256,19 @@ result. `S`, `B` as in the Mac commands above.
 
 Places where this plan guesses, stated so the guess can be overruled:
 
-1. **What a healthy Metal run prints on stderr is unknown.** Assumed: no
+1. ~~**What a healthy Metal run prints on stderr is unknown.** Assumed: no
    `[sapp:` and no `[sokol-present` line. 17d Step 1 settles it before
-   anything depends on it.
-2. **The Mac totals are arithmetic, not measurements**: 37 + 4 of 41 UI
+   anything depends on it.~~ *Answered by 17d:* the assumption held.
+2. ~~**The Mac totals are arithmetic, not measurements**: 37 + 4 of 41 UI
    files, 239 + 5 of 244 for the suite, 24 / 24 / 23 red under M1-M3.
    Each starts from a number Task 16f measured; the UI-file one starts
    from its Release run, since the ASAN build's UI-only count was never
-   reported.
-3. **The Release suite's totals on the Mac are a prediction** (238 + 6),
+   reported.~~ *Answered by 17d and 17e:* every one was measured as
+   derived.
+3. ~~**The Release suite's totals on the Mac are a prediction** (238 + 6),
    extended from one window-tests-only run. The unit count there has
-   never been reported.
+   never been reported.~~ *Answered by 17e:* JS 238 + 6 as predicted. The
+   unit count is 456; one of them failed there until its test was fixed.
 4. **`test/ui-stderr-rule.js` and its checker are an addition** the Task
    17 bullet did not ask for. They are here because a sweep with nothing
    enforcing it is the kind of thing this project has had to redo; the
@@ -1257,20 +1280,28 @@ Places where this plan guesses, stated so the guess can be overruled:
 6. **`[sapp:panic` and `[sapp:warning` are left out of the rule** on the
    reasoning in "Survey". A stricter rule that refuses every `[sapp:`
    line but the one known GL warning is possible and was not chosen.
-7. **Whether mutations M1-M3 disturb the macOS `display` probe** was
+7. ~~**Whether mutations M1-M3 disturb the macOS `display` probe** was
    reasoned (the probe looks for `present: drawable acquired` and
-   `DISPLAY_PROBE_OK`), not run. 17d Step 3 says what to do if they do.
-8. **The Mac round's mechanics** (channel branch, who commits) are
-   assumed unchanged from Task 16.
+   `DISPLAY_PROBE_OK`), not run. 17d Step 3 says what to do if they do.~~
+   *Answered by 17d:* they do not.
+8. ~~**The Mac round's mechanics** (channel branch, who commits) are
+   assumed unchanged from Task 16.~~ *Answered:* unchanged. The Mac made
+   no commit in Task 17.
 9. **Filing a new issue for NVIDIA, native Xorg and Intel GL** is this
    plan's decision; the brief said those stay in the tracker, and no such
    issue exists today.
 10. **17d and 17e each end in a Linux commit that records a Mac report.**
     If recording commits are not wanted as separate history, both fold
     into 17f's.
-11. **Five Metal-run tests are edited on Linux without being runnable
+11. ~~**Five Metal-run tests are edited on Linux without being runnable
     there.** The edits are textual and the checker reads them, but their
-    first execution is 17d.
+    first execution is 17d.~~ *Answered by 17d:* all five pass clean and
+    go red under M1 and M2.
+
+Questions 4, 5, 6, 9 and 10 were choices, not unknowns, and stood as
+written: the checker and its test, the ORIGIN case, the rule's two
+omissions, the new tracker issue (01a1fd38-a4ed) and the two recording
+commits are all in.
 
 ## Self-review
 
@@ -1286,6 +1317,56 @@ Places where this plan guesses, stated so the guess can be overruled:
 - **No step leaves a choice open** except 17d Step 2, which is a decision
   the Mac's census has to inform and which goes to the user if the
   census surprises.
+
+## Task 17a as built
+
+One commit on Linux, 2026-11-21: "Exclude Sokol error lines in every
+window test". Built as written. Its numbers, from the commit and the
+plan's own measurements, since no separate report was kept:
+
+- Before the sweep, 23 of the 44 `%with-display` RUN lines, in nine
+  files, did not read stderr with the exclusions, and an injected
+  `[sapp:error]` or `[sokol-present:warning]` left six of the nineteen
+  window test files that run on Linux green.
+- After it, `utils/check-ui-stderr-rule.py` reports 0 violations, and
+  M1 and M2 turn all nineteen red and M3 eighteen
+  (`ui-sokol-validation.js` expects a `[sokol-produce:error]` line).
+- `ui-terminate.js`, `ui-metal-maintenance.js` and
+  `ui-metal-maintenance-wake.js` run only on Metal and were not executed
+  on Linux; 17d ran them.
+- The suite total recorded on Linux is the one after 17c, below; the
+  per-commit totals of 17a and 17b were not kept.
+
+## Task 17b as built
+
+One commit on Linux, 2026-11-21: "Test hnui_get_window after a late
+rejection". `test/ui-late-rejection.js` is the file given in Step 1. It
+passed 6 of 6 as written, and mutation W turned it red with an
+AddressSanitizer heap-use-after-free in `onWorkerLoopTurn` (both measured
+while the plan was written, and again on the Mac in 17d). The checker
+then counts 41 files.
+
+One sentence of the test's header is Linux-only, found by 17d: under W
+the process ends with "status 1" on Linux and with 134 on the Mac. The
+test was not changed for it; it is red on both.
+
+## Task 17c as built
+
+One commit on Linux, 2026-11-21: "Stop relying on one drain for injected
+events". Built as written: `test/ui-close.js` REPLACED and
+`test/ui-events.js` TICKS inject the second event from the first one's
+listener and wait on `ui.__waitPlatformFrames(1)`, each printing the
+barrier's answer; two comments were corrected
+(`test/ui-event-exceptions.js` and `drainInjectedEvents()` in
+`ui_platform.cpp`, the only non-test file Task 17 touched, and a comment
+only). No hook was added.
+
+With S applied both tests are green; T turns TICKS red with or without
+S; K turns REPLACED red with or without S. Those are the five rows of
+Step 6, and 17d measured the same five on Metal.
+
+Suite on Linux after 17c: **456 unit tests passed; JS 234 passed, 10
+unsupported, 0 failed**, of 244.
 
 ## Task 17d as built
 
@@ -1480,4 +1561,129 @@ measured the same day by the user at the Mac ("Task 17f as built" has
 the record). Both of the issue's closing conditions being met, it is
 closed, with a comment that carries both measurements and what they
 leave unmeasured.
+
+## Task 17f as built
+
+One commit on Linux, 2026-11-21: "Close Slice D of the UI compositor",
+which added this section, the 17a-17c sections above, and the edits to
+the main plan, the progress file, CLAUDE.md, the spec and the tracker.
+
+**Step 1, the final Linux numbers**, measured at "Give the surface table
+stress test's consumer its turns" and again with this commit's documents
+in the tree, in `cmake-build-asan`: **456 unit tests passed; JS 234
+passed, 10 unsupported, 0 failed, of 244**, as expected. The ten
+unsupported are the ten expected: `bundle-yargs`, `ui-clipboard-mac`,
+`ui-display-busy`, `ui-display-feature`, `ui-metal-clear`,
+`ui-metal-maintenance`, `ui-metal-maintenance-wake`,
+`ui-metal-occlusion`, `ui-sokol-validation-ci`, `ui-terminate`. Neither
+known flake fired.
+
+**The three checks under "Needs the user at the Mac"**, all on
+2026-11-21, on the Apple M4 Max (macOS 27.2), in the ASAN UI build at
+"Stop relying on one drain for injected events".
+
+1. **A real Dock Quit reaches `-[HnuiApplication terminate:]`, through
+   `performClose:`.** Two runs, the user choosing Quit from the Dock
+   icon each time.
+   - The plan's command (`demo.js ... js`, nothing preventing the close):
+     the window closed, `status 0`. The trace has `quit requested:
+     cancelled, forwarded as close`, `close: not cancelled`, `lifecycle:
+     CLOSING (reason=close)` and `close: ending the process through
+     process.exit()`, and **no** line starting `app: terminate
+     requested;`. It has no `cleanup_cb` and no `sapp_run returned`
+     either, so AppKit's own `terminate:` did not run.
+   - A scratch script, not committed, whose `close` listener calls
+     `preventDefault()` and which exits through `process.exit(0)` three
+     seconds later: `status 0`, and the trace has `quit requested:
+     cancelled, forwarded as close`, `close: cancelled`, eight frame
+     ticks, then `app: terminate requested; through performClose:, 1
+     quit request(s) cancelled`. That line is the evidence.
+   - Why the first run lacks the line: it is printed after
+     `performClose:` returns, and `performClose:` returned about eight
+     frames after the quit request was cancelled. With nothing
+     preventing the close, the JS thread's `process.exit()` ended the
+     process inside that interval. (AppKit documents that
+     `performClose:` highlights the close button momentarily, which
+     would account for the delay. That was not tested.)
+   - **Decided: the trace line stays after `performClose:`.** It prints
+     what was read back, the count of quit requests cancelled across the
+     call; a line printed before the call would print a request. The
+     documents now say that its absence proves nothing when the close
+     was not prevented. `test/ui-terminate.js` DEFAULT sees the line
+     only because the driver blocks the JS thread until
+     `[NSApp terminate:nil]` returns.
+   - Still unmeasured: Cmd-Q (there is no main menu, 01a1fbb5-84c4, and
+     the user was not asked to try), and the quit Apple event from a
+     second process, which still reaches no handler; the Dock result
+     does not contradict that, being a different route. 01a1fbb5-851a
+     stays open, retitled to those two.
+
+2. **Display sleep with a window open**, the plan's sequence, once, the
+   user having agreed to the sleep at the machine.
+   - `present: swapchain invalid; nothing submitted` appears exactly
+     once, written during the sleep, and `present: swapchain valid
+     again` directly after it, after the wake. Nothing drawable-related
+     precedes the first: the only earlier such line is the first frame's
+     `present: drawable acquired (640x480)`.
+   - During the 15 s asleep the program logged 17 frames, each `frame
+     tick: 1 callback(s) ran, drew`: about one a second, against about
+     60 a second before and after. Why frames kept arriving at that rate
+     was not investigated.
+   - Frames resumed after the wake: 29 trace lines in the next 5 s, then
+     about 4,000 more until the close. Whole run: 6,007 `drew`, 0
+     `nothing drawn`.
+   - No `[sapp:` and no `[sokol-` line at any level, and no
+     AddressSanitizer report. The user closed the window with its close
+     button: `status 0`.
+   - Not known: whether the screen locked during the sleep. One run, 15
+     s; a longer sleep was not tried.
+   - 01a1fbb5-8545 carries this and is closed (17e).
+
+3. **The `display` canary with its promise broken.** With the screen
+   locked, `HERMES_NODE_UI_EXPECT_DISPLAY=1 utils/lit-run.sh $B
+   test/ui-display-feature.js test/ui-present.js` gave lit's note
+   `display: console session is locked`, `ui-display-feature.js` FAILED
+   (`display-feature off (console session is locked)`) and
+   `ui-present.js` UNSUPPORTED. Unlocked and rerun: both PASS. As
+   expected on both halves. This is the check Task 16f left undone.
+
+**The hand commands leaked pasteboards.** Each manual `with-display.py`
+run warned that its `hnui-test-<id>` pasteboard was not released,
+because `HERMES_NODE_UI_PASTEBOARD_TOOL` was not set; the Mac released
+the three by hand, and the real clipboard's digest was unchanged. The
+two commands under "Needs the user at the Mac" now set the variable.
+
+**Step 5, the tracker:**
+
+| Issue | Action |
+|---|---|
+| 01a1fd38-a4ed | Filed: the GL backend is untested on NVIDIA's driver, native Xorg and Intel GL. |
+| 01a1fbb5-8545 | Commented and closed, in 17e's commit: Release whole-suite run and display sleep both measured. |
+| 01a1fbb5-851a | Commented with the Dock Quit result; retitled to Cmd-Q and the quit Apple event; open. |
+| 01a1d5c0-d3b1 | Commented: `test/ui-late-rejection.js` reproduces its first state; the defect is untouched; open. |
+| 01a1fbb5-84af, -84ef, -8505, -852f | One line each: Slice D closed without this; open. |
+
+One thing found while filing 01a1fd38-a4ed: this plan's recipe for
+closing it (run `check-hermes-node` on a native X server) would not by
+itself reach a hardware driver, because `%with-display` starts its own
+Xvfb on Linux. The issue says so.
+
+**Where this departs from the step's text:**
+
+- **The spec was edited too**, three sentences, though the task's file
+  list does not name it: it said display sleep was not tried, a Release build
+  was not run, and a real Dock Quit was unproved.
+- **Two comments in code still say a Dock Quit is unproved** and were
+  left, because this task changes no code or test: `hnui.h` ("whether
+  Dock Quit, Cmd-Q or a quit Apple event arrive there has not been
+  shown") and the header of `test/ui-terminate.js`.
+- **What ran on which commit** is in "Task 17e as built": the Mac's
+  Release JS run and its three ASAN whole-suite runs predate the stress
+  test's fix, and only the unit suites were rerun after it.
+
+**Suite totals at the close of Slice D**, 456 unit tests and 244 JS
+tests on both machines: Linux, JS 234 passed, 10 unsupported, 0 failed;
+the Mac under ASAN, three runs, each JS 239 passed, 5 unsupported, 0
+failed; the Mac in Release, once, JS 238 passed, 6 unsupported, 0
+failed.
 

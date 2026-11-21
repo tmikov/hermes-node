@@ -11,7 +11,7 @@ Tracks `docs/superpowers/plans/2026-09-21-ui-compositor.md`, which implements
 | A — foundations, no GPU | 1–4 | **complete** | 2026-09-22 |
 | B — one window presenting one known pattern | 5–10 | **complete** | 2026-09-25 |
 | C — the rest of the surface area | 11–14 (as 11a–11d, 12, 13, 14a, 14b) | **complete** | 2026-11-13 |
-| D — lifecycle, Metal, suite | 15–17 | Task 15 (as 15a–15f) **complete**; Task 16 (as 16a–16f) **complete**; 17 not started, and next | Task 15: 2026-11-19. Task 16: 2026-11-21 |
+| D — lifecycle, Metal, suite | 15–17 (as 15a–15f, 16a–16f, 17a–17f) | **complete** | 2026-11-21 (Task 15: 2026-11-19; Tasks 16 and 17: 2026-11-21) |
 
 Slice A: 49 tests in `unittests/CompositorTest.cpp`. Slice B: 33 commits, 75
 files, and the suite at 414 unit tests plus 201 JS tests. Slice C: eight
@@ -73,8 +73,29 @@ and built a Release configuration with the UI on, whose window tests ran
 once: 34 passed, 5 unsupported, 0 failed. **Two checks of the Mac
 verification were not done**: the `display` canary with its promise
 broken (the screen stayed unlocked, and the display was not put to
-sleep), and the Dock Quit by hand (nobody was at the Mac). Task 17 is
-next.
+sleep), and the Dock Quit by hand (nobody was at the Mac). Both were
+done during Task 17.
+
+**Task 17, the full gated suite, 2026-11-21.** Six tasks (17a-17f); see
+"What Task 17 actually produced" below. It added two JS tests, so there
+are 244. Suite totals at the close of Slice D, 456 unit tests on both
+machines: **on Linux, 456 unit tests passed and JS 234 passed, 10
+unsupported, 0 failed; on the Mac under ASAN, three runs, each 456 unit
+tests passed and JS 239 passed, 5 unsupported, 0 failed; on the Mac in a
+Release build, once, JS 238 passed, 6 unsupported, 0 failed.** The
+Release unit run was 455 of 456, then 456 once the failing test, which
+depended on scheduling, was fixed. The Mac's JS runs and its three ASAN
+whole-suite runs were on the commit before that fix ("Stop relying on
+one drain for injected events"); after it only the unit suites were
+rerun there, in both builds. Linux's ten unsupported are `bundle-yargs.js`
+(`examples-installed`), `ui-sokol-validation-ci.js` (`ci`),
+`ui-display-busy.js` (`display-busy`) and `ui-display-feature.js`
+(`display-expected`, which this machine did not set), and the six
+Metal-only tests (`ui-clipboard-mac.js`, `ui-metal-clear.js`,
+`ui-metal-maintenance.js`, `ui-metal-maintenance-wake.js`,
+`ui-metal-occlusion.js`, `ui-terminate.js`). The Mac's five are the five
+it had after Task 16; its Release build adds `ui-sokol-validation.js`,
+whose validation layer a Release build compiles out.
 
 ## What Slice B actually produced
 
@@ -267,6 +288,78 @@ check that was skipped rather than a defect: the `display` canary was
 not seen to fail on the Mac with its promise broken during the final
 verification.
 
+*Since then (Task 17, 2026-11-21):* a real Dock Quit was checked by hand
+and reaches the override; display sleep and the whole suite under
+Release were measured; and the canary was seen to fail with the screen
+locked. The rest of that list stands. See "What Task 17 actually
+produced".
+
+## What Task 17 actually produced
+
+No product code: tests, one checker, and the measurements that close the
+slice. Written out in
+`docs/superpowers/plans/2026-11-21-ui-compositor-task17.md`, whose "as
+built" sections hold the numbers. Sub-tasks, by commit subject:
+
+- **17a** (Linux): "Exclude Sokol error lines in every window test".
+  Every `%with-display` RUN line's stderr is now read with
+  `--implicit-check-not='[sapp:error'` and `'[sokol-'`. Nine files
+  lacked it, not the four the outline named. The rule is a program,
+  `utils/check-ui-stderr-rule.py`, and `test/ui-stderr-rule.js` runs it,
+  ungated, so a window test added without the exclusions fails the
+  suite.
+- **17b** (Linux): "Test hnui_get_window after a late rejection".
+  `test/ui-late-rejection.js` provokes two of the three late failures
+  from a script and asserts no window is published. Publishing the
+  window before it is complete is a use-after-free under ASAN.
+- **17c** (Linux): "Stop relying on one drain for injected events".
+  `test/ui-close.js` REPLACED went red, and `test/ui-events.js` TICKS
+  stayed green with the call it pins removed, once injected batches were
+  split across frames. Both now inject the second event from the first
+  one's listener and wait on `ui.__waitPlatformFrames(1)`. **No hook was
+  added**: an atomic multi-event inject would guarantee one drain, and
+  what the tests need is one dispatch pass, which a drain does not give
+  when a dispatch for a real event is already posted.
+- **17d** (Mac ran it): "Record the Mac check of Task 17 on Metal". The
+  census of a healthy Metal run: no `[sapp:` line at any level and no
+  `[sokol-present` line, where GL prints one DPI warning. The injected
+  Sokol lines turn 24, 24 and 23 files red there; the late-rejection
+  mutation and the five dispatch-pass rows read as on Linux.
+- **17e** (Mac ran it): "Record the Mac suite runs for Task 17", with
+  "Give the surface table stress test's consumer its turns" before it.
+  The first whole-suite run under Release found one unit test,
+  `SurfaceTableTest.ProducerConsumerStressCompletesRealCycles`, failing
+  8 of 8: its progress check assumed the consumer thread gets a share of
+  an unfair mutex. A test defect; fixed, and its named mutation still
+  fails it.
+- **17f** (Linux): "Close Slice D of the UI compositor", the documents
+  and the tracker.
+
+Three checks were made by hand at the Mac on 2026-11-21, recorded in
+"Task 17f as built":
+
+- **A real Dock Quit reaches the `terminate:` override**, through
+  `performClose:`. The trace line that shows it is printed after
+  `performClose:` returns, so a run in which nothing prevents the close
+  can end, through the JS thread's `process.exit()`, before the line is
+  printed; its absence there proves nothing. Cmd-Q and the quit Apple
+  event are still unproved.
+- **Display sleep with a window open**: frames slowed to about one a
+  second while the display slept, the swapchain was reported invalid
+  once and valid again on waking, frames resumed, and no Sokol line was
+  printed. One run of 15 s.
+- **The `display` canary with its promise broken**: with the screen
+  locked and `HERMES_NODE_UI_EXPECT_DISPLAY=1`,
+  `test/ui-display-feature.js` failed and `test/ui-present.js` was
+  UNSUPPORTED; unlocked, both passed.
+
+What a green suite on both machines still does **not** show, each in the
+tracker: the GL backend on NVIDIA's driver, native Xorg or Intel GL (the
+suite's window tests draw through llvmpipe under Xvfb, always); Intel
+Macs; Cmd-Q or a quit Apple event reaching `terminate:`; the in-flight
+maintenance guard; fullscreen on macOS; and what GitHub's macOS runners
+have for a display.
+
 ## Things a newcomer needs to know
 
 - **The lit features are not interchangeable.** `ui-enabled`
@@ -323,7 +416,11 @@ waiting; a real Dock Quit reaching `terminate:` unproved; the maintenance
 in-flight guard verified by nothing; display sleep untried, and a
 Release build run only as far as its window tests, once; Intel Macs
 untested; and whether GitHub's macOS runners have a
-display.
+display. Task 17 closed the display-sleep and Release issue (both were
+measured), narrowed the Dock Quit one to Cmd-Q and the quit Apple event
+(a real Dock Quit was checked by hand and reaches `terminate:`), and
+added one: the GL backend is untested on NVIDIA's driver, native Xorg
+and Intel GL.
 
 ## Obligations carried into later tasks
 
@@ -348,7 +445,15 @@ from no text; compiling the two `sokol_gfx` files as Objective-C++, with a
 `__OBJC__`; and, from Task 15, keeping "the quit is always cancelled and the
 JS thread `_exit`s", with a check that `sapp_cancel_quit()` from `event_cb`
 inside `windowShouldClose:` cancels the close as it does on X11, tested
-with a real close request. **Task 17** keeps a stderr-check
+with a real close request. **Task 17's, listed next, are discharged**:
+the stderr-check sweep by `test/ui-stderr-rule.js`, which enforces the
+rule over every window test (nine files needed it, not four); the
+rejection test by `test/ui-late-rejection.js`; and the unenforced
+one-drain assumption by rewriting the two assertions that leaned on it,
+`test/ui-close.js` REPLACED and `test/ui-events.js` TICKS, around
+`ui.__waitPlatformFrames(1)`, so that nothing assumes it any more (the
+injector was not made explicit, and the Task 17 plan says why). They
+were: **Task 17** kept a stderr-check
 sweep of four tests and one small rejection test (macOS gating, which it
 also carried, was done by Task 16); the lifecycle assertions
 it was waiting for now exist (`test/ui-exit-paths.js`, `test/ui-close.js`,

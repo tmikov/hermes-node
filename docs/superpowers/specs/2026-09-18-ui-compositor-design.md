@@ -637,7 +637,11 @@ GPU_PENDING -> PUBLISHED_AWAITING_TAKE -> IDLE.
   timer starts on an occlusion *change*, so a window covered from the
   moment it opens keeps a valid swapchain and keeps ticking (600 of 600
   frames, twice); and of the causes only miniaturizing is exercised by a
-  test (`test/ui-metal-occlusion.js`). Display sleep was not tried.
+  test (`test/ui-metal-occlusion.js`). Display sleep was tried once, by
+  hand, on 2026-11-21: with a window open, frame ticks slowed to about
+  one a second while the display slept, the swapchain was reported
+  invalid once and valid again on waking, and frames resumed. No test
+  does it.
 - **Rendering happens only inside a frame callback.** After the last callback
   of a tick the module calls `sg_commit()` and arranges completion.
 
@@ -758,11 +762,18 @@ when Sokol delivers no event and nothing would cancel the quit, a
 What is established and what is not: `[NSApp terminate:nil]` called
 in-process reaches the override and behaves as above in all three cases
 (default, cancelled, before the window exists; `test/ui-terminate.js`).
-**Whether a real Dock Quit, Cmd-Q or quit Apple event reaches the override
-is unproved.** `-[NSRunningApplication terminate]` from a second process
-was tried twice and reached no handler at all in the target, including in
-a minimal control application, and the check by hand at the Dock was not
-made.
+**A real Dock Quit reaches the override, through `performClose:`**:
+checked by hand on 2026-11-21, in a run whose `close` listener prevented
+the close and whose trace then showed `app: terminate requested; through
+performClose:, 1 quit request(s) cancelled`. That line is printed after
+`performClose:` returns, which was measured at about eight frames after
+the quit request was cancelled; when nothing prevents the close, the JS
+thread's `process.exit()` can end the process first, so the line's
+absence in such a run proves nothing. **Whether Cmd-Q or a quit Apple
+event reaches the override is unproved.** There is no main menu, so
+Cmd-Q cannot be tried; and `-[NSRunningApplication terminate]` from a
+second process was tried twice and reached no handler at all in the
+target, including in a minimal control application.
 
 What remains impossible, and is documented rather than fixed: a `close`
 listener that cancels, or a JS thread busy in synchronous code, leaves a
@@ -1268,9 +1279,11 @@ The exact-pixel comparison holds on Metal: with test hooks on,
 the same command buffer that presents it, a copy of the drawable into a
 buffer the capture reads, converted from the drawable's BGRA order.
 
-Measured on an Apple M4 Max (macOS 27.2); Intel Macs are untested. Display
-sleep was not tried, a Release build with asserts off was not run, and
-fullscreen is skipped on macOS. **Whether GitHub's macOS runners have a
+Measured on an Apple M4 Max (macOS 27.2); Intel Macs are untested.
+Display sleep was tried once by hand ("Frames", above), a Release build
+with asserts off ran the whole suite once (2026-11-21: JS 238 passed, 6
+unsupported, 0 failed; 456 unit tests once a scheduling-dependent unit
+test was fixed), and fullscreen is skipped on macOS. **Whether GitHub's macOS runners have a
 Metal device and a window-server session will be reported by the first CI
 run**: the workflow carries an informational step that runs the probe and
 prints what it saw, and until that run nothing here claims either answer.
