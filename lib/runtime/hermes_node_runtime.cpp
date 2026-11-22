@@ -1627,6 +1627,12 @@ int runHermesNode(const HermesNodeConfig &config) {
     // terminal there is wrong if it runs twice.
     markProcessExiting();
 
+    // An embedder that owns more of the process than this runtime does --
+    // hermes-node-ui's window -- shuts that part down before any listener
+    // runs, as the other two paths that emit 'exit' do (processExit and
+    // process._fatalException). Plain hermes-node installs no hook.
+    runBeforeExitListenersHook(env, ExitReason::kRuntimeReturn);
+
     const std::optional<int> before = readProcessExitCode(env, processObj);
     if (exitCode == 0 && before.has_value())
       exitCode = *before;
@@ -1658,6 +1664,13 @@ int runHermesNode(const HermesNodeConfig &config) {
     // are lost.
     flushPendingWrites(eventLoop.getLoop());
   }
+
+  // Between 15 and 16: the status is settled, 'exit' listeners have run and
+  // their output is flushed, and nothing is torn down yet. An embedder that
+  // cannot let this runtime be torn down under it ends the process here and
+  // does not return; hermes-node-ui does when a window was requested. Plain
+  // hermes-node installs no hook.
+  runBeforeRuntimeCleanupHook(env, exitCode);
 
   // 16. Cleanup (reverse order of creation).
   {

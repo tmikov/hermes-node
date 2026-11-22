@@ -56,8 +56,6 @@ SurfaceRef gPresenting{};
 bool gHavePresenting = false;
 std::vector<GenerationId> gWrappedGenerations;
 
-bool gStartupFailed = false;
-
 /// The platform thread's tracked window state: the `window` snapshot of
 /// the last event it converted, refreshed from `sapp_*` queries before each
 /// real event (the converter handles focus and minimize, not size).
@@ -166,12 +164,12 @@ void maybeCapture() {
         static_cast<unsigned long long>(observed.publicationId),
         width,
         height);
-    // The dropped bool, same shape as the tick post in onFrame() and with
-    // the same owner: a refused post here leaves __captureFrame()'s
-    // Promise unsettled, bounded only by the caller's own timeout. Only
-    // reachable once the dispatcher is closed (Task 15).
-    if (gDispatch != nullptr)
-      gDispatch->post(onCaptureFinished);
+    // A refused post -- the dispatcher was closed by CLOSING -- leaves
+    // __captureFrame()'s Promise unsettled. The JS thread has already
+    // abandoned it (uiTestHooksAbandonCapture), so nothing waits on it; the
+    // window is a match that was under way when CLOSING began.
+    if (gDispatch == nullptr || !gDispatch->post(onCaptureFinished))
+      uiTrace("capture: post refused (dispatcher closed)");
     return;
   }
 
@@ -191,9 +189,9 @@ void maybeCapture() {
         "was presenting",
         framesObserved,
         static_cast<unsigned long long>(observed.publicationId));
-    // As above: a refused post leaves the Promise unsettled (Task 15).
-    if (gDispatch != nullptr)
-      gDispatch->post(onCaptureFinished);
+    // As above: a refused post leaves the abandoned Promise unsettled.
+    if (gDispatch == nullptr || !gDispatch->post(onCaptureFinished))
+      uiTrace("capture: post refused (dispatcher closed)");
   }
 }
 
@@ -386,11 +384,10 @@ void drainInjectedEvents() {
   if (!batched)
     return;
   // Released, then the queue is checked -- not "did this batch push
-  // anything". While the flag was held, a postEventDispatch() from the JS
-  // thread (the one onSharedContextReady makes for events that predate the
-  // window object) returned without posting, on the strength of this
-  // holder; checking the queue is what keeps that promise. A batch whose
-  // every event the converter refused is covered by the same check.
+  // anything". While the flag was held, any postEventDispatch() returned
+  // without posting, on the strength of this holder; checking the queue is
+  // what keeps that promise. A batch whose every event the converter
+  // refused is covered by the same check.
   gDispatchPosted.store(false);
   if (!gInput.empty())
     postEventDispatch();
@@ -619,9 +616,10 @@ void onInit() {
     // into it -- so that the rejection reaches JS rather than racing a
     // process teardown.
     gStartupError = error;
-    gStartupFailed = true;
-    if (gDispatch != nullptr)
-      gDispatch->post(onStartupFailed);
+    // Refused once the JS thread is CLOSING: the rejection is never
+    // delivered, and this thread presents its clear colour until _exit().
+    if (gDispatch == nullptr || !gDispatch->post(onStartupFailed))
+      uiTrace("init_cb: post refused (dispatcher closed)");
     return;
   }
 
@@ -629,8 +627,11 @@ void onInit() {
   gMetrics = gTracked;
 
   uiTrace("init_cb: shared context ready");
-  if (gDispatch != nullptr)
-    gDispatch->post(onSharedContextReady);
+  // Refused once the JS thread is CLOSING: the window's readiness is never
+  // delivered, gPresentReady stays false, and this thread presents its
+  // clear colour until _exit().
+  if (gDispatch == nullptr || !gDispatch->post(onSharedContextReady))
+    uiTrace("init_cb: post refused (dispatcher closed)");
 }
 
 /// The presenting half, once per platform frame: take a newly published
@@ -638,6 +639,18 @@ void onInit() {
 /// reads, and send the frame tick if one is due (spec: Architecture,
 /// `frame_cb`), and drain the command queue and the clipboard reads.
 void onFrame() {
+  // The test hooks' frame barrier (__waitPlatformFrames) counts every call,
+  // whichever of the returns below it leaves by.
+  struct FrameBarrierGuard {
+    bool active;
+    ~FrameBarrierGuard() {
+      if (active)
+        uiTestHookFrameEnded();
+    }
+  } frameBarrier{uiTestHooksEnabled()};
+  if (frameBarrier.active)
+    uiTestHookFrameBegan();
+
   if (gBackend == nullptr)
     return;
 
@@ -736,26 +749,21 @@ void onFrame() {
   // through a pointer conversion and silently mean "a slot is always
   // free"; TickMachine deletes that overload so it cannot compile.
   //
-  // **Known edge, owned by Task 15's teardown.** shouldSendTick() CONSUMES
-  // the request: a true return has already cleared `pending_` and moved
-  // the machine to kTickQueued. So if gDispatch is null, or post() returns
-  // false -- which happens once the dispatcher is closed -- nothing ever
-  // calls beginCallbacks(), the machine stays in kTickQueued, and every
-  // later shouldSendTickLocked() refuses on `state_ != kIdle`. The
-  // animation is then dead with nothing printed. It is unreachable until
-  // something closes the dispatcher, which only the lifecycle hook will.
-  //
-  // Putting the tick back is declined on semantics, not on absence: it IS
-  // expressible with the methods that exist -- requestFrame() then
-  // beginCallbacks() then endCallbacksDrew(false) returns the machine to
-  // kIdle with the request pending, and beginCallbacks()'s assert holds --
-  // but it would mean calling two methods that mean "the callbacks began"
-  // and "the callbacks ended" when no callback ran. Whoever writes the
-  // teardown should add a real entry point if one is needed, rather than
-  // conclude from this comment that the class is missing something.
-  // Recorded here so that edge is found rather than rediscovered as a hang.
-  if (gTick->shouldSendTick(*gTable) && gDispatch != nullptr)
-    gDispatch->post(runFrameTick);
+  // **A refused post is not repaired.** shouldSendTick() CONSUMES the
+  // request: a true return has already cleared `pending_` and moved the
+  // machine to kTickQueued, so a post the dispatcher refuses leaves it
+  // there. post() refuses only once the window is CLOSING has closed the
+  // dispatcher, and from then on no tick can ever be delivered again, so
+  // the machine's state is moot and TickMachine needs no entry point to
+  // put the tick back. The edge is also nearly unreachable: CLOSING calls
+  // SurfaceTable::beginClosing() before it closes the dispatcher, and a
+  // closing table makes this gate answer no
+  // (TickMachineTest.NoTickIsSentOnceTheTableIsClosing), so what remains is
+  // a window of a few instructions between this thread's gate and its post.
+  if (gTick->shouldSendTick(*gTable)) {
+    if (gDispatch == nullptr || !gDispatch->post(runFrameTick))
+      uiTrace("frame tick: post refused (dispatcher closed)");
+  }
 }
 
 void onEvent(const sapp_event *event) {
@@ -772,12 +780,24 @@ void onCleanup() {
 void uiHandlePlatformEvent(
     const sapp_event &event,
     const PlatformSource &source) {
-  // Ruling 54: the close button emits `close` and the window stays open.
-  // Cancelled BEFORE anything else, because Sokol acts on the flag as soon
-  // as this callback returns; what an uncancelled close does is Task 15's.
+  // Every quit request is cancelled, unconditionally and BEFORE anything
+  // else, because Sokol acts on its flag as soon as this callback returns --
+  // and a quit Sokol acted on would end sapp_run(), whose Linux teardown
+  // closes the X display the JS thread's GL context was created on while
+  // that thread still has it current (on macOS the quit path exits 0 from
+  // this thread instead, which cannot carry a status). That holds in
+  // CLOSING too: a second close request arriving while 'exit' listeners
+  // run must not be the one that tears the window down under them. Whether
+  // the window closes is the JS thread's decision, made by the `close`
+  // listeners this event is forwarded to, and carried out there by ending
+  // the process (uiCloseWindow); the platform thread is never told.
   if (event.type == SAPP_EVENTTYPE_QUIT_REQUESTED) {
     sapp_cancel_quit();
     uiTrace("quit requested: cancelled, forwarded as close");
+    // The test hooks' quit barrier (__waitPlatformQuitRequests) counts the
+    // cancellation once it has been executed.
+    if (uiTestHooksEnabled())
+      uiTestHookQuitCancelled();
   }
 
   UiEvent converted;
@@ -823,9 +843,8 @@ int uiRunPlatformLoop() {
     // guarantees the JS thread gets to observe it is that UiHost joins that
     // thread after this returns.
     gStartupError = error;
-    gStartupFailed = true;
-    if (gDispatch != nullptr)
-      gDispatch->post(onStartupFailed);
+    if (gDispatch == nullptr || !gDispatch->post(onStartupFailed))
+      uiTrace("startup failure: post refused (dispatcher closed)");
     return 1;
   }
 
@@ -879,11 +898,14 @@ int uiRunPlatformLoop() {
   uiTrace("sapp_run: %dx%d", desc.width, desc.height);
   sapp_run(&desc);
 
-  // Reached on Linux when the window closes; never on macOS ([NSApp run]).
-  // The JS thread is still running at this point, and bringing it down in
-  // an orderly way -- CLOSING, the pre-cleanup lifecycle hook, the exit
-  // code -- is Task 15. Until then UiHost joins it, and in practice the
-  // program ends through process.exit() before this line is reached.
+  // Not reached: nothing calls sapp_quit() or sapp_request_quit(), every
+  // quit request is cancelled in event_cb, and on macOS sapp_run() is
+  // [NSApp run], which never returns. That is deliberate rather than a gap:
+  // on Linux sapp_run() returning would close the X display the JS thread's
+  // GL context was created on, under that thread. The process ends from the
+  // JS thread instead -- process.exit(), the fatal path, or
+  // uiBeforeRuntimeCleanup() -- with the window still on screen. Traced, so
+  // that a run reaching here anyway says so.
   uiTrace("sapp_run returned");
   return 0;
 }

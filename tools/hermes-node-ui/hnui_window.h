@@ -88,13 +88,13 @@ struct hnui_window {
 
   /// Native and JavaScript callbacks in one registration-ordered list with
   /// one id space (Ruling 57). A JavaScript entry's `fn` is a strong
-  /// `napi_ref`, released through `releaseFrameCallback` by both routes
-  /// out of the list a running program takes: the tick, when it takes the
-  /// entry to run it, and either cancel entry point, when it removes one.
-  /// Entries still here at exit are not released: the window lives until
-  /// the process `_exit`s, as `jsWindow` does, and whoever adds window
-  /// teardown must hand them to `FrameCallbackList::releaseAll` while the
-  /// env is still alive.
+  /// `napi_ref`, released through `releaseFrameCallback` by every route
+  /// out of the list: the tick, when it takes the entry to run it; either
+  /// cancel entry point, when it removes one; and `uiEnterClosing`, which
+  /// hands whatever is still here -- the rest of a running batch included
+  /// -- to `FrameCallbackList::releaseAll` while the env is alive, before
+  /// any `'exit'` listener runs. Nothing is added afterwards: both request
+  /// entry points refuse once the window is CLOSING.
   hermes::node_compat::FrameCallbackList frameCallbacks;
 
   //=========================================================================
@@ -125,6 +125,18 @@ struct hnui_window {
     hnui_event_cb cb = nullptr;
     void *user = nullptr;
   };
+
+  /// Whether a close request (`kCloseRequested`) is being delivered: true
+  /// from before its first native listener runs until the JavaScript
+  /// `emit` returns. What `hnui_cancel_close` and the `close` payload's
+  /// `preventDefault()` check, so that a call at any other time cancels
+  /// nothing.
+  bool inCloseEvent = false;
+
+  /// Whether a listener of the close request being delivered cancelled it.
+  /// Reset when `inCloseEvent` is set, so one event's cancellation never
+  /// carries over to the next.
+  bool closeCancelled = false;
 
   /// `hnui_add_event_listener` registrations, in registration order.
   std::vector<NativeEventListener> eventListeners;

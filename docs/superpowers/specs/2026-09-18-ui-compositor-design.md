@@ -615,7 +615,8 @@ side. A DPI change arrives as `RESIZED`.
 
 **Commands** (JS -> main, fire-and-forget, applied in the next `frame_cb`):
 title, fullscreen toggle, icon, cursor shape, cursor visibility, pointer
-lock, custom cursor images, clipboard write, quit.
+lock, custom cursor images, clipboard write. There is no quit command:
+closing is decided and carried out on the JS thread (see Closing, below).
 
 **Clipboard read.**
 
@@ -647,16 +648,31 @@ lock, custom cursor images, clipboard write, quit.
 file-count limit, the path-length limit, and that one oversized path discards
 the entire drop.
 
-**Closing.** On `QUIT_REQUESTED` the main thread calls `sapp_cancel_quit()`
-and forwards a cancelable `close` event.
+**Closing.** On **every** `QUIT_REQUESTED` the main thread calls
+`sapp_cancel_quit()` -- unconditionally, in CLOSING too -- and forwards a
+cancelable `close` event. Sokol is never allowed to act on a quit, and
+`sapp_quit()` / `sapp_request_quit()` are never called: on Linux
+`sapp_run()` returning would close the X display the JS thread's GL context
+was created on, under that thread, and on macOS Sokol's quit path exits 0
+from the main thread, which cannot carry a status. A listener cancels with
+the payload's `preventDefault()` (JavaScript) or `hnui_cancel_close`
+(native). A `close` that no listener cancels enters CLOSING and ends the
+process, from the JS thread, as `process.exit()` with no argument would; the
+main thread is never told.
 
 **Inherited limits, documented not fixed:** no IME, no Wayland, Linux DPI
 scale read once at startup.
 
 ## Lifecycle
 
-**Startup states:** REQUESTED -> RUNNING, or REQUESTED -> FAILED; RUNNING ->
-CLOSING -> CLOSED.
+**States:** IDLE (no window requested) -> REQUESTED; REQUESTED -> RUNNING,
+or REQUESTED -> FAILED. CLOSING is entered from **any** of IDLE, REQUESTED,
+RUNNING and FAILED -- whichever the window is in when a path that emits
+`'exit'` begins -- and CLOSING -> CLOSED. From IDLE it only records the state,
+so that a `createWindow` called from an `'exit'` listener throws; from
+REQUESTED (the entry script threw after calling `createWindow`) and FAILED
+(a handled rejection, then the script returned) it does everything listed
+below for whatever exists yet.
 
 - `main()` spawns the JS thread and waits on a condition variable. Waiting
   before `[NSApp run]` is fine on macOS.
@@ -692,8 +708,10 @@ CLOSING -> CLOSED.
   We install a logger that prints the item and **terminates with a non-zero
   status**; returning from a logger does not make Sokol stop.
 - **Our additional shared-context creation failing rejects the Promise.** The
-  main thread posts the rejection and keeps running its loop, quitting only
-  when JS asks, so macOS termination cannot pre-empt delivery.
+  main thread posts the rejection and keeps running its loop until the
+  process ends, so macOS termination cannot pre-empt delivery. A rejected
+  `createWindow` (FAILED) releases the referenced handle, so a script that
+  handles the rejection and returns ends, through the second hook below.
 
 **Abnormal return of the runtime.** The entry script can throw after calling
 `createWindow`: step 14 of `runHermesNode` runs the loop only when
@@ -701,25 +719,52 @@ CLOSING -> CLOSED.
 Waiting for `runHermesNode()` to return is too late, and may never happen --
 `UvEventLoop::close()` runs `uv_run(UV_RUN_DEFAULT)`
 (`lib/event-loop/uv_event_loop.cpp:354`), which a live UI handle would keep
-alive forever. So the module registers a **lifecycle hook that runs before
-runtime cleanup**: it revokes cross-thread access with a synchronized sender
-shutdown, closes the UI handle, and tells the main thread to tear the window
-down and exit with the runtime's code.
+alive forever. So the module registers two lifecycle hooks with the
+runtime. The first runs before `'exit'` listeners on every path and enters
+CLOSING. The second runs when `runHermesNode` has emitted `'exit'` and
+flushed, and before it cleans anything up: it restores the terminal and calls
+`_exit()` with the runtime's code. The window is never torn down by Sokol:
+`sapp_run()` returning would close the X display the JS thread's GL context
+was created on.
 
 **CLOSING gates every exit path.** Entering CLOSING refuses further frame
-callbacks and event dispatch, fails pending synchronous clipboard requests,
-and makes platform commands unavailable to `'exit'` listeners. It is entered
-on **all three** paths: `win.close()` (or an uncancelled `close` event), an
-explicit `process.exit()`, and the fatal-exception path. This is required
-because `flushPendingWrites` runs `uv_run(UV_RUN_NOWAIT)` up to 64 times
-(`lib/process/node_process.cpp:544`) and would otherwise dispatch UI work
-while `'exit'` listeners are tearing down addon state.
+callbacks and event dispatch, fails pending clipboard requests of both kinds,
+and makes platform commands unavailable to `'exit'` listeners. A synchronous
+read blocks the only thread that can enter CLOSING, so none can be waiting at
+that moment; what a program observes is that `hnui_read_clipboard_sync`
+called from an `'exit'` listener returns `HNUI_ERROR` at once instead of
+waiting out its timeout. It is entered on **every** path that emits
+`'exit'`: `win.close()` (or an uncancelled `close` event), an explicit
+`process.exit()`, the fatal-exception path, and the runtime's own return.
+This is required because `flushPendingWrites` runs `uv_run(UV_RUN_NOWAIT)` up
+to 64 times (`lib/process/node_process.cpp:544`) and would otherwise dispatch
+UI work while `'exit'` listeners are tearing down addon state.
+
+Entering CLOSING runs queued ticks (nextTick and promise callbacks) only when
+it actually rejected a `ui.readClipboard()` Promise, so that the rejection's
+handlers run before the `'exit'` listeners; and never on the fatal path. With
+no Promise rejected, nothing queued runs, as in Node, whose `process.exit()`
+runs no queued callback; and after an uncaught exception Node runs no further
+callback, and a throwing handler would replace the error being reported.
+
+Unavailable means refused quietly: a refused command is dropped and traced,
+never thrown and never printed, because an `'exit'` listener that restores
+the cursor must not have the rest of its body skipped by an exception that
+`processExit` would swallow. `requestAnimationFrame` (both forms) returns 0
+and registers nothing; `ui.readClipboard()` returns a Promise already
+rejected with `ERR_CLIPBOARD_FAILED`; `createWindow` throws.
 
 **Closing the window ends the process** through hermes-node's normal
 `process.exit()` path: `'exit'` listeners run, `process.exitCode` is
 honoured, stdio is flushed, the terminal is restored, then `_exit()` ends both
 threads. Outstanding Promises and native operations are abandoned by that
-`_exit()`; `cleanup_cb` never runs.
+`_exit()`; `cleanup_cb` never runs, and `sapp_run()` never returns, on any
+path. CLOSED is that `_exit()`: no code observes it, and until it the window
+stays on screen, presenting its last published surface, while `'exit'`
+listeners run. A program that has replaced `process.exit` with a function
+that returns gets control back with the window in CLOSING, and nothing
+recovers it; the process ends when the program ends it some other way or its
+loop runs dry.
 
 ## The JS API
 
@@ -740,6 +785,10 @@ The name carries a colon, so it cannot collide with an npm package.
   (cancelable). Nothing is delivered until one loop turn after the window's
   Promise resolves, so listeners attached synchronously after `await
   createWindow()` receive every event since the window's creation, in order.
+  A `close` listener cancels by calling `event.preventDefault()`
+  synchronously, while the event is being delivered; a later call does
+  nothing. With no listener, or none that cancels, the window closes and the
+  process ends as if `process.exit()` had been called with no argument.
 - **Field names follow the DOM where the meaning is identical**: `code` with
   `KeyboardEvent.code` names, `repeat`, `shiftKey`/`ctrlKey`/`altKey`/
   `metaKey`, DOM button numbering. Where Sokol differs, Sokol's shape wins: a
@@ -748,7 +797,11 @@ The name carries a colon, so it cannot collide with an npm package.
   `.framebufferHeight`, `.dpiScale`, `.focused`, `.fullscreen`, `.minimized`.
 - **Commands:** `win.title = ...`, `setFullscreen`, `setIcon`, `close`,
   `setCursor`, `setCursorImage`, `showCursor`, `lockPointer`;
-  `ui.writeClipboard`, `ui.readClipboard`.
+  `ui.writeClipboard`, `ui.readClipboard`. `win.close()` does not emit
+  `close`, which means the window system asked: it enters CLOSING and calls
+  `process.exit()` -- the property, with no argument, so `process.exitCode`
+  is honoured -- and does not return unless `process.exit` has been replaced
+  by something that does.
 - **JS never calls `sokol_gfx`.** Rendering is native, through addons.
 
 ## The native C API
@@ -776,6 +829,7 @@ void  hnui_cancel_animation_frame(hnui_window *w, int id);
 int   hnui_add_event_listener(hnui_window *w, hnui_event_cb cb, void *user);
 void  hnui_remove_event_listener(hnui_window *w, int id);
 bool  hnui_event_dispatch_quiescent(hnui_window *w);  /* no native listener on the stack */
+bool  hnui_cancel_close(hnui_window *w);              /* inside a close request's delivery */
 void  hnui_get_window_state(hnui_window *w, hnui_window_state *out);
 
 void  hnui_set_cursor(hnui_window *w, hnui_cursor c);
@@ -831,6 +885,28 @@ int   hnui_read_clipboard_sync(hnui_window *w, int timeout_ms, char **out);
   `hnui_target` follows the same rule.
 - `hnui_read_clipboard_sync` returns a status; the string is owned by the
   caller and freed with `hnui_free`.
+- **`hnui_cancel_close`** returns true when called while an
+  `HNUI_EVENT_CLOSE_REQUESTED` event is being delivered for the window --
+  from a native listener, or from native code reached from a JavaScript
+  `close` listener -- and the close is then cancelled; a second call during
+  the same event is harmless and also returns true. It returns false at any
+  other time, for a NULL window, and once the window is CLOSING; a
+  wrong-thread call on a real window aborts. Added without an
+  `HNUI_ABI_VERSION` bump: an added export is a change an already-compiled
+  addon tolerates, and one that calls it against an older host fails at
+  `dlopen` with an undefined symbol.
+- **Once the window is CLOSING** (see Lifecycle), the API is the one the
+  "Closing" section of `hnui.h` lists: `hnui_request_animation_frame`
+  returns 0 and registers nothing; registered frame callbacks are dropped
+  without being called, and their `user` pointers are never handed back;
+  event listeners are no longer called; `hnui_frame_target` and
+  `hnui_cancel_close` return false; the cursor, pointer-lock and
+  clipboard-write commands are dropped (traced, not printed); and
+  `hnui_read_clipboard_sync` returns `HNUI_ERROR` at once. **There is no
+  teardown notification:** every exit of a windowed process is an `_exit()`,
+  the N-API environment is never destroyed, and so neither environment
+  cleanup hooks nor the finalizers its destruction would run are called. An
+  addon must not rely on being told the process is ending.
 - Addons own every `sg_*` resource they create, and **create and destroy them
   at init or inside a frame callback**, where a commit follows. Doing so at
   other times is out of contract in v1: on Metal it exhausts Sokol's id-pool,
@@ -894,9 +970,10 @@ and passes `sgl_setup` a `depth_format` of `SG_PIXELFORMAT_NONE`, which
   each, and prints what it observed: `hnui_cancel_animation_frame`,
   `hnui_remove_event_listener` (including removal during dispatch, and when
   its user data becomes safe to free), `hnui_get_window_state`,
-  `hnui_set_cursor`, `hnui_show_cursor`, `hnui_lock_pointer`,
-  `hnui_write_clipboard`, `hnui_read_clipboard_sync` (a normal read and a
-  timeout), and `hnui_free`. It also renders one frame through the
+  `hnui_cancel_close` (outside any event, and from a native listener during
+  a close request), `hnui_set_cursor`, `hnui_show_cursor`,
+  `hnui_lock_pointer`, `hnui_write_clipboard`, `hnui_read_clipboard_sync` (a
+  normal read and a timeout), and `hnui_free`. It also renders one frame through the
   **resolve view** with an MSAA image of its own, which is otherwise the one
   part of `hnui_frame_target` nothing exercises. This mode is textual and
   runs under lit; it is not part of what a person sees when running the demo

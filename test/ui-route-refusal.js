@@ -56,7 +56,40 @@
 // RUN: %FileCheck --check-prefix=PB %s < %t.pb.out
 // RUN: %FileCheck --check-prefix=PBERR %s < %t.pb.err
 
+// --- A handled rejection, and then the script simply returns. ----------
+//
+// A rejected createWindow leaves the window FAILED, and FAILED must not
+// keep the process alive: rejectWith() gives back the referenced handle
+// createWindow took, so the loop drains, runHermesNode reaches its end, and
+// the pre-cleanup hook exits with the program's own process.exitCode.
+// (Mutation: remove that release from rejectWith, and the run hangs until
+// `timeout` kills it, status 124.) Its 'exit' listener prints what
+// requestAnimationFrame answers, which is `RAF 0` only if the hook entered
+// CLOSING (from FAILED) before the listener ran. (Mutation: move
+// runHermesNode's kRuntimeReturn hook call below the 'exit' emit, and the
+// listener prints `RAF threw: ... no window exists yet ...`.)
+//
+// RUN: timeout 60 env HERMES_NODE_UI_GL_ROUTE=bogus HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s return > %t.ret.out 2> %t.ret.err; echo "EXITCODE $?" | %FileCheck --check-prefix=RETCODE %s
+// RUN: %FileCheck --check-prefix=RET %s < %t.ret.out
+// RUN: %FileCheck --check-prefix=RETERR %s < %t.ret.err
+
 const ui = require('hermes-node:ui');
+
+const returnAfterRejection = process.argv[2] === 'return';
+
+if (returnAfterRejection) {
+  // In CLOSING requestAnimationFrame answers 0; in FAILED, which is where the
+  // window is until the runtime-return hook enters CLOSING, it throws "no
+  // window exists yet". So this line says which of the two the 'exit'
+  // listener ran in.
+  process.on('exit', () => {
+    try {
+      console.log('RAF ' + ui.requestAnimationFrame(() => {}));
+    } catch (e) {
+      console.log('RAF threw: ' + e.message);
+    }
+  });
+}
 
 ui.createWindow({width: 320, height: 240, title: 'route refusal'}).then(
     () => {
@@ -67,8 +100,19 @@ ui.createWindow({width: 320, height: 240, title: 'route refusal'}).then(
     },
     (e) => {
       console.log('REJECTED ' + (e && e.message));
+      if (returnAfterRejection) {
+        process.exitCode = 5;
+        return;
+      }
       process.exit(3);
     });
+
+// RET: REJECTED {{.*}}unknown value for HERMES_NODE_UI_GL_ROUTE: 'bogus'
+// RET-NEXT: RAF 0
+// RETCODE: EXITCODE 5
+// RETERR: lifecycle: FAILED
+// RETERR: lifecycle: event-loop handle released
+// RETERR: lifecycle: runtime returned, exiting with status 5
 
 // The message names the variable, the bad value, and both routes with
 // their status, because "unknown route" alone leaves the reader to guess

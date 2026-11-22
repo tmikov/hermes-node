@@ -15,10 +15,9 @@
 // HOST     hnui_sokol_commit()/hnui_api_version() answer what the addon
 //          reports the host to be, and the commit is the pinned one.
 //
-// Opens no window and needs no display: init needs neither. It therefore
-// ends naturally rather than through process.exit() (that requirement
-// exists because closing a window hangs, dz 01a0d88a-6518); `timeout` stays
-// because lit has no per-test timeout (dz 01a0d797-e326).
+// Opens no window and needs no display: init needs neither. With no window
+// requested nothing holds the event loop, so the script simply returns;
+// `timeout` stays because lit has no per-test timeout (dz 01a0d797-e326).
 //
 // REQUIRES: ui, ui-gpu
 // RUN: timeout 60 %hermes-node-ui %s %hnui_demo_addon %hnui_bad_version_addon > %t.out 2> %t.err; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s

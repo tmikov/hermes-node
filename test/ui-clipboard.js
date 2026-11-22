@@ -22,9 +22,10 @@
 //              have returned its previous buffer here, which is the defect
 //              this whole read exists to remove (spec: Clipboard read)
 //   FAIL-PENDING  (under MUTE) a Promise read still outstanding is
-//              rejected with ERR_CLIPBOARD_FAILED by the test hook standing
-//              in for Task 15's shutdown (uiFailPendingClipboardReads), and
-//              the platform thread's reply that follows settles nothing
+//              rejected with ERR_CLIPBOARD_FAILED by the test hook that runs
+//              what entering CLOSING runs (uiFailPendingClipboardReads),
+//              without the rest of CLOSING, so that the platform thread's
+//              reply that follows can be seen to settle nothing
 //   LATE       the fixture answers read N only when read N+1's request
 //              arrives, with 'reply-1'. Read N times out; read N+1 receives
 //              N's SelectionNotify while it waits, recognises it by its
@@ -76,8 +77,7 @@
 // RUN-line shape as in ui-events.js: redirections inside `sh -c`, so the
 // trace file is the binary's own stderr whatever the display wrapper does,
 // and `timeout` because lit has no per-test timeout (dz 01a0d797-e326). Ends
-// through process.exit() (Ruling 59): closing the window still hangs (dz
-// 01a0d88a-6518).
+// through process.exit(): its subject is not closing.
 //
 // RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon %x11_selection_owner > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out

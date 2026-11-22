@@ -44,12 +44,14 @@
 // RUN-line shape as in ui-present.js: redirections inside `sh -c`, so the
 // trace file is the binary's own stderr whatever the display wrapper does,
 // and `timeout` because lit has no per-test timeout (dz 01a0d797-e326).
-// demo.js ends conformance mode through process.exit() (Ruling 59): closing
-// the window still hangs (dz 01a0d88a-6518).
+// demo.js ends conformance mode with win.close(), the way a program would.
+// A win.close() that did nothing leaves the run at its `timeout`; one that
+// entered CLOSING and returned lets the loop drain and exit 0 through the
+// runtime-return hook, which the implicit NOT on `runtime returned` catches.
 //
 // RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %source_dir/test/fixtures/hnui-demo/demo.js %hnui_demo_addon conformance %x11_selection_owner %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --check-prefix=TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' %s < %t.err
+// RUN: %FileCheck --check-prefix=TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='runtime returned' %s < %t.err
 
 // CODE: EXITCODE 0
 
@@ -66,6 +68,7 @@
 // CHECK-NEXT: hnui_remove_event_listener remaining listener received keys=293,294
 // CHECK-NEXT: hnui_event_dispatch_quiescent inside listener=0,0
 // CHECK-NEXT: hnui_event_dispatch_quiescent next frame callback=1 (removed listener's user data freed there)
+// CHECK-NEXT: hnui_cancel_close outside=0 inside=1
 // CHECK-NEXT: hnui_set_cursor HNUI_CURSOR_POINTING_HAND (4) issued
 // CHECK-NEXT: hnui_show_cursor 0 then 1 issued
 // CHECK-NEXT: hnui_lock_pointer 1 then 0 issued
@@ -86,3 +89,5 @@
 // TRACE: command clipboard: owns_selection=1 bytes=16
 // TRACE: clipboard read sync #1: status=ok bytes=16
 // TRACE: clipboard read sync #2: status=timeout bytes=0
+// TRACE: lifecycle: CLOSING (reason=close)
+// TRACE: close: ending the process through process.exit()

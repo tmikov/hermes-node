@@ -56,7 +56,7 @@ using hermes::node_compat::uiTrace;
       "\"Threading\".\n",
       function);
   std::fflush(stderr);
-  // Every _exit() path in this tree restores the terminal first; see
+  // Each _exit() caller in this tree restores the terminal itself; see
   // CLAUDE.md's Bootstrap Sequence section. abort() would skip that, and
   // this path is reachable from a program that had set raw mode.
   uv_tty_reset_mode();
@@ -185,6 +185,12 @@ int hnui_request_animation_frame(hnui_window *w, hnui_frame_cb cb, void *user) {
   requireOwnerThread(w, "hnui_request_animation_frame");
   if (cb == nullptr)
     return 0;
+  // Once the window is CLOSING no tick will ever run what this registers
+  // (uiEnterClosing() released the list), so nothing is registered.
+  if (hermes::node_compat::uiClosing()) {
+    uiTrace("hnui_request_animation_frame: refused (closing)");
+    return 0;
+  }
 
   // The function pointer travels as the list's opaque `fn`; the list
   // knows nothing about hnui types (frame_callbacks.h).
@@ -256,6 +262,23 @@ bool hnui_event_dispatch_quiescent(hnui_window *w) {
     return true;
   requireOwnerThread(w, "hnui_event_dispatch_quiescent");
   return w->events == nullptr || !w->events->dispatching();
+}
+
+bool hnui_cancel_close(hnui_window *w) {
+  if (!haveWindow(w, "hnui_cancel_close"))
+    return false;
+  requireOwnerThread(w, "hnui_cancel_close");
+  // Once CLOSING, there is no close left to cancel: the decision has been
+  // made, and whatever ended the window is ending the process.
+  if (hermes::node_compat::uiClosing())
+    return false;
+  // Outside a close request's delivery there is nothing to cancel either:
+  // deliver() decides when the event's listeners have all run, and a later
+  // call would be cancelling a decision already carried out.
+  if (!w->inCloseEvent)
+    return false;
+  w->closeCancelled = true;
+  return true;
 }
 
 void hnui_set_cursor(hnui_window *w, hnui_cursor c) {
@@ -369,8 +392,14 @@ int hnui_read_clipboard_sync(hnui_window *w, int timeout_ms, char **out) {
   auto slot = hermes::node_compat::uiClipboardReads().create();
   const uint64_t deadline = hermes::node_compat::clipboardClockNs() +
       static_cast<uint64_t>(timeoutMs) * 1000000u;
-  hermes::node_compat::uiPushCommand(
-      Command::readClipboard(slot->id(), /*replyThroughSlot=*/true, deadline));
+  // Refused once the window is CLOSING (an 'exit' listener's read, say):
+  // nothing will answer, so this fails at once rather than waiting out the
+  // timeout. The slot was created only to name the command; it is released
+  // on return, and the registry reaps its expired entry.
+  if (!hermes::node_compat::uiPushCommand(Command::readClipboard(
+          slot->id(), /*replyThroughSlot=*/true, deadline))) {
+    return HNUI_ERROR;
+  }
 
   // Blocks this (the JS) thread. The platform thread answers into the slot
   // directly, never through anything this thread would have to drain, and

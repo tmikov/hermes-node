@@ -360,6 +360,9 @@ static int g_logCount = 0;
    its tail would otherwise fail for a reason it cannot see. */
 static bool g_logOverflowed = false;
 static int g_eventListenerId = 0;
+/* How many close requests the event-log listener still cancels; set by
+   armCloseCancel(). */
+static int g_closeCancelsArmed = 0;
 
 static void appendLog(const char *line) {
   if (g_logCount >= LOG_MAX_LINES) {
@@ -477,6 +480,19 @@ static void onEvent(hnui_window *w, void *user, const hnui_event *event) {
       break;
   }
   appendLog(line);
+
+  /* armCloseCancel(n): cancel the next n close requests from here, and log
+     what hnui_cancel_close answered, so the test reads the answer rather
+     than inferring it from the window surviving. */
+  if (event->type == HNUI_EVENT_CLOSE_REQUESTED && g_closeCancelsArmed > 0) {
+    --g_closeCancelsArmed;
+    snprintf(
+        line,
+        sizeof(line),
+        "native:cancel_close=%d",
+        hnui_cancel_close(w) ? 1 : 0);
+    appendLog(line);
+  }
 }
 
 static napi_value startEventLog(napi_env env, napi_callback_info info) {
@@ -488,6 +504,30 @@ static napi_value startEventLog(napi_env env, napi_callback_info info) {
     g_eventListenerId = hnui_add_event_listener(w, onEvent, NULL);
   }
   napi_create_int32(env, g_eventListenerId, &result);
+  return result;
+}
+
+/** `armCloseCancel(n)`: the event-log listener calls hnui_cancel_close for
+    the next \p n close requests, and logs `native:cancel_close=<0|1>`. */
+static napi_value armCloseCancel(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  int32_t n = 0;
+
+  napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+  if (argc >= 1) {
+    napi_get_value_int32(env, argv[0], &n);
+  }
+  g_closeCancelsArmed = n > 0 ? n : 0;
+  return NULL;
+}
+
+/** `cancelCloseNow()` -> what hnui_cancel_close answers when called right
+    now, outside any close request: false. */
+static napi_value cancelCloseNow(napi_env env, napi_callback_info info) {
+  napi_value result;
+  (void)info;
+  napi_get_boolean(env, hnui_cancel_close(hnui_get_window(env)), &result);
   return result;
 }
 
@@ -1097,6 +1137,21 @@ static napi_value hostApiVersion(napi_env env, napi_callback_info info) {
   return result;
 }
 
+/** `frameTargetAvailable()` -> what `hnui_frame_target` answers right now,
+    for test/ui-exit-paths.js: false outside a frame callback, and false
+    once the window is CLOSING even when called from inside one. */
+static napi_value frameTargetAvailable(napi_env env, napi_callback_info info) {
+  napi_value result;
+  hnui_target target;
+  hnui_window *w = hnui_get_window(env);
+  (void)info;
+  memset(&target, 0, sizeof(target));
+  target.size = (uint32_t)sizeof(target);
+  napi_get_boolean(
+      env, w != NULL && hnui_frame_target(w, &target), &result);
+  return result;
+}
+
 static napi_value hasWindow(napi_env env, napi_callback_info info) {
   napi_value result;
   (void)info;
@@ -1130,6 +1185,14 @@ NAPI_MODULE_INIT() {
       {"framesDrawn", NULL, framesDrawn, NULL, NULL, NULL, napi_default, NULL},
       {"lastTarget", NULL, lastTarget, NULL, NULL, NULL, napi_default, NULL},
       {"hasWindow", NULL, hasWindow, NULL, NULL, NULL, napi_default, NULL},
+      {"frameTargetAvailable",
+       NULL,
+       frameTargetAvailable,
+       NULL,
+       NULL,
+       NULL,
+       napi_default,
+       NULL},
       {"startEventLog",
        NULL,
        startEventLog,
@@ -1139,6 +1202,22 @@ NAPI_MODULE_INIT() {
        napi_default,
        NULL},
       {"logLine", NULL, logLine, NULL, NULL, NULL, napi_default, NULL},
+      {"armCloseCancel",
+       NULL,
+       armCloseCancel,
+       NULL,
+       NULL,
+       NULL,
+       napi_default,
+       NULL},
+      {"cancelCloseNow",
+       NULL,
+       cancelCloseNow,
+       NULL,
+       NULL,
+       NULL,
+       napi_default,
+       NULL},
       {"takeEventLog",
        NULL,
        takeEventLog,

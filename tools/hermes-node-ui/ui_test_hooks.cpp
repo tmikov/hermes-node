@@ -8,6 +8,7 @@
 #include "event_injector.h"
 #include "ui_events.h"
 #include "ui_internal.h"
+#include "ui_module.h"
 
 #include <test_hooks.h>
 #include <ui_trace.h>
@@ -19,6 +20,8 @@
 
 #include <sokol_app.h>
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -76,6 +79,13 @@ void setBool(napi_value object, const char *name, bool value) {
 /// Hand the finished capture back to the JavaScript that asked for it.
 /// JS thread, posted by the platform thread.
 void onCaptureFinished() {
+  // Posted before CLOSING and run by the dispatcher's closing drain. The
+  // capture's Promise stays unsettled, as every outstanding Promise does
+  // once the process is on its way out.
+  if (uiClosing()) {
+    uiTrace("capture: result dropped (closing)");
+    return;
+  }
   if (gCaptureDeferred == nullptr || gEnv == nullptr)
     return;
 
@@ -106,6 +116,21 @@ void onCaptureFinished() {
   }
   gCaptureDeferred = nullptr;
   napi_close_handle_scope(gEnv, scope);
+}
+
+void uiTestHooksAbandonCapture() {
+  if (!uiTestHooksEnabled())
+    return;
+  // Cancelled first, so that the platform thread's maybeCapture() stops at
+  // its pending() check from here on rather than matching a frame whose
+  // result could only be delivered by a post the closed dispatcher refuses.
+  // A match already under way may still try that post; it is refused and
+  // traced there (`capture: post refused (dispatcher closed)`).
+  gCapture.cancel();
+  if (gCaptureDeferred == nullptr)
+    return;
+  gCaptureDeferred = nullptr;
+  uiTrace("capture: abandoned (closing)");
 }
 
 /// `__captureFrame(options)` -- the JavaScript end of the frame-capture
@@ -246,14 +271,147 @@ napi_value releaseProducerCompletions(napi_env env, napi_callback_info info) {
   return undefined;
 }
 
-/// `__failPendingClipboardReads()`: what Task 15's shutdown will do to the
-/// Promise reads, reachable now so the mechanism has a caller and a test.
+/// `__failPendingClipboardReads()`: what entering CLOSING does to the
+/// Promise reads, without the rest of CLOSING, so that a test can watch a
+/// late reply settle nothing in a process that carries on.
 napi_value failPendingClipboardReads(napi_env env, napi_callback_info info) {
   (void)info;
   uiFailPendingClipboardReads(env);
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
   return undefined;
+}
+
+//===========================================================================
+// Platform frame barrier (test hook)
+//===========================================================================
+
+namespace {
+
+/// Both threads, under gFrameCountMutex: how many onFrame() calls have
+/// begun and how many have returned. onFrame() runs on one thread and never
+/// re-enters, so the n-th call to begin is also the n-th to end, which is
+/// what lets two counters stand for "the frames that began after now".
+std::mutex gFrameCountMutex;
+std::condition_variable gFrameCountChanged;
+uint64_t gFramesBegan = 0;
+uint64_t gFramesEnded = 0;
+
+/// How long __waitPlatformFrames() waits before answering false. A bound,
+/// not a timing assumption: a platform thread that has stopped producing
+/// frames is a failure the test should report, not a hang.
+constexpr auto kFrameBarrierTimeout = std::chrono::seconds(10);
+
+} // namespace
+
+void uiTestHookFrameBegan() {
+  std::lock_guard<std::mutex> lock(gFrameCountMutex);
+  ++gFramesBegan;
+}
+
+void uiTestHookFrameEnded() {
+  {
+    std::lock_guard<std::mutex> lock(gFrameCountMutex);
+    ++gFramesEnded;
+  }
+  gFrameCountChanged.notify_all();
+}
+
+/// `__waitPlatformFrames(n)` -> boolean. Blocks the calling thread until
+/// the platform thread has returned from n onFrame() calls that BEGAN after
+/// this call was made; false if that has not happened within 10 s.
+///
+/// A frame already in progress when this is called does not count: it may
+/// have passed the point a test cares about (the injected-event drain, the
+/// tick post) before the test's own request existed. Works in every
+/// lifecycle state, CLOSING included: it is a mutex, a condition variable
+/// and two counters, not a command, and the platform thread keeps running
+/// frames until the process ends.
+napi_value waitPlatformFrames(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  int32_t n = 1;
+  napi_valuetype type = napi_undefined;
+  if (argc >= 1 && napi_typeof(env, argv[0], &type) == napi_ok &&
+      type == napi_number) {
+    napi_get_value_int32(env, argv[0], &n);
+  }
+  if (n < 0)
+    n = 0;
+
+  bool reached;
+  {
+    std::unique_lock<std::mutex> lock(gFrameCountMutex);
+    const uint64_t target = gFramesBegan + static_cast<uint64_t>(n);
+    reached = gFrameCountChanged.wait_for(
+        lock, kFrameBarrierTimeout, [&] { return gFramesEnded >= target; });
+  }
+  uiTrace(
+      "test hook: waited for platform frames: %s",
+      reached ? "ok" : "timed out");
+
+  napi_value result = nullptr;
+  napi_get_boolean(env, reached, &result);
+  return result;
+}
+
+//===========================================================================
+// Platform quit-request barrier (test hook)
+//===========================================================================
+
+namespace {
+
+/// Both threads, under gQuitCountMutex: how many sapp_cancel_quit() calls
+/// uiHandlePlatformEvent() has executed since startup.
+std::mutex gQuitCountMutex;
+std::condition_variable gQuitCountChanged;
+uint64_t gQuitsCancelled = 0;
+
+} // namespace
+
+void uiTestHookQuitCancelled() {
+  {
+    std::lock_guard<std::mutex> lock(gQuitCountMutex);
+    ++gQuitsCancelled;
+  }
+  gQuitCountChanged.notify_all();
+}
+
+/// `__waitPlatformQuitRequests(total)` -> boolean. Blocks the calling
+/// thread until the platform thread has executed \p total sapp_cancel_quit()
+/// calls since startup -- an absolute count, unlike __waitPlatformFrames(),
+/// because a test knows how many close requests it has sent; false if that
+/// has not happened within 10 s. Counted after the call, so true means the
+/// cancellation ran, not that the request arrived. Works in every lifecycle
+/// state, for the reason __waitPlatformFrames() does.
+napi_value waitPlatformQuitRequests(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  int32_t total = 1;
+  napi_valuetype type = napi_undefined;
+  if (argc >= 1 && napi_typeof(env, argv[0], &type) == napi_ok &&
+      type == napi_number) {
+    napi_get_value_int32(env, argv[0], &total);
+  }
+  if (total < 0)
+    total = 0;
+
+  bool reached;
+  {
+    std::unique_lock<std::mutex> lock(gQuitCountMutex);
+    reached = gQuitCountChanged.wait_for(lock, kFrameBarrierTimeout, [&] {
+      return gQuitsCancelled >= static_cast<uint64_t>(total);
+    });
+  }
+  uiTrace(
+      "test hook: waited for platform quit requests: %s",
+      reached ? "ok" : "timed out");
+
+  napi_value result = nullptr;
+  napi_get_boolean(env, reached, &result);
+  return result;
 }
 
 namespace {
@@ -446,7 +604,6 @@ napi_value injectEvent(napi_env env, napi_callback_info info) {
   napi_get_undefined(env, &undefined);
   return undefined;
 }
-
 
 } // namespace node_compat
 } // namespace hermes

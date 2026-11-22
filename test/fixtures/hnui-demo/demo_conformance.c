@@ -422,6 +422,56 @@ static napi_value requestQuiescenceFrame(
 }
 
 /* ------------------------------------------------------------------ */
+/* hnui_cancel_close                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Called once outside any event, where it must answer false, and once from
+ * a native listener while an injected QUIT_REQUESTED is delivered as
+ * HNUI_EVENT_CLOSE_REQUESTED, where it must answer true -- and does
+ * cancel: the run carries on, where an uncancelled close would end it.
+ * Injection is enough here: what is observed is the entry point's own
+ * bookkeeping, after the converter, not anything Sokol does.
+ */
+static int g_closeOutside = -1;
+static int g_closeInside = -1;
+static int g_closeListenerId = 0;
+
+static void
+closeCancelListener(hnui_window *w, void *user, const hnui_event *event) {
+  (void)user;
+  if (event->type != HNUI_EVENT_CLOSE_REQUESTED || g_closeInside != -1) {
+    return;
+  }
+  g_closeInside = hnui_cancel_close(w) ? 1 : 0;
+  /* Its job is done; removal is deferred, and the user data is NULL. */
+  hnui_remove_event_listener(w, g_closeListenerId);
+}
+
+/** `conformanceStartCloseCancel()`; then inject a QUIT_REQUESTED. */
+static napi_value startCloseCancel(napi_env env, napi_callback_info info) {
+  hnui_window *w = hnui_get_window(env);
+  (void)info;
+  g_closeOutside = hnui_cancel_close(w) ? 1 : 0;
+  g_closeInside = -1;
+  g_closeListenerId = hnui_add_event_listener(w, closeCancelListener, NULL);
+  return NULL;
+}
+
+/** `conformanceCloseCancelResult()` -> one line. */
+static napi_value closeCancelResult(napi_env env, napi_callback_info info) {
+  char line[LINE_BYTES];
+  (void)info;
+  snprintf(
+      line,
+      sizeof(line),
+      "hnui_cancel_close outside=%d inside=%d",
+      g_closeOutside,
+      g_closeInside);
+  return makeString(env, line);
+}
+
+/* ------------------------------------------------------------------ */
 /* The four void commands                                              */
 /* ------------------------------------------------------------------ */
 
@@ -611,6 +661,22 @@ void demoDefineConformanceExports(napi_env env, napi_value exports) {
       {"conformanceRequestQuiescenceFrame",
        NULL,
        requestQuiescenceFrame,
+       NULL,
+       NULL,
+       NULL,
+       napi_default,
+       NULL},
+      {"conformanceStartCloseCancel",
+       NULL,
+       startCloseCancel,
+       NULL,
+       NULL,
+       NULL,
+       napi_default,
+       NULL},
+      {"conformanceCloseCancelResult",
+       NULL,
+       closeCancelResult,
        NULL,
        NULL,
        NULL,

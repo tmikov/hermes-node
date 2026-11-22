@@ -52,8 +52,8 @@
 // redirections INSIDE `sh -c`, so the trace file is the binary's own stderr
 // whatever the display wrapper does, and `timeout` because lit has no
 // per-test timeout (dz 01a0d797-e326) and several mutations here wait forever
-// for a tick that never comes. The main run ends through process.exit()
-// (Ruling 59): closing the window still hangs (dz 01a0d88a-6518).
+// for a tick that never comes. The main run ends through process.exit():
+// its subject is not closing.
 //
 // RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon main %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out

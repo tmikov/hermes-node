@@ -31,6 +31,13 @@ namespace node_compat {
 class UiHost;
 struct PlatformSource;
 
+/// node_process.h's enumeration, declared opaquely rather than included:
+/// that header pulls in `uv.h`, and this one is also compiled by the
+/// no-window stub on a platform whose hand-compile check passes no libuv
+/// include path. An opaque `enum class` declaration has the same underlying
+/// type (`int`) as the definition, so the two agree by the language's rule.
+enum class ExitReason;
+
 /// The `hermes-node:ui` module, and the platform-thread half of the window
 /// it creates.
 ///
@@ -100,6 +107,73 @@ hnui_window *uiWindowForEnv(napi_env env);
 ///   back.
 int uiRunPlatformLoop();
 
+/// Why the window is entering CLOSING. Traced as `close`, `exit`, `fatal`
+/// and `return` respectively.
+enum class UiCloseReason {
+  /// The window itself: `win.close()`, or a `close` nobody cancelled.
+  kWindowClose,
+  /// `process.exit()`.
+  kExitCall,
+  /// An uncaught exception, through `process._fatalException`.
+  kFatalException,
+  /// `runHermesNode` reaching the end of its run.
+  kRuntimeReturn,
+};
+
+/// Enter CLOSING (spec: Lifecycle). Only on the JS thread of the runtime
+/// that instantiated the module: uiBeforeExitListeners() calls it only for
+/// that runtime's env, and every other caller is that runtime's own NAPI
+/// code. Idempotent: a second call returns at once.
+///
+/// From here on no frame callback, event, readiness or capture result
+/// reaches the program, and `requestAnimationFrame` (both forms) registers
+/// nothing. The window stays on screen, presenting its last published
+/// surface, until the process `_exit()`s. Called with no window ever
+/// requested it records the state and does nothing else, so that a
+/// `createWindow` called from an `'exit'` listener throws rather than
+/// opening a window into a process on its way out.
+void uiEnterClosing(UiCloseReason reason);
+
+/// True from uiEnterClosing() on, or from initUiModule() on when the module
+/// was first instantiated by a runtime already exiting. Only on the JS
+/// thread of the runtime that instantiated the module, which is the only
+/// thread that writes the state; no lock or atomic orders the read.
+bool uiClosing();
+
+/// The window closing itself: the default action of a `close` nobody
+/// cancelled, and `win.close()`. Enters CLOSING (`kWindowClose`), then calls
+/// the current value of `process.exit` with `process` as its receiver and
+/// no argument, so `process.exitCode` is the status. Does not return when
+/// that exits -- the ordinary case. If a program has replaced
+/// `process.exit` with something that returns, this returns too, with the
+/// window left in CLOSING and nothing to recover it (traced). JS thread
+/// only.
+///
+/// \return false with a JavaScript exception pending if the call threw, or
+///   if `process.exit` is not a function; the caller routes it.
+bool uiCloseWindow(hnui_window *w);
+
+/// `ProcessExitHooks::beforeExitListeners`, which `main()` installs: enters
+/// CLOSING with the reason \p reason maps to.
+///
+/// The hooks are process-wide, so this runs on the JS thread of WHICHEVER
+/// runtime is exiting, \p env's. It acts only when \p env is the runtime
+/// that instantiated `hermes-node:ui` (recorded by initUiModule() under the
+/// module's mutex, which is also what orders this read against that write);
+/// for any other env it returns at once, before touching anything the
+/// module's thread owns. When no runtime has instantiated the module yet it
+/// remembers \p env, so that the module, if a listener of that runtime
+/// requires it, starts out CLOSING.
+void uiBeforeExitListeners(napi_env env, ExitReason reason);
+
+/// `ProcessExitHooks::beforeRuntimeCleanup`, which `main()` installs. Runs
+/// on \p env's JS thread, as uiBeforeExitListeners() does, and returns at
+/// once for an env that is not the module's. Also returns when no window
+/// was ever requested (the windowless path ends through `UiHost::run()` as
+/// before). Otherwise does not return: `std::fflush(nullptr)`,
+/// `uv_tty_reset_mode()`, `_exit(exitCode)`.
+void uiBeforeRuntimeCleanup(napi_env env, int exitCode);
+
 /// Whether `createWindow` has been called. JS thread. What
 /// `ui.writeClipboard` checks: with no window ever requested nothing would
 /// drain the command queue, so an accepted call would silently do nothing.
@@ -117,7 +191,12 @@ bool uiWindowRequested();
 /// frame that runs. Not safe to call from the platform thread (it would
 /// answer itself next frame, which is harmless but not what the queue is
 /// for).
-void uiPushCommand(Command command);
+///
+/// False, with nothing queued, once the window is CLOSING: the refusal is
+/// traced (`command refused (closing): <name>`) and never thrown. Callers
+/// that only issue a command ignore the result; the two clipboard reads use
+/// it to fail at once instead of waiting for an answer that cannot come.
+bool uiPushCommand(Command command);
 
 /// The deadline a clipboard read gets when nobody names one: a JavaScript
 /// `readClipboard()`, and the read behind a `paste` event.
@@ -147,9 +226,13 @@ void uiFollowFramebufferSize(const WindowState &state);
 /// the result's window snapshot back as the platform thread's tracked
 /// state, tells the tick machine about a minimize or a restore, pushes the
 /// event onto the input queue, and posts the JS-thread dispatch -- at most
-/// one post outstanding. A `QUIT_REQUESTED` is cancelled first and
-/// forwarded as `close` (Ruling 54): what an uncancelled close does is
-/// Task 15's.
+/// one post outstanding. A `QUIT_REQUESTED` is cancelled first, always --
+/// in CLOSING too -- and forwarded as `close`: the platform thread never
+/// lets Sokol act on a quit, because `sapp_run()` returning would close the
+/// X display the JS thread's GL context was created on, under that thread,
+/// and on macOS its quit path exits 0 from the main thread. Whether the
+/// window then closes is decided on the JS thread, by the `close`
+/// listeners (`uiCloseWindow`), and carried out there.
 ///
 /// `onEvent` calls it with a source built over the real platform;
 /// `onFrame` calls it for each injected event (`event_injector.h`) with

@@ -30,10 +30,22 @@
 // `ok` and CREATEWINDOW prints `object`/`undefined` rather than `function`.
 //
 // REQUIRES: ui
-// RUN: timeout 60 %hermes-node-ui %s > %t.out 2> %t.err; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %hermes-node-ui %s > %t.out 2> %t.err; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck --check-prefix=OUT %s < %t.out
 
 'use strict';
+
+// Bounded from inside the script and not by a `timeout` command on the RUN
+// line: this test runs on macOS, where older releases ship none. The timer
+// is unref'd, so it never keeps the run alive by itself; it fires only if
+// something else holds the loop open, and then fails the run. That is all
+// it bounds: it cannot fire while the JS thread is blocked, or once the
+// script has finished and native code hangs. lit's missing per-test timeout
+// (dz 01a0d797-e326) is the gap there.
+setTimeout(() => {
+  console.log('WATCHDOG: the run did not end within 60 s');
+  process.exit(124);
+}, 60000).unref();
 
 let mod = null;
 let failure = null;

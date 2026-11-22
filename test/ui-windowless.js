@@ -25,9 +25,38 @@
 // REQUIRES: ui
 // RUN: %hermes-node-ui %s > %t.out; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck --check-prefix=OUT %s < %t.out
+//
+// The same run with tracing on, both streams kept: a script that never asks
+// for a window must still end by returning through UiHost::run(), not
+// through the pre-cleanup hook's _exit(), and must print no lifecycle line
+// at all. (Mutation: let uiBeforeRuntimeCleanup proceed with no window
+// requested, and `lifecycle: runtime returned` is printed.)
+//
+// RUN: env HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s > %t.dbg 2>&1; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %FileCheck --check-prefix=OUT --implicit-check-not='lifecycle:' %s < %t.dbg
+//
+// And a script that LOADS the module but never calls createWindow: requiring
+// `hermes-node:ui` must not by itself make the process a windowed one. Same
+// two checks, so the same ending: its own status, through the ordinary
+// cleanup, and no lifecycle line. Portable on purpose -- on macOS the module
+// is ui_module_nowindow.cpp's, and this runs there too -- so no `timeout`
+// and nothing but POSIX `env` and `echo`. (Mutation: in uiEnterClosing, move
+// the CLOSING trace above the `!uiWindowRequested()` return, and
+// `lifecycle: CLOSING (reason=return)` is printed -- by the run above too:
+// nothing in the code is specific to a loaded module today, and this case
+// is here so that something that becomes so is covered.)
+//
+// RUN: env HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s load > %t.load.dbg 2>&1; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %FileCheck --check-prefix=LOAD --implicit-check-not='lifecycle:' %s < %t.load.dbg
 
+if (process.argv[2] === 'load') {
+  const ui = require('hermes-node:ui');
+  console.log('LOADED ' + typeof ui.createWindow);
+}
 console.log('PASS');
 process.exitCode = 7;
 
 // OUT: PASS
 // CODE: EXITCODE 7
+// LOAD: LOADED function
+// LOAD-NEXT: PASS

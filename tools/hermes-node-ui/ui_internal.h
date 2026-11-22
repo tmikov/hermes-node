@@ -78,7 +78,7 @@ struct CaptureState {
 // --- Defined in ui_module.cpp ----------------------------------------------
 
 /// Both threads lock it: guards gRequest here, and ui_module.cpp's own
-/// gWindowRequested.
+/// gWindowRequested, gModuleEnv and gEnvsExitedBeforeModule.
 extern std::mutex gMutex;
 /// Under gMutex: written once by createWindow() (JS) before requestWindow();
 /// copied by uiRunPlatformLoop() (platform) and onSharedContextReady() (JS).
@@ -99,10 +99,17 @@ extern WindowState gMetrics;
 extern std::string gStartupError;
 /// Created by createWindow() (JS) before requestWindow(), which the platform
 /// thread's wake is ordered after (UiHost's mutex); post() is then called
-/// from both threads under OwnerDispatch's own lock.
+/// from both threads under OwnerDispatch's own lock. Closed by
+/// uiEnterClosing() (JS) and never deleted or nulled after the request is
+/// published, because the platform thread reads the pointer unsynchronized;
+/// a closed dispatcher refuses every post().
 extern OwnerDispatch *gDispatch;
-/// JS thread only (ui_module.cpp, ui_test_hooks.cpp). Written by
-/// createWindow().
+/// The runtime that called createWindow(). Written by createWindow() on that
+/// runtime's JS thread before it publishes the request under gMutex (and
+/// nulled again there if the request is abandoned before publication), and
+/// read only on that thread: by ui_module.cpp and ui_test_hooks.cpp, and by
+/// uiBeforeRuntimeCleanup(), which reads it only after its gMutex-guarded
+/// check that the exiting runtime is the module's own.
 extern napi_env gEnv;
 /// Created by onSharedContextReady() (JS); the platform thread touches it
 /// only after an acquire of gPresentReady. Carries its own lock.
@@ -122,8 +129,9 @@ extern CommandQueue gCommands;
 /// Atomic, both threads: set by postEventDispatch() and drainInjectedEvents()
 /// (platform), cleared by runEventDispatch() (JS) and drainInjectedEvents().
 extern std::atomic<bool> gDispatchPosted;
-/// Any thread, own lock: the JS thread creates slots and blocks on them, the
-/// platform thread answers them in applyReadClipboard().
+/// Any thread, own lock: the JS thread creates slots and blocks on them, and
+/// fails them all in uiEnterClosing(); the platform thread answers them in
+/// applyReadClipboard().
 extern ClipboardRequests gClipboardReads;
 
 // --- Defined in ui_test_hooks.cpp ------------------------------------------
@@ -132,7 +140,8 @@ extern ClipboardRequests gClipboardReads;
 /// completions pass through it on whichever thread runs them.
 extern CompletionGate gGate;
 /// Any thread, own lock: captureFrame() (JS) requests and cancels,
-/// maybeCapture() (platform) matches and cancels.
+/// uiTestHooksAbandonCapture() (JS) cancels, maybeCapture() (platform)
+/// matches and cancels.
 extern FrameCapture gCapture;
 /// Any thread, own lock: injectEvent() (JS) pushes, drainInjectedEvents()
 /// (platform) takes.
@@ -188,8 +197,33 @@ napi_value holdProducerCompletions(napi_env env, napi_callback_info info);
 napi_value releaseProducerCompletions(napi_env env, napi_callback_info info);
 /// JS thread (NAPI); exported by initUiModule() only when the hooks are on.
 napi_value failPendingClipboardReads(napi_env env, napi_callback_info info);
+/// JS thread, called by uiEnterClosing(). Cancels a pending capture request
+/// (gCapture, so the platform thread stops matching) and forgets its
+/// Promise, which then never settles. Traces `capture: abandoned (closing)`
+/// only when there was a Promise to abandon. Does nothing with the hooks
+/// off.
+void uiTestHooksAbandonCapture();
 /// JS thread (NAPI); exported by initUiModule() only when the hooks are on.
 napi_value injectEvent(napi_env env, napi_callback_info info);
+/// JS thread (NAPI); exported by initUiModule() only when the hooks are on.
+/// Blocks the JS thread on gFrameCountMutex, which only the two functions
+/// below also take.
+napi_value waitPlatformFrames(napi_env env, napi_callback_info info);
+/// Platform thread, first line of onFrame(), only when the hooks are on.
+/// Takes gFrameCountMutex (file-local to ui_test_hooks.cpp).
+void uiTestHookFrameBegan();
+/// Platform thread, on every return of onFrame(), only when the hooks are
+/// on. Takes gFrameCountMutex and wakes waitPlatformFrames().
+void uiTestHookFrameEnded();
+/// JS thread (NAPI); exported by initUiModule() only when the hooks are on.
+/// Blocks the JS thread on gQuitCountMutex, which only the function below
+/// also takes.
+napi_value waitPlatformQuitRequests(napi_env env, napi_callback_info info);
+/// Platform thread, in uiHandlePlatformEvent() right after its
+/// sapp_cancel_quit() call, only when the hooks are on. Takes
+/// gQuitCountMutex (file-local to ui_test_hooks.cpp) and wakes
+/// waitPlatformQuitRequests().
+void uiTestHookQuitCancelled();
 
 } // namespace node_compat
 } // namespace hermes

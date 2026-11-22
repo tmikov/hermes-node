@@ -79,14 +79,13 @@ async function main() {
   }
   console.log('SECOND ' + second);
 
-  // Explicit, and required in this build rather than tidy. createWindow
-  // takes a REFERENCED libuv handle (spec: Lifecycle, so the runtime cannot
-  // drain while the window is being created) and nothing releases it yet:
-  // the lifecycle hook that closes it before runtime cleanup is Task 15's.
-  // So a script that simply returned here would reach
-  // UvEventLoop::close()'s uv_run(UV_RUN_DEFAULT) with a live handle and
-  // wait there forever. process.exit() is the path that works today, and
-  // it is also the one the spec says ends a UI process normally.
+  // Explicit, and required rather than tidy. createWindow takes a
+  // REFERENCED libuv handle (spec: Lifecycle, so the runtime cannot drain
+  // while the window is being created), and only entering CLOSING -- or a
+  // rejected createWindow -- releases it. So a script that simply returned
+  // here would keep running with its window open, as a program with a
+  // window should. process.exit() ends it; win.close() would too, and is
+  // test/ui-close.js's subject.
   process.exit(0);
 }
 

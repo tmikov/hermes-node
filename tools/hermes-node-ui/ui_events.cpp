@@ -119,10 +119,30 @@ void setModifiers(napi_env env, napi_value payload, int modifiers) {
   setBool(env, payload, "metaKey", (modifiers & HNUI_MOD_META) != 0);
 }
 
+/// The `close` payload's `preventDefault()`. Its data is the window. Cancels
+/// the close request being delivered; outside one -- a listener that kept
+/// the payload and calls it later -- it does nothing and says so, because
+/// by then the decision has been made (deliver()).
+napi_value closePreventDefault(napi_env env, napi_callback_info info) {
+  void *data = nullptr;
+  napi_get_cb_info(env, info, nullptr, nullptr, nullptr, &data);
+  auto *w = static_cast<hnui_window *>(data);
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  if (uiClosing() || w == nullptr)
+    return undefined;
+  if (!w->inCloseEvent) {
+    uiTrace("close: preventDefault outside a close event; ignored");
+    return undefined;
+  }
+  w->closeCancelled = true;
+  return undefined;
+}
+
 /// The object passed to `emit`. Its fields per event are the table in the
 /// plan's Task 11b; an event with no fields gets `{}`, not `undefined`, so
 /// a listener may destructure its argument unconditionally.
-napi_value buildPayload(napi_env env, const UiEvent &event) {
+napi_value buildPayload(napi_env env, hnui_window *w, const UiEvent &event) {
   napi_value payload = nullptr;
   if (napi_create_object(env, &payload) != napi_ok)
     return nullptr;
@@ -199,11 +219,25 @@ napi_value buildPayload(napi_env env, const UiEvent &event) {
       setNumber(env, payload, "y", event.y);
       break;
     }
+    case UiEventType::kCloseRequested: {
+      // `preventDefault()`, the DOM's name for cancelling an event's
+      // default action, which here is closing the window.
+      napi_value fn = nullptr;
+      if (napi_create_function(
+              env,
+              "preventDefault",
+              NAPI_AUTO_LENGTH,
+              closePreventDefault,
+              w,
+              &fn) == napi_ok) {
+        napi_set_named_property(env, payload, "preventDefault", fn);
+      }
+      break;
+    }
     case UiEventType::kFocus:
     case UiEventType::kBlur:
     case UiEventType::kMinimize:
     case UiEventType::kRestore:
-    case UiEventType::kCloseRequested:
     case UiEventType::kInvalid:
     case UiEventType::kClipboardReply:
       break;
@@ -213,7 +247,11 @@ napi_value buildPayload(napi_env env, const UiEvent &event) {
 
 /// `window.emit(name, payload)`. An exception goes to
 /// handleCallbackException, which returns only if a listener took it.
-void emitToJs(napi_env env, napi_value window, const UiEvent &event) {
+void emitToJs(
+    napi_env env,
+    hnui_window *w,
+    napi_value window,
+    const UiEvent &event) {
   const char *name = jsEventName(event.type);
   if (name == nullptr)
     return;
@@ -234,7 +272,7 @@ void emitToJs(napi_env env, napi_value window, const UiEvent &event) {
       napi_ok) {
     return;
   }
-  argv[1] = buildPayload(env, event);
+  argv[1] = buildPayload(env, w, event);
   if (argv[1] == nullptr)
     napi_get_undefined(env, &argv[1]);
 
@@ -261,7 +299,10 @@ uint64_t gNextReadId = 1;
 
 /// Reject \p deferred with an Error carrying \p code. Inside a handle
 /// scope the caller opened.
-void rejectRead(
+///
+/// \return whether the rejection was performed, so a caller's trace can
+/// record one that happened rather than one that was attempted.
+bool rejectRead(
     napi_env env,
     napi_deferred deferred,
     const char *code,
@@ -272,7 +313,7 @@ void rejectRead(
   napi_create_string_utf8(env, code, NAPI_AUTO_LENGTH, &codeValue);
   napi_create_string_utf8(env, message.data(), message.size(), &messageValue);
   napi_create_error(env, codeValue, messageValue, &error);
-  napi_reject_deferred(env, deferred, error);
+  return napi_reject_deferred(env, deferred, error) == napi_ok;
 }
 
 /// Settle the Promise a `kClipboardReply` answers, then run the tick
@@ -377,6 +418,15 @@ void deliver(hnui_window *w, const UiEvent &event) {
   //    size it was just told about, not one of the old size.
   uiFollowFramebufferSize(w->state);
 
+  // A close request is cancelable, by any listener, native or JavaScript,
+  // for exactly as long as they run: from here until the JavaScript emit
+  // returns (hnui_cancel_close, the payload's preventDefault()).
+  const bool isClose = event.type == UiEventType::kCloseRequested;
+  if (isClose) {
+    w->inCloseEvent = true;
+    w->closeCancelled = false;
+  }
+
   // 3. Native listeners, in registration order. A copy of the list, so a
   //    listener that registers another one does not extend the iteration
   //    it is part of; the new one sees the next event. Each gets its own
@@ -391,7 +441,17 @@ void deliver(hnui_window *w, const UiEvent &event) {
   }
 
   // 4. JavaScript.
-  emitToJs(env, window, event);
+  emitToJs(env, w, window, event);
+
+  // The close request's listeners have all run, so its outcome is decided
+  // now. A listener that threw -- and was handled by an `uncaughtException`
+  // listener, or this would not be reached -- did not cancel by throwing.
+  bool closeNow = false;
+  if (isClose) {
+    w->inCloseEvent = false;
+    closeNow = !w->closeCancelled;
+    uiTrace(closeNow ? "close: not cancelled" : "close: cancelled");
+  }
 
   // 5. nextTick and promise callbacks queued by this event's listeners run
   //    now, before the next event is delivered -- what Node's MakeCallback
@@ -399,6 +459,15 @@ void deliver(hnui_window *w, const UiEvent &event) {
   uiRunTickCallback(env);
 
   napi_close_handle_scope(env, scope);
+
+  // 6. The default action of a close nobody cancelled: the window closes,
+  //    and the process ends as process.exit() with no argument ends it.
+  //    After the tick callback, so that what the listeners queued has run,
+  //    as it would before any other event's next listener; and not when
+  //    something already entered CLOSING meanwhile (a win.close() under a
+  //    replaced process.exit), which has nothing left to close.
+  if (closeNow && !uiClosing() && !uiCloseWindow(w))
+    handleCallbackException(env);
 }
 
 //===========================================================================
@@ -740,6 +809,22 @@ napi_value windowSetTitle(napi_env env, napi_callback_info info) {
   return jsUndefined(env);
 }
 
+/// `win.close()`: closes the window as an uncancelled `close` would, and
+/// emits no `close` -- that event means the window system asked. Does not
+/// return unless `process.exit` has been replaced by something that does,
+/// or threw (its exception then propagates to the caller). Once the window
+/// is CLOSING there is nothing left to close, and it returns undefined.
+napi_value windowClose(napi_env env, napi_callback_info info) {
+  void *data = nullptr;
+  napi_get_cb_info(env, info, nullptr, nullptr, nullptr, &data);
+  auto *w = static_cast<hnui_window *>(data);
+  if (uiClosing() || w == nullptr)
+    return jsUndefined(env);
+  if (!uiCloseWindow(w))
+    return nullptr; // the pending exception is the caller's
+  return jsUndefined(env);
+}
+
 /// Put the command methods and the `title` accessor on \p window. The data
 /// pointer of each is \p w, which lives as long as the process.
 bool defineWindowCommands(napi_env env, napi_value window, hnui_window *w) {
@@ -787,6 +872,14 @@ bool defineWindowCommands(napi_env env, napi_value window, hnui_window *w) {
       {"lockPointer",
        nullptr,
        windowLockPointer,
+       nullptr,
+       nullptr,
+       nullptr,
+       napi_default,
+       w},
+      {"close",
+       nullptr,
+       windowClose,
        nullptr,
        nullptr,
        nullptr,
@@ -853,19 +946,19 @@ napi_value uiWriteClipboard(napi_env env, napi_callback_info info) {
   return jsUndefined(env);
 }
 
-void uiFailPendingClipboardReads(napi_env env) {
+size_t uiFailPendingClipboardReads(napi_env env) {
   // Taken out first, so a reply delivered afterwards finds nothing to
   // settle, and a rejection handler that starts a new read gets a fresh
   // entry this loop does not see.
   std::map<uint64_t, napi_deferred> pending;
   pending.swap(gPendingReads);
   if (pending.empty())
-    return;
+    return 0;
   napi_handle_scope scope = nullptr;
   if (napi_open_handle_scope(env, &scope) != napi_ok) {
     // Put back rather than lost; nothing else can settle them.
     gPendingReads.insert(pending.begin(), pending.end());
-    return;
+    return 0;
   }
   for (const auto &entry : pending) {
     uiTrace(
@@ -878,6 +971,7 @@ void uiFailPendingClipboardReads(napi_env env) {
         "readClipboard: the read was abandoned before it was answered.");
   }
   napi_close_handle_scope(env, scope);
+  return pending.size();
 }
 
 napi_value uiReadClipboard(napi_env env, napi_callback_info info) {
@@ -897,11 +991,25 @@ napi_value uiReadClipboard(napi_env env, napi_callback_info info) {
     return nullptr;
 
   const uint64_t id = gNextReadId++;
-  gPendingReads[id] = deferred;
   const uint64_t deadline = clipboardClockNs() +
       static_cast<uint64_t>(kClipboardReadDefaultTimeoutMs) * 1000000u;
-  uiPushCommand(
-      Command::readClipboard(id, /*replyThroughSlot=*/false, deadline));
+  // Recorded only once the command is accepted. A refused one -- the
+  // window is CLOSING -- will never be answered, and its Promise is
+  // rejected here rather than left for a uiFailPendingClipboardReads() that
+  // has already run. Pushing before recording is safe: the reply comes
+  // back through the input queue, which only this thread drains.
+  if (!uiPushCommand(
+          Command::readClipboard(id, /*replyThroughSlot=*/false, deadline))) {
+    if (rejectRead(
+            env,
+            deferred,
+            "ERR_CLIPBOARD_FAILED",
+            "readClipboard: the window is closing.")) {
+      uiTrace("clipboard read promise: refused (closing)");
+    }
+    return promise;
+  }
+  gPendingReads[id] = deferred;
   return promise;
 }
 
@@ -969,7 +1077,20 @@ void uiDispatchEvents(hnui_window *w) {
   // Not drained before the object exists: see ui_events.h.
   if (w == nullptr || w->jsWindow == nullptr || !w->events)
     return;
-  w->events->dispatch([w](const UiEvent &event) { deliver(w, event); });
+  w->events->dispatch([w](const UiEvent &event) {
+    // Once CLOSING nothing more is delivered -- including the rest of the
+    // pass a close's default action was delivered from, which this loop
+    // returns into when process.exit has been replaced by something that
+    // returns. (A real process.exit() never comes back here.)
+    if (uiClosing()) {
+      const char *name = jsEventName(event.type);
+      uiTrace(
+          "event %s: not delivered (closing)",
+          name != nullptr ? name : "(internal)");
+      return;
+    }
+    deliver(w, event);
+  });
 }
 
 void uiRunTickCallback(napi_env env) {

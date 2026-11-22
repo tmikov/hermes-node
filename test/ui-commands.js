@@ -49,12 +49,15 @@
 // RUN-line shape as in ui-events.js: redirections inside `sh -c`, so the
 // trace file is the binary's own stderr whatever the display wrapper does,
 // and `timeout` because lit has no per-test timeout (dz 01a0d797-e326). Ends
-// through process.exit() (Ruling 59): closing the window still hangs (dz
-// 01a0d88a-6518).
+// with win.close(): closing is one of the window's commands, and this is the
+// one test outside test/ui-close.js that ends that way. A win.close() that
+// did nothing leaves the run at its `timeout`; one that ended the process
+// with the wrong status fails CODE; one that entered CLOSING and returned
+// fails TRACE (see the ending's lines below).
 //
 // RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=TRACE %s < %t.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='runtime returned' --check-prefix=TRACE %s < %t.err
 
 // CODE: EXITCODE 0
 
@@ -93,6 +96,13 @@
 // TRACE: command lock pointer: sapp_mouse_locked=1
 // TRACE: command lock pointer: sapp_mouse_locked=0
 // TRACE: command clipboard: owns_selection=1 bytes=14
+// The ending: win.close() enters CLOSING and then calls process.exit(). The
+// implicit NOT on `runtime returned` is what catches a win.close() that
+// enters CLOSING and returns: the released handle lets the loop drain, the
+// runtime-return hook exits with status 0, and every line above still
+// matches.
+// TRACE: lifecycle: CLOSING (reason=close)
+// TRACE: close: ending the process through process.exit()
 
 'use strict';
 
@@ -195,7 +205,7 @@ async function main() {
   report('MARKER', true);
 
   console.log('DONE');
-  process.exit(0);
+  win.close();
 }
 
 main().catch((e) => {
