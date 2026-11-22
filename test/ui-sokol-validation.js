@@ -17,7 +17,13 @@
 //
 // RUN: %with-display 120 sh -c '%hermes-node-ui %source_dir/test/ui-sokol-panic.js %hnui_demo_addon validation > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck --check-prefix=OUT %s < %t.out
-// RUN: %FileCheck --check-prefix=ERR %s < %t.err
+// RUN: %FileCheck --check-prefix=ERR --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-present' %s < %t.err
+//
+// This run is one of the two exceptions to the suite-wide stderr rule
+// (test/ui-stderr-rule.js). It provokes the PRODUCING instance into a real
+// validation failure, so that instance's error and panic lines are asserted;
+// a sokol_app error and anything from the presenting instance are still
+// refused.
 
 // CODE: EXITCODE 1
 

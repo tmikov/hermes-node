@@ -42,12 +42,19 @@
 // hang is not coverage. With the bound, a hang exits 124 and the EXITCODE
 // check below goes red like any other wrong answer.
 //
-// stderr goes to its own file: HERMES_NODE_DEBUG_NATIVE tracing and any
-// driver chatter land there, and folding them into stdout would make the
-// ordered checks below depend on what Mesa felt like logging.
+// stderr goes to its own file, and that file is read: the run is traced
+// (HERMES_NODE_DEBUG_NATIVE=UI) so that there is a positive line, `window
+// ready`, for the suite-wide stderr rule to hang on -- the ERR run refuses a
+// sokol_app error and anything at all from either sokol_gfx instance
+// (test/ui-stderr-rule.js). Folding the trace and any driver chatter into
+// stdout instead would make the ordered checks below depend on what Mesa
+// felt like logging. Redirections inside `sh -c`, as in every later window
+// test, so the files are the binary's own streams whatever the display
+// wrapper does.
 //
-// RUN: %with-display 120 %hermes-node-ui %s > %t.out 2> %t.err; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck --check-prefix=OUT %s < %t.out
+// RUN: %FileCheck --check-prefix=ERR --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' %s < %t.err
 
 const ui = require('hermes-node:ui');
 
@@ -106,3 +113,5 @@ main().catch((e) => {
 // OUT-NEXT: SECOND threw
 
 // CODE: EXITCODE 0
+
+// ERR: window ready

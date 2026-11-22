@@ -111,13 +111,14 @@
 /// host's `NSApplication` overrides `terminate:` and never lets AppKit end
 /// the process: the request is delivered as `HNUI_EVENT_CLOSE_REQUESTED`,
 /// cancelable like any other, and uncancelled it ends the process the same
-/// way. That is established for `[NSApp terminate:]` called in-process;
-/// whether Dock Quit, Cmd-Q or a quit Apple event arrive there has not
-/// been shown. Three things follow that an addon cannot change. A close
-/// request carries no reason, so logout cannot be told from Quit. A
-/// listener that cancels, or an owner thread busy in synchronous code,
-/// leaves a logout or shutdown waiting until the system gives up and
-/// reports the application. And the host creates no main menu, so Cmd-Q
+/// way. That is established for `[NSApp terminate:]` called in-process
+/// and, checked by hand, for Quit chosen from the Dock; whether Cmd-Q or
+/// a quit Apple event arrive there has not been shown. Three things
+/// follow that an addon cannot change. A close request carries no reason,
+/// so logout cannot be told from Quit. A listener that cancels, or an
+/// owner thread busy in synchronous code, leaves a logout or shutdown
+/// waiting until the system gives up and reports the application. And
+/// the host creates no main menu, so Cmd-Q
 /// has nothing to invoke. Force Quit and `SIGKILL` run no `'exit'`
 /// listener, as on every platform.
 ///

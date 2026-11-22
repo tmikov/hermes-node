@@ -1191,10 +1191,13 @@ done, and so is Task 15 of Slice D, lifecycle and closing (written out in
 `docs/superpowers/plans/2026-11-19-ui-compositor-task15.md`). Task 16, the
 Metal backend, is done too (written out in
 `docs/superpowers/plans/2026-11-19-ui-compositor-task16.md`, whose "as
-built" sections say what was measured, including the Mac's final
-verification of the whole suite on 2026-11-21 and the two checks of it
-that were not done). Task 17, the full gated suite, is next and not
-started.
+built" sections say what was measured, including the Mac's
+verification of the whole suite on 2026-11-21). Task 17, the full gated
+suite, is done as well, and Slice D with it (written out in
+`docs/superpowers/plans/2026-11-21-ui-compositor-task17.md`, whose "as
+built" sections hold the Mac's census of what a healthy Metal run prints,
+its suite runs in Release and under ASAN, and the three checks made by
+hand at the Mac). What is still unverified is in the tracker.
 
 There are two backends behind one interface
 (`lib/compositor-gpu/backend.h`): GL on X11 for Linux and other non-Apple
@@ -1295,7 +1298,11 @@ error. Everything Metal was measured on one Apple-silicon Mac.
   was requested or selected: a line that prints the request passes with the
   call it describes deleted, and that hole was found five separate times.
   A test that needs "the platform thread got that far" waits on one of the
-  two barriers above, never on time.
+  two barriers above, never on time. Two `__injectEvent` calls made back
+  to back are usually taken by one drain, and nothing guarantees them one
+  dispatch pass: a test that needs that injects the second event from the
+  first one's listener and waits on `ui.__waitPlatformFrames(1)`
+  (`test/ui-events.js` TICKS, `test/ui-close.js` REPLACED).
 - **A FileCheck `-NOT` between two `-DAG` lines, or after the last positive
   line, cannot see what precedes its anchor**, so it passes with the line it
   forbids present. Lines from one dispatcher drain arrive in either order,
@@ -1304,6 +1311,19 @@ error. Everything Metal was measured on one Apple-silicon Mac.
   applies to the whole input -- and prove it by a mutation that leaves every
   positive line matching. Several closing checks were blind to their own
   mutations until written that way.
+- **Every window RUN line's stderr is read with the Sokol exclusions.**
+  A window RUN line is one containing `%with-display`; the FileCheck run
+  that reads its stderr carries `--implicit-check-not='[sapp:error'
+  --implicit-check-not='[sokol-'`, so a `sokol_app` error, or anything
+  at all from either `sokol_gfx` instance, fails a run that otherwise
+  behaves. `test/ui-stderr-rule.js` enforces it through
+  `utils/check-ui-stderr-rule.py`; it is ungated and needs no binary.
+  The two exceptions are in that script: `ui-sokol-panic.js` and
+  `ui-sokol-validation.js` provoke the producing instance on purpose and
+  refuse only `sokol_app` and the presenting one. `[sapp:warning` is not
+  refused, because a healthy GL run prints one
+  (`LINUX_X11_QUERY_SYSTEM_DPI_FAILED`); a healthy Metal run prints no
+  Sokol line at all (measured).
 - **Window tests run under `%with-display <seconds>` (`utils/with-display.py`),
   not `xvfb-run -a`.** On Linux it execs `timeout <seconds>` over
   `utils/with-xvfb.py`. `xvfb-run -a` picks a display number and then starts
@@ -1413,9 +1433,16 @@ error. Everything Metal was measured on one Apple-silicon Mac.
   its first frame**, the interval the frame check is for: removing that
   check leaves all three green, and no request can be aimed there
   without a timing assumption. **Every one of them enters at `[NSApp terminate:nil]`
-  in-process. That a real Dock Quit, Cmd-Q or quit Apple event reaches the
-  override is unproved**: the one second-process route tried reached no
-  handler in the target at all, and nobody has checked by hand.
+  in-process.** A real Dock Quit was checked by hand on 2026-11-21 and
+  does reach the override, through `performClose:`. **That Cmd-Q or a
+  quit Apple event reaches it is unproved**: there is no main menu, and
+  the one second-process route tried reached no handler in the target at
+  all. **The trace line is printed after `performClose:` returns, so its
+  absence proves nothing when the close was not prevented**: the JS
+  thread's `process.exit()` can end the process first (measured:
+  `performClose:` returned about eight frames after the quit was
+  cancelled). `test/ui-terminate.js` sees the line in that case only
+  because the driver blocks the JS thread until `terminate:` returns.
 - **The presented-pixel test compares exactly — 0 or 255, no tolerance.**
   That is stronger than a threshold, not weaker, and it is affordable because
   the capture's agreement rule forces target size to equal framebuffer size:
@@ -1572,6 +1599,10 @@ error. Everything Metal was measured on one Apple-silicon Mac.
   nothing and sends no tick, tracing each transition once (`present:
   swapchain invalid; nothing submitted`, `present: swapchain valid
   again`). `test/ui-metal-occlusion.js` produces it by miniaturizing.
+  A display put to sleep under an open window was measured once, by
+  hand: frame ticks slowed to about one a second while it slept, the
+  swapchain was reported invalid once and valid again on waking, and
+  frames resumed, with no Sokol line. No test does this.
 - **The Metal command buffer is reached without patching Sokol.**
   `external/sokol/sokol` is still unmodified. `_sg` is a file-static of
   whichever unit defines `SOKOL_GFX_IMPL`, and those two units are ours,
@@ -1602,12 +1633,17 @@ error. Everything Metal was measured on one Apple-silicon Mac.
 - **macOS runs this suite, window tests included, when it has a usable
   display.** The Metal backend was built and the suite run on an
   Apple-silicon Mac (macOS 27.2) between 2026-11-19 and 2026-11-21. Its
-  last three runs of the whole suite, on 2026-11-21, were each 456 unit
-  tests and JS 237 passed, 5 unsupported, 0 failed; the progress file
-  names the five. With the screen locked, the display
+  last three runs of the whole suite, on 2026-11-21 at the end of Task
+  17, were each 456 unit tests and JS 239 passed, 5 unsupported, 0
+  failed; the progress file names the five. A Release build with the UI
+  on ran the whole suite there once the same day: JS 238 passed, 6
+  unsupported, 0 failed, and 456 unit tests once a scheduling-dependent
+  unit test was fixed. With the screen locked, the display
   asleep or no window server, `display` is false and the window tests
   report UNSUPPORTED; run with `HERMES_NODE_UI_EXPECT_DISPLAY=1` to make
-  that red instead, and under `caffeinate -dimsu` to keep the display
+  that red instead (seen with the screen locked: `ui-display-feature.js`
+  failed and `ui-present.js` was UNSUPPORTED), and under
+  `caffeinate -dimsu` to keep the display
   awake (it does not unlock a locked screen). A test must be written for
   BSD userland and must not rely on a `timeout` command: macOS 27 ships
   one in `/usr/bin` (Apple's own, which accepts `timeout <n> <command>`

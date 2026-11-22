@@ -21,8 +21,16 @@
 //
 // REQUIRES: ui, ui-gpu, ui-backend-gl, display
 //
-// RUN: %with-display 120 sh -c '%hermes-node-ui %source_dir/test/fixtures/hnui-demo/demo.js %hnui_demo_addon js > %t.demo.out 2> %t.demo.err & %x11_window_driver --close "hermes-node-ui demo"; wait $!'; echo "DEMOEXIT $?" | %FileCheck --check-prefix=DEMO %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %source_dir/test/fixtures/hnui-demo/demo.js %hnui_demo_addon js > %t.demo.out 2> %t.demo.err & %x11_window_driver --close "hermes-node-ui demo"; wait $!'; echo "DEMOEXIT $?" | %FileCheck --check-prefix=DEMO %s
 // RUN: %FileCheck --check-prefix=DEMOOUT %s < %t.demo.out
+// RUN: %FileCheck --check-prefix=DEMOERR --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' %s < %t.demo.err
+//
+// The run is traced (the test hooks stay off, which is the point of this
+// test) so that DEMOERR has positive lines to carry the suite-wide stderr
+// rule (test/ui-stderr-rule.js). `window ready` is deliberately not one of
+// them: the close request can arrive before it.
 
 // DEMO: DEMOEXIT 0
 // DEMOOUT: MODE js
+// DEMOERR: quit requested: cancelled, forwarded as close
+// DEMOERR: close: not cancelled

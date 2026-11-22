@@ -70,23 +70,23 @@
 //            returns. An injected close request (the subject here is what
 //            the JS thread does after the default action returns, which is
 //            after the converter) is delivered in the same dispatch pass as
-//            a KEY_DOWN injected with it. The default action enters CLOSING
-//            -- closing the dispatcher from inside the function it is
-//            running -- and calls the replacement, which returns: the
-//            window stays in CLOSING, the KEY_DOWN behind it is not
-//            delivered, a frame request is refused, and a timer the
+//            a KEY_DOWN injected from its own listener. The default action
+//            enters CLOSING -- closing the dispatcher from inside the
+//            function it is running -- and calls the replacement, which
+//            returns: the window stays in CLOSING, the KEY_DOWN behind it
+//            is not delivered, a frame request is refused, and a timer the
 //            replacement set calls the original process.exit(6). Under
 //            ASAN. (Mutation: remove the closing check in
 //            uiDispatchEvents, and KEY-AFTER-CLOSE prints.)
-//            Nothing enforces "the same dispatch pass": it holds because the
-//            two back-to-back __injectEvent calls are taken by one
-//            drainInjectedEvents() call on the platform thread (measured
-//            64/64 at 16-way parallel; ui-events.js relies on the same
-//            pattern). Were they split across two frames with the JS thread
-//            running the first pass in between, the KEY_DOWN would arrive
-//            after the dispatcher closed, and the trace would read `event
-//            dispatch: post refused (dispatcher closed)` where REPLACED-TRACE
-//            expects `event keydown: not delivered (closing)`.
+//            "The same dispatch pass" holds by construction: the KEY_DOWN
+//            is injected from the `close` listener, and
+//            __waitPlatformFrames(1) holds that listener until the platform
+//            thread has converted and queued it, so it is behind the close
+//            in the pass that is delivering the close, whatever the frame
+//            timing (KEY-QUEUED prints the barrier's answer). Two
+//            back-to-back __injectEvent calls would not do: split across
+//            two frames, the KEY_DOWN arrives after the dispatcher closed
+//            and the trace reads `event dispatch: refused (closing)`.
 //  RFRAME    the same replacement, with win.close() called from a frame
 //            callback that has drawn: the tick does not go on to submit
 //            the frame, since the table is closing and the slot is put
@@ -101,38 +101,41 @@
 // through a pipe, because the flush is part of the claim: a pipe is a
 // libuv stream whose writes are queued.
 //
+// Every -TRACE run carries the suite-wide stderr rule, the
+// `[sapp:error` / `[sokol-` pair of exclusions (test/ui-stderr-rule.js).
+//
 // RUN: %with-display 120 sh -c '{ HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s default %hnui_demo_addon %x11_window_driver 2> %t.default.err; echo "EXITCODE $?" > %t.default.code; } | cat > %t.default.out'
 // RUN: %FileCheck --check-prefix=DEFAULT-CODE %s < %t.default.code
 // RUN: %FileCheck --check-prefix=DEFAULT %s < %t.default.out
-// RUN: %FileCheck --check-prefix=DEFAULT-TRACE --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.default.err
+// RUN: %FileCheck --check-prefix=DEFAULT-TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.default.err
 //
 // RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s cancel %hnui_demo_addon %x11_window_driver > %t.cancel.out 2> %t.cancel.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CANCEL-CODE %s
 // RUN: %FileCheck --check-prefix=CANCEL %s < %t.cancel.out
-// RUN: %FileCheck --check-prefix=CANCEL-TRACE --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.cancel.err
+// RUN: %FileCheck --check-prefix=CANCEL-TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.cancel.err
 //
 // RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s native %hnui_demo_addon %x11_window_driver > %t.native.out 2> %t.native.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=NATIVE-CODE %s
 // RUN: %FileCheck --check-prefix=NATIVE %s < %t.native.out
-// RUN: %FileCheck --check-prefix=NATIVE-TRACE --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.native.err
+// RUN: %FileCheck --check-prefix=NATIVE-TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.native.err
 //
 // RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s winclose %hnui_demo_addon %x11_window_driver > %t.winclose.out 2> %t.winclose.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=WINCLOSE-CODE %s
 // RUN: %FileCheck --check-prefix=WINCLOSE --implicit-check-not=CLOSE-EVENT-EMITTED --implicit-check-not=RETURNED %s < %t.winclose.out
-// RUN: %FileCheck --check-prefix=WINCLOSE-TRACE --implicit-check-not='quit requested' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.winclose.err
+// RUN: %FileCheck --check-prefix=WINCLOSE-TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='quit requested' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.winclose.err
 //
 // RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s noexit %hnui_demo_addon %x11_window_driver > %t.noexit.out 2> %t.noexit.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=NOEXIT-CODE %s
 // RUN: %FileCheck --check-prefix=NOEXIT --implicit-check-not=RETURNED %s < %t.noexit.out
-// RUN: %FileCheck --check-prefix=NOEXIT-TRACE --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.noexit.err
+// RUN: %FileCheck --check-prefix=NOEXIT-TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.noexit.err
 //
 // RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s late %hnui_demo_addon %x11_window_driver > %t.late.out 2> %t.late.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=LATE-CODE %s
 // RUN: %FileCheck --check-prefix=LATE %s < %t.late.out
-// RUN: %FileCheck --check-prefix=LATE-TRACE --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.late.err
+// RUN: %FileCheck --check-prefix=LATE-TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.late.err
 //
 // RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s replaced %hnui_demo_addon %x11_window_driver > %t.replaced.out 2> %t.replaced.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=REPLACED-CODE %s
 // RUN: %FileCheck --check-prefix=REPLACED --implicit-check-not=KEY-AFTER-CLOSE --implicit-check-not=FRAME-AFTER-CLOSE %s < %t.replaced.out
-// RUN: %FileCheck --check-prefix=REPLACED-TRACE --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.replaced.err
+// RUN: %FileCheck --check-prefix=REPLACED-TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.replaced.err
 //
 // RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s rframe %hnui_demo_addon %x11_window_driver > %t.rframe.out 2> %t.rframe.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=RFRAME-CODE %s
 // RUN: %FileCheck --check-prefix=RFRAME --implicit-check-not=CB2-RAN %s < %t.rframe.out
-// RUN: %FileCheck --check-prefix=RFRAME-TRACE --implicit-check-not=', drew' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.rframe.err
+// RUN: %FileCheck --check-prefix=RFRAME-TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not=', drew' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.rframe.err
 
 'use strict';
 
@@ -275,13 +278,17 @@ async function main() {
       }, 1);
     };
     if (mode === 'replaced') {
-      win.on('close', () => console.log('CLOSE-EVENT'));
+      win.on('close', () => {
+        console.log('CLOSE-EVENT');
+        // Injected from inside the pass that is delivering the close, and
+        // the barrier holds this listener until the platform thread has
+        // converted and queued it: the KEY_DOWN is then behind the close
+        // in the SAME dispatch pass, whatever the frame timing.
+        ui.__injectEvent({type: 'KEY_DOWN', keyCode: SAPP_KEYCODE_A});
+        console.log('KEY-QUEUED ' + ui.__waitPlatformFrames(1));
+      });
       win.on('keydown', () => console.log('KEY-AFTER-CLOSE'));
-      // One injected batch: the platform thread pushes both in one frame,
-      // so one dispatch pass delivers them, close first. Not enforced; see
-      // REPLACED in the header.
       ui.__injectEvent({type: 'QUIT_REQUESTED'});
-      ui.__injectEvent({type: 'KEY_DOWN', keyCode: SAPP_KEYCODE_A});
       return;
     }
     nextFrame(() => {
@@ -350,6 +357,7 @@ main().catch((e) => {
 // LATE-TRACE: event dispatch: post refused (dispatcher closed)
 
 // REPLACED: CLOSE-EVENT
+// REPLACED-NEXT: KEY-QUEUED true
 // REPLACED-NEXT: REPLACED-EXIT args=0
 // REPLACED-NEXT: RAF 0
 // REPLACED-NEXT: EXIT code=6

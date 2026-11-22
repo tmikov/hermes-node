@@ -36,3 +36,5 @@ the screen from whoever is at the Mac.
 ## Log
 
 - 2026-11-21T01:25:39.631Z  Tzvetan Mikov <tmikov@gmail.com>  created
+- 2026-11-21T08:28:52.079Z  Tzvetan Mikov <tmikov@gmail.com>  comment
+    Slice D of the UI compositor closed on 2026-11-21 without this; still open.

@@ -21,8 +21,9 @@
 //             what coalescing preserves.
 //  MIRROR     inside `blur`, win.focused is false; inside `focus`, true.
 //             (Mutation: update the mirror after emit.)
-//  TICKS      a promise callback queued by the keydown listener runs
-//             before the char event reaches anyone.
+//  TICKS      a promise callback queued by a keydown listener runs
+//             before a CHAR that the same listener queued behind it, in
+//             one dispatch pass.
 //             (Mutation: remove the _tickCallback call.)
 //  CLOSE      an injected QUIT_REQUESTED is converted and emitted as
 //             `close`, exactly once. That is ALL it shows. It does not show
@@ -98,6 +99,7 @@ const SAPP_KEYCODE_F2 = 291;
 const SAPP_KEYCODE_F4 = 293;
 const SAPP_KEYCODE_F5 = 294;
 const SAPP_KEYCODE_F6 = 295;
+const SAPP_KEYCODE_F7 = 296;
 const SAPP_MODIFIER_SHIFT = 0x1;
 const SAPP_MOUSEBUTTON_RIGHT = 1;
 
@@ -119,18 +121,14 @@ function report(name, ok, detail) {
 
 /**
  * Check the log's shape: each event is a `native:<name>` line immediately
- * followed by `js:<name>`, with other lines (promise callbacks) allowed in
- * between events but not inside a pair; runs of mousemove collapse to one.
+ * followed by `js:<name>`, and nothing else; runs of mousemove collapse to
+ * one.
  */
 function checkOrder(log) {
   const names = [];
   let i = 0;
   while (i < log.length) {
     const line = log[i];
-    if (line.startsWith('promise:')) {
-      ++i;
-      continue;
-    }
     const m = /^native:(\S+)/.exec(line);
     if (!m) {
       return 'expected a native line at ' + i + ', got "' + line + '"';
@@ -173,11 +171,6 @@ async function main() {
       (received[name] = received[name] || []).push(e);
     });
   }
-  win.on('keydown', (e) => {
-    if (e.keyCode === SAPP_KEYCODE_A) {
-      Promise.resolve().then(() => addon.logLine('promise:keydown'));
-    }
-  });
   win.on('blur', () => {
     focusedInBlur = win.focused;
   });
@@ -242,11 +235,36 @@ async function main() {
       'MIRROR', mirrorOk,
       'blur=' + focusedInBlur + ' focus=' + focusedInFocus);
 
-  const promiseAt = log.indexOf('promise:keydown');
-  const charAt = log.findIndex((line) => line.startsWith('native:char'));
+  // TICKS, in a burst of its own. The CHAR is injected from inside the
+  // keydown listener, and the barrier holds that listener until the
+  // platform thread has converted and queued it -- so the CHAR is behind
+  // the KEY_DOWN in the SAME dispatch pass, whatever the frame timing, and
+  // only the checkpoint between two events of one pass can put the promise
+  // callback ahead of it. (Two events injected back to back are usually
+  // taken by one drain, but nothing makes them: split across two passes,
+  // the promise callback runs between the passes whether or not deliver()
+  // runs a checkpoint, and this line would pass with the call removed.)
+  let ticksBarrier = null;
+  await new Promise((resolve) => {
+    win.on('keydown', (e) => {
+      if (e.keyCode !== SAPP_KEYCODE_F7)
+        return;
+      Promise.resolve().then(() => addon.logLine('promise:keydown'));
+      ui.__injectEvent({type: 'CHAR', charCode: 0x62});
+      ticksBarrier = ui.__waitPlatformFrames(1);
+    });
+    win.once('char', () => resolve());
+    ui.__injectEvent({type: 'KEY_DOWN', keyCode: SAPP_KEYCODE_F7});
+  });
+  const ticksLog = addon.takeEventLog();
+  const promiseAt = ticksLog.indexOf('promise:keydown');
+  const charAt = ticksLog.findIndex((line) => line.startsWith('native:char'));
   report(
-      'TICKS', promiseAt !== -1 && charAt !== -1 && promiseAt < charAt,
-      'promise at ' + promiseAt + ', char at ' + charAt);
+      'TICKS',
+      ticksBarrier === true && promiseAt !== -1 && charAt !== -1 &&
+          promiseAt < charAt,
+      'barrier ' + ticksBarrier + ', promise at ' + promiseAt + ', char at ' +
+          charAt + ' log=' + ticksLog.join('|'));
 
   report('CLOSE', (received.close || []).length === 1);
 

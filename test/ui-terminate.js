@@ -58,9 +58,14 @@
 // the main thread). Probe P4 measured that a second process cannot reach
 // it: NSRunningApplication's quit Apple event arrives and reaches no
 // handler at all -- not terminate:, not applicationShouldTerminate:, not a
-// kAEQuitApplication handler. So what this file leaves unproved is that a
-// real Dock Quit, a Cmd-Q, or a quit Apple event reaches the override. The
-// first two need a person at the Mac.
+// kAEQuitApplication handler. So no case here shows a request from outside
+// the process reaching the override. A real Dock Quit was checked by hand
+// on 2026-11-21 and does reach it, through performClose:. That run also
+// showed something DEFAULT cannot: with nothing preventing the close, the
+// JS thread can end the process before the main thread prints `app:
+// terminate requested`. Here the line always precedes the exit only
+// because the driver blocks the JS thread until `[NSApp terminate:nil]`
+// returns. A Cmd-Q and a quit Apple event remain unproved.
 //
 // The driver's answer is read back after `[NSApp terminate:nil]` returned
 // -- which it does only because terminate: is ours: `visible=1` once the
@@ -72,18 +77,21 @@
 //
 // REQUIRES: ui, ui-backend-metal, display
 //
+// Every -TRACE run carries the suite-wide stderr rule, the
+// `[sapp:error` / `[sokol-` pair of exclusions (test/ui-stderr-rule.js).
+//
 // RUN: %with-display 120 sh -c '{ HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s default 2> %t.default.err; echo "EXITCODE $?" > %t.default.code; } | cat > %t.default.out'
 // RUN: %FileCheck --check-prefix=DEFAULT-CODE %s < %t.default.code
 // RUN: %FileCheck --check-prefix=DEFAULT %s < %t.default.out
-// RUN: %FileCheck --check-prefix=DEFAULT-TRACE --implicit-check-not='forwarded directly' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.default.err
+// RUN: %FileCheck --check-prefix=DEFAULT-TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='forwarded directly' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.default.err
 //
 // RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s cancel > %t.cancel.out 2> %t.cancel.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CANCEL-CODE %s
 // RUN: %FileCheck --check-prefix=CANCEL %s < %t.cancel.out
-// RUN: %FileCheck --check-prefix=CANCEL-TRACE --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.cancel.err
+// RUN: %FileCheck --check-prefix=CANCEL-TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.cancel.err
 //
 // RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s early > %t.early.out 2> %t.early.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=EARLY-CODE %s
 // RUN: %FileCheck --check-prefix=EARLY %s < %t.early.out
-// RUN: %FileCheck --check-prefix=EARLY-TRACE --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.early.err
+// RUN: %FileCheck --check-prefix=EARLY-TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.early.err
 
 // DEFAULT: ANSWER visible=1
 // DEFAULT-NEXT: CLOSE-EVENT
