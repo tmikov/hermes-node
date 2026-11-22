@@ -15,7 +15,7 @@
 /// one process-global (`static _sg_state_t _sg`) and every call must come
 /// from the thread owning that instance's GPU context, so two threads need
 /// two instances. Nothing but the rename separates the two translation
-/// units; if this file grows anything besides the include below, the twin
+/// units; if this file grows anything besides the includes below, the twin
 /// needs it too.
 ///
 /// `utils/check-sgp-isolation.py` proves the separation actually held, by
@@ -26,3 +26,9 @@
 
 #define SOKOL_GFX_IMPL
 #include <sokol_gfx.h>
+
+// This instance's accessors for state Sokol keeps private (the Metal frame
+// command buffer and id-pool counts; nothing on GL). Here because only this
+// unit can see its `_sg`; see sokol_gfx_ext.h.
+#define HNUI_SG_EXT(name) hnui_sg_##name
+#include "sokol_gfx_ext.inc"

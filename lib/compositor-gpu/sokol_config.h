@@ -30,6 +30,22 @@
     "No Sokol backend selected. lib/compositor-gpu/CMakeLists.txt sets SOKOL_GLCORE on Linux; macOS Metal arrives with Task 16. v1 refuses EGL and GLES3 (spec: Global Constraints)."
 #endif
 
+/// The Metal backend's Sokol units must be compiled as Objective-C++:
+/// sokol_gfx.h's Metal implementation is Objective-C, and the accessors in
+/// sokol_gfx_ext.inc bridge an `id<MTLCommandBuffer>`. Compiled as plain
+/// C++ the failure would be a cascade of Objective-C syntax errors from
+/// inside a 20,000-line header; this names the fix instead. **And with
+/// ARC**: Sokol's texture injection releases the texture it was handed
+/// under manual reference counting, out from under its owner.
+#if defined(SOKOL_METAL) && !defined(__OBJC__)
+#error \
+    "SOKOL_METAL requires Objective-C++: compile this file with the CMake source property LANGUAGE OBJCXX (set_source_files_properties(... PROPERTIES LANGUAGE OBJCXX)) and -fobjc-arc, as lib/compositor-gpu/CMakeLists.txt does for its Metal sources."
+#endif
+#if defined(SOKOL_METAL) && defined(__OBJC__) && !__has_feature(objc_arc)
+#error \
+    "SOKOL_METAL requires ARC: compile this file with -fobjc-arc. Without it Sokol's _SG_OBJC_RELEASE is a real release, and an injected texture is released out from under its owner."
+#endif
+
 /// Sokol's assert hook. Left as the default (`assert`) deliberately, and
 /// recorded here because the alternative is tempting and wrong: Sokol's
 /// asserts fire on genuine contract violations -- an exhausted resource

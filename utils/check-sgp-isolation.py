@@ -28,6 +28,18 @@ and asserts the properties directly:
     output shares no machinery with them.
 3.  Neither object *references* (undefined-symbol) anything belonging to the
     other's instance.
+4.  The accessors appended after each instance's implementation
+    (`lib/compositor-gpu/sokol_gfx_ext.inc`) follow the same split: the
+    producing object defines no `hnui_sgp_*` and the presenting object no
+    `hnui_sg_*`.  (On a backend whose accessors compile to nothing, as GL's
+    do, neither defines any, and that is not an error.)
+5.  Each USER object -- the backend code that calls one instance,
+    `--producing-user` and `--presenting-user` -- references its own family
+    and never the other's: a producing user with an undefined `sgp_*` or
+    `hnui_sgp_*`, or a presenting user with an undefined `sg_*` or
+    `hnui_sg_*`, is an error.  That is how a presenter installing its
+    completion handler on the producer's command buffer would show up: it
+    links, and reads the wrong `_sg`.
 
 Undefined `sg_*` symbols in the PRESENTING object are the interesting case
 and the reason this is not a one-line `nm | grep`: they are exactly how a
@@ -98,15 +110,29 @@ def read_symbols(nm, obj):
 
 
 def sokol_names(names, prefix):
-    """`sg_*` / `sgp_*` names, excluding the other prefix.
+    """`sg_*` / `sgp_*` / `hnui_sg_*` / `hnui_sgp_*` names, excluding the
+    other prefix of the same pair.
 
-    `sg_` is a prefix of `sgp_`, so a naive startswith("sg_") also matches
-    every renamed symbol.  Getting this backwards would make the check pass
-    unconditionally, which is the one outcome a checker must not have.
+    `sg_` is a prefix of `sgp_` (and `hnui_sg_` of `hnui_sgp_`), so a naive
+    startswith("sg_") also matches every renamed symbol.  Getting this
+    backwards would make the check pass unconditionally, which is the one
+    outcome a checker must not have.
     """
-    if prefix == "sg_":
-        return {n for n in names if n.startswith("sg_") and not n.startswith("sgp_")}
-    return {n for n in names if n.startswith("sgp_")}
+    renamed = {"sg_": "sgp_", "hnui_sg_": "hnui_sgp_"}
+    if prefix in renamed:
+        other = renamed[prefix]
+        return {n for n in names if n.startswith(prefix) and not n.startswith(other)}
+    if prefix in ("sgp_", "hnui_sgp_"):
+        return {n for n in names if n.startswith(prefix)}
+    raise ValueError("unknown family prefix %r" % prefix)
+
+
+def family(names, instance):
+    """Every name belonging to one instance: "producing" is `sg_*` plus
+    `hnui_sg_*`, "presenting" is `sgp_*` plus `hnui_sgp_*`."""
+    if instance == "producing":
+        return sokol_names(names, "sg_") | sokol_names(names, "hnui_sg_")
+    return sokol_names(names, "sgp_") | sokol_names(names, "hnui_sgp_")
 
 
 def report(label, names, limit=12):
@@ -123,6 +149,20 @@ def main():
     ap.add_argument(
         "--presenting", required=True, help="sokol_gfx_present_impl.cpp.o"
     )
+    ap.add_argument(
+        "--producing-user",
+        action="append",
+        default=[],
+        help="a backend object that calls the producing instance "
+        "(gl_backend.cpp.o); repeatable",
+    )
+    ap.add_argument(
+        "--presenting-user",
+        action="append",
+        default=[],
+        help="a backend object that calls the presenting instance "
+        "(gl_present.cpp.o); repeatable",
+    )
     args = ap.parse_args()
 
     nm = find_nm()
@@ -134,7 +174,8 @@ def main():
         )
         return 1
 
-    for path in (args.producing, args.presenting):
+    for path in [args.producing, args.presenting] + args.producing_user + \
+            args.presenting_user:
         if not os.path.exists(path):
             sys.stderr.write(
                 "check-sgp-isolation.py: %s does not exist. Build "
@@ -202,6 +243,69 @@ def main():
         )
         report("sgp_* referenced by the producing object", prod_sgp_undef)
 
+    # The accessor families (sokol_gfx_ext.inc), defined after each
+    # instance's implementation: the same split as the instances themselves.
+    prod_ext_other = sokol_names(prod_def, "hnui_sgp_")
+    if prod_ext_other:
+        failures.append(
+            "the producing object defines the presenting instance's accessors"
+        )
+        report("hnui_sgp_* defined in the producing object", prod_ext_other)
+    pres_ext_other = sokol_names(pres_def, "hnui_sg_")
+    if pres_ext_other:
+        failures.append(
+            "the presenting object defines the producing instance's accessors "
+            "-- HNUI_SG_EXT pasted the wrong prefix"
+        )
+        report("hnui_sg_* defined in the presenting object", pres_ext_other)
+    pres_ext_undef = sokol_names(pres_undef, "hnui_sg_")
+    if pres_ext_undef:
+        failures.append(
+            "the presenting object REFERENCES the producing instance's "
+            "accessors"
+        )
+        report("hnui_sg_* referenced by the presenting object", pres_ext_undef)
+    prod_ext_undef = sokol_names(prod_undef, "hnui_sgp_")
+    if prod_ext_undef:
+        failures.append(
+            "the producing object REFERENCES the presenting instance's "
+            "accessors"
+        )
+        report("hnui_sgp_* referenced by the producing object", prod_ext_undef)
+
+    # The user objects. Each must reference its own instance -- an object
+    # that references neither is not the backend code it was said to be,
+    # and would satisfy the rule below vacuously -- and never the other's.
+    user_counts = {"producing": 0, "presenting": 0}
+    for instance, other, paths in (
+        ("producing", "presenting", args.producing_user),
+        ("presenting", "producing", args.presenting_user),
+    ):
+        for path in paths:
+            _, undef = read_symbols(nm, path)
+            if undef is None:
+                return 1
+            own = family(undef, instance)
+            if not own:
+                failures.append(
+                    "%s references no %s-instance symbol at all -- it is not "
+                    "the %s backend's object, or nm read nothing"
+                    % (path, instance, instance)
+                )
+            user_counts[instance] += len(own)
+            crossed = family(undef, other)
+            if crossed:
+                failures.append(
+                    "%s calls the %s instance but REFERENCES the %s instance's "
+                    "symbols -- it would read the other thread's _sg"
+                    % (path, instance, other)
+                )
+                report(
+                    "%s-instance symbols referenced by %s"
+                    % (other, os.path.basename(path)),
+                    crossed,
+                )
+
     if failures:
         sys.stderr.write("check-sgp-isolation.py: FAILED\n")
         for f in failures:
@@ -215,6 +319,12 @@ def main():
         "sgp isolation OK: producing defines %d sg_*, presenting defines %d "
         "sgp_*, no cross-references" % (len(prod_sg), len(pres_sgp))
     )
+    if args.producing_user or args.presenting_user:
+        print(
+            "sgp users OK: producing user references %d sg_*, presenting "
+            "user references %d sgp_*, neither references the other family"
+            % (user_counts["producing"], user_counts["presenting"])
+        )
     return 0
 
 

@@ -15,7 +15,7 @@
 // REQUIRES: ui, ui-gpu, sokol-validation
 // REQUIRES: display
 //
-// RUN: timeout 120 %with-xvfb sh -c '%hermes-node-ui %source_dir/test/ui-sokol-panic.js %hnui_demo_addon validation > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %with-display 120 sh -c '%hermes-node-ui %source_dir/test/ui-sokol-panic.js %hnui_demo_addon validation > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck --check-prefix=OUT %s < %t.out
 // RUN: %FileCheck --check-prefix=ERR %s < %t.err
 

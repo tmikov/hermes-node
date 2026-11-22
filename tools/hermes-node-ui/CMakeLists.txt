@@ -102,12 +102,19 @@ if(TARGET hermesNodeCompositorGpu)
     hnui_api.cpp
     sokol_app_impl.cpp
   )
-  # The trace's read-back of the title and icon from the X server, and the
-  # clipboard read that replaces Sokol's (Ruling 55). Under the condition
-  # the GL backend is built under, which is what provides X11.
+  # The platform services (platform_services.h): the clipboard, both
+  # directions, and the trace's read-backs of the title, icon and clipboard
+  # ownership. One implementation per platform, chosen here rather than by
+  # a preprocessor conditional in ui_platform.cpp. X11's sits on our own
+  # clipboard read, which replaces Sokol's (Ruling 55), and is built under
+  # the condition the GL backend is built under, which is what provides X11.
+  # macOS's (platform_services_mac.mm) is Task 16e's.
   if(UNIX AND NOT APPLE)
-    target_sources(hermes-node-ui PRIVATE x11_readback.cpp x11_clipboard.cpp)
-    target_compile_definitions(hermes-node-ui PRIVATE HERMES_NODE_UI_HAVE_X11)
+    target_sources(hermes-node-ui PRIVATE
+      platform_services_x11.cpp
+      x11_readback.cpp
+      x11_clipboard.cpp
+    )
   endif()
   # Plain signature, matching the call above -- CMake refuses to mix plain
   # and keyword forms on one target, and hermes_node_link_setup() already

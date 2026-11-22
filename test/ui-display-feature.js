@@ -25,24 +25,30 @@
 // install is not a trade worth making. So this asserts the feature only
 // where its absence is a defect rather than a local choice: a machine with a
 // GPU backend (`ui-gpu`, so the window tests are meaningful at all) that
-// also says it is CI (`ci`, so a workflow exists that promised to install
-// xvfb). Without CI in the environment this file reports UNSUPPORTED, which
-// is the correct answer there and the reason a developer is not punished.
+// also PROMISED a display (`display-expected`: Linux CI, whose workflow
+// installs xvfb, or any machine whose environment sets
+// HERMES_NODE_UI_EXPECT_DISPLAY=1 -- every Mac command of the Task 16 plan
+// does). Elsewhere this file reports UNSUPPORTED, which is the correct
+// answer there and the reason a developer is not punished. macOS CI is
+// deliberately not `display-expected` yet: nobody knows whether its
+// runners have a Metal device and a window-server session.
 //
 // **It reads lit.cfg's own verdict, not a second opinion.** `%display-state`
 // expands to the feature this configuration actually computed, so a probe
 // that goes wrong for ANY reason -- a missing package, an Xvfb or wrapper
-// that changed its behaviour, a 90-second timeout under 16-way load -- is
-// what fails here. Re-running the probe from this file would only ask the
-// same question twice.
+// that changed its behaviour, a 90-second timeout under load, a locked Mac
+// -- is what fails here. `%display-reason` is the probe's own account of
+// why (on macOS, the console-session check's answer when that stage said
+// no), so the red line says what to fix.
 //
 // THE MUTATION THIS MUST BREAK: make lit.cfg's `_can_start_a_display()`
 // return False (equivalently: remove `xvfb` from the CI apt line). With CI
-// in the environment this file goes RED; the two window tests go
-// UNSUPPORTED, which is precisely the silent hole it exists to convert into
-// a failure.
+// in the environment this file goes RED; the window tests go UNSUPPORTED,
+// which is precisely the silent hole it exists to convert into a failure.
+// On macOS, both stages -- the console session and the window probe --
+// end in the same `display` verdict, so either one failing is red here.
 //
-// REQUIRES: ui-gpu, ci
-// RUN: echo 'display-feature %display-state' | %FileCheck %s
+// REQUIRES: ui-gpu, display-expected
+// RUN: echo 'display-feature %display-state (%display-reason)' | %FileCheck %s
 
 // CHECK: display-feature on

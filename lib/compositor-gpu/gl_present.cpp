@@ -7,6 +7,7 @@
 
 #include "gl_present.h"
 
+#include "present_constants.h"
 #include "sokol_config.h"
 #include "sokol_log.h"
 #include "ui_trace.h"
@@ -54,15 +55,6 @@ namespace hermes {
 namespace node_compat {
 
 namespace {
-
-/// What the window shows while nothing has ever been published.
-///
-/// Deliberately a colour nothing else in this system draws: the reference
-/// addon clears its surface to blue and draws yellow, so a captured frame
-/// that comes back this shade means the blit did not happen -- which is
-/// exactly the mutation test/ui-present.js makes. A black or grey that
-/// some other stage might also produce would make that failure ambiguous.
-constexpr float kClearLevel = 32.0f / 255.0f;
 
 /// Sokol's logger for the PRESENTING instance.
 ///
@@ -383,8 +375,8 @@ void GlPresenter::clear() {
   sg_pass pass = {};
   pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
   pass.action.colors[0].store_action = SG_STOREACTION_STORE;
-  pass.action.colors[0].clear_value =
-      sg_color{kClearLevel, kClearLevel, kClearLevel, 1.0f};
+  pass.action.colors[0].clear_value = sg_color{
+      kPresenterClearLevel, kPresenterClearLevel, kPresenterClearLevel, 1.0f};
   pass.swapchain = state_->swapchain;
   sg_begin_pass(&pass);
   sg_end_pass();
@@ -408,8 +400,8 @@ void *GlPresenter::blitAndFence(SurfaceRef ref) {
   // differently on every driver.
   pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
   pass.action.colors[0].store_action = SG_STOREACTION_STORE;
-  pass.action.colors[0].clear_value =
-      sg_color{kClearLevel, kClearLevel, kClearLevel, 1.0f};
+  pass.action.colors[0].clear_value = sg_color{
+      kPresenterClearLevel, kPresenterClearLevel, kPresenterClearLevel, 1.0f};
   pass.swapchain = state_->swapchain;
   sg_begin_pass(&pass);
   sg_apply_pipeline(state_->pipeline);

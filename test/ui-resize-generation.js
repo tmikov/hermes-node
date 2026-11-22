@@ -73,7 +73,7 @@
 // completion is forced so that producer
 // fences are completed on the platform thread, the path a real run takes.
 //
-// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI HERMES_NODE_UI_GL_COMPLETION=poll %hermes-node-ui %s %hnui_demo_addon %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %gl-completion-poll %hermes-node-ui %s %hnui_demo_addon %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
 // RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=INFLIGHT %s < %t.err
 // RUN: %FileCheck --check-prefix=LIFETIME %s < %t.err

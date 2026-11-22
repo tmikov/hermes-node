@@ -1227,7 +1227,15 @@ Metal backend, and Task 17, the full gated suite, are not.
   `sokol_gfx` was compiled with its validation layer (a Debug build), which
   the one test that provokes a real validation failure needs. A sixth, `ci`,
   is not about the UI: it only narrows the canaries below to machines that
-  promised to have what they check.
+  promised to have what they check. Since Task 16a there are more:
+  `ui-backend-gl` / `ui-backend-metal` and the `%ui-backend` substitution
+  (`gl`, `metal` or `none`) are read from the third `--version` line,
+  `gpu backend: <name>`; `display-expected` (Linux CI, or
+  `HERMES_NODE_UI_EXPECT_DISPLAY=1` in the environment) is what narrows the
+  `display` canary. A test whose trace differs per backend checks
+  `--check-prefixes=X,X-%ui-backend`, with GL facts under `X-gl`. On macOS
+  `display` is decided in two stages: the console session from `ioreg`
+  (`utils/macos_console_session.py`), then a real window probe.
 - **Every one of those features is decided by running something**, never by
   trusting a CMake param. A param lit believes rather than verifies can be
   deleted and leave the tests it gates reporting UNSUPPORTED forever, in the
@@ -1237,9 +1245,10 @@ Metal backend, and Task 17, the full gated suite, are not.
   matched by the shorter `%hermes-node` and silently rewritten into something
   that accidentally works). **A feature that can only ever turn a test
   UNSUPPORTED also needs a forcing function**, or it can be lost with nothing
-  going red: `test/ui-display-feature.js` is `display`'s, and
+  going red: `test/ui-display-feature.js` is `display`'s,
   `test/ui-sokol-validation-feature.js` plus `-ci.js` are
-  `sokol-validation`'s. Add one with any new feature.
+  `sokol-validation`'s, and `test/ui-backend-feature.js` is the backend
+  features'. Add one with any new feature.
 - **Environment variables**: `HERMES_NODE_UI_TEST_HOOKS` enables the test
   hooks (frame capture, synthetic event injection, controllable completion,
   and two platform-thread barriers: `ui.__waitPlatformFrames(n)` blocks the
@@ -1267,16 +1276,21 @@ Metal backend, and Task 17, the full gated suite, are not.
   applies to the whole input -- and prove it by a mutation that leaves every
   positive line matching. Several closing checks were blind to their own
   mutations until written that way.
-- **Window tests run under `utils/with-xvfb.py` (`%with-xvfb`), not
-  `xvfb-run -a`.** `xvfb-run -a` picks a display number and then starts the
-  server, which is not atomic: under 16-way load two runs were handed the
-  same display about 1-4% of the time, failing before any of our code ran —
-  or, worse, sharing one server, which corrupts a clipboard test because a
-  selection belongs to the server. The wrapper has Xvfb claim its own display
-  (`-displayfd`) and tears it down, `timeout` included. RUN lines keep their
-  redirections inside `sh -c '...'`.
+- **Window tests run under `%with-display <seconds>` (`utils/with-display.py`),
+  not `xvfb-run -a`.** On Linux it execs `timeout <seconds>` over
+  `utils/with-xvfb.py`. `xvfb-run -a` picks a display number and then starts
+  the server, which is not atomic: under 16-way load two runs were handed
+  the same display about 1-4% of the time, failing before any of our code
+  ran — or, worse, sharing one server, which corrupts a clipboard test
+  because a selection belongs to the server. with-xvfb.py has Xvfb claim its
+  own display (`-displayfd`) and tears it down, `timeout` included. On macOS
+  with-display.py serialises window tests on a lock instead. RUN lines keep
+  their redirections inside `sh -c '...'`. Every other UI RUN line bounds
+  itself with `%timeout` (GNU `timeout` on Linux, `utils/timeout.py` on
+  macOS). `utils/lit-run.sh <build dir> [lit options] <tests>` runs lit
+  with exactly the params CMake passes.
 - **A window test ends through `process.exit()`, `win.close()` or a real
-  close request, and every RUN line keeps `timeout <n>`**: lit has no
+  close request, and every RUN line keeps its time limit**: lit has no
   per-test timeout, and a regression in closing shows up as a hang. Most
   window tests end through `process.exit()` because their subject is not
   closing; `test/ui-close.js` is the closing test, and
@@ -1412,9 +1426,10 @@ Metal backend, and Task 17, the full gated suite, are not.
   `test/test-dns-timeout.js`). That is a weaker bound than `timeout`: it
   ends a run that a handle is holding open, and cannot fire while the JS
   thread is blocked or after the script has finished. Tests gated on
-  `ui-gpu` or `display` run only on Linux today and keep `timeout <n>` on
-  their RUN lines; that changes when a Metal backend makes `ui-gpu` true on
-  macOS.
+  `ui-gpu` or `display` run only on Linux today and bound their RUN lines
+  with `%timeout` or `%with-display <n>`, which on macOS are our own Python
+  (`utils/timeout.py`, `utils/with-display.py`) rather than whatever
+  `/usr/bin/timeout` the release ships.
 - Known defects and limitations live in `dz/`, not here — `dz list`.
 
 ## Test Infrastructure
@@ -1425,11 +1440,18 @@ JS tests use LLVM Lit (`test/lit.cfg`), run in parallel via `check-hermes-node-j
 - **Node-ported tests** (`test/node-tests/parallel/*.js`): `// RUN: TEST_THREAD_ID=$$ %hermes-node %s`
 - **Primordials test**: `// RUN: cat %source_dir/libjs/primordials.js %s > %t.js && %hermes -Xasync-generators %t.js`
 - **Expected-failure tests**: `%not` runs a command that must exit non-zero, e.g. `// RUN: %not %hermes-node %s 2>&1 | %FileCheck %s`
-- Run single test (paths must be absolute): `python3 cmake-build-asan/bin/hermes-lit $(pwd)/test/test-foo.js --param hermes_node=$(pwd)/cmake-build-asan/bin/hermes-node --param hermes=$(pwd)/cmake-build-asan/bin/hermes --param FileCheck=$(pwd)/cmake-build-asan/bin/FileCheck --param not=$(pwd)/cmake-build-asan/bin/not --param source_dir=$(pwd) --param test_exec_root=$(pwd)/cmake-build-asan/test`
-  Run it through `python3` rather than directly: the generated script's
-  shebang is `#!/usr/bin/env python`, which fails on a machine that has
-  `python3` and no `python`. `-v` shows the output of failing tests only; `-a` shows
-  every test's RUN lines and output, passing ones included.
+- Run single tests (paths must be absolute):
+  `utils/lit-run.sh <build dir> [lit options] <absolute test path>...`, e.g.
+  `utils/lit-run.sh cmake-build-asan -v $(pwd)/test/test-foo.js`. It takes
+  every `--param` from the build directory's own `check-hermes-node-js`
+  command in `build.ninja`, so it cannot drift from what CMake passes (a
+  hand-written param list did: it lacked `python`, and every `%python` test
+  failed with `/nonexistent/python-was-not-configured`), and it runs
+  `hermes-lit` through `python3`, whose generated shebang names a `python`
+  some machines lack. `-v` shows the output of failing tests only; `-a`
+  shows every test's RUN lines and output, passing ones included. **Never
+  run two lit invocations over one build directory at once**: they share
+  `test_exec_root`, so each overwrites the other's `%t` files.
 
 Unit tests (GTest) are discovered and run by Lit too (`unittests/lit.cfg`), via
 the `check-hermes-node-unit` target. `check-hermes-node` runs both suites, so a

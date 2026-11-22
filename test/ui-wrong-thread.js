@@ -19,7 +19,7 @@
 // REQUIRES: ui, ui-gpu
 // REQUIRES: display
 //
-// RUN: %not timeout 120 %with-xvfb sh -c '%hermes-node-ui %s %hnui_demo_addon > %t.out 2> %t.err'
+// RUN: %not %with-display 120 sh -c '%hermes-node-ui %s %hnui_demo_addon > %t.out 2> %t.err'
 // RUN: %FileCheck --check-prefix=OUT %s < %t.out
 // RUN: %FileCheck --check-prefix=ERR --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' %s < %t.err
 

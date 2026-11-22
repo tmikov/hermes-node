@@ -8,12 +8,9 @@
 #include "ui_module.h"
 
 #include "event_injector.h"
+#include "platform_services.h"
 #include "sapp_event_convert.h"
 #include "ui_internal.h"
-#ifdef HERMES_NODE_UI_HAVE_X11
-#include "x11_clipboard.h"
-#include "x11_readback.h"
-#endif
 
 #include <backend.h>
 #include <sokol_log.h>
@@ -295,24 +292,11 @@ const char *clipboardStatusName(ClipboardStatus status) {
 /// Read the clipboard now, waiting at most \p timeoutMs for another
 /// client's reply. Platform thread only.
 ///
-/// On X11 this is our own read (Ruling 55, `x11_clipboard.h`), never
-/// `sapp_get_clipboard_string()` alone, whose failures return its previous
-/// buffer. Elsewhere -- macOS, with Task 16 -- Sokol's getter reads the
-/// pasteboard directly and has no stale-buffer path.
+/// Through the platform's own read (`platform_services.h`), never
+/// `sapp_get_clipboard_string()`, whose failures return its previous
+/// buffer. One byte under the ABI's limit, which counts the terminator.
 ClipboardResult readClipboardNow(int timeoutMs) {
-#ifdef HERMES_NODE_UI_HAVE_X11
-  return x11ReadClipboard(
-      const_cast<void *>(sapp_x11_get_display()),
-      reinterpret_cast<unsigned long>(sapp_x11_get_window()),
-      timeoutMs,
-      HNUI_CLIPBOARD_MAX_BYTES - 1);
-#else
-  (void)timeoutMs;
-  const char *text = sapp_get_clipboard_string();
-  if (text == nullptr)
-    return ClipboardResult{ClipboardStatus::kError, std::string()};
-  return ClipboardResult{ClipboardStatus::kOk, text};
-#endif
+  return uiPlatformReadClipboard(timeoutMs, HNUI_CLIPBOARD_MAX_BYTES - 1);
 }
 
 /// A PlatformSource over the real platform, as of now.
@@ -495,21 +479,14 @@ void applyCommand(const Command &command) {
     case Command::Kind::kSetTitle: {
       sapp_set_window_title(command.title().c_str());
       // The read-backs below exist for the trace and run only when it is on:
-      // each is a synchronous X round trip.
+      // each is a synchronous round trip to the window system.
       if (!uiTracingEnabled())
         break;
-#ifdef HERMES_NODE_UI_HAVE_X11
       std::string name;
-      if (uiX11FetchWindowName(name))
+      if (uiPlatformWindowTitle(name))
         uiTrace("command title: readback='%s'", name.c_str());
       else
         uiTrace("command title: no readback available");
-#else
-      uiTrace(
-          "command title: applied '%s' (unverified: no read-back on this "
-          "platform)",
-          command.title().c_str());
-#endif
       break;
     }
     case Command::Kind::kSetFullscreen:
@@ -527,18 +504,7 @@ void applyCommand(const Command &command) {
       sapp_set_icon(&icon);
       if (!uiTracingEnabled())
         break;
-#ifdef HERMES_NODE_UI_HAVE_X11
-      int w = 0, h = 0;
-      uint32_t first = 0;
-      if (uiX11FetchIconHead(w, h, first))
-        uiTrace(
-            "command icon: _NET_WM_ICON %dx%d first_pixel=0x%08x", w, h, first);
-      else
-        uiTrace("command icon: no _NET_WM_ICON readback");
-#else
-      uiTrace(
-          "command icon: applied (unverified: no read-back on this platform)");
-#endif
+      uiTrace("command icon: %s", uiPlatformDescribeIcon().c_str());
       break;
     }
     case Command::Kind::kSetCursor: {
@@ -580,23 +546,12 @@ void applyCommand(const Command &command) {
       applyReadClipboard(command);
       break;
     case Command::Kind::kWriteClipboard: {
-      sapp_set_clipboard_string(command.text().c_str());
+      uiPlatformWriteClipboard(command.text());
       if (!uiTracingEnabled())
         break;
-#ifdef HERMES_NODE_UI_HAVE_X11
-      // Ownership, asked of the server. sapp_get_clipboard_string() is not
-      // used: when we are not the owner it runs a selection conversion that
-      // stalls this thread and overwrites Sokol's buffer.
       uiTrace(
-          "command clipboard: owns_selection=%d bytes=%zu",
-          uiX11OwnsClipboard() ? 1 : 0,
-          command.text().size());
-#else
-      uiTrace(
-          "command clipboard: written %zu bytes (unverified: no read-back on "
-          "this platform)",
-          command.text().size());
-#endif
+          "command clipboard: %s",
+          uiPlatformDescribeClipboardWrite(command.text().size()).c_str());
       break;
     }
   }
@@ -622,6 +577,11 @@ void onInit() {
       uiTrace("init_cb: post refused (dispatcher closed)");
     return;
   }
+
+  // The window exists and the backend is set up: whatever the platform
+  // still owes the window (macOS: putting it on screen without activating
+  // the application, under the test hooks) happens now.
+  uiPlatformAfterInit();
 
   refreshTrackedState();
   gMetrics = gTracked;
@@ -821,7 +781,7 @@ void uiHandlePlatformEvent(
 }
 
 int uiRunPlatformLoop() {
-  gBackend = createGlBackend();
+  gBackend = createCompositorBackend();
   if (gBackend == nullptr) {
     std::fprintf(
         stderr,
@@ -847,6 +807,12 @@ int uiRunPlatformLoop() {
       uiTrace("startup failure: post refused (dispatcher closed)");
     return 1;
   }
+
+  // The route is settled and nothing has been created yet: the one point
+  // at which the platform can install what Sokol's own setup will then use
+  // (macOS: the NSApplication subclass, before Sokol's
+  // [NSApplication sharedApplication]).
+  uiPlatformBeforeRun();
 
   WindowRequest request;
   {

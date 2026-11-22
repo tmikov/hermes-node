@@ -44,6 +44,16 @@
 //            'exit' listener's own line follows CB1 directly (FRAME-NEXT),
 //            and process.exit() never returns into the batch, so no
 //            mutation of the closing code could make it run.
+//            process.exit() also reaches flushPendingWrites, whose nested
+//            uv_run runs the check phase with this frame callback still on
+//            the stack -- so the worker's per-turn check must skip the
+//            backend, and traces that it did (`worker loop: turn skipped
+//            (closing)`). On GL the guard protects nothing yet, since GL's
+//            workerLoopTurn() is empty; its Metal half -- an autorelease
+//            pool that must not be popped, and a maintenance commit that
+//            must not be issued, under an open pass -- is Task 16c's.
+//            (Mutation: delete the two guards in the check callback, and
+//            the line is missing.)
 //  FATAL     an uncaught throw in a timer. `process._fatalException`
 //            enters CLOSING through `process._preExit()` before it emits
 //            'exit'. (Mutation: delete that call, and rafRefused=false.)
@@ -178,24 +188,24 @@
 // Redirections inside `sh -c` and a `timeout` on every run, as in every
 // window test (ui-present.js gives the reasons).
 //
-// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s listener %hnui_demo_addon > %t.listener.out 2> %t.listener.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=LISTENER-CODE %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s listener %hnui_demo_addon > %t.listener.out 2> %t.listener.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=LISTENER-CODE %s
 // RUN: %FileCheck --check-prefix=LISTENER %s < %t.listener.out
 // RUN: %FileCheck --check-prefix=LISTENER-TRACE --implicit-check-not=AddressSanitizer %s < %t.listener.err
 // RUN: %FileCheck --check-prefix=LISTENER-TICKS --implicit-check-not='callback(s) ran' %s < %t.listener.err
 //
-// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s frame %hnui_demo_addon > %t.frame.out 2> %t.frame.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=FRAME-CODE %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s frame %hnui_demo_addon > %t.frame.out 2> %t.frame.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=FRAME-CODE %s
 // RUN: %FileCheck --check-prefix=FRAME %s < %t.frame.out
 // RUN: %FileCheck --check-prefix=FRAME-TRACE --implicit-check-not=AddressSanitizer %s < %t.frame.err
 //
-// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s fatal %hnui_demo_addon > %t.fatal.out 2> %t.fatal.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=FATAL-CODE %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s fatal %hnui_demo_addon > %t.fatal.out 2> %t.fatal.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=FATAL-CODE %s
 // RUN: %FileCheck --check-prefix=FATAL %s < %t.fatal.out
 // RUN: %FileCheck --check-prefix=FATAL-TRACE --implicit-check-not=AddressSanitizer %s < %t.fatal.err
 //
-// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s reads %hnui_demo_addon > %t.reads.out 2> %t.reads.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=READS-CODE %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s reads %hnui_demo_addon > %t.reads.out 2> %t.reads.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=READS-CODE %s
 // RUN: %FileCheck --check-prefix=READS %s < %t.reads.out
 // RUN: %FileCheck --check-prefix=READS-TRACE --implicit-check-not=AddressSanitizer %s < %t.reads.err
 //
-// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s commands %hnui_demo_addon > %t.commands.out 2> %t.commands.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=COMMANDS-CODE %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s commands %hnui_demo_addon > %t.commands.out 2> %t.commands.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=COMMANDS-CODE %s
 // RUN: %FileCheck --check-prefix=COMMANDS %s < %t.commands.out
 // RUN: %FileCheck --check-prefix=COMMANDS-TRACE --implicit-check-not=AddressSanitizer --implicit-check-not='late title' %s < %t.commands.err
 //
@@ -203,7 +213,7 @@
 // claim: a pipe is a libuv stream whose writes are queued, so an _exit()
 // that ran before step 15's flush would lose the listener's lines.
 //
-// RUN: timeout 120 %with-xvfb sh -c '{ HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s throw %hnui_demo_addon 2> %t.throw.err; echo "EXITCODE $?" > %t.throw.code; } | cat > %t.throw.out'
+// RUN: %with-display 120 sh -c '{ HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s throw %hnui_demo_addon 2> %t.throw.err; echo "EXITCODE $?" > %t.throw.code; } | cat > %t.throw.out'
 // RUN: %FileCheck --check-prefix=THROW-CODE %s < %t.throw.code
 // RUN: %FileCheck --check-prefix=THROW %s < %t.throw.out
 // RUN: %FileCheck --check-prefix=THROW-TRACE --implicit-check-not='window ready' --implicit-check-not=AddressSanitizer %s < %t.throw.err
@@ -380,6 +390,7 @@ main().catch((e) => {
 // FRAME-CODE: EXITCODE 4
 // FRAME-TRACE: lifecycle: CLOSING (reason=exit)
 // FRAME-TRACE: lifecycle: frame callbacks released=2
+// FRAME-TRACE: worker loop: turn skipped (closing)
 
 // FATAL: EXIT code=1 rafRefused=true
 // FATAL-CODE: EXITCODE 1

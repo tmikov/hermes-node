@@ -45,16 +45,10 @@
 //           test races that report against the frame: the mutant prints
 //           CLOSE WRONG and exits 1 promptly.)
 //
-// The DEMO run is the reference demo's close button (F8 of the Slice C
-// fix wave): a real close request ends test/fixtures/hnui-demo/demo.js
-// with status 0, by the default action of a `close` nobody listens to --
-// the demo has no `close` listener at all. The driver's `--close` waits
-// for the demo's window to be mapped (no sleeping) and may therefore send
-// the request before the demo's script has run past its `await`; that it
-// still arrives is the early-delivery guarantee (spec: JS API -- no event
-// is delivered before the window's Promise continuation has run).
-// (Mutation: delete the uiCloseWindow call in deliver; the demo stays up
-// and the run ends at its `timeout` with 124.)
+// The driver is test/fixtures/hnui-demo/window_driver.js: the X11 client
+// on Linux, `ui.__driveWindow` on macOS, one interface. The reference
+// demo's close-button run, which needs a driver OUTSIDE the program, is
+// test/ui-real-events-demo.js.
 //
 // REQUIRES: ui, ui-gpu
 // REQUIRES: display
@@ -64,12 +58,9 @@
 // and `timeout` because lit has no per-test timeout (dz 01a0d797-e326).
 // Ends through process.exit(): its subject is not closing.
 //
-// RUN: timeout 120 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon %x11_window_driver %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon %x11_window_driver %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
 // RUN: %FileCheck --check-prefix=TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' %s < %t.err
-//
-// RUN: timeout 120 %with-xvfb sh -c '%hermes-node-ui %source_dir/test/fixtures/hnui-demo/demo.js %hnui_demo_addon js > %t.demo.out 2> %t.demo.err & %x11_window_driver --close "hermes-node-ui demo"; wait $!'; echo "DEMOEXIT $?" | %FileCheck --check-prefix=DEMO %s
-// RUN: %FileCheck --check-prefix=DEMOOUT %s < %t.demo.out
 
 // CODE: EXITCODE 0
 
@@ -84,13 +75,10 @@
 // TRACE: quit requested: cancelled, forwarded as close
 // TRACE-NOT: sapp_run returned
 
-// DEMO: DEMOEXIT 0
-// DEMOOUT: MODE js
-
 'use strict';
 
 const ui = require('hermes-node:ui');
-const {spawn} = require('child_process');
+const {startDriver} = require('./fixtures/hnui-demo/window_driver.js');
 const addonPath = process.argv[2];
 const driverPath = process.argv[3];
 
@@ -104,68 +92,10 @@ function report(name, ok, detail) {
   console.log(name + ' ' + (ok ? 'ok' : 'WRONG ' + detail));
 }
 
-/**
- * Start the driver and wait for READY. The handle's send() writes one
- * command and resolves with its answer line; onLost() registers a callback
- * for the driver's asynchronous `LOST` report.
- */
-function startDriver() {
-  return new Promise((resolve, reject) => {
-    const child = spawn(driverPath, [TITLE], {
-      env: process.env,
-      stdio: ['pipe', 'pipe', 'inherit'],
-    });
-    const waiting = [];
-    const lostCallbacks = [];
-    let lost = null;
-    let ready = false;
-    let buffered = '';
-    child.stdout.on('data', (chunk) => {
-      buffered += chunk;
-      let nl;
-      while ((nl = buffered.indexOf('\n')) !== -1) {
-        const line = buffered.slice(0, nl);
-        buffered = buffered.slice(nl + 1);
-        if (!ready && line.startsWith('READY')) {
-          ready = true;
-          resolve({
-            send(command) {
-              return new Promise((res) => {
-                waiting.push(res);
-                child.stdin.write(command + '\n');
-              });
-            },
-            onLost(callback) {
-              if (lost !== null)
-                callback(lost);
-              else
-                lostCallbacks.push(callback);
-            },
-            stop() {
-              child.stdin.end();
-            },
-          });
-        } else if (line.startsWith('LOST')) {
-          lost = line;
-          for (const callback of lostCallbacks.splice(0))
-            callback(line);
-        } else if (waiting.length > 0) {
-          waiting.shift()(line);
-        }
-      }
-    });
-    child.on('error', reject);
-    child.on('exit', (code) => {
-      if (!ready)
-        reject(new Error('driver exited with ' + code + ' before READY'));
-    });
-  });
-}
-
 async function main() {
   const win = await ui.createWindow({width: 320, height: 240, title: TITLE});
   const addon = require(addonPath);
-  const driver = await startDriver();
+  const driver = await startDriver({ui, driverPath, title: TITLE});
 
   // --- KEY ------------------------------------------------------------
   const keyed = new Promise((resolve) => win.once('keydown', resolve));

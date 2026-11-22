@@ -83,9 +83,10 @@
 // the stdout file and left the stderr file empty. Written the obvious way,
 // with `> %t.out 2> %t.err` outside, the trace assertions below would have
 // run against an EMPTY file and passed without reading anything, which is
-// the silent-green failure this suite keeps being bitten by. `%with-xvfb`
-// (utils/with-xvfb.py), which replaced xvfb-run because its choice of
-// display is not atomic, does not merge -- but the shape is kept: with the
+// the silent-green failure this suite keeps being bitten by. `%with-display`
+// (utils/with-display.py, over utils/with-xvfb.py on Linux, which replaced
+// xvfb-run because its choice of display is not atomic) does not merge --
+// but the shape is kept: with the
 // files attached to the binary's own fds by the inner shell, no wrapper
 // sitting between lit and the binary can empty them.
 //
@@ -96,13 +97,13 @@
 // so without the bound such a mutation would stall a worker slot instead
 // of failing. With it, a hang exits 124 and the EXITCODE check goes red.
 //
-// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI HERMES_NODE_UI_GL_COMPLETION=poll %hermes-node-ui %s %hnui_demo_addon js %t.poll.ppm > %t.poll.out 2> %t.poll.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=POLLCODE %s
+// RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %gl-completion-poll %hermes-node-ui %s %hnui_demo_addon js %t.poll.ppm > %t.poll.out 2> %t.poll.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=POLLCODE %s
 // RUN: %FileCheck --check-prefix=POLL %s < %t.poll.out
-// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=POLLERR %s < %t.poll.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefixes=POLLERR,POLLERR-%ui-backend %s < %t.poll.err
 
-// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI HERMES_NODE_UI_GL_COMPLETION=block %hermes-node-ui %s %hnui_demo_addon native %t.block.ppm > %t.block.out 2> %t.block.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=BLOCKCODE %s
+// RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %gl-completion-block %hermes-node-ui %s %hnui_demo_addon native %t.block.ppm > %t.block.out 2> %t.block.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=BLOCKCODE %s
 // RUN: %FileCheck --check-prefix=BLOCK %s < %t.block.out
-// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=BLOCKERR %s < %t.block.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefixes=BLOCKERR,BLOCKERR-%ui-backend %s < %t.block.err
 
 // --- A third run with NO override, so the stage-2 PROBE runs. --------
 //
@@ -113,9 +114,9 @@
 // while being exactly what a real user's run performs. This run leaves
 // the variable unset and lets the probe decide.
 //
-// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon js %t.probe.ppm > %t.probe.out 2> %t.probe.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=PROBECODE %s
+// RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon js %t.probe.ppm > %t.probe.out 2> %t.probe.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=PROBECODE %s
 // RUN: %FileCheck --check-prefix=PROBE %s < %t.probe.out
-// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=PROBEERR %s < %t.probe.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefixes=PROBEERR,PROBEERR-%ui-backend %s < %t.probe.err
 
 'use strict';
 
@@ -382,8 +383,8 @@ main().catch((e) => {
 // polling arm specifically, that a frame in that mode can only be completed
 // by the platform thread, so the capture line beneath cannot appear unless
 // the hand-off was picked up there.
-// POLLERR: [ui] completion mode: polling
-// POLLERR: [ui] completion: polling submission handed the fence to the platform thread
+// POLLERR-gl: [ui] completion mode: polling
+// POLLERR-gl: [ui] completion: polling submission handed the fence to the platform thread
 // POLLERR: [ui] capture: written generation 1 publication 1
 // POLLERR: [ui] capture: no match after 240 presented frame(s)
 
@@ -405,8 +406,8 @@ main().catch((e) => {
 // BLOCK-NEXT: DONE
 // BLOCKCODE: EXITCODE 0
 //
-// BLOCKERR: [ui] completion mode: blocking
-// BLOCKERR: [ui] completion: blocking submission waited on the producer thread
+// BLOCKERR-gl: [ui] completion mode: blocking
+// BLOCKERR-gl: [ui] completion: blocking submission waited on the producer thread
 // BLOCKERR: [ui] capture: written generation 1 publication 1
 
 // --- The probe run. -------------------------------------------------
@@ -433,10 +434,10 @@ main().catch((e) => {
 // "blocking (probe: the producer's fence signalled", which matches
 // neither alternative and fails here -- whereas a check for "(probe:"
 // alone would have accepted it.
-// PROBEERR: [ui] completion mode: {{(polling \(probe: the producer's fence signalled|blocking \(probe: (GL_WAIT_FAILED|the producer's fence did not signal))}}
+// PROBEERR-gl: [ui] completion mode: {{(polling \(probe: the producer's fence signalled|blocking \(probe: (GL_WAIT_FAILED|the producer's fence did not signal))}}
 //
 // And that the probe run really took one of the two submission paths. The
 // alternation is required here for the same reason the line above needs one:
 // which arm a given driver selects is not this test's business, and pinning
 // either would make this a statement about the machine.
-// PROBEERR: [ui] completion: {{(polling submission handed the fence|blocking submission waited)}}
+// PROBEERR-gl: [ui] completion: {{(polling submission handed the fence|blocking submission waited)}}

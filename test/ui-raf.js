@@ -55,11 +55,11 @@
 // for a tick that never comes. The main run ends through process.exit():
 // its subject is not closing.
 //
-// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon main %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon main %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
 // RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=TRACE %s < %t.err
 //
-// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon fatal > %t.fatal.out 2> %t.fatal.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=FATALCODE %s
+// RUN: %with-display 300 sh -c 'HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon fatal > %t.fatal.out 2> %t.fatal.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=FATALCODE %s
 // RUN: %FileCheck --check-prefix=FATAL %s < %t.fatal.out
 // RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=FATALERR %s < %t.fatal.err
 
@@ -360,6 +360,11 @@ main().catch((e) => {
 // CHECK-NEXT: HANDLED ok
 // CHECK-NEXT: DONE
 
+// The worker's per-turn check (CompositorBackend::workerLoopTurn) ran: it
+// is started once the worker's context is current, so by the time frame
+// ticks run it has run too. (Mutation: do not start the handle, and the
+// line is missing.)
+// TRACE: worker loop: first turn
 // The empty tick of CANCEL (c), traced where the batch ran.
 // TRACE: frame tick: 0 callback(s) ran, nothing drawn
 

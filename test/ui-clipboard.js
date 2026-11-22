@@ -48,8 +48,9 @@
 // forwarded at all (PASTE-MUTE: a marker key injected after it arrives,
 // and no paste before it).
 //
-// Each lit run starts its own Xvfb (%with-xvfb lets `Xvfb -displayfd`
-// claim a free display atomically, which `xvfb-run -a` did not), and a
+// Each lit run starts its own Xvfb (%with-display runs utils/with-xvfb.py,
+// which lets `Xvfb -displayfd` claim a free display atomically, as
+// `xvfb-run -a` did not), and a
 // selection belongs to one X server, so parallel runs of this test do not
 // share a CLIPBOARD. Were they to, another run's owner
 // would break OWN, FOREIGN or NONE here.
@@ -71,7 +72,10 @@
 // accepts. Both are correct; what ABANDONED pins is that the abandoned
 // request neither hangs the waiter nor disturbs the read after it.
 //
-// REQUIRES: ui, ui-gpu
+// GL-only: what this pins is the X11 selection protocol -- a mute owner, a
+// late reply, INCR -- which the macOS pasteboard does not have
+// (test/ui-clipboard-mac.js covers what it can do, Task 16e).
+// REQUIRES: ui, ui-gpu, ui-backend-gl
 // REQUIRES: display
 //
 // RUN-line shape as in ui-events.js: redirections inside `sh -c`, so the
@@ -79,7 +83,7 @@
 // and `timeout` because lit has no per-test timeout (dz 01a0d797-e326). Ends
 // through process.exit(): its subject is not closing.
 //
-// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon %x11_selection_owner > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon %x11_selection_owner > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
 // RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=TRACE %s < %t.err
 

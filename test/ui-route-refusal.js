@@ -41,9 +41,9 @@
 // configures no per-test timeout (dz 01a0d797-e326). A hang would stall a
 // worker slot instead of failing.
 //
-// RUN: timeout 60 env HERMES_NODE_UI_GL_ROUTE=bogus %hermes-node-ui %s > %t.bogus.out 2> %t.bogus.err; echo "EXITCODE $?" | %FileCheck --check-prefix=BOGUSCODE %s
-// RUN: %FileCheck --check-prefix=BOGUS %s < %t.bogus.out
-// RUN: %FileCheck --check-prefix=BOGUSERR %s < %t.bogus.err
+// RUN: %timeout 60 env HERMES_NODE_UI_GL_ROUTE=bogus %hermes-node-ui %s > %t.bogus.out 2> %t.bogus.err; echo "EXITCODE $?" | %FileCheck --check-prefix=BOGUSCODE %s
+// RUN: %FileCheck --check-prefixes=BOGUS,BOGUS-%ui-backend %s < %t.bogus.out
+// RUN: %FileCheck --check-prefixes=BOGUSERR,BOGUSERR-%ui-backend %s < %t.bogus.err
 
 // --- A route that is real but not built in v1. ------------------------
 //
@@ -52,9 +52,9 @@
 // surfaceless and appear to work -- on the driver that needed it, the
 // fallback is precisely what would fail later and somewhere else.
 //
-// RUN: timeout 60 env HERMES_NODE_UI_GL_ROUTE=pbuffer %hermes-node-ui %s > %t.pb.out 2> %t.pb.err; echo "EXITCODE $?" | %FileCheck --check-prefix=PBCODE %s
-// RUN: %FileCheck --check-prefix=PB %s < %t.pb.out
-// RUN: %FileCheck --check-prefix=PBERR %s < %t.pb.err
+// RUN: %timeout 60 env HERMES_NODE_UI_GL_ROUTE=pbuffer %hermes-node-ui %s > %t.pb.out 2> %t.pb.err; echo "EXITCODE $?" | %FileCheck --check-prefix=PBCODE %s
+// RUN: %FileCheck --check-prefixes=PB,PB-%ui-backend %s < %t.pb.out
+// RUN: %FileCheck --check-prefixes=PBERR,PBERR-%ui-backend %s < %t.pb.err
 
 // --- A handled rejection, and then the script simply returns. ----------
 //
@@ -69,9 +69,9 @@
 // runHermesNode's kRuntimeReturn hook call below the 'exit' emit, and the
 // listener prints `RAF threw: ... no window exists yet ...`.)
 //
-// RUN: timeout 60 env HERMES_NODE_UI_GL_ROUTE=bogus HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s return > %t.ret.out 2> %t.ret.err; echo "EXITCODE $?" | %FileCheck --check-prefix=RETCODE %s
-// RUN: %FileCheck --check-prefix=RET %s < %t.ret.out
-// RUN: %FileCheck --check-prefix=RETERR %s < %t.ret.err
+// RUN: %timeout 60 env HERMES_NODE_UI_GL_ROUTE=bogus HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s return > %t.ret.out 2> %t.ret.err; echo "EXITCODE $?" | %FileCheck --check-prefix=RETCODE %s
+// RUN: %FileCheck --check-prefixes=RET,RET-%ui-backend %s < %t.ret.out
+// RUN: %FileCheck --check-prefixes=RETERR,RETERR-%ui-backend %s < %t.ret.err
 
 const ui = require('hermes-node:ui');
 
@@ -107,7 +107,14 @@ ui.createWindow({width: 320, height: 240, title: 'route refusal'}).then(
       process.exit(3);
     });
 
-// RET: REJECTED {{.*}}unknown value for HERMES_NODE_UI_GL_ROUTE: 'bogus'
+// Every line that names a GL fact -- the variable's GL meaning, the two
+// GL routes -- is under a `-gl` prefix, selected by `%ui-backend`. The
+// Metal backend refuses the same variable by name before sapp_run(), with
+// its own words, which its `-metal` lines will check; what every backend
+// must do (reject, print on stderr, return with the program's status)
+// stays under the plain prefix.
+// RET: REJECTED
+// RET-gl-SAME: unknown value for HERMES_NODE_UI_GL_ROUTE: 'bogus'
 // RET-NEXT: RAF 0
 // RETCODE: EXITCODE 5
 // RETERR: lifecycle: FAILED
@@ -117,16 +124,19 @@ ui.createWindow({width: 320, height: 240, title: 'route refusal'}).then(
 // The message names the variable, the bad value, and both routes with
 // their status, because "unknown route" alone leaves the reader to guess
 // what the alternatives were.
-// BOGUS: REJECTED {{.*}}unknown value for HERMES_NODE_UI_GL_ROUTE: 'bogus'
-// BOGUS-SAME: surfaceless (built)
-// BOGUS-SAME: pbuffer (not built in v1)
+// BOGUS: REJECTED
+// BOGUS-gl-SAME: unknown value for HERMES_NODE_UI_GL_ROUTE: 'bogus'
+// BOGUS-gl-SAME: surfaceless (built)
+// BOGUS-gl-SAME: pbuffer (not built in v1)
 // BOGUSCODE: EXITCODE 3
 
 // Also on stderr, before any of the JS ran: a route refusal must be
 // legible even to someone whose script swallows the rejection.
-// BOGUSERR: hermes-node-ui: unknown value for HERMES_NODE_UI_GL_ROUTE
+// BOGUSERR: hermes-node-ui:
+// BOGUSERR-gl-SAME: unknown value for HERMES_NODE_UI_GL_ROUTE
 
-// PB: REJECTED {{.*}}pbuffer GL context route is not built in v1
+// PB: REJECTED
+// PB-gl-SAME: pbuffer GL context route is not built in v1
 // PBCODE: EXITCODE 3
 //
 // The native half of the refusal, checked for the same reason BOGUSERR is:
@@ -135,4 +145,5 @@ ui.createWindow({width: 320, height: 240, title: 'route refusal'}).then(
 // decision. Without it this arm captured %t.pb.err and never looked at it,
 // so the pbuffer branch could have stopped saying anything on stderr and
 // nothing would have noticed.
-// PBERR: hermes-node-ui: the pbuffer GL context route is not built in v1
+// PBERR: hermes-node-ui:
+// PBERR-gl-SAME: the pbuffer GL context route is not built in v1

@@ -22,15 +22,18 @@
 
 // --- Why the RUN line looks like this. --------------------------------
 //
-// `%with-xvfb` rather than a bare invocation: RULING 34 requires the RUN
-// line to actually START a display, not merely to have detected that Xvfb
-// is installed. The wrapper (utils/with-xvfb.py) has the server claim a
-// free display itself through `-displayfd`, which is what makes this safe
-// under the suite's 16-way parallelism -- several of these can be in
-// flight at once. (`xvfb-run -a`, which this replaced, chose the number
-// before starting the server, and two runs could be handed the same one.)
+// `%with-display <seconds>` rather than a bare invocation: RULING 34
+// requires the RUN line to actually START a display, not merely to have
+// detected that Xvfb is installed. On Linux the wrapper
+// (utils/with-display.py) runs utils/with-xvfb.py under `timeout`, and
+// that has the server claim a free display itself through `-displayfd`,
+// which is what makes this safe under the suite's 16-way parallelism --
+// several of these can be in flight at once. (`xvfb-run -a`, which this
+// replaced, chose the number before starting the server, and two runs
+// could be handed the same one.) On macOS it serialises window tests on
+// the one real display instead.
 //
-// `timeout` is the load-bearing part, and it is here because of how the
+// The time limit is the load-bearing part, and it is here because of how the
 // interesting mutations fail. Break the init_cb -> JS handshake and this
 // script does not print something wrong; it prints nothing and waits
 // forever on a Promise nobody will settle. lit configures no per-test
@@ -43,7 +46,7 @@
 // driver chatter land there, and folding them into stdout would make the
 // ordered checks below depend on what Mesa felt like logging.
 //
-// RUN: timeout 120 %with-xvfb %hermes-node-ui %s > %t.out 2> %t.err; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %with-display 120 %hermes-node-ui %s > %t.out 2> %t.err; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck --check-prefix=OUT %s < %t.out
 
 const ui = require('hermes-node:ui');

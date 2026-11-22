@@ -29,9 +29,11 @@
 //            point the visual demo does not, and prints one line per
 //            observation. It needs HERMES_NODE_UI_TEST_HOOKS=1, because it
 //            injects its own events and captures its own frame, and two
-//            more arguments:
+//            more arguments, and the GPU backend:
 //              demo.js <addon> conformance <x11_selection_owner> <out.ppm>
-//            test/ui-conformance.js runs it.
+//                  <gl|metal>
+//            test/ui-conformance.js runs it, passing %ui-backend. On `gl`
+//            nothing is skipped.
 //
 // This file stays free of test scaffolding in the visual modes:
 // test/ui-demo-visual.js starts them through startDemo() below and adds its
@@ -164,11 +166,12 @@ const SAPP_KEYCODE_F5 = 294;
 // timeout reported is the platform thread's.
 const CLIPBOARD_TIMEOUT_MS = 3000;
 
-async function runConformance(addonPath, ownerPath, capturePath) {
-  if (typeof ui.__injectEvent !== 'function' || !ownerPath || !capturePath) {
+async function runConformance(addonPath, ownerPath, capturePath, backend) {
+  if (typeof ui.__injectEvent !== 'function' || !ownerPath || !capturePath ||
+      (backend !== 'gl' && backend !== 'metal')) {
     console.log(
-        'conformance mode needs HERMES_NODE_UI_TEST_HOOKS=1 and two more ' +
-        'arguments: <x11_selection_owner> <capture.ppm>');
+        'conformance mode needs HERMES_NODE_UI_TEST_HOOKS=1 and three more ' +
+        'arguments: <x11_selection_owner> <capture.ppm> <gl|metal>');
     process.exit(2);
   }
   const win = await ui.createWindow(
@@ -254,14 +257,18 @@ async function runConformance(addonPath, ownerPath, capturePath) {
 
   print(addon.conformanceCommands());
 
-  // A normal read, from our own selection; then a timeout, against an
-  // owner that takes the selection and never answers.
+  // A normal read, from our own selection; then a timeout. On X11 the
+  // timeout is reached against an owner that takes the selection and never
+  // answers. The macOS pasteboard has no owner to go mute, so the Metal
+  // backend reaches it by a zero deadline instead (Task 16e).
   print(addon.conformanceWriteClipboard('hnui conformance'));
   print(addon.conformanceReadClipboard(CLIPBOARD_TIMEOUT_MS, ''));
-  const owner = await startOwner(ownerPath, ['mute']);
-  print(addon.conformanceReadClipboard(
-      CLIPBOARD_TIMEOUT_MS, ' (owner never answers)'));
-  await owner.stop();
+  if (backend === 'gl') {
+    const owner = await startOwner(ownerPath, ['mute']);
+    print(addon.conformanceReadClipboard(
+        CLIPBOARD_TIMEOUT_MS, ' (owner never answers)'));
+    await owner.stop();
+  }
 
   print('DONE');
   // Ends the way a program would: closing the window ends the process, with
@@ -282,7 +289,8 @@ if (require.main === module) {
   }
   let started;
   if (mode === 'conformance') {
-    started = runConformance(addonPath, process.argv[4], process.argv[5]);
+    started = runConformance(
+        addonPath, process.argv[4], process.argv[5], process.argv[6]);
   } else if (VISUAL_MODES.includes(mode)) {
     started = startDemo(addonPath, mode);
   } else {

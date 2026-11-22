@@ -33,7 +33,7 @@
 // files are the binary's own streams whatever the display wrapper does, and
 // `timeout` because lit has no per-test timeout (dz 01a0d797-e326).
 //
-// RUN: timeout 120 %with-xvfb sh -c '%hermes-node-ui %s %hnui_demo_addon logger > %t.logger.out 2> %t.logger.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %with-display 120 sh -c '%hermes-node-ui %s %hnui_demo_addon logger > %t.logger.out 2> %t.logger.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck --check-prefix=LOGGER %s < %t.logger.out
 // RUN: %FileCheck --check-prefix=LOGGERERR %s < %t.logger.err
 //

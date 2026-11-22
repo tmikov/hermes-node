@@ -210,7 +210,16 @@ if(HERMES_NODE_ENABLE_UI AND TARGET hermesNodeCompositorGpu)
   # The same backend define the host is built with. Two translation units
   # of the same Sokol configured differently would disagree about struct
   # layouts while linking perfectly -- see lib/compositor-gpu/sokol_config.h.
-  target_compile_definitions(hnui_demo_addon PRIVATE SOKOL_GLCORE)
+  # Taken from the host's own PUBLIC compile definitions rather than
+  # spelled here, so the addon cannot be built for a backend the host was
+  # not (SOKOL_GLCORE on Linux, SOKOL_METAL on macOS). Read through the
+  # property alone, not by linking the target, which would drag the
+  # compositor and its windowing libraries into a module that must resolve
+  # every sg_* symbol against the host at dlopen time.
+  set(HNUI_ADDON_BACKEND_DEFINES
+    $<TARGET_PROPERTY:hermesNodeCompositorGpu,INTERFACE_COMPILE_DEFINITIONS>)
+  target_compile_definitions(hnui_demo_addon PRIVATE
+    ${HNUI_ADDON_BACKEND_DEFINES})
   set_target_properties(hnui_demo_addon PROPERTIES
     PREFIX ""
     SUFFIX ".node"
@@ -229,7 +238,7 @@ if(TARGET hnui_demo_addon)
   target_include_directories(hnui_bad_version_addon PRIVATE ${_demo_includes})
   target_link_libraries(hnui_bad_version_addon PRIVATE sokol Threads::Threads)
   target_compile_definitions(hnui_bad_version_addon PRIVATE
-    SOKOL_GLCORE
+    ${HNUI_ADDON_BACKEND_DEFINES}
     HNUI_SOKOL_COMMIT_OVERRIDE="deadbee")
   set_target_properties(hnui_bad_version_addon PROPERTIES
     PREFIX ""
@@ -368,6 +377,11 @@ endif()
 # on and this target still does not exist.
 if(TARGET hermesNodeCompositorGpu)
   list(APPEND HERMES_NODE_JS_TEST_DEPENDS hermesNodeCompositorGpu)
+  # The backend objects that call each sokol_gfx instance, which
+  # lib/compositor-gpu/CMakeLists.txt names (they differ per backend).
+  list(APPEND HERMES_NODE_LIT_PARAMS
+    sgp_producing_user=${HNUI_SGP_PRODUCING_USER_OBJ}
+    sgp_presenting_user=${HNUI_SGP_PRESENTING_USER_OBJ})
 endif()
 add_lit_testsuite(check-hermes-node-js "Running hermes-node JS tests"
   ${CMAKE_CURRENT_SOURCE_DIR}/test

@@ -64,11 +64,11 @@
 // and `timeout` because lit has no per-test timeout (dz 01a0d797-e326). Ends
 // through process.exit(): its subject is not closing.
 //
-// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon js %t.js.ppm > %t.js.out 2> %t.js.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon js %t.js.ppm > %t.js.out 2> %t.js.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.js.out
 // RUN: %FileCheck --check-prefix=TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' %s < %t.js.err
 //
-// RUN: timeout 300 %with-xvfb sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon native %t.native.ppm > %t.native.out 2> %t.native.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon native %t.native.ppm > %t.native.out 2> %t.native.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.native.out
 // RUN: %FileCheck --check-prefixes=TRACE,NATIVETRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' %s < %t.native.err
 
