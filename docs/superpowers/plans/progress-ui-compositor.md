@@ -19,6 +19,19 @@ tasks, a whole-slice review and one fix wave; the suite stands at 449 unit
 tests and 220 JS tests, with 4 unsupported (one needs `examples/` installed,
 three are CI- or macOS-only gates).
 
+**First macOS build, 2026-11-19** (Apple M4 Max, macOS 27.2, Apple clang 21,
+ASAN Debug with `HERMES_NODE_ENABLE_UI=ON`): the tree configures and builds
+with no errors and no warnings in the UI code, including
+`tools/hermes-node-ui/ui_module_nowindow.cpp`, which no Linux build
+compiles. 439 unit tests pass, the difference from Linux being
+`TestHooksTest`'s ten, which is built only with a GPU backend. 199 JS tests
+pass and 25 are unsupported: the 23 gated on `ui-gpu` or `display`,
+`bundle-yargs.js`, and `ui-sokol-validation-feature.js`. That last one
+failed on the first run, because it required only `ui` while asserting a
+`--version` line compiled only with window support; its gate is now
+`ui, ui-gpu`. `test/ui-no-window-support.js` runs there and passes. Nothing
+window- or GPU-related was compiled or run on macOS: that is Task 16.
+
 ## What Slice B actually produced
 
 `hermes-node-ui` opens a real window, the reference addon draws a fixed
