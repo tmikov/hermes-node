@@ -3,22 +3,36 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the root directory of this source tree.
 
-// Input events from REAL X events. Every other window test injects a
-// sapp_event below Sokol (`__injectEvent`), which onFrame hands straight to
-// uiHandlePlatformEvent -- so `desc.event_cb`, onEvent's refresh of the
-// tracked window state from sapp_*, Sokol's own event production and its
-// `_sapp.quit_requested` flag are executed by nothing else. Here a second
-// X client (test/fixtures/hnui-demo/x11_window_driver.c) sends the events,
-// and Sokol turns them into sapp_events the way it does for a person.
+// Input events from REAL window-system events. Every other window test
+// injects a sapp_event below Sokol (`__injectEvent`), which onFrame hands
+// straight to uiHandlePlatformEvent -- so `desc.event_cb`, onEvent's refresh
+// of the tracked window state from sapp_*, Sokol's own event production and
+// its `_sapp.quit_requested` flag are executed by nothing else. Here a
+// driver sends the events, and Sokol turns them into sapp_events the way it
+// does for a person:
+//
+//  - Linux (GL): a second X client,
+//    test/fixtures/hnui-demo/x11_window_driver.c, sends a KeyPress, an
+//    XResizeWindow and a WM_DELETE_WINDOW, and watches the window from
+//    outside.
+//  - macOS (Metal): an in-process driver,
+//    tools/hermes-node-ui/mac_test_driver.mm, reached as
+//    `ui.__driveWindow`, makes one AppKit call on the main thread per
+//    command -- `[window sendEvent:]`, `setContentSize:`, `performClose:`
+//    -- and answers with what it read back. Nothing watches the window from
+//    outside there, so `onLost()` never fires.
 //
 // What is asserted, each line of output naming one property:
 //
-//  KEY      a real KeyPress arrives as `keydown` with code 'KeyA'.
+//  KEY      a real key press arrives as `keydown` with code 'KeyA'.
 //           (Mutation: remove `desc.event_cb = onEvent`. Nothing then
-//           arrives at all; the test waits into its `timeout`, and the
-//           EXITCODE line goes red with 124.)
-//  RESIZE   a real XResizeWindow produces a `resize` event reporting the
-//           new size, with the mirror already at it inside the listener.
+//           arrives at all; the test waits for the `keydown` with no bound
+//           of its own, so the run ends at the wrapper's 120 s limit and
+//           the EXITCODE line goes red with 124. Measured on macOS: 121 s
+//           of wall time, empty stdout.)
+//  RESIZE   a real resize of the window (XResizeWindow, `setContentSize:`)
+//           produces a `resize` event reporting the new size, with the
+//           mirror already at it inside the listener.
 //           (Mutation: remove onEvent's refreshTrackedState() -- the
 //           event then reports the size the window had before.)
 //  GEN      the next frame's hnui_frame_target is a NEW generation of
@@ -28,22 +42,38 @@
 //           This is the resize of the REAL framebuffer --
 //           test/ui-resize-generation.js injects its resize, so there the
 //           framebuffer never changes size and only the target does.
-//  CLOSE    a real close request (WM_DELETE_WINDOW) emits `close`, and,
-//           when a listener cancels it with e.preventDefault(), the window
-//           is still there afterwards: a frame requested from the `close`
-//           listener runs, and the driver then reports the window still
-//           viewable. Cancelled, because an uncancelled close now closes
-//           the window and ends the process (test/ui-close.js). This pins
-//           the platform thread's sapp_cancel_quit(): only a real close
-//           request sets Sokol's quit flag, so the injected QUIT_REQUESTED
-//           of ui-events.js has nothing to cancel. (Mutation: remove the
-//           sapp_cancel_quit() call. Sokol then leaves its loop and
-//           destroys the window, no frame is ever ticked again, and the
-//           JS thread is not told -- so waiting for the frame alone would
-//           only ever end at the `timeout`. The driver watches the window
-//           and reports its destruction the moment it happens, and the
-//           test races that report against the frame: the mutant prints
-//           CLOSE WRONG and exits 1 promptly.)
+//  CLOSE    a real close request (WM_DELETE_WINDOW on Linux,
+//           `performClose:` on macOS) emits `close`, and, when a listener
+//           cancels it with e.preventDefault(), the window is still there
+//           afterwards: a frame requested from the `close` listener runs,
+//           and the driver then reports the window still viewable.
+//           Cancelled, because an uncancelled close now closes the window
+//           and ends the process (test/ui-close.js). This pins the platform
+//           thread's sapp_cancel_quit(): only a real close request sets
+//           Sokol's quit flag, so the injected QUIT_REQUESTED of
+//           ui-events.js has nothing to cancel.
+//
+//           Mutation: remove the sapp_cancel_quit() call. The outcome
+//           differs by platform.
+//
+//           Linux: Sokol leaves its loop and destroys the window, no frame
+//           is ever ticked again, and the JS thread is not told -- so
+//           waiting for the frame alone would only ever end at the
+//           `timeout`. The driver watches the window and reports its
+//           destruction the moment it happens, and the test races that
+//           report against the frame: the mutant prints CLOSE WRONG and
+//           exits 1 promptly.
+//
+//           macOS (measured): there is no outside watcher and no CLOSE
+//           line at all. The process ends with status 0, so the
+//           EXITCODE line stays green; stdout stops after `GEN ok`, so
+//           the check for the CLOSE line goes red, and the trace has
+//           `cleanup_cb`.
+//           `quit requested: cancelled, forwarded as close` is printed
+//           even with the cancel deleted, so that line tells nothing
+//           there. The driver's read-back does: it says
+//           `drive: close applied (visible=0)`, and the TRACE-metal line
+//           below requires `visible=1`.
 //
 // The driver is test/fixtures/hnui-demo/window_driver.js: the X11 client
 // on Linux, `ui.__driveWindow` on macOS, one interface. The reference
@@ -60,7 +90,7 @@
 //
 // RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon %x11_window_driver %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --check-prefix=TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' %s < %t.err
+// RUN: %FileCheck --check-prefixes=TRACE,TRACE-%ui-backend --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' %s < %t.err
 
 // CODE: EXITCODE 0
 
@@ -72,8 +102,18 @@
 
 // The close came through the real path and was cancelled where it is
 // APPLIED, on the platform thread; and Sokol never left its loop.
+//
+// On macOS the in-process driver also says what AppKit reported after each
+// action: the key went to Sokol's view as first responder, the content
+// view is the requested size, and the window is still visible once
+// performClose: has returned -- after the cancellation, which ran inside
+// it.
+// TRACE-metal: [ui] drive: key a applied (first_responder_is_view=1)
+// TRACE-metal: [ui] drive: resize 400 300 applied (content=400x300)
 // TRACE: quit requested: cancelled, forwarded as close
 // TRACE-NOT: sapp_run returned
+// TRACE-metal: [ui] drive: close applied (visible=1)
+// TRACE-metal-NOT: sapp_run returned
 
 'use strict';
 

@@ -364,6 +364,18 @@ class CompositorBackend {
   /// popped nor a maintenance commit issued.
   virtual void workerLoopTurn() = 0;
 
+  /// Worker thread, once, before the first `workerLoopTurn()`: \p wake
+  /// makes the worker's loop turn once more, so that `workerLoopTurn()`
+  /// runs again even in a program that is otherwise idle. \p wake may be
+  /// called from **any** thread, and does nothing once the window is
+  /// closing.
+  ///
+  /// GL: unused. Metal: called from the producer's completion handler when
+  /// `workerLoopTurn()` put maintenance off because a frame was in flight
+  /// -- nothing else would turn an idle loop, and the retired generation's
+  /// textures would stay until something unrelated did.
+  virtual void setWorkerWake(void (*wake)(void *user), void *user) = 0;
+
  protected:
   CompositorBackend() = default;
 };

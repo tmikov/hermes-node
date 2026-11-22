@@ -13,6 +13,9 @@
 #include "ui_internal.h"
 
 #include <backend.h>
+#if defined(__APPLE__)
+#include "mac_test_driver.h"
+#endif
 #include <test_hooks.h>
 #include <ui_trace.h>
 #include <algorithm>
@@ -454,6 +457,17 @@ void onConsumerComplete(void *user, SurfaceRef ref, bool ok) {
     gGate.completeConsumer(action);
   else
     action();
+}
+
+/// The backend's request for one more worker loop turn
+/// (`CompositorBackend::setWorkerWake`). Any thread. Posts nothing but the
+/// turn itself and a trace that it arrived: the turn's check phase is what
+/// calls `workerLoopTurn()`. A refused post means the dispatcher is closed,
+/// and a closing window runs no more loop turns anyway.
+void wakeWorker(void *user) {
+  (void)user;
+  if (gDispatch != nullptr)
+    gDispatch->post([]() { uiTrace("worker loop: woken"); });
 }
 
 /// Run one JavaScript frame callback, which next() has already taken out
@@ -902,6 +916,7 @@ void onSharedContextReady() {
   // callback submitAndTrackCompletion() takes, the consumer's through
   // this sink, because blit() has nowhere to carry one.
   gBackend->setConsumerCompletion(onConsumerComplete, nullptr);
+  gBackend->setWorkerWake(wakeWorker, nullptr);
 
   // Surfaces are sized to the FRAMEBUFFER in pixels, not to the window in
   // logical units (spec: Surfaces, "sized to the framebuffer in pixels").
@@ -1451,6 +1466,13 @@ napi_value initUiModule(napi_env env, napi_value exports) {
             waitPlatformQuitRequests)) {
       return nullptr;
     }
+#if defined(__APPLE__)
+    // The in-process window driver (mac_test_driver.h): macOS has no second
+    // process that may drive this window without consent, so the driver
+    // lives here, behind the same gate as the other hooks.
+    if (!exportFunction(env, exports, "__driveWindow", driveWindow))
+      return nullptr;
+#endif
   }
   return exports;
 }

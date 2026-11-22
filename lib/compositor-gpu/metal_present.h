@@ -45,11 +45,12 @@ namespace node_compat {
 /// again. (`device()` is read on the platform thread only; the worker uses
 /// the backend's own copy, `MetalBackend::device_`.)
 ///
-/// # What exists after Task 16c
+/// # What exists
 ///
 /// Setup, the per-frame swapchain acquisition, the clear, the wrappers, the
 /// blit with its consumer completion handler, and the test hooks' read-back
-/// of the presented drawable. Task 16d adds the invalid-swapchain traces.
+/// of the presented drawable. The invalid-swapchain transitions are traced
+/// by the backend (`MetalBackend::acquireFrameSwapchain`/`presentInvalid`).
 class MetalPresenter {
  public:
   MetalPresenter() = default;

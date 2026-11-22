@@ -221,6 +221,15 @@ hnui_window *hnui_get_window(napi_env env);
 /// only**. They must not be retained, destroyed, or used after it returns:
 /// the slot they name goes back into rotation, and a later frame's
 /// callback will be drawing into it.
+///
+/// **`sokol_gfx` state that lasts one frame must be produced and consumed
+/// inside one frame callback.** That covers data appended with
+/// `sg_append_buffer` and `sokol_gl` commands recorded but not yet drawn.
+/// The host, not the addon, ends each `sokol_gfx` frame, and it may end one
+/// between two callbacks: on Metal it commits empty frames after a resize,
+/// to release the retired surfaces, and `sokol_gl` rewinds on every commit.
+/// Commands recorded in one callback and drawn in a later one may therefore
+/// be gone, and so may appended data.
 bool hnui_frame_target(hnui_window *w, hnui_target *out);
 
 /// Register \p cb to run on the next frame tick, with \p user as its

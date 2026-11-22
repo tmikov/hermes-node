@@ -324,6 +324,7 @@ class GlBackend final : public CompositorBackend {
   bool readPresentedPixels(int width, int height, uint8_t *out) override;
 
   void workerLoopTurn() override;
+  void setWorkerWake(void (*wake)(void *user), void *user) override;
 
  private:
   /// One generation's surfaces, as both halves of this backend see them.
@@ -1183,6 +1184,13 @@ void GlBackend::workerLoopTurn() {
   // nothing GL or Sokol's GL backend creates is autoreleased, and Sokol's
   // GL resources are freed at the sg_destroy_* call itself, so there is no
   // deferred release to collect.
+}
+
+void GlBackend::setWorkerWake(void (*wake)(void *user), void *user) {
+  // Unused, for workerLoopTurn()'s reason: GL has no work that waits for a
+  // completion before the worker can do it.
+  (void)wake;
+  (void)user;
 }
 
 void GlBackend::pollCompletions() {
