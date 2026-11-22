@@ -186,6 +186,21 @@ void changeMiniaturized(
 /// with what AppKit reports afterwards -- before returning, except for
 /// `miniaturize` and `deminiaturize` (changeMiniaturized()).
 void runOnMain(const std::string &command, const Finish &finish) {
+  if (command == "terminate") {
+    // What a Dock Quit or Cmd-Q sends, and allowed before the window
+    // exists: HnuiApplication's terminate: (mac_app.mm) forwards it either
+    // way. Read back after the call returns, which it does once
+    // terminate: is ours: the window's visibility, or that there is none.
+    [NSApp terminate:nil];
+    NSWindow *after = (__bridge NSWindow *)uiMacWindow();
+    applied(
+        command,
+        after == nil ? std::string("window=0")
+                     : std::string("visible=") + (after.isVisible ? "1" : "0"),
+        finish);
+    return;
+  }
+
   NSWindow *window = (__bridge NSWindow *)uiMacWindow();
   if (window == nil) {
     finish("ERROR no window", true);
@@ -261,11 +276,6 @@ void runOnMain(const std::string &command, const Finish &finish) {
         command,
         "in_flight=" + std::to_string(metalTestReleaseProducerGpu()),
         finish);
-  } else if (verb == "terminate") {
-    // What a Dock Quit or Cmd-Q sends. Task 16e's terminate: override is
-    // what decides what it does; until then it is NSApplication's own.
-    [NSApp terminate:nil];
-    applied(command, "requested", finish);
   } else {
     finish("", false);
   }

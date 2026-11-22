@@ -241,5 +241,14 @@ void uiHandlePlatformEvent(
     const sapp_event &event,
     const PlatformSource &source);
 
+/// Platform thread. A quit request that did not come through Sokol, handled
+/// as uiHandlePlatformEvent() handles Sokol's: cancelled, and forwarded to
+/// the JS thread as a close request. Its one caller is macOS's
+/// `terminate:` (mac_app.mm), for a request that arrives before Sokol
+/// delivers events -- before its window exists, or before `init_cb` --
+/// when `performClose:` would reach no event callback and Sokol would let
+/// the window close.
+void uiHandleQuitRequestDirectly();
+
 } // namespace node_compat
 } // namespace hermes

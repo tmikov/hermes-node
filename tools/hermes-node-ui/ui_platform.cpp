@@ -737,6 +737,12 @@ void onCleanup() {
 
 } // namespace
 
+void uiHandleQuitRequestDirectly() {
+  sapp_event event{};
+  event.type = SAPP_EVENTTYPE_QUIT_REQUESTED;
+  uiHandlePlatformEvent(event, realPlatformSource());
+}
+
 void uiHandlePlatformEvent(
     const sapp_event &event,
     const PlatformSource &source) {

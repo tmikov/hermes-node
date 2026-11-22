@@ -268,6 +268,8 @@ async function runConformance(addonPath, ownerPath, capturePath, backend) {
     print(addon.conformanceReadClipboard(
         CLIPBOARD_TIMEOUT_MS, ' (owner never answers)'));
     await owner.stop();
+  } else {
+    print(addon.conformanceReadClipboard(0, ' (zero deadline)'));
   }
 
   print('DONE');

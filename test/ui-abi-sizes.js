@@ -66,10 +66,12 @@
 // APPLIED: command show cursor: sapp_mouse_shown=1
 // APPLIED: command lock pointer: sapp_mouse_locked=1
 // APPLIED: command lock pointer: sapp_mouse_locked=0
-// The clipboard line's read-back is X11's (selection ownership), so it is
-// GL-only; every backend's `-<backend>` line must still show the full
-// 1048575 bytes arriving.
+// The clipboard line's read-back is the platform's -- X11's selection
+// ownership, macOS's pasteboard read back -- so each is under its backend;
+// every backend's `-<backend>` line must still show the full 1048575 bytes
+// arriving.
 // APPLIED-gl: command clipboard: owns_selection=1 bytes=1048575
+// APPLIED-metal: command clipboard: pasteboard_bytes=1048575 bytes=1048575
 
 // "Pushes nothing" is pinned by COUNTING what the platform thread applied,
 // not by CHECK-NOT: a NOT only searches the text before the next positive
