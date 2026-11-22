@@ -59,8 +59,19 @@ ClipboardResult uiPlatformReadClipboard(int timeoutMs, size_t maxBytes) {
       result.status = ClipboardStatus::kUnavailable;
       return result;
     }
+    // nil when the string type's data is not text AppKit can decode
+    // (test/ui-clipboard-mac.js BADDATA writes a lone UTF-16 surrogate).
     NSString *text = [board stringForType:NSPasteboardTypeString];
     if (text == nil) {
+      result.status = ClipboardStatus::kError;
+      return result;
+    }
+    // NULL for a string UTF-8 cannot encode, where the length below would
+    // be 0 and the read would pass for an empty clipboard. Not provoked by
+    // any test: AppKit stores a string with a lone surrogate as an empty
+    // one (measured), so no pasteboard hands such a string back.
+    const char *utf8 = [text UTF8String];
+    if (utf8 == nullptr) {
       result.status = ClipboardStatus::kError;
       return result;
     }
@@ -70,7 +81,7 @@ ClipboardResult uiPlatformReadClipboard(int timeoutMs, size_t maxBytes) {
       result.status = ClipboardStatus::kTooLarge;
       return result;
     }
-    result.text.assign([text UTF8String], bytes);
+    result.text.assign(utf8, bytes);
     result.status = ClipboardStatus::kOk;
   }
   return result;

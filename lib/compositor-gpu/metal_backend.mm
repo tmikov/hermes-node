@@ -408,11 +408,11 @@ bool MetalBackend::createGenerationSurfaces(
     std::string &error) {
   // The plan's Ruling 82. A generation change is not held back until the
   // previous one's releases are collected; what is enforced is the bound
-  // that rule exists for. A generation's destruction queues at most nine
-  // releases against Sokol's pool, every idle loop turn collects them, and
-  // this replaces the assert Sokol would hit on an empty pool (compiled out
-  // in Release) with a sentence the shared code turns into a terminated
-  // session.
+  // that rule exists for. A generation's destruction queues three releases
+  // against Sokol's pool (kIdPoolGuard says which), maintenance collects
+  // them, and this replaces the assert Sokol would hit on an empty pool
+  // (compiled out in Release) with a sentence the shared code turns into a
+  // terminated session.
   const int freeSlots = hnui_sg_mtl_idpool_free();
   if (freeSlots < kIdPoolGuard) {
     error = "the Metal resource pool is nearly exhausted (" +
@@ -565,8 +565,7 @@ void MetalBackend::submitAndTrackCompletion(
 
     // The test hooks' GPU hold: a wait encoded after the frame's passes,
     // so the buffer cannot complete until releaseProducerGpuAfterTurn()
-    // signals.
-    // Never in a run without the hooks.
+    // signals. Never in a run without the hooks.
     if (uiTestHooksEnabled()) {
       std::lock_guard<std::mutex> lock(holdMutex_);
       if (holdRequested_) {
@@ -602,7 +601,10 @@ void MetalBackend::submitAndTrackCompletion(
       onComplete(user, ref, ok);
       // The last frame in flight wakes the loop if maintenance waits for
       // it (wakeWanted_ says why both sides are needed). Traced before the
-      // post, so the line cannot follow the maintenance it causes.
+      // post, so the line cannot follow the maintenance it causes -- and so
+      // it says the wake was asked for, not that it arrived: a closed
+      // dispatcher refuses the post. `worker loop: woken`, printed by the
+      // posted function on the worker, is the evidence that it arrived.
       if (self->producerInFlight_.fetch_sub(1) == 1 &&
           self->wakeWanted_.exchange(false)) {
         uiTrace("maintenance: woken by completion");

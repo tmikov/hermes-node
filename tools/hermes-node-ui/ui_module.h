@@ -11,6 +11,8 @@
 
 #include <node_api.h>
 
+#include <cstdint>
+
 /// At GLOBAL scope, deliberately, and this is not a stylistic choice.
 /// `hnui_abi.h` declares `::hnui_window`, and `hnui_window.h` defines it
 /// there. Writing `struct hnui_window *` inside the namespace below would
@@ -241,6 +243,13 @@ void uiHandlePlatformEvent(
 /// when `performClose:` would reach no event callback and Sokol would let
 /// the window close.
 void uiHandleQuitRequestDirectly();
+
+/// Any thread. How many quit requests uiHandlePlatformEvent() has cancelled
+/// since startup, counted after each sapp_cancel_quit(). Unlike the test
+/// hooks' count behind __waitPlatformQuitRequests, kept whether or not the
+/// hooks are on, because a trace line reads it: macOS's `terminate:` says
+/// how many requests its performClose: actually raised.
+uint64_t uiQuitRequestsCancelled();
 
 } // namespace node_compat
 } // namespace hermes

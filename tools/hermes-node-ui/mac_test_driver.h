@@ -22,7 +22,9 @@ namespace node_compat {
 /// the main queue, and blocks the JS thread until the answer arrives. The
 /// main thread never waits on the JS thread, so this cannot deadlock;
 /// throws if the main thread did not run the command within 10 s, or for a
-/// command it does not know.
+/// command it does not know. Before the window exists every command except
+/// `terminate` answers `ERROR no window` instead -- an unknown one too,
+/// since the window is checked first -- and does not throw.
 ///
 /// Commands, and the answer each returns (window_driver.js maps the answer
 /// onto the X11 driver's line; an answer starting `ERROR` is a refusal):
@@ -46,11 +48,13 @@ namespace node_compat {
 /// The answers are read back after the action, never echoed from the
 /// request -- for the two animated ones, `miniaturize` and
 /// `deminiaturize`, after AppKit's notification that the animation is
-/// over. One is weaker than that, and says less than it seems to:
+/// over. Three are weaker than that, and say less than they seem to:
 /// `key`'s `first_responder_is_view` is a precondition, read after the
 /// event was sent -- that the view was where a key event goes, not that
 /// this one arrived (the `keydown` event the script receives is the
-/// evidence of that).
+/// evidence of that); `gpu-hold`'s `held=1` says only that a backend took
+/// the request, not that any frame has been held; and `gpu-release`'s
+/// `in_flight` is read before the release, which happens later.
 ///
 /// `gpu-hold` and `gpu-release` are not about the window: they are the test
 /// hooks' hold on the producer's GPU work (`metal_test_hooks.h`), here

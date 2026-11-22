@@ -78,7 +78,8 @@
 // nothing is skipped. On `metal` the fullscreen pair is not issued: AppKit's
 // toggleFullScreen: is an animated transition into a new Space, and what it
 // does with a second toggle during the first is not something this test
-// should depend on (Task 16e).
+// should depend on. Fullscreen is therefore untested on macOS: tracker
+// issue 01a1fbb5-84af.
 //
 // Each line is the value READ BACK after the call. `command cursor N` is the
 // hnui_cursor value pushed (default, arrow, ibeam, crosshair, pointer,
@@ -127,6 +128,20 @@ const ui = require('hermes-node:ui');
 const backend = process.argv[2];
 if (backend !== 'gl' && backend !== 'metal') {
   console.log('BACKEND argument is not gl or metal: ' + backend);
+  process.exit(2);
+}
+
+// macOS writes the clipboard to the pasteboard HERMES_NODE_UI_TEST_PASTEBOARD
+// names, and to the general one -- the clipboard of whoever is using the
+// Mac -- without it. utils/with-display.py sets a private hnui-test-* name;
+// a run without the wrapper is refused before anything is written.
+if (process.platform === 'darwin' &&
+    !(process.env.HERMES_NODE_UI_TEST_PASTEBOARD || '').startsWith(
+        'hnui-test-')) {
+  console.log(
+      'REFUSED: HERMES_NODE_UI_TEST_PASTEBOARD does not name a hnui-test-* ' +
+      'pasteboard, so this run would write the general pasteboard. Run it ' +
+      'under utils/with-display.py.');
   process.exit(2);
 }
 

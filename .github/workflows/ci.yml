@@ -144,6 +144,52 @@ jobs:
       - name: Build & test
         run: cmake --build build --target check-hermes-node
 
+      # Nobody knows yet whether GitHub's macOS runners have a Metal device
+      # and a window-server session. The suite is safe either way: every
+      # window test is gated on the `display` lit feature, which is decided
+      # by this same probe (test/lit.cfg, utils/display_probe.py), so
+      # without a usable display those tests report UNSUPPORTED and the job
+      # stays green. This step exists so that the log says which case this
+      # runner is. It runs the probe by hand, with tracing on, and prints
+      # the console-session verdict lit's first stage would have reached
+      # and the probe's exit status; it never fails the job.
+      #
+      # Three outcomes can be told apart in its output:
+      #
+      #  1. `route: metal (device=...)`, then `present: drawable acquired`,
+      #     and DISPLAY_PROBE_OK on stdout: the runner has a display, and
+      #     the window tests ran in the step above. Follow up by setting
+      #     HERMES_NODE_UI_EXPECT_DISPLAY: 1 in this job's environment for
+      #     macOS, so that test/ui-display-feature.js guards it from then
+      #     on.
+      #  2. A `hermes-node-ui:` line on stderr saying no Metal device is
+      #     available, and no sentinel: there is no GPU. Record it in the
+      #     tracker issue about these runners and leave the job as it is.
+      #  3. A `route: metal` line and no `present: drawable acquired`
+      #     (typically ending in the wrapper's time limit, status 124): a
+      #     device, and no usable window-server session. Record it the
+      #     same way.
+      #
+      # HERMES_NODE_UI_EXPECT_DISPLAY is deliberately NOT set here or
+      # anywhere in this workflow yet: that is a promise, and it is made
+      # only after outcome 1 has been seen.
+      - name: UI display probe (informational)
+        if: ${{ !cancelled() && runner.os == 'macOS' && matrix.config == 'asan-debug-o1' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        env:
+          HERMES_NODE_UI_TEST_HOOKS: 1
+          HERMES_NODE_DEBUG_NATIVE: UI
+          HERMES_NODE_UI_DISPLAY_LOCK_WAIT: 120
+        run: |
+          set +e
+          python3 utils/macos_console_session.py
+          echo "console session status $?"
+          python3 utils/with-display.py 60 build/bin/hermes-node-ui \
+            test/fixtures/hnui-demo/display_probe.js
+          echo "probe status $?"
+
       - name: ccache stats (after build)
         if: always()
         run: ccache -s

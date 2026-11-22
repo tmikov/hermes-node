@@ -20,13 +20,18 @@ namespace node_compat {
 /// only with the test hooks on: submitAndTrackCompletion() consults the
 /// hold only then.
 ///
-/// Two things to know, both measured. The hold catches whatever frame is
-/// committed next -- including one whose callback has already run, if a
-/// script asks from that callback's own continuation -- so hold only once
-/// the frame before has been seen presented. And a frame held for more
-/// than a few seconds fails: the GPU's watchdog ends it with
+/// Three limits. The hold catches whatever frame is committed next --
+/// including one whose callback has already run, if a script asks from
+/// that callback's own continuation -- so hold only once the frame before
+/// has been seen presented (measured). A frame held for more than a few
+/// seconds fails: the GPU's watchdog ends it with
 /// `kIOGPUCommandBufferCallbackErrorTimeout`, and the graphics session
-/// ends with it. A hold is for milliseconds.
+/// ends with it (measured); a hold is for milliseconds. And at most two
+/// frames can be held: the producing instance's first pass of a frame
+/// waits on Sokol's in-flight semaphore, created with
+/// SG_NUM_INFLIGHT_FRAMES (2), so a third frame blocks the JS thread in
+/// sg_begin_pass until a held one completes -- which, with the JS thread
+/// blocked, nothing will release.
 
 /// From now on, every producer frame committed waits on the GPU, after its
 /// passes, for a shared event that nothing signals yet.

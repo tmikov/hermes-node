@@ -27,6 +27,7 @@
 #include <sokol_app.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
@@ -737,6 +738,17 @@ void onCleanup() {
 
 } // namespace
 
+namespace {
+
+/// uiQuitRequestsCancelled()'s count. Incremented on the platform thread.
+std::atomic<uint64_t> gQuitRequestsCancelled{0};
+
+} // namespace
+
+uint64_t uiQuitRequestsCancelled() {
+  return gQuitRequestsCancelled.load();
+}
+
 void uiHandleQuitRequestDirectly() {
   sapp_event event{};
   event.type = SAPP_EVENTTYPE_QUIT_REQUESTED;
@@ -759,6 +771,7 @@ void uiHandlePlatformEvent(
   // the process (uiCloseWindow); the platform thread is never told.
   if (event.type == SAPP_EVENTTYPE_QUIT_REQUESTED) {
     sapp_cancel_quit();
+    gQuitRequestsCancelled.fetch_add(1);
     uiTrace("quit requested: cancelled, forwarded as close");
     // The test hooks' quit barrier (__waitPlatformQuitRequests) counts the
     // cancellation once it has been executed.

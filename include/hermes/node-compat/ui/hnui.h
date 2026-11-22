@@ -107,6 +107,20 @@
 /// JavaScript `'exit'` listener, from which the API behaves as listed
 /// above.
 ///
+/// **On macOS a request to quit the application is a close request.** The
+/// host's `NSApplication` overrides `terminate:` and never lets AppKit end
+/// the process: the request is delivered as `HNUI_EVENT_CLOSE_REQUESTED`,
+/// cancelable like any other, and uncancelled it ends the process the same
+/// way. That is established for `[NSApp terminate:]` called in-process;
+/// whether Dock Quit, Cmd-Q or a quit Apple event arrive there has not
+/// been shown. Three things follow that an addon cannot change. A close
+/// request carries no reason, so logout cannot be told from Quit. A
+/// listener that cancels, or an owner thread busy in synchronous code,
+/// leaves a logout or shutdown waiting until the system gives up and
+/// reports the application. And the host creates no main menu, so Cmd-Q
+/// has nothing to invoke. Force Quit and `SIGKILL` run no `'exit'`
+/// listener, as on every platform.
+///
 /// # Linking
 ///
 /// The host exports these symbols from its own executable
@@ -366,6 +380,10 @@ void hnui_write_clipboard(hnui_window *w, const char *utf8);
 /// reply that arrives after the deadline is discarded. A \p timeout_ms of
 /// zero or less always returns `HNUI_TIMEOUT`.
 ///
+/// On macOS the read is the pasteboard's, which answers at once, so
+/// `HNUI_TIMEOUT` arises there only when the deadline passed before the
+/// platform thread reached the request.
+///
 /// **Two limits \p timeout_ms does not override**, both from the X11
 /// reader. The platform thread waits at most 2000 ms for another client to
 /// answer, whatever \p timeout_ms says, because it is the thread that
@@ -382,7 +400,7 @@ void hnui_write_clipboard(hnui_window *w, const char *utf8);
 ///   - `HNUI_UNAVAILABLE`: nothing owns the clipboard, or it holds no text.
 ///   - `HNUI_TIMEOUT`: no answer before the deadline.
 ///   - `HNUI_TOO_LARGE`: over `HNUI_CLIPBOARD_MAX_BYTES - 1` bytes, or
-///     offered incrementally.
+///     (X11) offered incrementally.
 ///   - `HNUI_ERROR`: anything else, including a NULL \p w (the ordinary
 ///     answer for a runtime with no window, as for every entry point here)
 ///     or a failed allocation.

@@ -14,9 +14,13 @@
  *   mac_pasteboard_tool <name> clear         no types at all
  *   mac_pasteboard_tool <name> png           one non-string type only
  *   mac_pasteboard_tool <name> big <bytes>   a string of that many 'x'
- *   mac_pasteboard_tool <name> release       give the pasteboard back
+ *   mac_pasteboard_tool <name> surrogate     string-type data AppKit cannot
+ *                                            decode: a lone UTF-16 surrogate
+ *   mac_pasteboard_tool <name> release       give the pasteboard back;
+ *                                            prints "DONE 0"
  *
- * Each prints "DONE <changeCount>" and exits 0; a usage error exits 2.
+ * Each other verb prints "DONE <changeCount>"; all exit 0. A usage error,
+ * including a `set` argument that is not valid UTF-8, exits 2.
  *
  * **Only a pasteboard named hnui-test-* is touched.** The test passes the
  * name the wrapper (utils/with-display.py) put in its environment; a test
@@ -35,7 +39,7 @@ static int usage(void) {
   fprintf(
       stderr,
       "usage: mac_pasteboard_tool hnui-test-<id> "
-      "set <text> | clear | png | big <bytes> | release\n");
+      "set <text> | clear | png | big <bytes> | surrogate | release\n");
   return 2;
 }
 
@@ -52,8 +56,12 @@ int main(int argc, char **argv) {
       return 0;
     }
     if (strcmp(verb, "set") == 0 && argc == 4) {
+      NSString *text = [NSString stringWithUTF8String:argv[3]];
+      if (text == nil) {
+        return usage();
+      }
       [board clearContents];
-      [board setString:@(argv[3]) forType:NSPasteboardTypeString];
+      [board setString:text forType:NSPasteboardTypeString];
     } else if (strcmp(verb, "clear") == 0 && argc == 3) {
       [board clearContents];
     } else if (strcmp(verb, "png") == 0 && argc == 3) {
@@ -64,6 +72,15 @@ int main(int argc, char **argv) {
       [board clearContents];
       [board setData:[NSData dataWithBytes:kSignature length:sizeof kSignature]
              forType:NSPasteboardTypePNG];
+    } else if (strcmp(verb, "surrogate") == 0 && argc == 3) {
+      /* 0xD800 as UTF-16LE data under the string type: stringForType:
+         then answers nil. (Through setString: AppKit would store an
+         empty string instead -- measured.) */
+      static const unsigned char kLoneSurrogate[2] = {0x00, 0xD8};
+      [board clearContents];
+      [board setData:[NSData dataWithBytes:kLoneSurrogate
+                                    length:sizeof kLoneSurrogate]
+             forType:NSPasteboardTypeString];
     } else if (strcmp(verb, "big") == 0 && argc == 4) {
       const long bytes = atol(argv[3]);
       if (bytes <= 0) {
