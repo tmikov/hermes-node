@@ -7,32 +7,32 @@
 # blitting, plus BOTH sokol_gfx instances. The top-level CMakeLists.txt only
 # add_subdirectory()s this when HERMES_NODE_ENABLE_UI is on.
 
-# v1 is Linux GL (X11, GLX, desktop GL 4.3 core) and macOS Metal, and Metal
-# is Task 16. So this whole directory is Linux-only today.
+# v1 is GL on X11 (GLX, desktop GL 4.3 core) for Linux and any other
+# non-Apple Unix, and Metal on macOS. A platform that is not Unix has no
+# backend, and this whole directory is skipped there.
 #
 # A message(FATAL_ERROR) here would be the louder choice and is deliberately
-# NOT what this does, because of where the option is actually set: CI turns
-# HERMES_NODE_ENABLE_UI on for the asan-debug-o1 configuration, and that
-# matrix entry covers macos-latest as well as ubuntu-latest
-# (.github/workflows/ci.yml). Failing to configure would take macOS CI red
-# to report something already known and already scheduled. Instead the
-# library is not built, hermes-node-ui keeps exactly the windowless
-# behaviour Task 6 gave it, and the `display` lit feature reports the
-# window tests UNSUPPORTED there.
-#
-# That UNSUPPORTED is the one legitimate instance of a failure mode this
-# plan otherwise treats as a defect, and it is legitimate only because the
-# platform genuinely has no implementation yet rather than because a probe
-# could not tell. When Task 16 lands metal_backend.mm, this guard is what it
-# edits.
-if(NOT (UNIX AND NOT APPLE))
+# NOT what this does: the option is one a build configuration turns on for
+# every platform it covers (CI's asan-debug-o1 does, in
+# .github/workflows/ci.yml), and a platform without a backend should still
+# build the rest. There the library is not built, hermes-node-ui keeps
+# exactly the windowless behaviour Task 6 gave it, and the `ui-gpu` lit
+# feature reports the window tests UNSUPPORTED.
+if(NOT UNIX)
   message(STATUS
-    "hermes-node UI: no GPU backend for this platform yet "
-    "(v1 GL is Linux-only; macOS Metal is Task 16). "
+    "hermes-node UI: no GPU backend for this platform "
+    "(v1 is Linux GL and macOS Metal). "
     "hermes-node-ui will build without window support.")
   return()
 endif()
 
+if(APPLE)
+  # Metal (Task 16). The producing half (metal_backend.mm) and the
+  # presenting half (metal_present.mm) are split for the reason the GL pair
+  # below is; see metal_present.h. Nothing to look up: Cocoa, QuartzCore
+  # and Metal are system frameworks, linked below.
+  set(HNUI_GPU_BACKEND_SOURCES metal_backend.mm metal_present.mm)
+else()
 find_package(OpenGL REQUIRED)
 find_package(X11 REQUIRED)
 
@@ -50,6 +50,15 @@ foreach(_x11_component X11 Xi Xcursor)
       "-DHERMES_NODE_ENABLE_UI=ON to build hermes-node alone.")
   endif()
 endforeach()
+
+# The presenting half, gl_present.cpp, is in a translation unit of its own
+# because it must include sgp_rename.h before sokol_gfx.h's declarations
+# and gl_backend.cpp must not -- see gl_present.h's class comment. It is
+# also the one unit that compiles sokol_glue.h's implementation, which the
+# design says is compiled "exactly once, in the presenting unit, or not at
+# all".
+set(HNUI_GPU_BACKEND_SOURCES gl_backend.cpp gl_present.cpp)
+endif()
 
 # sgp_rename.h: one `#define sg_x sgp_x` per public sokol_gfx function, so
 # the presenting instance gets its own copy of the implementation. Generated
@@ -77,13 +86,8 @@ add_custom_command(
 add_custom_target(hermes-node-sgp-rename DEPENDS ${SGP_RENAME_H})
 
 add_hermes_library(hermesNodeCompositorGpu STATIC
-  gl_backend.cpp
-  # The presenting half, in a translation unit of its own because it must
-  # include sgp_rename.h before sokol_gfx.h's declarations and gl_backend.cpp
-  # must not -- see gl_present.h's class comment. It is also the one unit
-  # that compiles sokol_glue.h's implementation, which the design says is
-  # compiled "exactly once, in the presenting unit, or not at all".
-  gl_present.cpp
+  # The backend's two halves, chosen above.
+  ${HNUI_GPU_BACKEND_SOURCES}
   ui_trace.cpp
   # The one body of all three Sokol loggers, sokol_app's included.
   sokol_log.cpp
@@ -109,6 +113,30 @@ target_include_directories(hermesNodeCompositorGpu PRIVATE
 # and needs the identical SOKOL_GLCORE: two translation units of the same
 # Sokol build configured differently would disagree about struct layouts
 # while linking perfectly (see sokol_config.h).
+if(APPLE)
+  target_compile_definitions(hermesNodeCompositorGpu PUBLIC SOKOL_METAL)
+
+  target_link_libraries(hermesNodeCompositorGpu PUBLIC
+    hermesNodeCompositor
+    sokol
+    "-framework Cocoa"
+    "-framework QuartzCore"
+    "-framework Metal"
+  )
+
+  # Sokol's Metal implementation is Objective-C, so the two sokol_gfx units
+  # are compiled as Objective-C++ -- under their .cpp names, so that their
+  # object names, and the lit params and isolation check that name those
+  # objects, are the same on both platforms. A per-source option rather
+  # than LANGUAGE OBJCXX keeps the language CXX, so Hermes's CMAKE_CXX_FLAGS
+  # still apply. ARC on every Objective-C(++) unit: sokol_config.h refuses
+  # to compile a Metal Sokol unit without it, because Sokol's texture
+  # injection releases an injected texture under manual reference counting.
+  set_source_files_properties(sokol_gfx_impl.cpp sokol_gfx_present_impl.cpp
+    PROPERTIES COMPILE_OPTIONS "-xobjective-c++;-fobjc-arc")
+  set_source_files_properties(metal_backend.mm metal_present.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+else()
 target_compile_definitions(hermesNodeCompositorGpu PUBLIC SOKOL_GLCORE)
 
 target_link_libraries(hermesNodeCompositorGpu PUBLIC
@@ -119,6 +147,7 @@ target_link_libraries(hermesNodeCompositorGpu PUBLIC
   X11::Xi
   X11::Xcursor
 )
+endif()
 
 # check-sgp-isolation: prove the two sokol_gfx instances do not reach each
 # other's state, by reading the objects' symbol tables rather than by
@@ -146,6 +175,10 @@ set(SGP_ISOLATION_OBJ_DIR
   ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/hermesNodeCompositorGpu.dir)
 set(HNUI_SGP_PRODUCING_USER_OBJ ${SGP_ISOLATION_OBJ_DIR}/gl_backend.cpp.o)
 set(HNUI_SGP_PRESENTING_USER_OBJ ${SGP_ISOLATION_OBJ_DIR}/gl_present.cpp.o)
+if(APPLE)
+  set(HNUI_SGP_PRODUCING_USER_OBJ ${SGP_ISOLATION_OBJ_DIR}/metal_backend.mm.o)
+  set(HNUI_SGP_PRESENTING_USER_OBJ ${SGP_ISOLATION_OBJ_DIR}/metal_present.mm.o)
+endif()
 set(HNUI_SGP_PRODUCING_USER_OBJ ${HNUI_SGP_PRODUCING_USER_OBJ} PARENT_SCOPE)
 set(HNUI_SGP_PRESENTING_USER_OBJ ${HNUI_SGP_PRESENTING_USER_OBJ} PARENT_SCOPE)
 add_custom_target(check-sgp-isolation

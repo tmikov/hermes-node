@@ -27,7 +27,19 @@ bool uiTracingEnabled();
 /// printf-style, to **stderr**, prefixed "[ui] ". Nothing when tracing is
 /// off, and the arguments are still evaluated -- so no call site may hide a
 /// side effect in one.
+///
+/// A line is one fwrite, whatever its length, so lines from different
+/// threads never interleave within a line; see writeLineV in ui_trace.cpp.
 void uiTrace(const char *format, ...)
+#if defined(__GNUC__) || defined(__clang__)
+    __attribute__((format(printf, 1, 2)))
+#endif
+    ;
+
+/// printf-style, to **stderr**, unconditionally and with no prefix; a
+/// newline is appended. For a line other threads' trace lines must not
+/// land inside -- emitted by the same single fwrite uiTrace uses.
+void uiStderrLine(const char *format, ...)
 #if defined(__GNUC__) || defined(__clang__)
     __attribute__((format(printf, 1, 2)))
 #endif

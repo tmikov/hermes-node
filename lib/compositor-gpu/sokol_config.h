@@ -27,7 +27,7 @@
 
 #if !defined(SOKOL_GLCORE) && !defined(SOKOL_METAL)
 #error \
-    "No Sokol backend selected. lib/compositor-gpu/CMakeLists.txt sets SOKOL_GLCORE on Linux; macOS Metal arrives with Task 16. v1 refuses EGL and GLES3 (spec: Global Constraints)."
+    "No Sokol backend selected. lib/compositor-gpu/CMakeLists.txt sets SOKOL_GLCORE on Linux and SOKOL_METAL on macOS. v1 refuses EGL and GLES3 (spec: Global Constraints)."
 #endif
 
 /// The Metal backend's Sokol units must be compiled as Objective-C++:
@@ -39,7 +39,7 @@
 /// under manual reference counting, out from under its owner.
 #if defined(SOKOL_METAL) && !defined(__OBJC__)
 #error \
-    "SOKOL_METAL requires Objective-C++: compile this file with the CMake source property LANGUAGE OBJCXX (set_source_files_properties(... PROPERTIES LANGUAGE OBJCXX)) and -fobjc-arc, as lib/compositor-gpu/CMakeLists.txt does for its Metal sources."
+    "SOKOL_METAL requires Objective-C++: compile this file with -xobjective-c++ and -fobjc-arc (the COMPILE_OPTIONS source property), as lib/compositor-gpu/CMakeLists.txt does for its Sokol units under APPLE."
 #endif
 #if defined(SOKOL_METAL) && defined(__OBJC__) && !__has_feature(objc_arc)
 #error \

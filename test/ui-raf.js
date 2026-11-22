@@ -57,7 +57,7 @@
 //
 // RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon main %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
-// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=TRACE %s < %t.err
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefixes=TRACE,TRACE-%ui-backend %s < %t.err
 //
 // RUN: %with-display 300 sh -c 'HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s %hnui_demo_addon fatal > %t.fatal.out 2> %t.fatal.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=FATALCODE %s
 // RUN: %FileCheck --check-prefix=FATAL %s < %t.fatal.out
@@ -364,6 +364,10 @@ main().catch((e) => {
 // is started once the worker's context is current, so by the time frame
 // ticks run it has run too. (Mutation: do not start the handle, and the
 // line is missing.)
+// On Metal that turn drained and replaced the worker's autorelease pool,
+// traced from inside workerLoopTurn() after the pop, which runs before the
+// shared line below. (Mutation: remove the pop, and the line is missing.)
+// TRACE-metal: worker autorelease pool: first drain
 // TRACE: worker loop: first turn
 // The empty tick of CANCEL (c), traced where the batch ran.
 // TRACE: frame tick: 0 callback(s) ran, nothing drawn

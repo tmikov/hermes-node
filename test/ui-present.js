@@ -134,6 +134,13 @@ const capturePath = process.argv[4];
 // letting a fixed number of real presented frames go past.
 const REBLIT_FRAME_BUDGET = 240;
 
+// How many presented frames the slot-recycling case (step 4) allows for
+// two draws to be published. The same generous figure the other requests
+// that are expected to match use -- the platform thread keeps presenting
+// while a loaded machine starves the JS thread -- and it is also the whole
+// cost of the failing case, which ends when the budget does.
+const RECYCLE_FRAME_BUDGET = 900;
+
 // The pattern the addon draws, as bytes. Every channel is 0 or 255; see
 // the tolerance policy above for why that is a requirement and not a
 // coincidence.
@@ -325,6 +332,37 @@ async function main() {
     console.log(
         'RESUMED matched=' + resumed.matched +
         ' publicationId=' + resumed.publicationId);
+
+    // --- 4. A presented surface's slot comes back. -----------------
+    //
+    // A generation has three slots, and publications 1 and 2 have used
+    // two of them. Two more draws make publication 4 the first frame that
+    // can only be drawn into a slot an earlier publication held -- and a
+    // slot returns to FREE only once the backend has reported, through its
+    // consumer-completion sink, that every blit which sampled it has
+    // finished. A backend that never calls that sink presents three
+    // frames correctly and then never draws again. No request above
+    // notices: none needs a fourth frame.
+    //
+    // The request is installed before either draw, for the reason given at
+    // step 1. And the second draw is registered from inside the first's
+    // callback, with neither awaited: when no slot is free the callback is
+    // simply not run, so awaiting one would turn "the slot never came
+    // back" into a hang that ends at the RUN line's time limit. This way
+    // the request gives up after its frame budget and the failure is one
+    // line reading `matched=false`.
+    const recycledPending =
+        capture(4, capturePath + '.recycled', RECYCLE_FRAME_BUDGET);
+    ui.requestAnimationFrame(() => {
+      addon.drawFixedPattern();
+      ui.requestAnimationFrame(() => {
+        addon.drawFixedPattern();
+      });
+    });
+    const recycled = await recycledPending;
+    console.log(
+        'RECYCLED matched=' + recycled.matched +
+        ' publicationId=' + recycled.publicationId);
   }
 
   console.log('DONE');
@@ -360,6 +398,13 @@ main().catch((e) => {
 // reads `matched=true framesObserved=1`.
 // POLL-NEXT: REBLIT matched=false framesObserved=240
 // POLL-NEXT: RESUMED matched=true publicationId=2
+//
+// **The slot-recycling assertion.** Publication 4 is the first that needs
+// a slot back from an earlier one. Stop the backend calling its
+// consumer-completion sink and this line reads `matched=false
+// publicationId=0`: the slots that were presented keep their read
+// references, the fourth draw is never run, and the request gives up.
+// POLL-NEXT: RECYCLED matched=true publicationId=4
 // POLL-NEXT: DONE
 // POLLCODE: EXITCODE 0
 //
@@ -385,8 +430,20 @@ main().catch((e) => {
 // the hand-off was picked up there.
 // POLLERR-gl: [ui] completion mode: polling
 // POLLERR-gl: [ui] completion: polling submission handed the fence to the platform thread
+// On Metal there is one completion mechanism and no mode to choose, so the
+// three runs make the same claims. Each `handler ran` line is printed
+// from inside a Metal completion handler after it read the buffer's
+// status, once per run: evidence that a handler executed on a real buffer,
+// where the mode line only says which mechanism this build has. The
+// staging line is printed from init_cb, before the worker starts, with
+// framebufferOnly read back from Sokol's layer after it was cleared.
+// POLLERR-metal: [ui] capture: staging copy enabled (framebufferOnly=0)
+// POLLERR-metal: [ui] completion mode: handler (metal)
+// POLLERR-metal: [ui] completion: producer handler ran (status=completed)
+// POLLERR-metal: [ui] completion: consumer handler ran (status=completed)
 // POLLERR: [ui] capture: written generation 1 publication 1
 // POLLERR: [ui] capture: no match after 240 presented frame(s)
+// POLLERR: [ui] capture: written generation 1 publication 4
 
 // --- The addon-driven, blocking-completion run. ----------------------
 //
@@ -408,6 +465,10 @@ main().catch((e) => {
 //
 // BLOCKERR-gl: [ui] completion mode: blocking
 // BLOCKERR-gl: [ui] completion: blocking submission waited on the producer thread
+// BLOCKERR-metal: [ui] capture: staging copy enabled (framebufferOnly=0)
+// BLOCKERR-metal: [ui] completion mode: handler (metal)
+// BLOCKERR-metal: [ui] completion: producer handler ran (status=completed)
+// BLOCKERR-metal: [ui] completion: consumer handler ran (status=completed)
 // BLOCKERR: [ui] capture: written generation 1 publication 1
 
 // --- The probe run. -------------------------------------------------
@@ -417,6 +478,7 @@ main().catch((e) => {
 // PROBE: PATTERN ok
 // PROBE-NEXT: REBLIT matched=false framesObserved=240
 // PROBE-NEXT: RESUMED matched=true publicationId=2
+// PROBE-NEXT: RECYCLED matched=true publicationId=4
 // PROBE-NEXT: DONE
 // PROBECODE: EXITCODE 0
 //
@@ -441,3 +503,10 @@ main().catch((e) => {
 // which arm a given driver selects is not this test's business, and pinning
 // either would make this a statement about the machine.
 // PROBEERR-gl: [ui] completion: {{(polling submission handed the fence|blocking submission waited)}}
+//
+// Metal: no probe and no mode, so the probe run's claims are the other
+// two runs' (see POLLERR-metal above).
+// PROBEERR-metal: [ui] capture: staging copy enabled (framebufferOnly=0)
+// PROBEERR-metal: [ui] completion mode: handler (metal)
+// PROBEERR-metal: [ui] completion: producer handler ran (status=completed)
+// PROBEERR-metal: [ui] completion: consumer handler ran (status=completed)
