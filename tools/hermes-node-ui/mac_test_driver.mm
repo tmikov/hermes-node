@@ -105,11 +105,16 @@ int keyCodeFor(char c) {
 }
 
 /// A key event for our own window, as AppKit would deliver one.
-NSEvent *keyEvent(NSEventType type, NSWindow *window, char c, int keyCode) {
+NSEvent *keyEvent(
+    NSEventType type,
+    NSWindow *window,
+    char c,
+    int keyCode,
+    NSEventModifierFlags modifiers = 0) {
   NSString *characters = [NSString stringWithFormat:@"%c", c];
   return [NSEvent keyEventWithType:type
                           location:NSZeroPoint
-                     modifierFlags:0
+                     modifierFlags:modifiers
                          timestamp:[[NSProcessInfo processInfo] systemUptime]
                       windowNumber:window.windowNumber
                            context:nil
@@ -187,9 +192,9 @@ void changeMiniaturized(
 /// `miniaturize` and `deminiaturize` (changeMiniaturized()).
 void runOnMain(const std::string &command, const Finish &finish) {
   if (command == "terminate") {
-    // What a Dock Quit or Cmd-Q sends, and allowed before the window
-    // exists: HnuiApplication's terminate: (mac_app.mm) forwards it either
-    // way. Read back after the call returns, which it does once
+    // What a Dock Quit or the menu's Quit item sends, and allowed before the
+    // window exists: HnuiApplication's terminate: (mac_app.mm) forwards it
+    // either way. Read back after the call returns, which it does once
     // terminate: is ours: the window's visibility, or that there is none.
     [NSApp terminate:nil];
     NSWindow *after = (__bridge NSWindow *)uiMacWindow();
@@ -243,6 +248,38 @@ void runOnMain(const std::string &command, const Finish &finish) {
         std::string("first_responder_is_view=") +
             (window.firstResponder == window.contentView ? "1" : "0"),
         finish);
+  } else if (verb == "cmd-key" || verb == "menu-key") {
+    std::string arg;
+    in >> arg;
+    const int keyCode = arg.size() == 1 ? keyCodeFor(arg[0]) : -1;
+    if (keyCode < 0) {
+      finish("ERROR " + verb + ": no key code for '" + arg + "'", true);
+      return;
+    }
+    NSEvent *event = keyEvent(
+        NSEventTypeKeyDown,
+        window,
+        arg[0],
+        keyCode,
+        NSEventModifierFlagCommand);
+    if (verb == "cmd-key") {
+      // A Command key-down handed to the application, where AppKit's
+      // event loop hands a real one: -[NSApplication sendEvent:] offers it
+      // to the main menu as a key equivalent before any window gets it.
+      // Nothing is returned to read, so the answer is what the menu's
+      // action would have changed; the trace says whether an action ran.
+      [NSApp sendEvent:event];
+      applied(
+          command,
+          std::string("visible=") + (window.isVisible ? "1" : "0"),
+          finish);
+    } else {
+      // The same event handed to the main menu directly, one step lower:
+      // it skips -[NSApplication sendEvent:]'s routing, and its answer is
+      // the menu's own, whether an item took the key.
+      const BOOL handled = [NSApp.mainMenu performKeyEquivalent:event];
+      applied(command, std::string("handled=") + (handled ? "1" : "0"), finish);
+    }
   } else if (verb == "resize") {
     int width = 0;
     int height = 0;

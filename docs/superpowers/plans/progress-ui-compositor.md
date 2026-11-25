@@ -356,9 +356,51 @@ Three checks were made by hand at the Mac on 2026-11-21, recorded in
 What a green suite on both machines still does **not** show, each in the
 tracker: the GL backend on NVIDIA's driver, native Xorg or Intel GL (the
 suite's window tests draw through llvmpipe under Xvfb, always); Intel
-Macs; Cmd-Q or a quit Apple event reaching `terminate:`; the in-flight
+Macs; a quit Apple event reaching `terminate:` (Cmd-Q was shown on
+2026-11-25, below); the in-flight
 maintenance guard; fullscreen on macOS; and what GitHub's macOS runners
 have for a display.
+
+## After the plan: a main menu on macOS, 2026-11-25
+
+Not a task of the plan; it closes the tracker's "no main menu, so Cmd-Q
+does nothing". The application now has a main menu holding one item,
+`Quit <process name>`, key equivalent Cmd-Q, action `terminate:` on
+`NSApp` (`installMainMenu`, `tools/hermes-node-ui/mac_app.mm`), and
+`terminate:` traces its sender on entry. One item, because AppKit offers
+every Command key-down to the main menu before the window: each item is
+a key a program no longer receives. Two driver commands were added,
+`cmd-key <c>` and `menu-key <c>`, and `test/ui-terminate.js` gained a
+fourth case, MENU.
+
+Measured on the Mac (Apple M4 Max, macOS 27.2, ASAN build):
+
+- `[NSApp sendEvent:]` offers a synthesized Command key-down to the main
+  menu in the test state (Accessory policy, never activated), and
+  `[NSApp.mainMenu performKeyEquivalent:]` answers 1 for Q and 0 for W.
+- A Command key-down no item claims reaches the window through `[NSApp
+  sendEvent:]` even with no key window, and its `keydown` arrives later
+  than two platform frames and a loop turn. MENU's first version counted
+  after such a wait and failed on it; it now orders by events (a W
+  before the Q and one after, each waited for by its own `keydown`).
+- MENU passed 8 of 8. With `installMainMenu()` removed it fails: no
+  close arrives and the run ends at the wrapper's limit (123 s).
+- By hand, real keys, window frontmost: Cmd-Q three times and Cmd-W
+  once. Each Cmd-Q reached `terminate:` with the menu item as sender;
+  two were prevented and the third closed the window. No key event for
+  any Q, a `keydown` for the W, and one for the Command key itself.
+- The whole suite, twice: the first run failed
+  `test/ui-resize-generation.js`, which hung until its 300 s limit with
+  its swapchain invalid; the second was 456 unit tests and JS 239
+  passed, 5 unsupported, 0 failed. The failing test passed 6 of 6 alone.
+  The cause is not established and nothing connects it to the menu; it
+  is in the tracker.
+
+On Linux the change compiles nothing and runs no new test: 456 unit
+tests, and JS 234 passed, 10 unsupported, 0 failed, as before.
+
+Still unproved, in the tracker: a quit Apple event reaching
+`terminate:`.
 
 ## Things a newcomer needs to know
 
@@ -420,7 +462,9 @@ display. Task 17 closed the display-sleep and Release issue (both were
 measured), narrowed the Dock Quit one to Cmd-Q and the quit Apple event
 (a real Dock Quit was checked by hand and reaches `terminate:`), and
 added one: the GL backend is untested on NVIDIA's driver, native Xorg
-and Intel GL.
+and Intel GL. On 2026-11-25 the main-menu issue was closed (Cmd-Q now
+closes), the Cmd-Q one narrowed to the quit Apple event, and one added:
+`test/ui-resize-generation.js` hung once in a full run on the Mac.
 
 ## Obligations carried into later tasks
 

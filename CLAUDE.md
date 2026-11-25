@@ -1429,15 +1429,26 @@ error. Everything Metal was measured on one Apple-silicon Mac.
   call (a count kept beside `sapp_cancel_quit()` whether or not the test
   hooks are on), or `no window yet, forwarded directly`, or `no frame
   yet, forwarded directly`. `test/ui-terminate.js` pins
-  three cases. **None of them lands between the window's creation and
+  four cases. **None of them lands between the window's creation and
   its first frame**, the interval the frame check is for: removing that
-  check leaves all three green, and no request can be aimed there
-  without a timing assumption. **Every one of them enters at `[NSApp terminate:nil]`
-  in-process.** A real Dock Quit was checked by hand on 2026-11-21 and
-  does reach the override, through `performClose:`. **That Cmd-Q or a
-  quit Apple event reaches it is unproved**: there is no main menu, and
-  the one second-process route tried reached no handler in the target at
-  all. **The trace line is printed after `performClose:` returns, so its
+  check leaves all four green, and no request can be aimed there
+  without a timing assumption. **Every one of them enters in-process**,
+  three at `[NSApp terminate:nil]` and MENU at `[NSApp sendEvent:]`
+  with a synthesized Cmd-Q. A real Dock Quit was checked by hand on 2026-11-21 and
+  does reach the override, through `performClose:`. **Cmd-Q reaches it
+  through a main menu of our own** (`installMainMenu`, `mac_app.mm`):
+  Sokol creates none, so the application gets one item, `Quit <process
+  name>`, key equivalent Cmd-Q, action `terminate:` on `NSApp`.
+  `terminate:` traces its sender on entry (`app: terminate: sender is
+  NSMenuItem`, or `nil` for the driver's call), which is how
+  `test/ui-terminate.js` MENU tells the menu's request from any other.
+  **One item on purpose**: AppKit offers every Command key-down to the
+  main menu before the window, so each added item is a key a program no
+  longer receives. A program gets no `keydown` for Cmd-Q and gets one
+  for every other key (checked by hand on 2026-11-25, real keys: three
+  Cmd-Q, none delivered as a key; a Cmd-W between them delivered).
+  **That a quit Apple event reaches the override is unproved**: the one
+  second-process route tried reached no handler in the target at all. **The trace line is printed after `performClose:` returns, so its
   absence proves nothing when the close was not prevented**: the JS
   thread's `process.exit()` can end the process first (measured:
   `performClose:` returned about eight frames after the quit was
@@ -1493,6 +1504,8 @@ error. Everything Metal was measured on one Apple-silicon Mac.
   | `close` | `[window performClose:nil]` | `visible=<0\|1>` |
   | `miniaturize`, `deminiaturize` | `[window miniaturize:]` and its inverse | `miniaturized=<0\|1>`, after AppKit's notification that the animation ended |
   | `terminate` | `[NSApp terminate:nil]` | `visible=<0\|1>`, or `window=0` before the window exists |
+  | `cmd-key <c>` | `[NSApp sendEvent:]` with a synthesized Command key-down | `visible=<0\|1>`; the trace says whether a menu action ran |
+  | `menu-key <c>` | `[NSApp.mainMenu performKeyEquivalent:]` with the same event | `handled=<0\|1>` |
   | `state` | reads only | `viewable=<0\|1> <w>x<h>` |
   | `gpu-hold`, `gpu-release` | not window commands: they hold the producer's frames in flight on the GPU and release them (`lib/compositor-gpu/metal_test_hooks.h`) | `held=<0\|1>`, `in_flight=<n>` |
 

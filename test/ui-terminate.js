@@ -15,7 +15,7 @@
 // the close button makes, which the shared code cancels and forwards to
 // the program's `close` listeners.
 //
-// Three cases, one per RUN group:
+// Four cases, one per RUN group:
 //
 //  DEFAULT  No listener prevents it. The close proceeds as in ui-close.js's
 //           default case -- `'exit'` listeners run and the status is
@@ -40,6 +40,24 @@
 //           delivered once the window is ready, and nothing prevents it.
 //           Measured: it always landed before the window existed.
 //
+//  MENU     The request is a Command-Q key-down handed to the application
+//           (`cmd-key q`: `[NSApp sendEvent:]`), which AppKit offers to
+//           the main menu as a key equivalent. The menu's one item, Quit,
+//           sends `terminate:` to NSApp, so the trace has the override's
+//           `sender is NSMenuItem` line and the same performClose: line
+//           as DEFAULT. A `close` listener prevents it. That the menu
+//           took the Q, so the program got no `keydown` for it, is shown
+//           by order and not by waiting: `cmd-key w` is sent before the Q
+//           and again after it, no menu item has that key, and each W is
+//           waited for by its own `keydown`. Events arrive in the order
+//           they were produced, so the codes received up to the second W
+//           are exactly `KeyW,KeyW` only if the Q produced none.
+//           (Measured on the Mac: an unclaimed Command key-down reaches
+//           the window through `[NSApp sendEvent:]` even with no key
+//           window, and its `keydown` arrives later than two platform
+//           frames and a loop turn, which is why nothing here counts
+//           after a wait.)
+//
 // **Nothing here covers the interval between Sokol creating its window and
 // its first frame**, which is the one in which terminate: must not use
 // performClose: (mac_app.mm says why), and which the `no frame yet` branch
@@ -51,7 +69,9 @@
 // inside performClose: or the direct hand-off -- before `app: terminate
 // requested`, printed after either returned; and none may contain
 // `cleanup_cb` or `sapp_run returned`, which is what AppKit's own terminate:
-// leaves behind.
+// leaves behind. MENU's `terminate: sender is NSMenuItem` line is what
+// says the request came through the menu: the driver's own call passes
+// nil.
 //
 // **Every request here enters at -[NSApplication terminate:], in this
 // process** (ui.__driveWindow('terminate') calls `[NSApp terminate:nil]` on
@@ -59,13 +79,16 @@
 // it: NSRunningApplication's quit Apple event arrives and reaches no
 // handler at all -- not terminate:, not applicationShouldTerminate:, not a
 // kAEQuitApplication handler. So no case here shows a request from outside
-// the process reaching the override. A real Dock Quit was checked by hand
+// the process reaching the override (MENU's key-down is synthesized in
+// process too). A real Dock Quit was checked by hand
 // on 2026-11-21 and does reach it, through performClose:. That run also
 // showed something DEFAULT cannot: with nothing preventing the close, the
 // JS thread can end the process before the main thread prints `app:
 // terminate requested`. Here the line always precedes the exit only
 // because the driver blocks the JS thread until `[NSApp terminate:nil]`
-// returns. A Cmd-Q and a quit Apple event remain unproved.
+// returns. A real Cmd-Q was checked by hand on 2026-11-25 and reaches it
+// through the menu item, as MENU's does. A quit Apple event remains
+// unproved.
 //
 // The driver's answer is read back after `[NSApp terminate:nil]` returned
 // -- which it does only because terminate: is ours: `visible=1` once the
@@ -92,6 +115,10 @@
 // RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s early > %t.early.out 2> %t.early.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=EARLY-CODE %s
 // RUN: %FileCheck --check-prefix=EARLY %s < %t.early.out
 // RUN: %FileCheck --check-prefix=EARLY-TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.early.err
+//
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s menu > %t.menu.out 2> %t.menu.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=MENU-CODE %s
+// RUN: %FileCheck --check-prefix=MENU %s < %t.menu.out
+// RUN: %FileCheck --check-prefix=MENU-TRACE --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='forwarded directly' --implicit-check-not='sapp_run returned' --implicit-check-not='cleanup_cb' --implicit-check-not=AddressSanitizer %s < %t.menu.err
 
 // DEFAULT: ANSWER visible=1
 // DEFAULT-NEXT: CLOSE-EVENT
@@ -122,6 +149,18 @@
 // EARLY-TRACE-NEXT: app: terminate requested; {{(through performClose:, 1 quit request\(s\) cancelled|no window yet, forwarded directly|no frame yet, forwarded directly)}}
 // EARLY-TRACE: close: not cancelled
 // EARLY-TRACE: lifecycle: CLOSING (reason=close)
+
+// MENU: CONTROL KeyW
+// MENU-NEXT: ANSWER visible=1
+// MENU-NEXT: CANCELLED
+// MENU-NEXT: KEYS KeyW,KeyW
+// MENU-NEXT: EXIT code=0
+// MENU-CODE: EXITCODE 0
+// MENU-TRACE: app: main menu installed (1 item(s); first: key=q action=terminate: target_is_app=1)
+// MENU-TRACE: app: terminate: sender is NSMenuItem
+// MENU-TRACE-NEXT: quit requested: cancelled, forwarded as close
+// MENU-TRACE-NEXT: app: terminate requested; through performClose:, 1 quit request(s) cancelled
+// MENU-TRACE: close: cancelled
 
 'use strict';
 
@@ -193,6 +232,44 @@ async function main() {
       });
     });
     console.log('ANSWER ' + terminate());
+    return;
+  }
+
+  if (mode === 'menu') {
+    process.on('exit', (code) => console.log('EXIT code=' + code));
+    const codes = [];
+    let onKey = null;
+    win.on('keydown', (e) => {
+      codes.push(e.code);
+      const resolve = onKey;
+      onKey = null;
+      if (resolve)
+        resolve();
+    });
+    const nextKey = () => new Promise((resolve) => (onKey = resolve));
+    // The control, waited for by its own `keydown` and not by time
+    // (measured: it arrives later than two platform frames and a loop
+    // turn).
+    let key = nextKey();
+    ui.__driveWindow('cmd-key w');
+    await key;
+    console.log('CONTROL ' + codes.join(','));
+    win.on('close', (e) => {
+      e.preventDefault();
+      console.log('CANCELLED');
+      // A loop turn before a driver command from inside a listener (see
+      // EARLY), then the second W: events arrive in the order they were
+      // produced, so a `keydown` for the Q would be in `codes` before it.
+      turn().then(() => {
+        key = nextKey();
+        ui.__driveWindow('cmd-key w');
+        return key;
+      }).then(() => {
+        console.log('KEYS ' + codes.join(','));
+        process.exit(0);
+      });
+    });
+    console.log('ANSWER ' + ui.__driveWindow('cmd-key q'));
     return;
   }
 

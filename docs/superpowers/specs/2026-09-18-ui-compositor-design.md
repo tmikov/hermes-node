@@ -769,19 +769,26 @@ performClose:, 1 quit request(s) cancelled`. That line is printed after
 `performClose:` returns, which was measured at about eight frames after
 the quit request was cancelled; when nothing prevents the close, the JS
 thread's `process.exit()` can end the process first, so the line's
-absence in such a run proves nothing. **Whether Cmd-Q or a quit Apple
-event reaches the override is unproved.** There is no main menu, so
-Cmd-Q cannot be tried; and `-[NSRunningApplication terminate]` from a
-second process was tried twice and reached no handler at all in the
-target, including in a minimal control application.
+absence in such a run proves nothing. **Cmd-Q reaches it too, through
+the main menu.** Sokol creates no menu, so the host installs one holding
+a single item, Quit, with the key equivalent Cmd-Q and the action
+`terminate:` on `NSApp`. Checked by hand on 2026-11-25: three presses
+each arrived at the override with the menu item as sender, two prevented
+by the program and the third closing it, and the program received no key
+event for any of them, while a Cmd-W pressed between them arrived as an
+ordinary `keydown`. The menu has one item on purpose: AppKit offers every
+Command key-down to the main menu before the window, so each further
+item is a key a program can no longer receive. **Whether a quit Apple
+event reaches the override is unproved**: `-[NSRunningApplication
+terminate]` from a second process was tried twice and reached no handler
+at all in the target, including in a minimal control application.
 
 What remains impossible, and is documented rather than fixed: a `close`
 listener that cancels, or a JS thread busy in synchronous code, leaves a
 logout or shutdown waiting until the system gives up and reports the
 application, and a request carries no reason, so a program cannot tell
-logout from Quit; Force Quit and `SIGKILL` run no `'exit'` listener, as
-everywhere; and Sokol creates no main menu, so Cmd-Q has nothing to
-invoke.
+logout from Quit; and Force Quit and `SIGKILL` run no `'exit'` listener,
+as everywhere.
 
 **Inherited limits, documented not fixed:** no IME, no Wayland, Linux DPI
 scale read once at startup.

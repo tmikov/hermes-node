@@ -30,6 +30,11 @@ namespace node_compat {
 /// onto the X11 driver's line; an answer starting `ERROR` is a refusal):
 ///
 ///   key <c>          `first_responder_is_view=<0|1>`
+///   cmd-key <c>      `visible=<0|1>` -- a Command key-down through
+///                    `[NSApp sendEvent:]`, which offers it to the main
+///                    menu first; the trace says whether an action ran
+///   menu-key <c>     `handled=<0|1>` -- the same event handed straight
+///                    to `[NSApp.mainMenu performKeyEquivalent:]`
 ///   resize <w> <h>   `content=<w>x<h>`
 ///   close            `visible=<0|1>`
 ///   miniaturize      `miniaturized=<0|1>`

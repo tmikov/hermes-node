@@ -62,7 +62,8 @@
   return [super setActivationPolicy:policy];
 }
 
-/// What a Dock Quit, Cmd-Q or `[NSApp terminate:nil]` reaches. **Never
+/// What a Dock Quit, Cmd-Q (through the main menu's Quit item,
+/// installMainMenu()) or `[NSApp terminate:nil]` reaches. **Never
 /// calls super**: AppKit's terminate: ends the process from inside the call
 /// (measured before this existed: `cleanup_cb`, then status 0 or a
 /// SIGTRAP), so the program's `close` listeners and exit code would be
@@ -88,6 +89,11 @@
 /// no frame. The shared `quit requested` line is printed inside either.
 - (void)terminate:(id)sender {
   using namespace hermes::node_compat;
+  // Who asked, read from the argument: the main menu's Quit item for
+  // Cmd-Q (installMainMenu()), nil for the test driver's call.
+  uiTrace(
+      "app: terminate: sender is %s",
+      sender == nil ? "nil" : [NSStringFromClass([sender class]) UTF8String]);
   NSWindow *window = (__bridge NSWindow *)uiMacWindow();
   if (window != nil && sapp_frame_count() > 0) {
     const uint64_t before = uiQuitRequestsCancelled();
@@ -118,6 +124,54 @@ bool noActivateRequested() {
   return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
 }
 
+/// Give the application a main menu holding one item, `Quit <process
+/// name>`, whose key equivalent is Cmd-Q and whose action is `terminate:`
+/// on NSApp -- HnuiApplication's override, so Cmd-Q becomes the cancelable
+/// close like every other termination request. Sokol creates no menu, and
+/// a key equivalent with no menu item to invoke does nothing.
+///
+/// The target is NSApp itself rather than nil: a nil-targeted action is
+/// routed through the key window's responder chain, and under the
+/// no-activate mode there may be no key window.
+///
+/// One item only. AppKit offers the main menu every Command key-down
+/// before the window sees it, so each further item is a key the program
+/// can no longer receive: with this menu a program gets no `keydown` for
+/// Cmd-Q, and still gets one for every other key.
+///
+/// The trace line is read back from `NSApp.mainMenu`.
+void installMainMenu() {
+  NSString *name = [[NSProcessInfo processInfo] processName];
+  NSMenuItem *quit =
+      [[NSMenuItem alloc] initWithTitle:[@"Quit " stringByAppendingString:name]
+                                 action:@selector(terminate:)
+                          keyEquivalent:@"q"];
+  quit.target = NSApp;
+  NSMenu *appMenu = [[NSMenu alloc] initWithTitle:name];
+  [appMenu addItem:quit];
+  NSMenuItem *appItem = [[NSMenuItem alloc] initWithTitle:name
+                                                   action:nil
+                                            keyEquivalent:@""];
+  appItem.submenu = appMenu;
+  NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:@""];
+  [mainMenu addItem:appItem];
+  NSApp.mainMenu = mainMenu;
+
+  NSMenu *installed = NSApp.mainMenu;
+  NSMenu *submenu =
+      installed.numberOfItems > 0 ? [installed itemAtIndex:0].submenu : nil;
+  NSMenuItem *item = submenu.numberOfItems > 0 ? [submenu itemAtIndex:0] : nil;
+  uiTrace(
+      "app: main menu installed (%ld item(s); first: key=%s action=%s "
+      "target_is_app=%d)",
+      static_cast<long>(submenu.numberOfItems),
+      item == nil ? "" : [item.keyEquivalent UTF8String],
+      item == nil || item.action == nullptr
+          ? ""
+          : [NSStringFromSelector(item.action) UTF8String],
+      item != nil && item.target == NSApp ? 1 : 0);
+}
+
 } // namespace
 
 void uiMacInstallApplication() {
@@ -144,6 +198,7 @@ void uiMacInstallApplication() {
     uiTrace(
         "app: HnuiApplication installed (activate=%d)",
         uiMacRefusesActivation() ? 0 : 1);
+    installMainMenu();
   }
 }
 
