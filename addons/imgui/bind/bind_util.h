@@ -215,6 +215,9 @@ class Call {
   // A negative value is not converted as it is, so it is not bounded here;
   // each caller says why.
   bool belowIntLimit(float v, const char *what);
+  // A position ImGui converts to int as it is, whatever its sign:
+  // ERR_OUT_OF_RANGE unless -2^31 <= \p v < 2^31.
+  bool inIntRange(float v, const char *what);
 
   // After the arguments are read: counts the call, then the caller calls
   // ImGui.

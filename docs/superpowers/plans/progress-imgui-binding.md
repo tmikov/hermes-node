@@ -273,6 +273,12 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 9 | `ui-imgui-app.js` | `CallbackScope`'s destructor not lowering the callback depth (`--gCallbackDepth` removed) | fails before THROW is reached: the main run's first frame, once Log's clipper has run, throws `Error: imgui.render(): not allowed inside a list clipper's callback`; `EXITCODE 1` after `SCALE 1`; test failed |
 | 9 | `ui-imgui-app.js` (`throw`) | the callback scope left raised only when the callback threw (a heap `CallbackScope`, deleted only with no exception pending): the brief's mutation confined to the throw path | after `THROW caught ...`: `Error: imgui.newFrame(): not allowed inside a list clipper's callback`, `EXITCODE 1`, no `THROW ok`; test failed. Before the `process.emit` fix below, the same mutation hung instead (status 124, nothing printed): the second uncaught exception was swallowed |
 | 9 (emit) | `test-process-emit-return.js` | (RED) run before the fix | `EMIT true true true true false` (node v24.13.1: `true false true false false`); the second timer's throw swallowed and `STILL ALIVE` printed, exit 0; test failed |
+| 8 (review) | `ui-imgui-bind-windows.js`, `ui-imgui-bind-widgets.js` | (RED) POSITION and LBSIZE written, no bound yet | windows: `NOTHROW ERR_OUT_OF_RANGE` at `setNextWindowPos([2147483648, 0])`; widgets: `NOTHROW ERR_OUT_OF_RANGE` at `beginListBox('##big', [2147483648, 100])`; both failed |
+| 8 (review) | `ui-imgui-bind-windows.js` | `setNextWindowPos`'s position bound removed | `NOTHROW ERR_OUT_OF_RANGE`; test failed |
+| 8 (review) | `ui-imgui-bind-windows.js` | `Call::inIntRange` one-sided (`v < 2^31` only) | `NOTHROW ERR_OUT_OF_RANGE` at the first negative case; test failed |
+| 8 (review) | `ui-imgui-bind-windows.js` | `Call::inIntRange`'s lower end exclusive (`v > -2^31`) | `RangeError: imgui.setNextWindowPos(): pos[0] must be at least -2147483648 and less than 2147483648; got -2.14748e+09`, uncaught (the accepted -2^31 refused); test failed |
+| 8 (review) | `ui-imgui-bind-widgets.js` | `beginListBox`'s size bound removed | `NOTHROW ERR_OUT_OF_RANGE`; test failed |
+| 8 (review) | `ui-imgui-bind-docking.js` | NOWINDOW's script ending in `process.exit(1)` after its output | the new CODE check of the NOWINDOW run: `CODE: expected string not found in input`; test failed (before the fix that run checked no status) |
 
 ## Behaviours no test detects
 
@@ -1344,3 +1350,28 @@ automated test would notice losing. Each task appends its own.
   Not a leak: a Release run of 16000 frames had rss 147 MiB at the start,
   a peak of 172 MiB near frame 6000, and 152.5 MiB from frame 10000 to the
   end.
+- **Review fixes (Task 8).** `setNextWindowPos` is bounded to -2^31 ..
+  < 2^31 on both components (`Call::inIntRange`): with the default zero
+  pivot Begin() hands the position to `SetWindowPos` as it is
+  (imgui.cpp:8155-8169), which truncates it (9311), so the earlier
+  survey's "only a sum" was true only for a non-zero pivot (8426).
+  Re-reading the other sized and positioned arguments found one more
+  converted as it is: `beginListBox`'s size (`ImTrunc`, widgets:8965),
+  now bounded below 2^31. `setCursorScreenPos`, `dummy`, `sameLine`,
+  `indent`/`unindent`, and the size of `button`, `invisibleButton`,
+  `selectable`, `progressBar` and `colorButton` reach a conversion only
+  as part of a sum; the surface table's "Not covered" 3f now has the
+  table. `inputTextMultiline`'s and `beginListBox`'s children are begun
+  with `fl(cursor + size) - cursor`, which can round past an accepted
+  size; documented, not bounded lower, since the cursor is unbounded.
+  Found by reading in that pass, not a conversion and not measured:
+  `colorButton`'s alpha checkerboard is unclipped and emits about
+  `(size.x / size.y) * 9` rectangles (3f). The `canDockSpaceOverViewport`
+  comment now says the host's SkipItems makes both conditions stricter
+  than ImGui, and the NOWINDOW run of the docking test checks its exit
+  status. POSITION (`ui-imgui-bind-windows.js`) rejects 2^31, the float
+  below -2^31 and +-3e38 on each component, and begins 32 x 32 windows at
+  -2^31 and at 2147483520, reading the positions back; LBSIZE
+  (`ui-imgui-bind-widgets.js`) rejects 2^31 and draws a list box
+  2147483520 wide.
+

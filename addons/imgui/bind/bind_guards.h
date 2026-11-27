@@ -115,7 +115,9 @@ const char *canListClipper();
 /// (imgui.cpp:20940, 20943), which then asserts on the next submission of
 /// that ID. The host window's SkipItems, which would make ImGui take the
 /// keep-alive path too (imgui.cpp:20914-20915), is set only inside the
-/// call and is not read.
+/// call and is not read, so both conditions are stricter than ImGui
+/// there: with it set, ImGui accepts a second call or a split node's ID
+/// that the guard refuses.
 const char *canDockSpaceOverViewport(unsigned dockspaceId, int flags);
 
 /// What listClipper() compares after each callback (design, "Exceptions:

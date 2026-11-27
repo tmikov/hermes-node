@@ -40,6 +40,9 @@
 //  LISTBOX   beginListBox('##lb', [200, 100]) returns true and is an item of
 //            that size holding its selectables; a click on one returns
 //            true.
+//  LBSIZE    a beginListBox size component of 2^31 or more:
+//            ERR_OUT_OF_RANGE, not called; the largest float below 2^31
+//            accepted, and the list box drawn that wide.
 //  TEXTFIELDS inputText, inputTextWithHint and inputTextMultiline each draw
 //            a non-empty item.
 //  FORMAT    a slider with format '%.1f units' draws; '%s', '%d', '%f %f'
@@ -461,6 +464,27 @@ async function main() {
                          JSON.stringify([box, ra, rb]) + ' ' + presses);
   }
 
+  // --- LBSIZE ----------------------------------------------------------
+  {
+    // BeginListBox truncates its size with ImTrunc (widgets:8965); a
+    // positive component is the argument as it is.
+    const L = 2147483520; // the largest float below 2^31
+    let message, shown = false, box;
+    await h.run(inWindow(() => {
+      for (const s of [[2147483648, 100], [100, 2147483648]])
+        message = rejects('beginListBox',
+                          () => imgui.beginListBox('##big', s),
+                          'ERR_OUT_OF_RANGE').message;
+      shown = imgui.beginListBox('##big', [L, 100]);
+      if (shown)
+        imgui.endListBox();
+      box = rect();
+    }));
+    const ok = shown && width(box) === Math.fround(box.min[0] + L) - box.min[0];
+    console.log(ok ? 'LBSIZE ok' : 'LBSIZE WRONG ' + shown + ' ' + JSON.stringify(box));
+    console.log('LBSIZE message ' + message);
+  }
+
   // --- TEXTFIELDS ------------------------------------------------------
   {
     const rects = [];
@@ -690,6 +714,8 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}PROGRESS ok{{$}}
 // CHECK-NEXT: {{^}}BULLET ok{{$}}
 // CHECK-NEXT: {{^}}LISTBOX ok{{$}}
+// CHECK-NEXT: {{^}}LBSIZE ok{{$}}
+// CHECK-NEXT: {{^}}LBSIZE message imgui.beginListBox(): size[1] must be less than 2147483648; got 2.14748e+09{{$}}
 // CHECK-NEXT: {{^}}TEXTFIELDS ok{{$}}
 // CHECK-NEXT: {{^}}FORMAT ok{{$}}
 // CHECK-NEXT: {{^}}FORMATLEN ok{{$}}

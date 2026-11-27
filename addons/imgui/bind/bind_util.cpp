@@ -364,6 +364,16 @@ bool Call::belowIntLimit(float v, const char *what) {
   return false;
 }
 
+bool Call::inIntRange(float v, const char *what) {
+  if (v >= -2147483648.0f && v < 2147483648.0f)
+    return true;
+  throwRange(
+      "%s must be at least -2147483648 and less than 2147483648; got %g",
+      what,
+      v);
+  return false;
+}
+
 bool Call::f64(size_t i, const char *what, double *out) {
   if (typeOf(i) != napi_number) {
     throwType("ERR_INVALID_ARG_TYPE", "%s must be a number", what);

@@ -119,13 +119,19 @@ napi_value endChild(napi_env env, napi_callback_info info) {
   return c.undefined();
 }
 
-/// `setNextWindowPos(pos, cond = 0, pivot = [0, 0])`, imgui.h:492.
+/// `setNextWindowPos(pos, cond = 0, pivot = [0, 0])`, imgui.h:492. Each
+/// component of `pos` is bounded to -2^31 .. 2^31: with a zero pivot
+/// Begin() passes it to SetWindowPos as it is (imgui.cpp:8155-8169), which
+/// converts it to int (ImTrunc, imgui.cpp:9311), whatever its sign. With a
+/// pivot the value converted is `pos - size * pivot` (imgui.cpp:8426), a
+/// sum this does not cover (surface table, "Not covered" 3f).
 napi_value setNextWindowPos(napi_env env, napi_callback_info info) {
   Call c(env, info, "setNextWindowPos");
   ImVec2 pos;
   int cond = 0;
   ImVec2 pivot(0.0f, 0.0f);
-  if (!c.ok() || !c.vec2(0, "pos", &pos))
+  if (!c.ok() || !c.vec2(0, "pos", &pos) || !c.inIntRange(pos.x, "pos[0]") ||
+      !c.inIntRange(pos.y, "pos[1]"))
     return nullptr;
   if ((!c.isMissing(1) && !c.enumValue(1, "cond", kCond, &cond)) ||
       (!c.isMissing(2) && !c.vec2(2, "pivot", &pivot)) || !c.needFrame())

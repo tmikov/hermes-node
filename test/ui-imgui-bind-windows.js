@@ -42,6 +42,10 @@
 //            beginChild: ERR_OUT_OF_RANGE, not called. The largest float
 //            below 2^31 is accepted by both: getWindowSize() reads it back
 //            in the window and in the child.
+//  POSITION  a setNextWindowPos component of 2^31 or more, or below
+//            -2^31: ERR_OUT_OF_RANGE, not called, each component and
+//            sign. -2^31 and the largest float below 2^31 accepted: two
+//            32 x 32 windows begun there read their positions back.
 //  COVERAGE  every Windows function has reached ImGui.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
@@ -53,7 +57,8 @@
 //  begin('')'s check removed: REJECTED fails (ImGui aborts);
 //  each of beginChild's three flag checks removed: REJECTED fails;
 //  getWindowPos(out) returning a new array instead of out: POS fails;
-//  setNextWindowSize's or beginChild's size bound removed: SIZES fails.
+//  setNextWindowSize's or beginChild's size bound removed: SIZES fails;
+//  setNextWindowPos's position bound removed, or one-sided: POSITION fails.
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -364,6 +369,40 @@ async function main() {
     console.log('SIZES message ' + message);
   }
 
+  // --- POSITION --------------------------------------------------------
+  {
+    // With the default pivot, Begin() passes the position to SetWindowPos
+    // as it is (imgui.cpp:8155-8169), which truncates it with ImTrunc
+    // (imgui.cpp:9311): undefined outside -2^31 .. 2^31, both signs.
+    const range = 'ERR_OUT_OF_RANGE';
+    const BELOW_MIN = -2147483904; // the float next below -2^31
+    let message, low, high;
+    await h.run(() => windowAt('position', [40, 50], [300, 200], () => {
+      for (const p of [[INT_LIMIT, 0], [0, INT_LIMIT], [BELOW_MIN, 0],
+                       [0, BELOW_MIN], [3e38, 0], [0, -3e38]])
+        message = rejects('setNextWindowPos', () => imgui.setNextWindowPos(p),
+                          range).message;
+    }));
+    // The extremes accepted. A 32 x 32 window keeps position + size from
+    // rounding up to 2^31 (the float spacing there is 128).
+    const L = LARGEST_BELOW_LIMIT, M = -INT_LIMIT;
+    await h.run(() => {
+      for (const [name, p] of [['low', [M, M]], ['high', [L, L]]]) {
+        imgui.setNextWindowPos(p);
+        imgui.setNextWindowSize([32, 32]);
+        imgui.begin(name, null, imgui.WindowFlags_NoTitleBar);
+        if (name === 'low')
+          low = imgui.getWindowPos();
+        else
+          high = imgui.getWindowPos();
+        imgui.end();
+      }
+    });
+    const ok = same(low, [M, M]) && same(high, [L, L]);
+    console.log(ok ? 'POSITION ok' : 'POSITION WRONG ' + low + ' / ' + high);
+    console.log('POSITION message ' + message);
+  }
+
   harness.checkGroupCoverage(h, 'Windows');
   process.exit(0);
 }
@@ -385,6 +424,8 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}REJECTED usage imgui.isWindowHovered(): Invalid flags for IsWindowHovered()!{{$}}
 // CHECK-NEXT: {{^}}SIZES ok{{$}}
 // CHECK-NEXT: {{^}}SIZES message imgui.setNextWindowSize(): size[0] must be less than 2147483648; got 3e+38{{$}}
+// CHECK-NEXT: {{^}}POSITION ok{{$}}
+// CHECK-NEXT: {{^}}POSITION message imgui.setNextWindowPos(): pos[1] must be at least -2147483648 and less than 2147483648; got -3e+38{{$}}
 // CHECK-NEXT: {{^}}COVERAGE Windows ok{{$}}
 // CODE: EXITCODE 0
 

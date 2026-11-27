@@ -72,7 +72,8 @@
 // RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
 // RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --implicit-check-not='imgui: usage error' --check-prefix=TRACE %s < %t.err
-// RUN: env HERMES_NODE_UI_TEST_HOOKS=1 %timeout 60 %hermes-node-ui %s nowindow | %FileCheck --check-prefix=NOWINDOW %s
+// RUN: sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 %timeout 60 %hermes-node-ui %s nowindow > %t.nowindow.out'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
+// RUN: %FileCheck --check-prefix=NOWINDOW %s < %t.nowindow.out
 
 'use strict';
 

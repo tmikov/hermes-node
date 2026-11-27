@@ -484,6 +484,11 @@ napi_value inputText(napi_env env, napi_callback_info info) {
 /// (IM_TRUNC, imgui.cpp:9361, 9365). A zero width is the item width,
 /// bounded by setNextItemWidth() and pushItemWidth(); a negative component
 /// becomes max(4, avail + size) (CalcItemSize, imgui.cpp:12615-12622).
+/// The bound covers the argument, not the sum: the child is begun with
+/// `frame_bb.GetSize()`, `fl(cursor + size) - cursor` (widgets:4824,
+/// 4856), which rounds up to 2^31 for an accepted size near the limit
+/// with the cursor at 64 or more ("Not covered" 3f). No lower bound makes
+/// that sum safe for every cursor, since the cursor itself is unbounded.
 napi_value inputTextMultiline(napi_env env, napi_callback_info info) {
   Call c(env, info, "inputTextMultiline");
   std::string label;
@@ -716,13 +721,22 @@ napi_value colorButton(napi_env env, napi_callback_info info) {
   return c.result(pressed);
 }
 
-/// `beginListBox(label, size = [0, 0])`, imgui.h:805.
+/// `beginListBox(label, size = [0, 0])`, imgui.h:805. Each component of
+/// `size` is bounded below 2^31: BeginListBox truncates the size with
+/// ImTrunc (widgets:8965), and a positive component is the argument as it
+/// is (CalcItemSize, imgui.cpp:12615-12622; a negative one becomes
+/// max(4, avail + size), zero the default). Its child window is then begun
+/// with `frame_bb.GetSize()`, `fl(cursor + size) - cursor` (widgets:8967,
+/// 8989), which can round up to 2^31 for an accepted size: a sum, as in
+/// "Not covered" 3f.
 napi_value beginListBox(napi_env env, napi_callback_info info) {
   Call c(env, info, "beginListBox");
   std::string label;
   ImVec2 size(0.0f, 0.0f);
   if (!c.ok() || !c.string(0, "label", &label) ||
-      (!c.isMissing(1) && !c.vec2(1, "size", &size)) || !c.needFrame() ||
+      (!c.isMissing(1) && !c.vec2(1, "size", &size)) ||
+      !c.belowIntLimit(size.x, "size[0]") ||
+      !c.belowIntLimit(size.y, "size[1]") || !c.needFrame() ||
       !c.needLabelId("label", label))
     return nullptr;
   c.enterImGui();

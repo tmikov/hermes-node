@@ -438,11 +438,20 @@ there is no "Proposed addition" under any group.
 - C++: `IMGUI_API void SetNextWindowPos(const ImVec2& pos, ImGuiCond cond
   = 0, const ImVec2& pivot = ImVec2(0, 0));` (`imgui.h:492`)
 - Overload: only one. Nullable: none. Omitted: none.
-- Frame: open. Rejected: none.
-- Preconditions: `cond == 0 || ImIsPowerOfTwo(cond)` (imgui.cpp:9433,
-  plain). Covered by G1: `ImGuiCond` is an enum type, so a combination of
-  conditions is not an exported enumerator.
-- Notes: none.
+- Frame: open.
+- Rejected: a `pos` component below -2^31 or of 2^31 or more
+  (`ERR_OUT_OF_RANGE`).
+- Preconditions:
+  - `cond == 0 || ImIsPowerOfTwo(cond)` (imgui.cpp:9433, plain). Covered
+    by G1: `ImGuiCond` is an enum type, so a combination of conditions is
+    not an exported enumerator.
+  - with a zero pivot (the default) `Begin()` passes the position to
+    `SetWindowPos` as it is (imgui.cpp:8155-8169), which converts it to
+    `int` (`ImTrunc`, imgui.cpp:9311), undefined outside -2^31 .. 2^31
+    whatever the sign. (a), both components.
+- Notes: with a non-zero pivot the value converted is `pos - size *
+  pivot` (imgui.cpp:8426), and the window's rectangles add its size;
+  both are sums, "Not covered" 3f.
 
 ### `setNextWindowSize`
 
@@ -1410,7 +1419,13 @@ All six pass a finished string and never let ImGui interpret `%`.
   converts to `int` (imgui.cpp:9361, 9365), undefined from 2^31 up. A
   zero width is the item width (bounded by `setNextItemWidth` and
   `pushItemWidth`); a negative component becomes `max(4, avail + size)`
-  (`CalcItemSize`, imgui.cpp:12615-12622).
+  (`CalcItemSize`, imgui.cpp:12615-12622). The bound covers the argument,
+  not what reaches `SetWindowSize`: the child is begun with
+  `frame_bb.GetSize()`, `fl(cursor + size) - cursor` (widgets:4824, 4856),
+  which rounds up to 2^31 for a size near the limit with the cursor at 64
+  or more (the float spacing there is 128). No lower bound makes that sum
+  safe for every cursor, since the cursor is itself unbounded: "Not
+  covered" 3f.
 - Notes: it adds `ImGuiInputTextFlags_Multiline` itself (widgets:4090),
   and it opens a group and a child window of its own.
 
@@ -1607,12 +1622,19 @@ All six pass a finished string and never let ImGui interpret `%`.
 - C++: `IMGUI_API bool BeginListBox(const char* label, const ImVec2& size
   = ImVec2(0, 0));` (`imgui.h:805`)
 - Overload: only one. Nullable: none. Omitted: none.
-- Frame: open. Rejected: none.
+- Frame: open.
+- Rejected: a `size` component of 2^31 or more (`ERR_OUT_OF_RANGE`).
 - Label-id: yes.
 - Preconditions: label-id, through the child window it begins with
   `BeginChild(id, ...)` (widgets:8989), where `id` is `GetID(label)`
   (widgets:8959); `BeginChildEx` also asserts `id != 0` (imgui.cpp:6895),
-  not checkable from the argument.
+  not checkable from the argument. The size is truncated with `ImTrunc`
+  (widgets:8965), and a positive component is the argument as it is
+  (`CalcItemSize`, imgui.cpp:12615-12622): (a), undefined from 2^31 up. A
+  negative one becomes `max(4, avail + size)`, zero the default. The child
+  is begun with `frame_bb.GetSize()`, `fl(cursor + size) - cursor`
+  (widgets:8967, 8989), which can round up to 2^31 for an accepted size:
+  a sum, "Not covered" 3f.
 - Notes: when it returns true it has opened a group (widgets:8980) and a
   child window; `endListBox()` is called only then.
 
@@ -3227,27 +3249,63 @@ a C++ program.
    raised the tree depth (tables:457), and the node's entry is left on
    `g.TreeNodeStack`.
 
-3f. **Screen coordinates that reach 2^31 by accumulation** (Task 8
-   survey). ImGui converts positions to `int` in many places, each
-   undefined at 2^31 or more in magnitude: `ItemSize` truncates the next
-   line's cursor, `window->Pos.x + DC.Indent.x + ColumnsOffset.x` and
-   `line_y1 + line_height + ItemSpacing.y` (`IM_TRUNC`,
-   imgui.cpp:12406-12407); `SetWindowPos` truncates the position
-   (imgui.cpp:9311), which with a pivot is `pos - size * pivot`
-   (imgui.cpp:8426); `Begin()` floors and truncates the window's inner
-   rectangles, position plus size (`ImFloor`, imgui.cpp:8649-8652;
-   `ImTrunc`, 8716-8717; `ImFloor` is `(int)` too,
-   imgui_internal.h:558); `ImFont::RenderText` truncates the position of
-   every text it draws (imgui_draw.cpp:7353-7354). A bound on one argument does not prevent
-   these, because the value converted is a sum: `setNextWindowPos`
-   (position and pivot), `setCursorScreenPos`, `indent` (which
-   accumulates), `sameLine`, `dummy`, `progressBar`'s size, and the
-   position of an item or window sized near the bounds above all reach
-   them. The bounded arguments (`setNextItemWidth`, `pushItemWidth`,
-   `setNextWindowSize`, `beginChild`'s and `inputTextMultiline`'s size,
-   `plotLines`/`plotHistogram`'s `graphSize[0]`) are the ones ImGui
-   converts as they are. This is undefined behaviour rather than an
-   assertion, and no sanitizer in the test builds reports it.
+3f. **Screen coordinates that reach 2^31 as a sum** (Task 8 survey and
+   its review). ImGui converts positions and sizes to `int` in many
+   places, each undefined outside -2^31 .. 2^31 (`ImTrunc`, `IM_TRUNC`,
+   `IM_ROUND`, and `ImFloor`, which is `(int)` too, imgui_internal.h:298,
+   299, 556-558). An argument ImGui converts as it is is bounded by its
+   function (the table below); one that is converted only as part of a
+   sum is not, because no bound on the argument alone keeps the sum in
+   range: the cursor, the window position and an accumulated indent are
+   themselves unbounded. The sums:
+   - `ItemSize` truncates the next line's cursor, `window->Pos.x +
+     DC.Indent.x + DC.ColumnsOffset.x` and `line_y1 + line_height +
+     ItemSpacing.y` (imgui.cpp:12406-12407), for every item;
+   - `SetWindowPos` with a non-zero pivot: `pos - size * pivot`
+     (imgui.cpp:8426, then 9311);
+   - `Begin()` floors and truncates the window's inner rectangles,
+     position plus size (imgui.cpp:8649-8652, 8716-8717);
+   - `ImFont::RenderText` truncates every text position
+     (imgui_draw.cpp:7353-7354);
+   - a child window begun with `frame_bb.GetSize()`, `fl(cursor + size) -
+     cursor`, which can round up past a bounded size
+     (`inputTextMultiline`, widgets:4824, 4856; `beginListBox`, 8967,
+     8989);
+   - `colorButton`'s half-alpha preview rounds the midpoint of its
+     rectangle (`IM_ROUND`, widgets:6631), and its checkerboard truncates
+     each cell's edges (imgui_draw.cpp:7760, 7769).
+
+   | Argument | Converted | Where | Bounded |
+   |---|---|---|---|
+   | `setNextItemWidth`, `pushItemWidth` `itemWidth` | as it is (positive) | imgui.cpp:12601 | yes, < 2^31 |
+   | `setNextWindowSize` `size` | as it is (positive) | imgui.cpp:9361, 9365 | yes, < 2^31 |
+   | `beginChild` `size` | as it is (positive) | imgui.cpp:12615-12622, 6961, 9361, 9365 | yes, < 2^31 |
+   | `inputTextMultiline` `size` | as it is (positive), then as a sum | imgui.cpp:9361, 9365; widgets:4824, 4856 | yes, < 2^31 (the sum not) |
+   | `beginListBox` `size` | as it is (positive), then as a sum | widgets:8965; 8967, 8989 | yes, < 2^31 (the sum not) |
+   | `setNextWindowPos` `pos` | as it is (zero pivot, both signs) | imgui.cpp:8155-8169, 9311 | yes, -2^31 .. < 2^31 |
+   | `setNextWindowPos` with a pivot | sum | imgui.cpp:8426 | no |
+   | `plotLines`/`plotHistogram` `graphSize[0]` | as it is (positive) | widgets:9116 | yes, < 2^31 (Task 7) |
+   | `setCursorScreenPos` `pos` | sum (stored, imgui.cpp:12464; converted in `ItemSize` and text drawing) | imgui.cpp:12406-12407 | no |
+   | `dummy` `size` | sum (`ItemSize`) | widgets:1627 | no |
+   | `sameLine` `offsetFromStartX`, `spacing` | sum (cursor, imgui.cpp:12440, 12447) | imgui.cpp:12406-12407 | no |
+   | `indent`, `unindent` `indentW` | sum, accumulating (imgui.cpp:12523, 12531) | imgui.cpp:12406 | no |
+   | `button` `size` | sum (`CalcItemSize`, `ItemSize`) | widgets:803, 806 | no |
+   | `invisibleButton` `size` | sum | widgets:856, 860 | no |
+   | `selectable` `size` | sum | widgets:7529, 7532 | no |
+   | `progressBar` `size` | sum | widgets:1450, 1452 | no |
+   | `colorButton` `size` | sum | widgets:6597-6599, 6631; imgui_draw.cpp:7760, 7769 | no |
+
+   This is undefined behaviour rather than an assertion, and no sanitizer
+   in the test builds reports it. Found by reading in the same survey,
+   and not a conversion: `colorButton`'s checkerboard
+   (`RenderColorRectWithAlphaCheckerboard`, imgui_draw.cpp:7758-7780) is
+   drawn whenever the colour's alpha is below 1 and neither `NoAlpha`,
+   `AlphaOpaque` nor `AlphaNoBg` is given (widgets:6606, 6630-6633,
+   6642-6643). Its
+   cells are `min(size) / 2.99` wide (widgets:6614) and are not clipped,
+   so a button much longer than it is tall emits about
+   `(size.x / size.y) * 9` rectangles (a [1e9, 10] one, about 9e8).
+   Not measured.
 
 3g. **A settings string ImGui cannot apply** (Task 8, each measured by
    hand). `LoadIniSettingsFromMemory` parses with no validation ("Zero-
