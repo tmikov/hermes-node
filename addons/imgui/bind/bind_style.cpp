@@ -33,6 +33,10 @@ napi_value pushStyleColor(napi_env env, napi_callback_info info) {
     c.enterImGui();
     ImGui::PushStyleColor(idx, col);
   } else {
+    if (c.typeOf(1) != napi_number)
+      return c.throwType(
+          "ERR_INVALID_ARG_TYPE",
+          "col must be a number or an array of 4 numbers");
     ImU32 col = 0;
     if (!c.u32(1, "col", &col) || !c.needFrame())
       return nullptr;
@@ -74,6 +78,10 @@ napi_value pushStyleVar(napi_env env, napi_callback_info info) {
     c.enterImGui();
     ImGui::PushStyleVar(idx, val);
   } else {
+    if (c.typeOf(1) != napi_number)
+      return c.throwType(
+          "ERR_INVALID_ARG_TYPE",
+          "val must be a number or an array of 2 numbers");
     float val = 0.0f;
     if (!c.f32(1, "val", &val) || !c.needFrame())
       return nullptr;

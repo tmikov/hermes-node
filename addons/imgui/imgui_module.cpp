@@ -145,6 +145,11 @@ napi_value newFrame(napi_env env, napi_callback_info info) {
   c.enterImGui();
   ImGui::NewFrame();
   gFrameOpen = true;
+  // Like every bound function. NewFrame()'s own body (imgui.cpp:5867-6174)
+  // has no IM_ASSERT_USER_ERROR; should one be reached through a function
+  // it calls, the frame is open and the error is thrown.
+  if (!c.leaveImGui())
+    return nullptr;
   return c.result(true);
 }
 

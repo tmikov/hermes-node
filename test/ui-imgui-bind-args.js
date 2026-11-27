@@ -20,7 +20,9 @@
 //            `NOSAMPLE <name>`, so each later task must add its own.
 //  ARGTYPE   a value of the wrong type, or a missing one: TypeError,
 //            ERR_INVALID_ARG_TYPE; the message names the function and the
-//            argument (checked once, on begin).
+//            argument (checked on begin, and on the three functions that
+//            dispatch on an argument's type, whose message names both
+//            forms).
 //  REFARRAY  reference arrays that are not what they claim (Review Focus
 //            1): too short is ERR_OUT_OF_RANGE; a wrong element type, a
 //            hole, a Float32Array where an Array is required, and an array
@@ -175,6 +177,7 @@ async function main() {
   // --- ARGTYPE ---------------------------------------------------------
   {
     let message;
+    const dispatched = [];
     await inWindow(() => {
       message = rejects('begin', () => imgui.begin(1),
                         'ERR_INVALID_ARG_TYPE').message;
@@ -183,9 +186,19 @@ async function main() {
       rejects('text', () => imgui.text(), 'ERR_INVALID_ARG_TYPE');
       rejects('sliderFloat3', () => imgui.sliderFloat3('s', [1, 2, 3], 'x', 1),
               'ERR_INVALID_ARG_TYPE');
+      // Dispatched arguments: the message names both forms.
+      dispatched.push(rejects('pushStyleColor',
+                              () => imgui.pushStyleColor(0, 'x'),
+                              'ERR_INVALID_ARG_TYPE').message);
+      dispatched.push(rejects('pushStyleVar', () => imgui.pushStyleVar(0, 'x'),
+                              'ERR_INVALID_ARG_TYPE').message);
+      dispatched.push(rejects('pushID', () => imgui.pushID(true),
+                              'ERR_INVALID_ARG_TYPE').message);
     });
     console.log('ARGTYPE ok');
     console.log('ARGTYPE message ' + message);
+    for (const m of dispatched)
+      console.log('ARGTYPE dispatch ' + m);
   }
 
   // --- REFARRAY --------------------------------------------------------
@@ -392,6 +405,9 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}NOFRAME ok{{$}}
 // CHECK-NEXT: {{^}}ARGTYPE ok{{$}}
 // CHECK-NEXT: {{^}}ARGTYPE message imgui.begin(): name must be a string{{$}}
+// CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.pushStyleColor(): col must be a number or an array of 4 numbers{{$}}
+// CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.pushStyleVar(): val must be a number or an array of 2 numbers{{$}}
+// CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.pushID(): strId must be a string, or intId a number{{$}}
 // CHECK-NEXT: {{^}}REFARRAY ok{{$}}
 // CHECK-NEXT: {{^}}FLOAT ok{{$}}
 // CHECK-NEXT: {{^}}NUL ok{{$}}

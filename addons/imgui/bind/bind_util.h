@@ -198,6 +198,11 @@ class Call {
       __attribute__((format(printf, 3, 4)));
   napi_value throwRange(const char *fmt, ...)
       __attribute__((format(printf, 2, 3)));
+  // True when \p status is napi_ok. Otherwise the call is no longer ok,
+  // and unless the engine already has an exception pending this throws an
+  // Error, `imgui.<name>(): internal error <action> <what>`, so that no
+  // failure path returns without an exception.
+  bool napiOk(napi_status status, const char *action, const char *what);
 
  private:
   static constexpr size_t kMaxArgs = 8;

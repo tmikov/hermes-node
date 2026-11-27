@@ -72,7 +72,7 @@ napi_value pushID(napi_env env, napi_callback_info info) {
   } else {
     if (c.typeOf(0) != napi_string)
       return c.throwType(
-          "ERR_INVALID_ARG_TYPE", "id must be a string or a number");
+          "ERR_INVALID_ARG_TYPE", "strId must be a string, or intId a number");
     std::string id;
     if (!c.string(0, "strId", &id) || !c.needFrame())
       return nullptr;

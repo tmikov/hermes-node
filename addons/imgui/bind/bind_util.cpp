@@ -104,10 +104,11 @@ Call::Call(napi_env env, napi_callback_info info, const char *name)
     : env_(env), name_(name) {
   napi_get_undefined(env, &undefined_);
   size_t argc = kMaxArgs;
-  if (napi_get_cb_info(env, info, &argc, argv_, nullptr, nullptr) != napi_ok) {
-    ok_ = false;
+  if (!napiOk(
+          napi_get_cb_info(env, info, &argc, argv_, nullptr, nullptr),
+          "reading",
+          "the arguments"))
     return;
-  }
   argc_ = argc;
   if (gInsideCall) {
     std::string message = std::string("imgui.") + name +
@@ -152,6 +153,20 @@ bool Call::isNull(size_t i) const {
 bool Call::isArray(size_t i) const {
   bool is = false;
   return napi_is_array(env_, arg(i), &is) == napi_ok && is;
+}
+
+bool Call::napiOk(napi_status status, const char *action, const char *what) {
+  if (status == napi_ok)
+    return true;
+  ok_ = false;
+  bool isPending = false;
+  napi_is_exception_pending(env_, &isPending);
+  if (!isPending) {
+    const std::string message = std::string("imgui.") + name_ +
+        "(): internal error " + action + " " + what;
+    napi_throw_error(env_, nullptr, message.c_str());
+  }
+  return false;
 }
 
 bool Call::pending() {
@@ -229,7 +244,7 @@ bool Call::boolean(size_t i, const char *what, bool *out) {
     throwType("ERR_INVALID_ARG_TYPE", "%s must be a boolean", what);
     return false;
   }
-  return napi_get_value_bool(env_, arg(i), out) == napi_ok;
+  return napiOk(napi_get_value_bool(env_, arg(i), out), "reading", what);
 }
 
 bool Call::int32(size_t i, const char *what, int *out) {
@@ -277,13 +292,15 @@ bool Call::u32(size_t i, const char *what, ImU32 *out) {
 
 bool Call::f32Value(napi_value value, const char *what, float *out) {
   napi_valuetype t = napi_undefined;
-  napi_typeof(env_, value, &t);
+  if (!napiOk(napi_typeof(env_, value, &t), "reading", what))
+    return false;
   if (t != napi_number) {
     throwType("ERR_INVALID_ARG_TYPE", "%s must be a number", what);
     return false;
   }
   double v = 0;
-  napi_get_value_double(env_, value, &v);
+  if (!napiOk(napi_get_value_double(env_, value, &v), "reading", what))
+    return false;
   if (!(std::isfinite(v) && std::fabs(v) <= FLT_MAX)) {
     throwRange(
         "%s must be a finite number within the range of a float; got %g",
@@ -304,7 +321,7 @@ bool Call::f64(size_t i, const char *what, double *out) {
     throwType("ERR_INVALID_ARG_TYPE", "%s must be a number", what);
     return false;
   }
-  return napi_get_value_double(env_, arg(i), out) == napi_ok;
+  return napiOk(napi_get_value_double(env_, arg(i), out), "reading", what);
 }
 
 /// Reads string \p value into \p out; throws for a non-string or one
@@ -313,18 +330,25 @@ static bool
 readString(Call &c, napi_value value, const char *what, std::string *out) {
   napi_env env = c.env();
   napi_valuetype t = napi_undefined;
-  napi_typeof(env, value, &t);
+  if (!c.napiOk(napi_typeof(env, value, &t), "reading", what))
+    return false;
   if (t != napi_string) {
     c.throwType("ERR_INVALID_ARG_TYPE", "%s must be a string", what);
     return false;
   }
   size_t length = 0;
-  if (napi_get_value_string_utf8(env, value, nullptr, 0, &length) != napi_ok)
+  if (!c.napiOk(
+          napi_get_value_string_utf8(env, value, nullptr, 0, &length),
+          "reading",
+          what))
     return false;
   std::vector<char> buf(length + 1);
   size_t copied = 0;
-  if (napi_get_value_string_utf8(env, value, buf.data(), buf.size(), &copied) !=
-      napi_ok)
+  if (!c.napiOk(
+          napi_get_value_string_utf8(
+              env, value, buf.data(), buf.size(), &copied),
+          "reading",
+          what))
     return false;
   if (std::memchr(buf.data(), '\0', copied) != nullptr) {
     c.throwType("ERR_INVALID_ARG_VALUE", "%s must not contain U+0000", what);
@@ -408,11 +432,9 @@ bool Call::enumValue(
 
 bool Call::element(napi_value array, uint32_t k, napi_value *out) {
   // Reading an element can run JavaScript (an accessor on the index).
-  if (napi_get_element(env_, array, k, out) != napi_ok || pending()) {
-    ok_ = false;
-    return false;
-  }
-  return true;
+  return napiOk(
+             napi_get_element(env_, array, k, out), "reading", "an element") &&
+      !pending();
 }
 
 bool Call::arrayOf(
@@ -430,7 +452,7 @@ bool Call::arrayOf(
     return false;
   }
   uint32_t length = 0;
-  if (napi_get_array_length(env_, arg(i), &length) != napi_ok)
+  if (!napiOk(napi_get_array_length(env_, arg(i), &length), "reading", what))
     return false;
   if (length < n) {
     throwRange(
@@ -486,12 +508,13 @@ bool Call::refBool(size_t i, const char *what, bool nullable, RefBool *out) {
   if (!element(array, 0, &e))
     return false;
   napi_valuetype t = napi_undefined;
-  napi_typeof(env_, e, &t);
+  if (!napiOk(napi_typeof(env_, e, &t), "reading", what))
+    return false;
   if (t != napi_boolean) {
     throwType("ERR_INVALID_ARG_TYPE", "%s[0] must be a boolean", what);
     return false;
   }
-  return napi_get_value_bool(env_, e, &out->value) == napi_ok;
+  return napiOk(napi_get_value_bool(env_, e, &out->value), "reading", what);
 }
 
 bool Call::refInt(
@@ -512,13 +535,15 @@ bool Call::refInt(
     if (!element(array, static_cast<uint32_t>(k), &e))
       return false;
     napi_valuetype t = napi_undefined;
-    napi_typeof(env_, e, &t);
+    if (!napiOk(napi_typeof(env_, e, &t), "reading", what))
+      return false;
     if (t != napi_number) {
       throwType("ERR_INVALID_ARG_TYPE", "%s[%d] must be a number", what, k);
       return false;
     }
     double v = 0;
-    napi_get_value_double(env_, e, &v);
+    if (!napiOk(napi_get_value_double(env_, e, &v), "reading", what))
+      return false;
     if (!(std::trunc(v) == v && v >= INT32_MIN && v <= INT32_MAX)) {
       throwRange(
           "%s[%d] must be an integer from -2147483648 to 2147483647; got %g",
@@ -581,7 +606,7 @@ bool Call::refString(
 bool Call::floats(size_t i, const char *what, FloatSpan *out) {
   if (isArray(i)) {
     uint32_t length = 0;
-    if (napi_get_array_length(env_, arg(i), &length) != napi_ok)
+    if (!napiOk(napi_get_array_length(env_, arg(i), &length), "reading", what))
       return false;
     out->copy.resize(length);
     for (uint32_t k = 0; k < length; ++k) {
@@ -596,14 +621,19 @@ bool Call::floats(size_t i, const char *what, FloatSpan *out) {
     return true;
   }
   bool isTyped = false;
-  napi_is_typedarray(env_, arg(i), &isTyped);
+  if (!napiOk(napi_is_typedarray(env_, arg(i), &isTyped), "reading", what))
+    return false;
   napi_typedarray_type type = napi_int8_array;
   size_t length = 0;
   void *data = nullptr;
-  if (!isTyped ||
-      napi_get_typedarray_info(
-          env_, arg(i), &type, &length, &data, nullptr, nullptr) != napi_ok ||
-      type != napi_float32_array) {
+  if (isTyped &&
+      !napiOk(
+          napi_get_typedarray_info(
+              env_, arg(i), &type, &length, &data, nullptr, nullptr),
+          "reading",
+          what))
+    return false;
+  if (!isTyped || type != napi_float32_array) {
     throwType(
         "ERR_INVALID_ARG_TYPE", "%s must be an Array or a Float32Array", what);
     return false;
@@ -652,9 +682,10 @@ bool Call::write(RefBool &r) {
   if (r.array == nullptr)
     return true;
   napi_value v = nullptr;
-  napi_get_boolean(env_, r.value, &v);
   // Writing an element can run JavaScript (a setter on the index).
-  return napi_set_element(env_, r.array, 0, v) == napi_ok && !pending();
+  return napiOk(napi_get_boolean(env_, r.value, &v), "writing", "a result") &&
+      napiOk(napi_set_element(env_, r.array, 0, v), "writing", "an element") &&
+      !pending();
 }
 
 bool Call::write(RefInt &r) {
@@ -662,9 +693,12 @@ bool Call::write(RefInt &r) {
     return true;
   for (int k = 0; k < r.n; ++k) {
     napi_value v = nullptr;
-    napi_create_int32(env_, r.values[k], &v);
-    if (napi_set_element(env_, r.array, static_cast<uint32_t>(k), v) !=
-            napi_ok ||
+    if (!napiOk(
+            napi_create_int32(env_, r.values[k], &v), "writing", "a result") ||
+        !napiOk(
+            napi_set_element(env_, r.array, static_cast<uint32_t>(k), v),
+            "writing",
+            "an element") ||
         pending())
       return false;
   }
@@ -676,9 +710,12 @@ bool Call::write(RefFloat &r) {
     return true;
   for (int k = 0; k < r.n; ++k) {
     napi_value v = nullptr;
-    napi_create_double(env_, r.values[k], &v);
-    if (napi_set_element(env_, r.array, static_cast<uint32_t>(k), v) !=
-            napi_ok ||
+    if (!napiOk(
+            napi_create_double(env_, r.values[k], &v), "writing", "a result") ||
+        !napiOk(
+            napi_set_element(env_, r.array, static_cast<uint32_t>(k), v),
+            "writing",
+            "an element") ||
         pending())
       return false;
   }
@@ -693,40 +730,51 @@ bool Call::write(RefString &r) {
       std::memcmp(r.buffer.data(), r.original.data(), n) == 0)
     return true;
   napi_value v = nullptr;
-  if (napi_create_string_utf8(env_, r.buffer.data(), n, &v) != napi_ok)
-    return false;
-  return napi_set_element(env_, r.array, 0, v) == napi_ok && !pending();
+  return napiOk(
+             napi_create_string_utf8(env_, r.buffer.data(), n, &v),
+             "writing",
+             "a result") &&
+      napiOk(napi_set_element(env_, r.array, 0, v), "writing", "an element") &&
+      !pending();
 }
 
 napi_value Call::result(bool v) {
   napi_value out = nullptr;
-  napi_get_boolean(env_, v, &out);
-  return out;
+  return napiOk(napi_get_boolean(env_, v, &out), "returning", "the result")
+      ? out
+      : nullptr;
 }
 
 napi_value Call::result(double v) {
   napi_value out = nullptr;
-  napi_create_double(env_, v, &out);
-  return out;
+  return napiOk(napi_create_double(env_, v, &out), "returning", "the result")
+      ? out
+      : nullptr;
 }
 
 napi_value Call::resultU32(ImU32 v) {
   napi_value out = nullptr;
-  napi_create_uint32(env_, v, &out);
-  return out;
+  return napiOk(napi_create_uint32(env_, v, &out), "returning", "the result")
+      ? out
+      : nullptr;
 }
 
 napi_value Call::fillVec(size_t outArg, const float *v, uint32_t n) {
   napi_value target = nullptr;
   if (!isMissing(outArg)) {
     target = arg(outArg); // checked by outArray() before the ImGui call
-  } else if (napi_create_array_with_length(env_, n, &target) != napi_ok) {
+  } else if (!napiOk(
+                 napi_create_array_with_length(env_, n, &target),
+                 "returning",
+                 "the result")) {
     return nullptr;
   }
   for (uint32_t k = 0; k < n; ++k) {
     napi_value e = nullptr;
-    napi_create_double(env_, v[k], &e);
-    if (napi_set_element(env_, target, k, e) != napi_ok || pending())
+    if (!napiOk(
+            napi_create_double(env_, v[k], &e), "returning", "the result") ||
+        !napiOk(napi_set_element(env_, target, k, e), "writing", "out") ||
+        pending())
       return nullptr;
   }
   return target;

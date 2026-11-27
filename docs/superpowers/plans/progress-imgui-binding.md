@@ -41,7 +41,40 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 1 | `ui-imgui-bind-args.js` | `enterImGui()` removed from `getDeltaTime` (Frame group: coverage) | `UNCOVERED Frame getDeltaTime`; test failed |
 | 1 | `ui-imgui-bind-args.js` | `showDemoWindow`'s write-back of `pOpen` removed (Frame group: a write-back) | `FRAME WRONG ... writes={"demo":[],"metrics":[true]}`; test failed |
 | 1 | `ui-imgui-bind-args.js` | the element-type check of `refBool` removed (an argument check) | `NOTHROW ERR_INVALID_ARG_TYPE` at `checkbox('a', [1])` in REFARRAY; test failed |
-| 1 | `ui-imgui-bind-errors.js` | `io.ConfigErrorRecoveryEnableDebugLog = false` removed from `setRecoveryFlags()` (see Notes, Task 1) | PASS: stdout is a file there, and the process ends in `_exit()` without flushing stdio, so ImGui's `printf` never reaches it. Run by hand under `script` (a pty): `[00001] [imgui-error] In window 'Debug##Default': Calling End() too many times!` and one such line per error on stdout; with the line restored, none. Not caught by any test; checked by hand |
+| 1 | `ui-imgui-bind-errors.js` | `io.ConfigErrorRecoveryEnableDebugLog = false` removed from `setRecoveryFlags()` | PASS, as expected: no test can see it (see "Behaviours no test detects") |
+| 1 (review) | `ui-imgui-bind-errors.js` | `canEndChild()` requiring a true `beginChild` again, after GUARD_CHILD was changed to count only the frame whose `beginChild()` returned false and to catch the refusal | the assertion itself now fails: `SETUP child clipped`, then `GUARD_CHILD not accepted`; test failed |
+| 1 (review) | `ui-imgui-bind-errors.js` | every usage error traced twice (`throwUsage()` also tracing `usage error: <msg>`) | the ONCE run failed: `ONCE-NEXT: is not on the line after the previous match` at the second line, `Calling End() too many times!` appearing twice; test failed |
+
+## Behaviours no test detects
+
+Properties that hold, by reading or by a check made by hand, and that no
+automated test would notice losing. Each task appends its own.
+
+- **Task 1: ImGui's error output to stdout is off.** `setRecoveryFlags()`
+  (`addons/imgui/bind/bind_guards.cpp`) sets
+  `io.ConfigErrorRecoveryEnableDebugLog = false`. With it on, ImGui
+  `printf`s `[<frame>] [imgui-error] In window '<name>': <msg>` to stdout
+  for every usage error. A test cannot see it: lit's stdout is a file, so
+  stdio is fully buffered, and every windowed process ends in `_exit()`,
+  which discards that buffer. Observed on 2026-11-27 with the line removed,
+  under a pty: `[00001] [imgui-error] (current settings: Assert=0, Log=1,
+  Tooltip=0)`, then one line per error (`... In window 'Debug##Default':
+  Calling End() too many times!`, `... In window 'left open': Missing
+  End()`, ...); with it restored, none. To re-check: `script -qc "python3
+  utils/with-display.py 100 env HERMES_NODE_UI_TEST_HOOKS=1
+  cmake-build-asan/bin/hermes-node-ui test/ui-imgui-bind-errors.js main
+  /tmp/x.ppm" /dev/null | grep -c imgui-error` prints 0.
+- **Task 1: an N-API failure never returns silently.** Every `napi_*`
+  status the readers, writers and result helpers in
+  `addons/imgui/bind/bind_util.cpp` check goes through `Call::napiOk()`,
+  which throws `imgui.<name>(): internal error <action> <what>` when no
+  exception is already pending, so a binding function cannot return
+  `undefined` with nothing thrown. Those statuses fail only on engine
+  errors no JavaScript value produces (a wrong-type value is caught by the
+  `napi_typeof` check before), so the path is unreachable from a test.
+  (`typeOf()` and `isArray()` do not go through it: a failure there reads
+  as `undefined` / not an array, which then throws the ordinary
+  `ERR_INVALID_ARG_TYPE`.)
 
 ## Notes
 
@@ -78,13 +111,33 @@ Every mutation was restored, and the addon rebuilt, afterwards.
   `io.ConfigErrorRecoveryEnableDebugLog = false`, because with it on every
   usage error is `printf`ed to stdout, unconditionally (point 1 above):
   output the addon did not decide to print, outside the tracing rule. The
-  callback's trace replaces it. It is the last mutation in the table:
-  invisible to a test whose stdout is a file (the process `_exit()`s with
-  stdio unflushed), visible on a terminal.
+  callback's trace replaces it. Verified by hand, not by a test; what was
+  observed and how to re-check it are under "Behaviours no test detects".
 - **Every usage error is traced once.** ImGui's through the callback; a
   guard's refusal by the guard itself (`refuse()` in `bind_guards.cpp`),
   both as `usage error: <msg>`. `throwUsage()` does not trace, so nothing
-  is traced twice.
+  is traced twice. `ui-imgui-bind-errors.js`'s ONCE and CLOSINGONCE runs
+  pin it: the usage-error and discard lines, between `BEGIN` and `END`,
+  as one `-NEXT` chain.
+- **`newFrame()` calls `leaveImGui()` after `ImGui::NewFrame()`**, like
+  every bound function. NewFrame()'s own body (imgui.cpp:5867-6174) has no
+  `IM_ASSERT_USER_ERROR`; if one is reached through a function it calls,
+  the frame is open and the error is thrown. The discard path still only
+  traces.
+- **Checks implemented in Task 1 that still need their test cases:**
+  - `begin('')` -> `ERR_INVALID_ARG_VALUE`: `begin()` in
+    `addons/imgui/bind/bind_windows.cpp`.
+  - `beginChild`'s three flag combinations -> `ERR_OUT_OF_RANGE`
+    (`WindowFlags_AlwaysAutoResize` in `windowFlags`;
+    `ChildFlags_AlwaysAutoResize` with `_ResizeX`/`_ResizeY`; it without
+    `_AutoResizeX`/`_AutoResizeY`): `beginChild()` in
+    `addons/imgui/bind/bind_windows.cpp`.
+  - `sliderFloat3`'s `SliderFlags_WrapAround` rejection and its `format`
+    check: `sliderFloat3()` in `addons/imgui/bind/bind_widgets.cpp`
+    (the format check itself is `Call::format()` / `validFormat()` in
+    `addons/imgui/bind/bind_util.cpp`).
+  - `Col_COUNT` and `StyleVar_COUNT` rejection: `pushStyleColor()` and
+    `pushStyleVar()` in `addons/imgui/bind/bind_style.cpp`.
 - **`enterImGui()` drops a stale usage error** (one reported outside any
   binding call, already traced), so it is not blamed on the next call.
   Nothing in this task produces one; it is a defence.
@@ -113,8 +166,8 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 - **`bind_util.h` beyond the plan's interface**: `Call::outArray(i,
   what)`, which checks a getter's optional output array before the ImGui
   call (so a wrong `out` is a rejected call, not counted);
-  `Call::typeOf`, `isNull`, `isArray`, `name`; `bind::bindCalls()` for the
-  test hook. Every reader of the plan's interface is implemented, including
+  `Call::typeOf`, `isNull`, `isArray`, `name`; `Call::napiOk()` (see
+  "Behaviours no test detects"); `bind::bindCalls()` for the test hook. Every reader of the plan's interface is implemented, including
   those no pilot uses yet (`refInt`, `refString`, `floats`, `flags`,
   `enumValue`, `stringOrNull`): they are untested until their tasks.
 - **Until Task 2**, every flags and enum argument is read with `int32`
@@ -123,6 +176,12 @@ Every mutation was restored, and the addon rebuilt, afterwards.
   are read with `intIn(0, <type>_COUNT - 1)`, which is also their
   "Rejected: `_COUNT`" line. So an out-of-range `cond` or slider flag still
   reaches ImGui's plain assertions until Task 2.
+- **Dispatched arguments name both forms** in their `TypeError`:
+  `pushStyleColor`'s "col must be a number or an array of 4 numbers",
+  `pushStyleVar`'s "val must be a number or an array of 2 numbers",
+  `pushID`'s "strId must be a string, or intId a number" (the surface
+  entry's parameter names); `ui-imgui-bind-args.js` ARGTYPE checks the
+  text.
 - **`begin('')`** throws `ERR_INVALID_ARG_VALUE` (its "Rejected" line names
   the case and not the code; an empty string is a wrong value, not a wrong
   type).

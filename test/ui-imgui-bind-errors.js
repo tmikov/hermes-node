@@ -51,7 +51,8 @@
 //  canEndChild() requiring a true beginChild: GUARD_CHILD's accepted half
 //  fails;
 //  a guard condition registered and never refused: GUARDS fails
-//  (`UNREFUSED <name>`).
+//  (`UNREFUSED <name>`);
+//  every usage error traced twice (throwUsage() tracing too): ONCE fails.
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -59,9 +60,11 @@
 // RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s main %t.ppm > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
 // RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=TRACE %s < %t.err
+// RUN: sh -c 'echo BEGIN; grep -E "imgui: (usage error|frame discarded)" %t.err; echo END' | %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=ONCE %s
 // RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s closing > %t.closing.out 2> %t.closing.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CLOSINGCODE %s
 // RUN: %FileCheck --check-prefix=CLOSING %s < %t.closing.out
 // RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=CLOSINGTRACE %s < %t.closing.err
+// RUN: sh -c 'echo BEGIN; grep -E "imgui: (usage error|frame discarded)" %t.closing.err; echo END' | %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=CLOSINGONCE %s
 
 'use strict';
 
@@ -239,7 +242,7 @@ async function main() {
     // not clipped on its first frames (it is still being sized), so frames
     // run until beginChild() answers false, at most a few.
     let clipped = false;
-    let accepted = 0;
+    let accepted = false;
     for (let i = 0; i < 10 && !clipped; ++i) {
       await harness.frame(h, () => {
         imgui.setNextWindowPos([40, 40]);
@@ -248,17 +251,38 @@ async function main() {
         imgui.setCursorScreenPos([60, 2000]);
         const shown = imgui.beginChild('clipped', [100, 100]);
         const before = calls('endChild');
-        imgui.endChild();
-        if (calls('endChild') === before + 1)
-          ++accepted;
-        imgui.end();
+        let threw = 'none';
+        try {
+          imgui.endChild();
+        } catch (e) {
+          threw = e.code;
+        }
+        // Counted only in the frame whose beginChild() returned false: the
+        // case is about the clipped child.
+        if (shown === false && threw === 'none' &&
+            calls('endChild') === before + 1)
+          accepted = true;
+        if (threw === 'none') {
+          imgui.end();
+        } else {
+          // Wrongly refused, the child is still current: two end() calls
+          // close it and the parent, each reporting a usage error, so that
+          // the frame stays balanced and the case reports instead of
+          // throwing.
+          for (let k = 0; k < 2; ++k) {
+            try {
+              imgui.end();
+            } catch (e) {
+            }
+          }
+        }
         clipped = shown === false;
       });
     }
     if (!clipped)
       fail('SETUP child not clipped');
     console.log('SETUP child clipped');
-    console.log(accepted > 0 ? 'GUARD_CHILD ok' : 'GUARD_CHILD not accepted');
+    console.log(accepted ? 'GUARD_CHILD ok' : 'GUARD_CHILD not accepted');
   }
 
   // --- DISCARD ---------------------------------------------------------
@@ -294,22 +318,32 @@ async function main() {
 // CHECK-NEXT: {{^}}GUARDS ok{{$}}
 // CODE: EXITCODE 0
 
-// Every usage error is traced once, ImGui's own and the guards' alike, in
-// the order the cases raise them.
+// Every usage error is traced exactly once, ImGui's own and the guards'
+// alike, in the order the cases raise them. TRACE reads the whole stderr
+// (for the Sokol exclusions); ONCE reads only the usage-error and discard
+// lines, between a BEGIN and an END line, as one -NEXT chain, so a line
+// traced twice, anywhere, breaks the chain.
 // TRACE: {{^}}[ui] imgui: usage error: Calling End() too many times!{{$}}
-// TRACE: {{^}}[ui] imgui: usage error: Missing End(){{$}}
-// TRACE: {{^}}[ui] imgui: usage error: Missing PopID(){{$}}
-// TRACE: {{^}}[ui] imgui: usage error: Missing End(){{$}}
-// TRACE: {{^}}[ui] imgui: usage error: Missing End(){{$}}
-// TRACE: {{^}}[ui] imgui: usage error: EndGroup() with no group open{{$}}
-// TRACE: {{^}}[ui] imgui: usage error: Missing EndGroup(){{$}}
-// TRACE: {{^}}[ui] imgui: usage error: EndGroup() with no group open{{$}}
-// TRACE: {{^}}[ui] imgui: usage error: EndGroup() in another window than its BeginGroup(){{$}}
-// TRACE: {{^}}[ui] imgui: usage error: EndChild() outside a child window{{$}}
+// TRACE: {{^}}[ui] imgui: frame discarded{{$}}
+// ONCE: {{^}}BEGIN{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Calling End() too many times!{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing End(){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing PopID(){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing End(){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing End(){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndGroup() with no group open{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing EndGroup(){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndGroup() with no group open{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndGroup() in another window than its BeginGroup(){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndChild() outside a child window{{$}}
 // The discarded frame's open window is reported, then the discard.
-// TRACE: {{^}}[ui] imgui: usage error: Missing End(){{$}}
-// TRACE-NEXT: {{^}}[ui] imgui: frame discarded{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing End(){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: frame discarded{{$}}
+// ONCE-NEXT: {{^}}END{{$}}
 
 // CLOSING: {{^}}CLOSING ERR_IMGUI_USAGE{{$}}
 // CLOSINGCODE: EXITCODE 5
 // CLOSINGTRACE: {{^}}[ui] imgui: usage error: Missing End(){{$}}
+// CLOSINGONCE: {{^}}BEGIN{{$}}
+// CLOSINGONCE-NEXT: {{^}}[ui] imgui: usage error: Missing End(){{$}}
+// CLOSINGONCE-NEXT: {{^}}END{{$}}
