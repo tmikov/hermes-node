@@ -1,0 +1,1 @@
+A literal replacement character: � (U+FFFD), valid UTF-8.

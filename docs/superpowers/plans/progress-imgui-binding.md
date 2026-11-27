@@ -17,7 +17,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-binding.md`
 | Task 6 | Tables | done (GL) |
 | Task 7 | Style, plots, draw list, list clipper | done (GL) |
 | Task 8 | Docking and settings | done (GL) |
-| Task 9 | The application | |
+| Task 9 | The application | done (GL) |
 | Task 10 | Documentation and the full suite | |
 
 ## Mutations
@@ -259,6 +259,20 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 8 | `ui-imgui-bind-errors.js` | the guard's default ID computed from `"Dockspace"` instead of `"DockSpace"` | aborted in DOCKSPACE_TWICE's second frame (the explicit ID, then 0): `imgui.cpp:20939 ... twice a frame ...`; test failed |
 | 8 | `ui-imgui-bind-errors.js`, `ui-imgui-bind-docking.js` | `needNoFrame()`'s trace line removed | errors: the ONCE chain broke at the `must be called outside a frame` line; docking: the TRACE run's positive line missing; both failed |
 | 8 | by hand, `hermes-node-ui` on a scratch script | three malformed settings strings, loaded between frames: a self-parented node; a window `DockId` naming no node; a chain of 300 nodes, then saved | the first never returned (the run ended at its 60 s limit, status 124); the second aborted, `imgui.cpp:18618 ... DockContextBuildAddWindowsToNodes ... Assertion node != __null failed`; the third loaded, and the save aborted, `imgui.cpp:21927 ... Assertion depth < (1 << (sizeof(node_settings.Depth) << 3)) failed`. Loaded before the first frame, the first and third were pruned and did nothing ("Not covered" 3g) |
+| 9 (harness) | `ui-imgui-adopt.js` | (RED) run against the committed harness, whose `adopt()` called `resync()` first | nothing printed; the run ended at its 120 s limit (`EXITCODE 124`): the capture request `resync()` makes is counted per presented frame and nothing had been presented. This is also the test's mutation (`resync(h)` back in `adopt()`) |
+| 9 | `imgui-app-viewer.js`, `ui-imgui-app.js` | (RED) run before `examples/imgui-app/` existed | viewer: `Cannot find module` for `panels/viewer.js`, FileCheck `'-' is empty`; app: `EXITCODE 1` (the same, from `app.js`) |
+| 9 | `imgui-app-viewer.js` | the viewer reading with `fs.readFile()` and slicing | `CAP WRONG readFile used: fs.open,handle.stat,fs.readFile,handle.close`; test failed |
+| 9 | `imgui-app-viewer.js` | the read loop not stopping at the cap (`while (true)`, 64 KiB requests) | `CAP WRONG a read past the cap: {"length":65536,"position":1048576,"returned":1}`; test failed |
+| 9 | `imgui-app-viewer.js` | `close()` moved out of `finally`, after the reads | `CLOSE_ON_ERROR WRONG {"status":"error","code":"EIO","closes":0,...}`; test failed |
+| 9 | `imgui-app-viewer.js` | the request counter's check removed | `SUPERSEDE WRONG older-last {"path":"first","status":"text","lines":["first content"]}`; test failed |
+| 9 | `imgui-app-viewer.js` | the read position advanced by the requested length instead of the returned one | `SHORT_READ WRONG position 65536 after 1000 bytes returned`; test failed |
+| 9 | `imgui-app-viewer.js` | text decided by searching the decoded text for U+FFFD instead of `isUtf8()` | `CLASSIFY WRONG fffd.txt={"status":"hex","rows":4,"truncated":false}`; test failed |
+| 9 | `imgui-app-viewer.js` | the trailing incomplete-sequence trim removed | `CLASSIFY WRONG straddle={"status":"hex","rows":65536,"truncated":true}`; test failed |
+| 9 | `ui-imgui-app.js` | the Reset Layout load moved after `newFrame()` | after `RESET floating`: `Error: imgui.loadIniSettingsFromMemory(): must be called outside a frame (before newFrame())`, uncaught, `EXITCODE 1`; test failed |
+| 9 | `ui-imgui-app.js` | the orbiting circle drawn at 0.8 of the orbit radius (`orbitPosition()` unchanged) | `CANVAS WRONG orbit(1)=21,162,162 want 0,255,255` (the trail); test failed |
+| 9 | `ui-imgui-app.js` | `CallbackScope`'s destructor not lowering the callback depth (`--gCallbackDepth` removed) | fails before THROW is reached: the main run's first frame, once Log's clipper has run, throws `Error: imgui.render(): not allowed inside a list clipper's callback`; `EXITCODE 1` after `SCALE 1`; test failed |
+| 9 | `ui-imgui-app.js` (`throw`) | the callback scope left raised only when the callback threw (a heap `CallbackScope`, deleted only with no exception pending): the brief's mutation confined to the throw path | after `THROW caught ...`: `Error: imgui.newFrame(): not allowed inside a list clipper's callback`, `EXITCODE 1`, no `THROW ok`; test failed. Before the `process.emit` fix below, the same mutation hung instead (status 124, nothing printed): the second uncaught exception was swallowed |
+| 9 (emit) | `test-process-emit-return.js` | (RED) run before the fix | `EMIT true true true true false` (node v24.13.1: `true false true false false`); the second timer's throw swallowed and `STILL ALIVE` printed, exit 0; test failed |
 
 ## Behaviours no test detects
 
@@ -1222,3 +1236,111 @@ automated test would notice losing. Each task appends its own.
   `DockSpace` line; the round trip in step 2, run with the menu bar
   drawn, gives the right ones.
 
+
+### Task 9
+
+- **The harness's `adopt()` never resolved** (its own commit, first). It
+  called `resync()`, which learns the publication count from a capture
+  request that gives up after a number of presented frames; the host
+  counts those frames only as it presents them, so before the first
+  publication the request never settles. An adopted handle now starts at
+  `published` 0, as `open()`'s does, and `adopt()` must be called before
+  the application draws (`driven: true`). `test/ui-imgui-adopt.js`.
+- **A runtime defect, fixed in its own commit**: `process.emit()`
+  (`libjs/process-events.js`) returned `true` for an event whose last
+  listener had been removed (the emptied array stayed behind), and
+  `process._fatalException` decides from that answer whether a listener
+  took an uncaught exception. So after a `process.once('uncaughtException')`
+  listener had handled one exception, every later uncaught exception was
+  swallowed and the process exited 0; node v24.13.1 exits 1. Found by the
+  THROW mutation, whose run hung instead of failing. Not specific to the
+  UI: the same with two throwing timers under plain `hermes-node`.
+  `test/test-process-emit-return.js`, its expected answers taken from node.
+- **Runtime facts checked first** (2026-11-27, `cmake-build-asan`
+  `hermes-node` against node v24.13.1, one script, identical output except
+  where said): `require('buffer').isUtf8` exists and answers as Node does
+  for valid UTF-8 with U+FFFD (true), `ff 41` (false), a truncated `e2 82`
+  (false), empty (true), a NUL (true), a surrogate `ed a0 80` (false) and a
+  `Uint8Array` (true). `fs.promises.open` / `FileHandle.stat` /
+  `FileHandle.read(buffer, offset, length, position)` with explicit
+  positions read the bytes at those positions (`ghij` at 6, `abc` into
+  offset 1 from 0, 0 bytes past the end) and resolve with the same buffer;
+  `close` works; `readdir(..., {withFileTypes: true})` gives `Dirent`s;
+  missing and unreadable paths reject with `ENOENT` and `EACCES`.
+  `performance` is undefined here (as the constraints say). And one
+  divergence the Monitor shows: `process.memoryUsage()` reports
+  `heapUsed`, `heapTotal`, `external` and `arrayBuffers` as 0 (only `rss`
+  is real), so two of its plots are flat; the README says so.
+- **No binding gap and no binding bug.** Every panel is written with the
+  bound surface as it is; nothing was added to the binding.
+- **The default layout** was produced as Task 8's notes describe: a
+  hand-written string for the sketch's three columns of two, loaded
+  before the first frame of a scratch run of the application itself
+  (`createApp` driven, `harness.adopt`), every panel `docked: true` from
+  frame 0, then `saveIniSettingsToMemory()` after six frames, less
+  `[Window][Debug##Default]` and the `LastUsed=` lines. Loaded again and
+  saved again, it came back identical. With the main menu bar the dock
+  space is at `Pos=0,19 Size=1280,781`. The steps are in
+  `examples/imgui-app/README.md`.
+- **Departures from the brief, each the strongest true form.**
+  - THROW's throwing frame is registered with `ui.requestAnimationFrame`
+    directly, not run with `harness.rawTick`: `rawTick` catches what its
+    function throws (it rejects with it), so the `uncaughtException`
+    listener the brief asks to see the error would never be reached. The
+    host's own path is what the case is about.
+  - THROW selects the Widgets panel's Table tab first (`selectTab`, read
+    back as `visibleTab`), because the clipper inside a table inside a
+    child window lives in that tab; `throwNextFrame` alone would wait for
+    a tab nobody shows. Selection by `TabItemFlags_SetSelected` takes
+    effect a frame later (widgets:10910, `TabBarQueueFocus`).
+  - The hex line is `APP opened <path> <bytes> hex=<rows>`; the design
+    gave only the text form (`lines=`).
+  - The design's test mode "selected by an environment variable" is the
+    brief's `createApp({root, clock, driven})`; `driven` is `ctx.testMode`
+    and turns the `APP` lines on.
+  - RESET's floating layout is a window-only section for `Log` without a
+    `DockId` (the shape Task 8's UNDOCK loaded safely), hand-written in
+    the test, not a string `saveIniSettingsToMemory()` produced; the
+    application itself loads only its saved `DEFAULT`. Measured: in the
+    next frame `Log` is floating and the other five stay docked.
+  - The literal `CallbackScope` mutation fails earlier than THROW (every
+    frame's clipper leaves the depth raised), so a second mutation
+    confined to the throw path shows THROW itself failing (Mutations).
+  - `app.lastFrameMs` is added to the brief's app object: the JS time of
+    the last whole frame, which the Monitor plots and the measurement
+    reads.
+- **The discarded frame's trace (THROW)**, pinned exactly: `Missing
+  EndTable()`, `Missing EndChild()` twice (the scrolling table's inner
+  child, then the panel's child), `Missing EndTabBar()`, `Missing PopID()`
+  (the tab item's pushed ID, which recovery does not pop), then `frame
+  discarded`; after the next frame, no usage error.
+- **TINY**: under Xvfb the window manager grants 1x1 (`TINY size 1x1`;
+  the host starts a 1x1 generation). Nothing throws, ImGui reports no
+  usage error, and all six panels are docked again at 1280x800.
+- **Not exercised by a test** (each looked at once in a capture, or not
+  at all): the Open Folder and About modals, the View toggles, Dark /
+  Light, the ImGui Demo and Metrics toggles, File > Quit through the menu
+  (QUIT calls `app.quit()`), the 5000-entry cap and its "... N more" row,
+  a symbolic link in the tree, the Log's filter and its follow-the-bottom
+  rule, the canvas's drag, speed and pause. A capture of the whole window
+  (scale 1, GL) was looked at by the implementer and every panel drew as
+  designed; nobody has looked at it on the Mac.
+- **Measurement** (spec goal 5; `test/fixtures/imgui/app-measure.js`,
+  2026-11-27, Linux, Intel(R) Xeon(R) E-2288G CPU @ 3.70GHz, 16 threads,
+  under Xvfb at scale 1; the application driven, all six panels open, the
+  viewer showing `dir1/b.js` of `test/fixtures/imgui/app-tree`, the
+  Widgets panel on its Basic tab; 600 frames after 10 warm-up; JS time is
+  `app.frame()`'s own `process.hrtime.bigint()` measurement of its body,
+  `newFrame()` to `render()` and the draw calls included; two runs each):
+
+  | Build | JS time per frame, mean | max | binding calls per frame |
+  |---|---|---|---|
+  | `cmake-build-asan` (Debug, ASAN, UI on) | 12.196 ms, 12.158 ms | 198.6 ms, 197.4 ms | 254.1 |
+  | `cmake-build-noasan` (Release, UI on) | 1.590 ms, 1.603 ms | 2.28 ms, 2.30 ms | 254.0 |
+
+  The Debug maximum is one frame in about 63 (152 ms at frame 193 rising
+  to 212 ms at frame 589 in a run that printed them), which has the shape
+  of garbage collection while the heap grows; Release has no such frame.
+  Not a leak: a Release run of 16000 frames had rss 147 MiB at the start,
+  a peak of 172 MiB near frame 6000, and 152.5 MiB from frame 10000 to the
+  end.

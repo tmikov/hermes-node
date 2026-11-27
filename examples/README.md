@@ -44,6 +44,16 @@ Dear ImGui's demo window, drawn from a JavaScript program by the
 `hermes-node`; it is not part of `check-hermes-node-examples`. See
 `imgui-demo/README.md`.
 
+## imgui-app/
+
+A docked, multi-panel ImGui application written in plain JavaScript
+against the `hermes-node:imgui` binding: a lazily read directory tree, a
+file viewer (text or hex, the first 1 MiB), a widget gallery, a monitor
+of `process.memoryUsage()` and `os.loadavg()`, an animated draw-list
+canvas and a log, backed by Node's `fs`, `os` and `process` APIs. Needs a
+build with `-DHERMES_NODE_ENABLE_UI=ON` and runs with `hermes-node-ui`;
+not part of `check-hermes-node-examples`. See `imgui-app/README.md`.
+
 ## bufferutil-addon/
 
 Loads `bufferutil`, a real npm package with a prebuilt native NAPI addon
