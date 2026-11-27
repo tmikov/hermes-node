@@ -15,6 +15,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-addon-part-a.md`
 | Task 5 | The renderer's draw path | done (GL; Metal shader unverified) |
 | Task 6 | Texture scenes and tests | done (GL) |
 | Task 7 | Input | done (GL) |
+| Task 8 | Cursor and clipboard | done (GL; Metal unverified) |
 
 ## Mutations
 
@@ -59,6 +60,16 @@ Each test must be shown able to fail: the change made, and what it did.
 | 7 | `test/ui-imgui-input.js` | (b) repeated key-downs passed on | test PASSES: `AddKeyEvent` filters a down for a key whose latest state is already down ("Filter duplicate" in `AddKeyAnalogEvent`), so the drop is redundant and this test cannot tell; the drop is kept, as the spec states it; restored |
 | 7 | `test/ui-imgui-input.js` | (d) `IMGUI_USE_WCHAR32` dropped from `imgui_config.h` | `ASTRAL WRONG ["h","i","\ufffd"]` (ImGui replaced the code point), test failed; restored |
 | 7 | `test/ui-imgui-input.js` | (e) modifier events skipped | test PASSES, as expected: no case here uses a modifier (Task 8's chords do); restored |
+| 7 | `test/ui-imgui-input.js` | (f, review of Task 7, run in Task 8) the listener's `key != ImGuiKey_None` guard removed | test PASSES (`UNKNOWN ok apress=1`): `AddKeyAnalogEvent` returns at once for `ImGuiKey_None` and filters duplicate downs, so UNKNOWN proves only "no crash, and A still presses once"; undetectable here, recorded in the test's header; restored |
+| 7 | `test/ui-imgui-input.js` | (g, review of Task 7, run in Task 8) `AddFocusEvent(true)` for `HNUI_EVENT_FOCUS` removed | test PASSES: a regained focus only clears `AppFocusLost`, which no case reads; undetectable here, recorded in the test's header; restored |
+| 8 | `test/ui-imgui-clipboard.js` | (RED) the two `platform_io` clipboard functions not yet set | stdout PASSED all four cases: ImGui's own default clipboard (an in-process buffer) serves copy and paste when no backend sets the functions, so only the TRACE run failed (no `clipboard read: no owner`, no `imgui: clipboard` lines) |
+| 8 | `test/ui-imgui-cursor.js` | (RED) `platformAfterRender` doing nothing | `TIMEOUT CURSOR 1`, `EXITCODE 1` |
+| 8 | `test/ui-imgui-clipboard.js` | (a) get returns `""` on failure, untraced | stdout unchanged; TRACE failed on `imgui: clipboard get: status 4`; restored |
+| 8 | `test/ui-imgui-clipboard.js` | (b) set does not call `hnui_write_clipboard` | `PASTE text=hello`, `CUTPASTE text=` (nothing owns the selection, every read is status 4), test failed; restored |
+| 8 | `test/ui-imgui-clipboard.js` | (c) `addModifiers` skipped for key events | `PASTE text=hello`, `CUT text=hello` (no chord is a shortcut), test failed; restored |
+| 8 | `test/ui-imgui-cursor.js` | (d) TextInput mapped to `ARROW` | TRACE failed on `imgui: cursor 1 -> hnui 2`; the trace held `cursor 1 -> hnui 1` and no `command cursor 2` line at all, so the second line fails too; restored |
+| 8 | `test/ui-imgui-clipboard.js` | (e) `HNUI_EVENT_PASTE` also inserted into the field | test PASSES, `PASTE text=hellohello` (twice, not three times): the chords are injected below Sokol, which produces its paste event only from a real key, so no `HNUI_EVENT_PASTE` arrives; this test cannot see that double insertion; restored |
+| 8 | `test/ui-imgui-cursor.js` | (extra) one cache: visibility acted on only when the shape also changed | TRACE failed on `imgui: cursor hidden` (the pointer does not move in SOFTCURSOR); restored |
 
 ## Notes
 
@@ -190,3 +201,23 @@ Each test must be shown able to fail: the change made, and what it did.
   to the window directly.
 - `BackendPlatformName` changed from `hermes-node-ui (hnui)` to the plan's
   `hermes-node hnui`; no test read the old value.
+
+### Task 8
+
+- On Linux, a paste with nothing copied reads back `HNUI_UNAVAILABLE` (4):
+  the host traces `clipboard read: no owner` under a fresh Xvfb. The test
+  expects 4 on macOS too, on the ground that a new named pasteboard holds
+  no string type, which the host reports as unavailable; not run there.
+- ImGui has a default clipboard of its own (an in-process buffer), used
+  when no backend sets the `platform_io` functions. So a clipboard test
+  that reads only the field passes with no backend at all; the TRACE lines
+  are what show the host was used.
+- The `widgets` scene takes a string argument, `softcursor` or
+  `hardcursor`; any other string is refused, and a string given to any
+  other scene is a TypeError. Integer arguments are unchanged.
+- The cursor's shape cache starts at `ImGuiMouseCursor_None`, so the first
+  frame sets ARROW once: the host starts at Sokol's DEFAULT, not ARROW.
+  `state().cursor` is that cache (the shape last set), -1 before any frame.
+- The listener traces `event rejected: size <n>` once, the first time
+  `hnui_size_ok` fails, instead of dropping silently. No test reaches it:
+  the host built with this tree never sends a short event.

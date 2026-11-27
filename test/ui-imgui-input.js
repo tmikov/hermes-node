@@ -38,8 +38,10 @@
 //  APRESS      with the field unfocused (Escape, then a click outside the
 //              window): A down, A down again as a repeat, three frames, A
 //              up: one press.
-//  UNKNOWN     key codes 0 and 999, which ImGui has no key for, are
-//              dropped, and A still presses once after them.
+//  UNKNOWN     key codes 0 and 999, which ImGui has no key for, cause no
+//              assertion, and A still presses once after them. That is
+//              all it proves: it cannot tell whether the addon or ImGui
+//              dropped them (mutation (f) below).
 //  HELD, BLUR  A and the left button held, read back held; then the window
 //              loses focus and ImGui reads both released. FOCUSED follows,
 //              only after that, since ImGui applies a focus change at the
@@ -60,6 +62,14 @@
 //  (d) IMGUI_USE_WCHAR32 dropped: ASTRAL fails;
 //  (e) modifier events skipped: no case here fails (the clipboard chords
 //      test does).
+// And two this test cannot detect, recorded so nobody relies on it for
+// them:
+//  (f) the listener's `key != ImGuiKey_None` guard removed: UNKNOWN still
+//      passes, because ImGui's AddKeyAnalogEvent returns at once for
+//      ImGuiKey_None and filters a down for a key already down;
+//  (g) AddFocusEvent(true) for HNUI_EVENT_FOCUS removed: every case still
+//      passes; a regained focus only clears ImGui's AppFocusLost, which no
+//      case reads, and input is applied either way.
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display

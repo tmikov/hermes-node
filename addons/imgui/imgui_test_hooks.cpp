@@ -205,8 +205,15 @@ ImVec4 lastItemRect() {
 
 /// `widgets`: a window "T" at (50,50), 300x200, holding a 100x30 button "B"
 /// that counts its clicks and a text field. Each frame also counts presses
-/// of A (not repeats), reads whether A is down and adds up the wheel.
-void sceneWidgets() {
+/// of A (not repeats), reads whether A is down and adds up the wheel. With
+/// \p arg `softcursor` it first sets io.MouseDrawCursor, so ImGui draws the
+/// cursor itself; with `hardcursor` it clears it. The flag stays as set for
+/// later frames.
+void sceneWidgets(const char *arg) {
+  if (std::strcmp(arg, "softcursor") == 0)
+    ImGui::GetIO().MouseDrawCursor = true;
+  else if (std::strcmp(arg, "hardcursor") == 0)
+    ImGui::GetIO().MouseDrawCursor = false;
   ImGui::SetNextWindowPos(ImVec2(50.0f, 50.0f), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(300.0f, 200.0f), ImGuiCond_Always);
   ImGui::Begin(
@@ -227,8 +234,9 @@ void sceneWidgets() {
 
 /// `scene(name[, arg])`: draws immediately into the frame that is open, so
 /// it is called between newFrame() and render(); with no frame open it
-/// throws the no-frame error, as showDemoWindow() does. `arg` is an
-/// optional integer some scenes take; it defaults to 0.
+/// throws the no-frame error, as showDemoWindow() does. `arg` is optional:
+/// an integer for the scenes that take one (default 0), or one of the
+/// strings `widgets` takes.
 napi_value scene(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2] = {nullptr, nullptr};
@@ -243,13 +251,30 @@ napi_value scene(napi_env env, napi_callback_info info) {
     return nullptr;
   }
   int32_t arg = 0;
+  char textArg[32] = {};
   napi_valuetype argType = napi_undefined;
   if (argc >= 2)
     napi_typeof(env, argv[1], &argType);
-  if (argType != napi_undefined &&
+  if (argType == napi_string) {
+    if (napi_get_value_string_utf8(
+            env, argv[1], textArg, sizeof(textArg), &length) != napi_ok) {
+      napi_throw_type_error(
+          env, nullptr, "imgui.__test.scene(): unreadable string argument");
+      return nullptr;
+    }
+  } else if (
+      argType != napi_undefined &&
       napi_get_value_int32(env, argv[1], &arg) != napi_ok) {
     napi_throw_type_error(
-        env, nullptr, "imgui.__test.scene(): the argument must be a number");
+        env,
+        nullptr,
+        "imgui.__test.scene(): the argument must be a number or a string");
+    return nullptr;
+  }
+  if (argType == napi_string && std::strcmp(name, "widgets") != 0) {
+    const std::string message = std::string("imgui.__test.scene('") + name +
+        "'): the argument must be a number";
+    napi_throw_type_error(env, nullptr, message.c_str());
     return nullptr;
   }
   if (!frameOpen())
@@ -286,7 +311,15 @@ napi_value scene(napi_env env, napi_callback_info info) {
     return nullptr;
   }
   if (std::strcmp(name, "widgets") == 0) {
-    sceneWidgets();
+    if (textArg[0] != '\0' && std::strcmp(textArg, "softcursor") != 0 &&
+        std::strcmp(textArg, "hardcursor") != 0) {
+      const std::string message =
+          std::string("imgui.__test.scene('widgets'): unknown argument '") +
+          textArg + "'";
+      napi_throw_error(env, "ERR_INVALID_ARG_VALUE", message.c_str());
+      return nullptr;
+    }
+    sceneWidgets(textArg);
     return nullptr;
   }
   const std::string message =
@@ -403,7 +436,8 @@ napi_value state(napi_env env, napi_callback_info) {
       setString(env, result, "text", gWidgets.text) &&
       setNumber(env, result, "wheel", gWidgets.wheel) &&
       setRect(env, result, "buttonRect", gWidgets.buttonRect) &&
-      setRect(env, result, "fieldRect", gWidgets.fieldRect);
+      setRect(env, result, "fieldRect", gWidgets.fieldRect) &&
+      setNumber(env, result, "cursor", lastCursorRequested());
   return ok ? result : nullptr;
 }
 

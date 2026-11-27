@@ -6,17 +6,23 @@
  */
 
 // The platform half of the backend: what ImGui's GLFW or SDL backend does,
-// on hnui. The display size, the framebuffer scale and the time step, and
-// the input events; the cursor and the clipboard join it in later tasks.
+// on hnui. The display size, the framebuffer scale and the time step, the
+// input events, the mouse cursor and the clipboard.
 
 #include "imgui_addon.h"
 
 #include <cfloat>
 #include <chrono>
+#include <cstring>
+#include <string>
 
 namespace hnimgui {
 
 namespace {
+
+/// The window platformInit() was given, for the clipboard functions, which
+/// ImGui calls with only its context.
+hnui_window *gWindow = nullptr;
 
 /// The clock reading of the previous newFrame(); unset before the first.
 bool gHaveLastFrameTime = false;
@@ -299,8 +305,15 @@ void addModifiers(ImGuiIO &io, int modifiers) {
 /// queue. ImGui applies the queue at the next NewFrame(), trickling it over
 /// several frames where one frame would lose a press-and-release.
 void onEvent(hnui_window *, void *, const hnui_event *event) {
-  if (!hnui_size_ok(event->size, HNUI_EVENT_MIN_SIZE))
+  if (!hnui_size_ok(event->size, HNUI_EVENT_MIN_SIZE)) {
+    // Every event from a host this old is too small, so once is enough.
+    static bool traced = false;
+    if (!traced) {
+      traced = true;
+      trace("event rejected: size %u", event->size);
+    }
     return;
+  }
   ImGuiIO &io = ImGui::GetIO();
   switch (static_cast<hnui_event_type>(event->type)) {
     case HNUI_EVENT_MOUSE_MOVE:
@@ -362,11 +375,75 @@ void onEvent(hnui_window *, void *, const hnui_event *event) {
   }
 }
 
+/// ImGui's Platform_SetClipboardTextFn: copy and cut.
+void setClipboardText(ImGuiContext *, const char *text) {
+  hnui_write_clipboard(gWindow, text);
+  trace("clipboard set, %zu bytes", std::strlen(text));
+}
+
+/// ImGui's Platform_GetClipboardTextFn: paste. ImGui reads the result
+/// before it calls this again, so one buffer is enough; NULL is ImGui's
+/// "no text", which leaves the field unchanged.
+const char *getClipboardText(ImGuiContext *) {
+  static std::string text;
+  char *out = nullptr;
+  const int status = hnui_read_clipboard_sync(gWindow, 500, &out);
+  if (status != HNUI_OK) {
+    trace("clipboard get: status %d", status);
+    return nullptr;
+  }
+  text = out;
+  hnui_free(out);
+  trace("clipboard get: ok, %zu bytes", text.size());
+  return text.c_str();
+}
+
+/// The hnui cursor for a shape ImGui asks for. Wait and Progress have no
+/// hnui counterpart and get the arrow.
+hnui_cursor translateCursor(ImGuiMouseCursor c) {
+  switch (c) {
+    case ImGuiMouseCursor_Arrow:
+    case ImGuiMouseCursor_Wait:
+    case ImGuiMouseCursor_Progress:
+      return HNUI_CURSOR_ARROW;
+    case ImGuiMouseCursor_TextInput:
+      return HNUI_CURSOR_IBEAM;
+    case ImGuiMouseCursor_ResizeAll:
+      return HNUI_CURSOR_RESIZE_ALL;
+    case ImGuiMouseCursor_ResizeNS:
+      return HNUI_CURSOR_RESIZE_NS;
+    case ImGuiMouseCursor_ResizeEW:
+      return HNUI_CURSOR_RESIZE_EW;
+    case ImGuiMouseCursor_ResizeNESW:
+      return HNUI_CURSOR_RESIZE_NESW;
+    case ImGuiMouseCursor_ResizeNWSE:
+      return HNUI_CURSOR_RESIZE_NWSE;
+    case ImGuiMouseCursor_Hand:
+      return HNUI_CURSOR_POINTING_HAND;
+    case ImGuiMouseCursor_NotAllowed:
+      return HNUI_CURSOR_NOT_ALLOWED;
+    default: // None and COUNT, which are not shapes
+      return HNUI_CURSOR_ARROW;
+  }
+}
+
+/// What platformAfterRender() last did, kept as two values because ImGui
+/// can hide the cursor without changing its shape (io.MouseDrawCursor):
+/// whether it is hidden, and the shape last set, or ImGuiMouseCursor_None
+/// before the first, which no frame matches, so the first frame sets one.
+bool gCursorHidden = false;
+ImGuiMouseCursor gCursorShape = ImGuiMouseCursor_None;
+
 } // namespace
 
 void platformInit(hnui_window *w) {
   ImGuiIO &io = ImGui::GetIO();
   io.BackendPlatformName = "hermes-node hnui";
+  io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;
+  gWindow = w;
+  ImGuiPlatformIO &pio = ImGui::GetPlatformIO();
+  pio.Platform_SetClipboardTextFn = setClipboardText;
+  pio.Platform_GetClipboardTextFn = getClipboardText;
   const int id = hnui_add_event_listener(w, onEvent, nullptr);
   trace("event listener %s (id %d)", id != 0 ? "registered" : "FAILED", id);
 }
@@ -402,8 +479,29 @@ void platformNewFrame(hnui_window *w) {
   gHaveLastFrameTime = true;
 }
 
-void platformAfterRender(hnui_window *) {
-  // The cursor is set from here once the platform half handles it.
+void platformAfterRender(hnui_window *w) {
+  const ImGuiIO &io = ImGui::GetIO();
+  if (io.ConfigFlags & ImGuiConfigFlags_NoMouseCursorChange)
+    return;
+  const ImGuiMouseCursor c = ImGui::GetMouseCursor();
+  // ImGui draws the cursor itself under MouseDrawCursor, so the system's
+  // is hidden then, whatever the shape.
+  const bool hidden = c == ImGuiMouseCursor_None || io.MouseDrawCursor;
+  if (hidden != gCursorHidden) {
+    hnui_show_cursor(w, !hidden);
+    gCursorHidden = hidden;
+    trace("cursor %s", hidden ? "hidden" : "shown");
+  }
+  if (!hidden && c != gCursorShape) {
+    const hnui_cursor hc = translateCursor(c);
+    hnui_set_cursor(w, hc);
+    gCursorShape = c;
+    trace("cursor %d -> hnui %d", c, static_cast<int>(hc));
+  }
+}
+
+int lastCursorRequested() {
+  return gCursorShape;
 }
 
 } // namespace hnimgui
