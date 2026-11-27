@@ -129,13 +129,19 @@ loads the addon file and returns that file's exports.
   the running executable**, realpath'd (the rule the kit and bundle roots
   already use). CMake builds it into the same directory as the binary.
 - Loading goes through the same code as `process.dlopen`, so
-  `napi_register_module_v1` is the entry and errors read the same. Today
+  `napi_register_module_v1` is the entry and a file that exists and will
+  not load (a missing dependency, an unresolved symbol) is
+  `ERR_DLOPEN_FAILED`, as there. `process.dlopen`'s own contract does not
+  change. Today
   that code is a static N-API callback (`processDlopen`,
   `lib/process/node_process.cpp`); its body is extracted into a C++
   function both callers use. That refactor is a commit of its own.
-- A missing file throws with `code = 'MODULE_NOT_FOUND'` and a message
-  naming the full path that was tried.
-- It loads at the first `require`, so a program that never asks for ImGui
+- An absent file is the one case classified **before** the shared loader
+  is called: the resolver checks for the file itself and throws with
+  `code = 'MODULE_NOT_FOUND'` and a message naming the full path tried.
+- It loads at the first `require()` **or `require.resolve()`** of the
+  name (the embedder route initializes a module for both), and a failed
+  load is not cached, so a later attempt tries again. A program that never asks for ImGui
   pays nothing and `hermes-node-ui` has no link dependency on the addon.
 - The mechanism is a table of name and file name with one row, not a
   search path and not a naming convention any file can satisfy. *(My
@@ -179,18 +185,25 @@ win.requestAnimationFrame(frame);
   when there is no target (outside a frame callback, or in CLOSING), in
   which case the ImGui frame is ended and nothing is drawn.
 - **`render()`, not `newFrame()`, takes the target, because taking it is
-  what tells the host the tick drew.** A program that throws between the
-  two calls then presents nothing for that tick, where the other order
-  would present a surface nothing drew into.
+  what tells the host the tick drew.** A pair interrupted by a throw
+  between the two calls therefore takes no target and draws nothing. If
+  nothing else drew in that tick, nothing is presented for it; the other
+  order would present a surface nothing drew into.
 - `newFrame()` while a frame is already open ends the open one
   (`ImGui::EndFrame()`), traces `imgui: frame discarded`, and starts the
   new one. It does not throw: the addon cannot tell a second call in one
   callback from a call in the next callback after a throw, and `hnui`
   gives it no tick identity to tell with. *(My call, over adding one to
   `hnui`.)*
+- **More than one `newFrame()`/`render()` pair in a tick is legal**, in
+  one callback or in several: the host runs every callback of a tick
+  before it submits once. Each `render()` clears the target, so the last
+  one's picture is the one presented. The renderer is built for it (see
+  "Renderer half": appended buffers, replaced textures).
 - `showDemoWindow()` or `render()` with no frame open throws a JS error
-  naming the call. Neither `newFrame()` nor `render()` throws in CLOSING,
-  so an `'exit'` listener is not cut short.
+  naming the call, everywhere, an `'exit'` listener included. A correctly
+  paired `newFrame()`/`render()` never throws in CLOSING: `render()`
+  returns false there.
 - `imgui.version` is ImGui's version string.
 
 The JS program owns the frame, and the addon registers no frame callback
@@ -213,6 +226,11 @@ platform, renderer and module surface are separate units.
   calls: mouse position, buttons, wheel, keys with modifiers, text input,
   focus and blur, mouse leave. Native listeners run before JS ones, so
   ImGui has the event before the program's own listeners see it.
+- Mouse buttons are renumbered: `hnui` uses DOM numbering (middle 1,
+  right 2) and ImGui the other (right 1, middle 2).
+- A `KEY_DOWN` with `repeat` set is not passed on as a new press: ImGui
+  generates key repeat itself from the key being held. A repeated
+  `TEXT_INPUT` is text and is passed on.
 - `key_code` is GLFW's numbering; the key table is ImGui's own GLFW
   backend's table, re-typed against `hnui`.
 - **Everything is in logical units.** Display size is the window's
@@ -254,13 +272,32 @@ repository does not have.
   what `demo_visual.c`'s `sokol_gl` already compiles to), and Metal
   Shading Language. Which one is used is decided at run time from
   `sg_query_backend()`.
-- Dynamic vertex and index buffers, grown by replacement when a frame
-  needs more, updated once per frame with every draw list concatenated.
-- Textures follow ImGui's texture protocol
-  (`ImGuiBackendFlags_RendererHasTextures`): the renderer creates,
-  updates and destroys `sg_image`s as ImGui's texture list asks, which is
-  how the font atlas arrives. `ImGuiBackendFlags_RendererHasVtxOffset` is
-  set, with 16-bit indices.
+- **Vertex and index data go through `sg_append_buffer`, never
+  `sg_update_buffer`.** Sokol allows one update of a buffer per Sokol
+  frame and any number of appends, and a Sokol frame here is a host
+  commit, not an ImGui frame: two `render()` calls in one tick share
+  one. Each `render()` appends all its draw lists and draws with the
+  returned offsets. When an append would not fit, the buffer is replaced
+  by a larger one (which has had no append in this frame) and the old
+  one destroyed; draws already issued from the old one are unaffected.
+- **Textures follow ImGui's texture protocol**
+  (`ImGuiBackendFlags_RendererHasTextures`), which is how the font atlas
+  arrives and grows. Sokol's `sg_update_image` takes a whole image, once
+  per Sokol frame, so the adapter does not use it: for a texture ImGui
+  wants created **or updated**, the renderer creates a new immutable
+  `sg_image` from the texture's full pixel data, with a texture view,
+  gives ImGui the new id, and destroys the previous image and view. One
+  path, legal any number of times per Sokol frame; its cost is a whole
+  atlas upload per change, and the atlas changes only when new glyphs or
+  sizes appear. A texture ImGui wants destroyed is destroyed. ImGui's
+  status for a texture is set only after the Sokol objects were made and
+  are valid. An ImGui texture id is the Sokol view's id; one linear
+  sampler, the addon's, serves every texture. The exact status fields
+  are read from the vendored tag.
+- `ImGuiBackendFlags_RendererHasVtxOffset` is set, with 16-bit indices:
+  a draw command's vertex offset becomes the draw's base vertex, or the
+  vertex buffer binding's offset, whichever this Sokol supports on both
+  backends.
 - `render()` owns one pass on the target: it clears to a fixed dark
   colour and draws. Targets are single-sampled on both backends today;
   the pipeline takes the sample count from the target regardless. Sharing the
@@ -289,8 +326,14 @@ absent otherwise:
 - `__test.scene(name)`: called between `newFrame()` and `render()`, draws
   a fixed native scene in place of the demo window. The scenes are what
   the tests below need: a full-window flat fill through the background
-  draw list, a window at a fixed position holding one button and one text
-  field, and a textured quad from a small generated texture.
+  draw list; a window at a fixed position holding one button and one text
+  field; a textured quad from a small generated texture; `many`, more
+  than 65,535 vertices of flat quads in one draw list tiling the window
+  in known colours, which forces buffer growth and non-zero vertex
+  offsets; `clip`, a fill under a clip rectangle smaller than itself; and
+  `glyphs`, text at one size, then, from a later frame on, also text at a
+  second size and with characters not used before, which forces an atlas
+  update after the first upload.
 - `__test.state()`: returns what ImGui holds, read back: display size and
   framebuffer scale, mouse position, `WantCaptureMouse`,
   `WantCaptureKeyboard`, `WantTextInput`, the scene's button click count,
@@ -311,17 +354,20 @@ succeeds in the built binary. It has a forcing-function test, red when
 
 | Test | Proves |
 |---|---|
-| load | The name resolves; `version` matches the pin; the context trace line; plain `hermes-node` refuses the name. |
-| missing file | A copy of the binary in an empty directory throws `MODULE_NOT_FOUND` naming the path. Needs no display. |
+| load | The name resolves; `version` matches the pin; the context trace line; plain `hermes-node` refuses the name. `require.resolve()` of the name loads it too, and a following `require()` returns the same object. |
+| missing file | A copy of the binary in an empty directory throws `MODULE_NOT_FOUND` naming the path, from `require()` and from `require.resolve()`, twice in one process. A file there that is not a loadable addon throws `ERR_DLOPEN_FAILED`. Needs no display. |
 | pixels | The flat-fill scene and the textured quad, captured from the presented frame, compared exactly at sample points. Per backend. |
-| mouse | Injected move, down and up over the scene's button: click count goes 0 to 1; `WantCaptureMouse` true over the window and false off it. |
+| many, clip | `many`: exact colours at sample points in the first, a middle and the last quad, and the buffer-growth trace. `clip`: the fill's colour inside the clip rectangle, the clear colour outside it. |
+| glyphs | The texture trace shows a replacement after the first upload; captured pixels inside the old text's and the new text's boxes are not all the background colour, before and after. |
+| two renders | Two pairs in one callback, and two callbacks in one tick, each pair a different flat fill: the presented frame is the last one's, with no Sokol line (validation is on in Debug). |
+| mouse | Injected move, down and up over the scene's button: click count goes 0 to 1; `WantCaptureMouse` true over the window and false off it. Right and middle buttons read back in ImGui's numbering. A repeated key-down adds no press; a repeated text event adds a character. |
 | keyboard and text | Click the text field, inject `TEXT_INPUT` and key events: contents, `WantTextInput`, and an edit with arrow keys and backspace. One key through the real-event driver (`window_driver.js`), since injection enters below Sokol. |
 | clipboard | Select-all and copy from the field, move the caret to the end, paste: contents doubled; the host's clipboard read-back trace. On macOS it carries the `hnui-test-` pasteboard guard the other clipboard-writing tests have. |
 | cursor | Hovering the text field: ImGui requests the I-beam, and the host's own trace shows the cursor it set. |
 | resize | A real resize: display size follows, the generation changes, live textures unchanged, a frame still presents. |
-| demo window | `showDemoWindow()` for a fixed number of frames: non-zero draw totals and no Sokol line. In a Debug build this runs under Sokol's validation layer, which is the check on the renderer's API use. |
-| misuse | `render()` and `showDemoWindow()` with no frame open: the errors. `newFrame()` twice: the discard trace, no throw. `render()` outside a frame callback returns false. A throw between `newFrame()` and `render()`: that tick presents nothing, the next frame draws. |
-| exit | `process.exit()` from inside a frame, and an `'exit'` listener calling `newFrame()` and `render()`: no throw, `render()` false, status preserved. |
+| demo window | `showDemoWindow()` for a fixed number of frames, one captured: pixels inside the demo window's rectangle differ from the clear colour and pixels outside it equal it, so a renderer that submits nothing fails. No Sokol line; in a Debug build this runs under Sokol's validation layer. |
+| misuse | `render()` and `showDemoWindow()` with no frame open: the errors. `newFrame()` twice: the discard trace, no throw. `render()` outside a frame callback returns false. A throw between `newFrame()` and `render()`, caught by an `uncaughtException` listener, with the next frame's callback registered before the throw and nothing else drawing: the host's trace shows that tick drew nothing, and the next frame draws after a discard trace. |
+| exit | `process.exit()` from inside a frame, and an `'exit'` listener calling a paired `newFrame()` and `render()`: no throw, `render()` false, status preserved. |
 
 The Mac runs go through the gist channel, as for Tasks 16 and 17, and the
 plan has verification rounds there: the Metal shader, the Metal pixel
@@ -332,8 +378,9 @@ run them. The formatter runs on Linux only.
 
 The addon is expected to find some. Each is fixed in `hnui`, in a commit of
 its own with its own test, and recorded in the tracker if not fixed at
-once. Adding an export needs no ABI bump; changing a struct or an existing
-function does. None is known yet. One was considered and declined: a tick
+once. Adding an export, or appending a field under the size-prefix rules
+of `hnui_abi.h`, needs no ABI bump; an incompatible change of layout or
+of an existing function's meaning does. None is known yet. One was considered and declined: a tick
 identity on `hnui_target` (see "JS surface").
 
 ## Documentation
