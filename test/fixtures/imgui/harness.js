@@ -127,6 +127,21 @@ async function until(h, drawFn, predicate, label) {
   process.exit(1);
 }
 
+/**
+ * Inject one platform event (`ui.__injectEvent`, Sokol's terms). `mouseX`
+ * and `mouseY` are given in logical units here and scaled by the window's
+ * dpiScale, since Sokol's are framebuffer pixels. Returns at once; the
+ * event reaches the JS thread, and so ImGui, frames later.
+ */
+function inject(h, desc) {
+  const scaled = Object.assign({}, desc);
+  for (const k of ['mouseX', 'mouseY']) {
+    if (k in scaled)
+      scaled[k] = scaled[k] * h.win.dpiScale;
+  }
+  h.ui.__injectEvent(scaled);
+}
+
 /** The agreement fields of a capture of the next publication. */
 function captureRequest(h, outPath) {
   return {
@@ -207,6 +222,7 @@ module.exports = {
   frame,
   resync,
   until,
+  inject,
   capture,
   captureTick,
   readPpm,

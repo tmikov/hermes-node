@@ -183,6 +183,48 @@ void sceneGlyphs(int arg) {
   endScene(list);
 }
 
+/// What the `widgets` scene has seen, for state(). Accumulated across
+/// frames and never reset: a test reads deltas.
+struct WidgetsState {
+  int clicks = 0;
+  int keyAPresses = 0;
+  bool keyADown = false;
+  double wheel = 0;
+  char text[256] = {};
+  ImVec4 buttonRect{0, 0, 0, 0};
+  ImVec4 fieldRect{0, 0, 0, 0};
+};
+WidgetsState gWidgets;
+
+/// The last item's screen rectangle, as (x0, y0, x1, y1).
+ImVec4 lastItemRect() {
+  const ImVec2 min = ImGui::GetItemRectMin();
+  const ImVec2 max = ImGui::GetItemRectMax();
+  return ImVec4(min.x, min.y, max.x, max.y);
+}
+
+/// `widgets`: a window "T" at (50,50), 300x200, holding a 100x30 button "B"
+/// that counts its clicks and a text field. Each frame also counts presses
+/// of A (not repeats), reads whether A is down and adds up the wheel.
+void sceneWidgets() {
+  ImGui::SetNextWindowPos(ImVec2(50.0f, 50.0f), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(300.0f, 200.0f), ImGuiCond_Always);
+  ImGui::Begin(
+      "T",
+      nullptr,
+      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse);
+  if (ImGui::Button("B", ImVec2(100.0f, 30.0f)))
+    ++gWidgets.clicks;
+  gWidgets.buttonRect = lastItemRect();
+  ImGui::InputText("##t", gWidgets.text, sizeof(gWidgets.text));
+  gWidgets.fieldRect = lastItemRect();
+  ImGui::End();
+  if (ImGui::IsKeyPressed(ImGuiKey_A, false))
+    ++gWidgets.keyAPresses;
+  gWidgets.keyADown = ImGui::IsKeyDown(ImGuiKey_A);
+  gWidgets.wheel += ImGui::GetIO().MouseWheel;
+}
+
 /// `scene(name[, arg])`: draws immediately into the frame that is open, so
 /// it is called between newFrame() and render(); with no frame open it
 /// throws the no-frame error, as showDemoWindow() does. `arg` is an
@@ -243,6 +285,10 @@ napi_value scene(napi_env env, napi_callback_info info) {
     sceneGlyphs(arg);
     return nullptr;
   }
+  if (std::strcmp(name, "widgets") == 0) {
+    sceneWidgets();
+    return nullptr;
+  }
   const std::string message =
       std::string("imgui.__test.scene(): unknown scene '") + name + "'";
   napi_throw_error(env, "ERR_INVALID_ARG_VALUE", message.c_str());
@@ -253,6 +299,43 @@ bool setNumber(napi_env env, napi_value object, const char *name, double v) {
   napi_value value = nullptr;
   return napi_create_double(env, v, &value) == napi_ok &&
       napi_set_named_property(env, object, name, value) == napi_ok;
+}
+
+bool setString(
+    napi_env env,
+    napi_value object,
+    const char *name,
+    const char *v) {
+  napi_value value = nullptr;
+  return napi_create_string_utf8(env, v, NAPI_AUTO_LENGTH, &value) == napi_ok &&
+      napi_set_named_property(env, object, name, value) == napi_ok;
+}
+
+/// An array of \p count elements, each made by \p make(i, &value).
+template <typename Make>
+bool setArray(
+    napi_env env,
+    napi_value object,
+    const char *name,
+    uint32_t count,
+    Make make) {
+  napi_value array = nullptr;
+  if (napi_create_array_with_length(env, count, &array) != napi_ok)
+    return false;
+  for (uint32_t i = 0; i < count; ++i) {
+    napi_value value = nullptr;
+    if (!make(i, &value) || napi_set_element(env, array, i, value) != napi_ok)
+      return false;
+  }
+  return napi_set_named_property(env, object, name, array) == napi_ok;
+}
+
+/// `[x0, y0, x1, y1]`.
+bool setRect(napi_env env, napi_value object, const char *name, ImVec4 r) {
+  const float v[4] = {r.x, r.y, r.z, r.w};
+  return setArray(env, object, name, 4, [&](uint32_t i, napi_value *out) {
+    return napi_create_double(env, v[i], out) == napi_ok;
+  });
 }
 
 bool setBool(napi_env env, napi_value object, const char *name, bool v) {
@@ -271,10 +354,21 @@ napi_value state(napi_env env, napi_callback_info) {
 
   ImVec2 display(0.0f, 0.0f);
   ImVec2 scale(0.0f, 0.0f);
+  ImVec2 mouse(0.0f, 0.0f);
+  bool mouseDown[3] = {false, false, false};
+  bool wantCaptureMouse = false;
+  bool wantCaptureKeyboard = false;
+  bool wantTextInput = false;
   if (ImGui::GetCurrentContext() != nullptr) {
     const ImGuiIO &io = ImGui::GetIO();
     display = io.DisplaySize;
     scale = io.DisplayFramebufferScale;
+    mouse = io.MousePos;
+    for (int i = 0; i < 3; ++i)
+      mouseDown[i] = io.MouseDown[i];
+    wantCaptureMouse = io.WantCaptureMouse;
+    wantCaptureKeyboard = io.WantCaptureKeyboard;
+    wantTextInput = io.WantTextInput;
   }
   const hnui_target &target = lastTarget();
   const RendererStats stats = rendererStats();
@@ -290,7 +384,26 @@ napi_value state(napi_env env, napi_callback_info) {
       setNumber(env, result, "commands", stats.commands) &&
       setNumber(env, result, "vertices", stats.vertices) &&
       setNumber(env, result, "indices", stats.indices) &&
-      setNumber(env, result, "liveTextures", stats.liveTextures);
+      setNumber(env, result, "liveTextures", stats.liveTextures) &&
+      setNumber(env, result, "mouseX", mouse.x) &&
+      setNumber(env, result, "mouseY", mouse.y) &&
+      setArray(env,
+               result,
+               "mouseDown",
+               3,
+               [&](uint32_t i, napi_value *out) {
+                 return napi_get_boolean(env, mouseDown[i], out) == napi_ok;
+               }) &&
+      setBool(env, result, "wantCaptureMouse", wantCaptureMouse) &&
+      setBool(env, result, "wantCaptureKeyboard", wantCaptureKeyboard) &&
+      setBool(env, result, "wantTextInput", wantTextInput) &&
+      setNumber(env, result, "clicks", gWidgets.clicks) &&
+      setNumber(env, result, "keyAPresses", gWidgets.keyAPresses) &&
+      setBool(env, result, "keyADown", gWidgets.keyADown) &&
+      setString(env, result, "text", gWidgets.text) &&
+      setNumber(env, result, "wheel", gWidgets.wheel) &&
+      setRect(env, result, "buttonRect", gWidgets.buttonRect) &&
+      setRect(env, result, "fieldRect", gWidgets.fieldRect);
   return ok ? result : nullptr;
 }
 

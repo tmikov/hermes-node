@@ -14,6 +14,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-addon-part-a.md`
 | Task 4 | The frame protocol, and a cleared target | done |
 | Task 5 | The renderer's draw path | done (GL; Metal shader unverified) |
 | Task 6 | Texture scenes and tests | done (GL) |
+| Task 7 | Input | done (GL) |
 
 ## Mutations
 
@@ -53,6 +54,11 @@ Each test must be shown able to fail: the change made, and what it did.
 | 6 | `test/ui-imgui-textures.js` | (b) every command bound to the white fallback view | `QUAD WRONG 105,105=255,255,255 want 255,0,0 295,105=... want 0,255,0 105,295=... want 0,0,255` (the white corner passes, as it must); GLYPHS0/1 stayed green, as predicted. This closes Task 5's review gap: no test failed under this mutation before; restored |
 | 6 | `test/ui-imgui-textures.js` | (c) the previous image and view not destroyed on replace | no test fails (`ui-imgui-textures.js`, `ui-imgui-draw.js`, `ui-imgui-frame.js` all PASS), as expected; checked by reading instead: `updateTexture` destroys `record->view` then `record->image` only after the new pair is valid, and the leak would exhaust Sokol's pools only after thousands of replacements; restored |
 | 6 | `test/ui-imgui-textures.js` | TEXTURE run against a doctored `%t.err`: the `replaced` lines after `MARK glyphs1` deleted; separately, every `replaced` rewritten as `created` | both fail FileCheck (no line after the marker; a second `created` before it) |
+| 7 | `test/ui-imgui-input.js` | (RED, and (c)) no listener registered: `platformInit` as before this task | `TIMEOUT HOVER move`, `EXITCODE 1`. REAL cannot be reached from there, so it was also run alone (a temporary copy of the test with every case but REAL removed): `TIMEOUT REAL` under the mutation, `REAL apress=1` without it; restored |
+| 7 | `test/ui-imgui-input.js` | (a) buttons passed through unrenumbered | `RIGHT mouseDown=false,false,true`, `MIDDLE mouseDown=false,true,false`, test failed; restored |
+| 7 | `test/ui-imgui-input.js` | (b) repeated key-downs passed on | test PASSES: `AddKeyEvent` filters a down for a key whose latest state is already down ("Filter duplicate" in `AddKeyAnalogEvent`), so the drop is redundant and this test cannot tell; the drop is kept, as the spec states it; restored |
+| 7 | `test/ui-imgui-input.js` | (d) `IMGUI_USE_WCHAR32` dropped from `imgui_config.h` | `ASTRAL WRONG ["h","i","\ufffd"]` (ImGui replaced the code point), test failed; restored |
+| 7 | `test/ui-imgui-input.js` | (e) modifier events skipped | test PASSES, as expected: no case here uses a modifier (Task 8's chords do); restored |
 
 ## Notes
 
@@ -166,3 +172,21 @@ Each test must be shown able to fail: the change made, and what it did.
   throws rather than creating Sokol resources there. No test reaches that
   throw.
 - No change to `imgui_renderer.cpp` was needed: no defect surfaced.
+
+### Task 7
+
+- ImGui floors the mouse position (`AddMousePosEvent`), so the test aims
+  at whole-number coordinates; a first draft aimed at the field's centre,
+  which was at a half unit, and waited forever for the position to arrive.
+- The test runs REPEATCHAR while the field is still focused from the text
+  cases, before APRESS unfocuses it, rather than after APRESS as the plan
+  lists them; each case is unchanged.
+- APRESS waits for the repeated key-down to reach a JavaScript `keydown`
+  listener (`e.repeat`), which runs after the native one, before its three
+  frames: that is what makes the three frames follow the repeat's delivery
+  rather than race it.
+- The REAL key reached ImGui under Xvfb with nothing arranged for focus,
+  as in `test/ui-real-events.js`: Sokol takes a KeyPress the driver sends
+  to the window directly.
+- `BackendPlatformName` changed from `hermes-node-ui (hnui)` to the plan's
+  `hermes-node hnui`; no test read the old value.

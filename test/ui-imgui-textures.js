@@ -31,7 +31,7 @@
 // is accepted.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-addon.md):
-//  (a) WantUpdates ignored: GLYPHS1 fails (and ImGui asserts);
+//  (a) WantUpdates ignored: GLYPHS1 fails;
 //  (b) every command bound to the white fallback view: QUAD fails;
 //  (c) the previous image not destroyed on replace: no test fails (checked
 //      by reading; Sokol's pool would run out only after thousands).
