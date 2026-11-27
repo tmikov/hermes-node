@@ -304,8 +304,9 @@ repository does not have.
   backends.
 - ImGui's reset-render-state draw callback
   (`platform_io.DrawCallback_ResetRenderState` at this version) is
-  honoured by re-applying the pipeline and bindings; any other user
-  callback is called.
+  honoured by running the renderer's whole state setup again: pipeline,
+  viewport and projection uniforms (bindings and scissor are applied per
+  draw command anyway). Any other user callback is called.
 - `render()` owns one pass on the target: it clears to a fixed dark
   colour and draws. Targets are single-sampled on both backends today;
   the pipeline takes the sample count from the target regardless. Sharing the
@@ -373,6 +374,7 @@ succeeds in the built binary. It has a forcing-function test, red when
 | pixels | The flat-fill scene and the textured quad, captured from the presented frame, compared exactly at sample points. Per backend. |
 | many, clip | `many`: exact colours at sample points in the first, a middle and the last quad, and the buffer-growth trace. `clip`: the fill's colour inside the clip rectangle, the clear colour outside it. |
 | glyphs | The texture trace shows a replacement after the first upload; captured pixels inside the old text's and the new text's boxes are not all the background colour, before and after. |
+| callback | A scene whose draw list holds a user callback that applies a quarter-size viewport, then the reset callback, then a full-window fill: the fill covers the whole window. |
 | two renders | Two pairs in one callback, and two callbacks in one tick, each pair a different flat fill: the presented frame is the last one's, with no Sokol line (validation is on in Debug). |
 | mouse | Injected move, down and up over the scene's button: click count goes 0 to 1; `WantCaptureMouse` true over the window and false off it. Right and middle buttons read back in ImGui's numbering. A repeated key-down adds no press; a repeated text event adds a character. |
 | keyboard and text | Click the text field, inject `TEXT_INPUT` and key events: contents, `WantTextInput`, and an edit with arrow keys and backspace. One key through the real-event driver (`window_driver.js`), since injection enters below Sokol. |
