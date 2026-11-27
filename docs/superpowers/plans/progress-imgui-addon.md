@@ -13,6 +13,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-addon-part-a.md`
 | Task 3 | Load a named addon; the addon skeleton | done |
 | Task 4 | The frame protocol, and a cleared target | done |
 | Task 5 | The renderer's draw path | done (GL; Metal shader unverified) |
+| Task 6 | Texture scenes and tests | done (GL) |
 
 ## Mutations
 
@@ -47,6 +48,11 @@ Each test must be shown able to fail: the change made, and what it did.
 | 5 | `test/ui-imgui-draw.js` | the pipeline rebuilt on every draw | PIPELINE run failed on its `-NOT` line; restored |
 | 5 | `test/ui-imgui-draw.js` | the atlas's `created` trace printed twice | TEXTURE run failed on its `-NOT` line; restored (a first attempt printed a differently-shaped duplicate *before* the real line, which the positive line skipped and the `-NOT` could not see: a mutation must reproduce the real line) |
 | 5 | `test/ui-imgui-draw.js` | (g, review) the user-callback call in `drawList` deleted | before USERCALLBACK existed, CALLBACK stayed green (the reset re-applies the viewport anyway); with it: `USERCALLBACK WRONG 600,440=0,255,0`, test failed; restored |
+| 6 | `test/ui-imgui-textures.js` | (RED) scenes `quad` and `glyphs` not yet written | `Error: imgui.__test.scene(): unknown scene 'quad'`, `EXITCODE 1` |
+| 6 | `test/ui-imgui-textures.js` | (a) `WantUpdates` ignored (only `WantCreate` uploads) | `GLYPHS1 WRONG abc=19 xyz=0` and no texture line after the marker; ImGui did **not** assert (the brief expected it to); restored |
+| 6 | `test/ui-imgui-textures.js` | (b) every command bound to the white fallback view | `QUAD WRONG 105,105=255,255,255 want 255,0,0 295,105=... want 0,255,0 105,295=... want 0,0,255` (the white corner passes, as it must); GLYPHS0/1 stayed green, as predicted. This closes Task 5's review gap: no test failed under this mutation before; restored |
+| 6 | `test/ui-imgui-textures.js` | (c) the previous image and view not destroyed on replace | no test fails (`ui-imgui-textures.js`, `ui-imgui-draw.js`, `ui-imgui-frame.js` all PASS), as expected; checked by reading instead: `updateTexture` destroys `record->view` then `record->image` only after the new pair is valid, and the leak would exhaust Sokol's pools only after thousands of replacements; restored |
+| 6 | `test/ui-imgui-textures.js` | TEXTURE run against a doctored `%t.err`: the `replaced` lines after `MARK glyphs1` deleted; separately, every `replaced` rewritten as `created` | both fail FileCheck (no line after the marker; a second `created` before it) |
 
 ## Notes
 
@@ -143,3 +149,20 @@ Each test must be shown able to fail: the change made, and what it did.
   format and sample count is not retried for that pair; a partial
   device-object failure destroys what was made. The `dynamic_update`
   deprecation is a tracker issue (`dz list`).
+
+### Task 6
+
+- After the font atlas's first upload, the 40-unit `XYZ` made ImGui
+  **replace** texture 1 (same id, 512x128 both times), not create a second
+  texture; the test accepts either. A `replaced` also appears before the
+  marker, during GLYPHS0: ImGui 1.93 rasterizes glyphs on first use, so even
+  `abc` at the default size updates the atlas. That is why the TEXTURE run
+  anchors the GLYPHS1 check on a marker the test writes to stderr.
+- QUAD's four samples were exact (0 or 255) with the linear clamp-to-edge
+  sampler: 5 units in from a 200-unit quad's corner is well inside the outer
+  half-texel, where clamping leaves one texel's colour unmixed.
+- The `quad` scene makes its image and view on first use and checks
+  `hnui_frame_target` first, so a first use outside a frame callback
+  throws rather than creating Sokol resources there. No test reaches that
+  throw.
+- No change to `imgui_renderer.cpp` was needed: no defect surfaced.

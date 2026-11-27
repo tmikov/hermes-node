@@ -13,6 +13,7 @@
 
 #include <sokol_gfx.h>
 
+#include <cstdint>
 #include <cstring>
 #include <string>
 
@@ -112,6 +113,76 @@ void sceneCallback(int arg) {
   endScene(list);
 }
 
+/// The `quad` scene's view, made on its first use. It and its image live
+/// as long as the process, like every other Sokol resource here.
+sg_view gQuadView = {};
+
+/// `quad`: a 2x2 image of the addon's own (red, green / blue, white, rows
+/// top first) drawn with AddImage over (100,100)-(300,300), its view id as
+/// the ImTextureID. The image is made on the scene's first use, which must
+/// be inside a frame callback, where sg_* resource creation belongs (see
+/// imgui_renderer.cpp); outside one this throws, and so does a failed
+/// creation.
+void sceneQuad(napi_env env) {
+  if (gQuadView.id == SG_INVALID_ID) {
+    hnui_target target;
+    if (!hnui_frame_target(hnui_get_window(env), &target)) {
+      napi_throw_error(
+          env,
+          nullptr,
+          "imgui.__test.scene('quad'): first use must be inside a frame "
+          "callback");
+      return;
+    }
+    // RGBA8, rows top first.
+    static const uint8_t kPixels[2][2][4] = {
+        {{255, 0, 0, 255}, {0, 255, 0, 255}},
+        {{0, 0, 255, 255}, {255, 255, 255, 255}}};
+    sg_image_desc img = {};
+    img.width = 2;
+    img.height = 2;
+    img.pixel_format = SG_PIXELFORMAT_RGBA8;
+    img.data.mip_levels[0].ptr = kPixels;
+    img.data.mip_levels[0].size = sizeof(kPixels);
+    img.label = "imgui-test-quad";
+    const sg_image image = sg_make_image(&img);
+    sg_view_desc vd = {};
+    vd.texture.image = image;
+    const sg_view view = sg_make_view(&vd);
+    if (sg_query_image_state(image) != SG_RESOURCESTATE_VALID ||
+        sg_query_view_state(view) != SG_RESOURCESTATE_VALID) {
+      sg_destroy_view(view);
+      sg_destroy_image(image);
+      napi_throw_error(
+          env, nullptr, "imgui.__test.scene('quad'): image creation failed");
+      return;
+    }
+    gQuadView = view;
+    trace("test quad image created (view %u)", view.id);
+  }
+  ImDrawList *list = beginScene();
+  list->AddImage(
+      static_cast<ImTextureID>(gQuadView.id),
+      ImVec2(100.0f, 100.0f),
+      ImVec2(300.0f, 300.0f));
+  endScene(list);
+}
+
+/// `glyphs`: `abc` in white at (20,20) at the default size; with \p arg
+/// non-zero also `XYZ` at (20,200) at 40 units, whose glyphs the font atlas
+/// does not hold until they are first drawn, so ImGui updates or replaces
+/// the atlas texture.
+void sceneGlyphs(int arg) {
+  ImDrawList *list = beginScene();
+  list->AddText(ImVec2(20.0f, 20.0f), IM_COL32_WHITE, "abc");
+  if (arg != 0) {
+    ImGui::PushFont(nullptr, 40.0f);
+    list->AddText(ImVec2(20.0f, 200.0f), IM_COL32_WHITE, "XYZ");
+    ImGui::PopFont();
+  }
+  endScene(list);
+}
+
 /// `scene(name[, arg])`: draws immediately into the frame that is open, so
 /// it is called between newFrame() and render(); with no frame open it
 /// throws the no-frame error, as showDemoWindow() does. `arg` is an
@@ -162,6 +233,14 @@ napi_value scene(napi_env env, napi_callback_info info) {
   }
   if (std::strcmp(name, "callback") == 0) {
     sceneCallback(arg);
+    return nullptr;
+  }
+  if (std::strcmp(name, "quad") == 0) {
+    sceneQuad(env);
+    return nullptr;
+  }
+  if (std::strcmp(name, "glyphs") == 0) {
+    sceneGlyphs(arg);
     return nullptr;
   }
   const std::string message =
