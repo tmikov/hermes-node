@@ -56,7 +56,15 @@ async function open(options) {
  * from `app`, where `app.frame` is already a whole frame (its own
  * newFrame() and render()) returning what render() returned. Every helper
  * then runs `app.frame` as its frame and ignores its `drawFn` argument
- * (pass `null`). Resolves once `h.published` has been read from the host.
+ * (pass `null`).
+ *
+ * Call it before the application has drawn a frame (it was created with
+ * `driven: true` and nothing has run `app.frame` yet): `h.published`
+ * starts at 0, as `open()`'s does, and is not read from the host. It
+ * cannot be: `resync()` learns the count from a capture request that gives
+ * up, and the host counts a request's frames only as it presents them, so
+ * before the first publication there is nothing to count and the request
+ * never settles.
  */
 async function adopt(app) {
   const h = {
@@ -67,7 +75,6 @@ async function adopt(app) {
     generation: 1,
   };
   h.run = () => tick(h, [app.frame]).then((r) => r[0]);
-  await resync(h);
   return h;
 }
 
@@ -126,6 +133,10 @@ async function frame(h, drawFn) {
  * so the publication presenting is the last there will be until the test
  * draws again, and a capture request that cannot match (generation 0 is
  * never issued) reports it when it gives up.
+ *
+ * Only once something has been published: the request's frames are
+ * counted as they are presented, and before the first publication none
+ * is, so it would never give up (see `adopt`).
  */
 async function resync(h) {
   await tick(h, [() => false]);
