@@ -16,6 +16,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-addon-part-a.md`
 | Task 6 | Texture scenes and tests | done (GL) |
 | Task 7 | Input | done (GL) |
 | Task 8 | Cursor and clipboard | done (GL; Metal unverified) |
+| Task 9 | Resize and HiDPI | done (GL at scale 1; the 2x case needs a Mac run) |
 
 ## Mutations
 
@@ -71,6 +72,10 @@ Each test must be shown able to fail: the change made, and what it did.
 | 8 | `test/ui-imgui-clipboard.js` | (e) `HNUI_EVENT_PASTE` also inserted into the field | test PASSES, `PASTE text=hellohello` (twice, not three times): the chords are injected below Sokol, which produces its paste event only from a real key, so no `HNUI_EVENT_PASTE` arrives; this test cannot see that double insertion; restored |
 | 8 | `test/ui-imgui-cursor.js` | (extra) one cache: visibility acted on only when the shape also changed | TRACE failed on `imgui: cursor hidden` (the pointer does not move in SOFTCURSOR); restored |
 | 8 | `test/ui-imgui-cursor.js` | (review) the shape cache updated while hidden | `HIDDENMOVE cursor=1`, test failed; TRACE alone also fails, on SHOWN's `imgui: cursor 1 -> hnui 2` (nothing set after the cursor is shown again); restored |
+| 9 | `test/ui-imgui-resize.js` | (a) `DisplayFramebufferScale` hard-coded to 1 | test PASSES, as the plan says: under Xvfb the framebuffer is the logical size, so the scale is 1 anyway (`SCALE ok`, `SCALEVALUE 1`); only a run on a 2x display (the Mac) can fail it; restored |
+| 9 | `test/ui-imgui-resize.js` | (b) `DisplaySize` set on the first frame only (a cached size) | `TIMEOUT RESIZED` after `BEFORE matched`, test failed; restored |
+| 9 | `test/ui-imgui-resize.js` | (extra) `harness.resync` sets `h.published` to the reported id plus one | `CAPTURE unmatched ...fill800.ppm` after `TEXTURES same`, test failed: FILL800's capture depends on the id resync read back; restored |
+| 9 | `test/ui-imgui-resize.js` | (exclusions, doctored `.err`) one more `[ui] imgui: pipeline created (format 23, samples 1)` appended to a passing run's stderr; then one more `[ui] imgui: texture 2 created 512x128` | PIPELINE failed (`PIPELINE-NOT: excluded string found in input`), TEXTURE failed likewise; both pass on the undoctored file |
 
 ## Notes
 
@@ -231,3 +236,20 @@ Each test must be shown able to fail: the change made, and what it did.
 - The listener traces `event rejected: size <n>` once, the first time
   `hnui_size_ok` fails, instead of dropping silently. No test reaches it:
   the host built with this tree never sends a short event.
+
+### Task 9
+
+- Nothing in the addon needed changing: a real resize to 800x600 and a
+  `highDpi: true` window both pass as written (GL, Xvfb, scale 1).
+- `harness.resync` was exercised for the first time and works as the plan
+  specifies: after the resize the give-up result reported publication 2,
+  the last one drawn, and the FILL800 capture of publication 3 matched.
+  In this run no frame was refused at publication: the frames after the
+  resize are drawn only once the `resize` event has arrived, by which time
+  the JS thread has switched to generation 2, so every frame drew into a
+  live generation and `h.published` was already right. Resync is what
+  makes that an observation rather than an assumption; the extra mutation
+  shows the capture depends on the value it reads back.
+- Under Xvfb the `highdpi` run's scale is 1, so it repeats the `resize`
+  run's geometry. `SCALEVALUE` is printed unchecked so a Mac run's log
+  shows whether the 2x case ran.

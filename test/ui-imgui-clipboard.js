@@ -44,9 +44,10 @@
 // by program order. Each host line that a later addon line must follow
 // is ordered by the synchronous read: the read is a command on the same
 // FIFO queue as the write, and the addon's `clipboard get` line is printed
-// only once the platform thread has answered it. Stdout alone passes with no backend clipboard at all,
-// since ImGui falls back to an in-process buffer of its own when no
-// backend sets the functions: the TRACE run is what proves the backend.
+// only once the platform thread has answered it. Stdout alone passes with
+// no backend clipboard at all, since ImGui falls back to an in-process
+// buffer of its own when no backend sets the functions: the TRACE run is
+// what proves the backend.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-addon.md):
 //  (a) get returns "" on failure, untraced: TRACE fails on the status line;
