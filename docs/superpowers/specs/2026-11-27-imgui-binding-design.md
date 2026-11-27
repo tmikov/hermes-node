@@ -364,7 +364,10 @@ conventions may not change.
   `io.ConfigErrorRecoveryEnableAssert = false`, so a recoverable error
   never aborts a Debug build, and `io.ConfigErrorRecoveryEnableTooltip =
   false`, because ImGui's tooltip carries a button that turns the asserts
-  back on; `newFrame()` sets both again. It also installs ImGui's error
+  back on; and `io.ConfigErrorRecoveryEnableDebugLog = false`, because
+  ImGui would otherwise print every recoverable error to stdout from
+  inside a library (the binding throws and traces instead); `newFrame()`
+  sets all three again. It also installs ImGui's error
   callback, which records the first message.
   - An error reported during a binding call makes that call throw an
     `Error` with `code` `ERR_IMGUI_USAGE` and ImGui's message, after ImGui
