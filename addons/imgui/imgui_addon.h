@@ -19,7 +19,8 @@
 
 namespace hnimgui {
 
-void trace(const char *fmt, ...); // "[ui] imgui: ..." when UI tracing is on
+// "[ui] imgui: ..." when UI tracing is on
+void trace(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 bool testHooksEnabled(); // HERMES_NODE_UI_TEST_HOOKS, same rule as the host
 // platform
 void platformInit(hnui_window *w); // listener, clipboard hooks, backend flags

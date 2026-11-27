@@ -51,8 +51,10 @@ Each test must be shown able to fail: the change made, and what it did.
   `exports.darwin.txt` as ld64's `-exported_symbols_list`, both a
   `LINK_DEPENDS`), so the addon's code may use std containers freely. The
   macOS half has not been linked anywhere yet.
-- `test/imgui-missing.js` copies the whole `hermes-node-ui` binary (about
-  190 MB under ASAN) into `%t.dir`, because a symlink would be realpath'd
-  back to `bin/`; it deletes the copy when it passes.
+- `test/imgui-missing.js` hard-links the `hermes-node-ui` binary into
+  `%t.dir` (copying it, about 190 MB under ASAN, only when the link fails);
+  `/proc/self/exe` reports the link's own path, so the executable's
+  directory is `%t.dir`. A symlink would not do: it is realpath'd back to
+  `bin/`.
 - The UI-off configuration (`cmake-build-asan-noui`) still configures and
   builds `hermes-node`.

@@ -61,8 +61,9 @@ set_target_properties(hermes_node_imgui PROPERTIES
 # std:: template instantiations: libstdc++ declares namespace std with
 # default visibility, so a std::vector used anywhere in the addon is exported
 # as a weak symbol. The list names the two NAPI_MODULE_INIT() functions and
-# nothing else. ld64 takes no comments, so macOS has a file of its own with
-# the Mach-O (underscore-prefixed) names; keep the two in step.
+# nothing else. macOS has a file of its own, in ld64's exported-symbols
+# format with the Mach-O (underscore-prefixed) names; keep the two in step.
+# The macOS link is unverified until a Mac has run it.
 if(APPLE)
   set(_imgui_exports ${CMAKE_CURRENT_SOURCE_DIR}/exports.darwin.txt)
   target_link_options(hermes_node_imgui PRIVATE

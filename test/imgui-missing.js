@@ -18,13 +18,19 @@
 //
 // Needs no display and no built addon.
 //
+// The binary is hard-linked rather than copied where the filesystem allows
+// (about 190 MB under ASAN): the kernel reports a hard link's own path as
+// the executable, so its directory is still %t.dir. A copy is the fallback
+// across filesystems. A failing run leaves %t.dir behind, since lit stops
+// at the first failing RUN line; the next run's first line removes it.
+//
 // THE MUTATION THIS MUST BREAK: remove the stat() check in
 // tools/hermes-node-ui/named_addons.cpp. The missing file then reaches
 // dlopen and the MISSING lines say ERR_DLOPEN_FAILED.
 //
 // REQUIRES: ui
 // RUN: rm -rf %t.dir && mkdir -p %t.dir
-// RUN: cp %hermes-node-ui %t.dir/hermes-node-ui
+// RUN: ln %hermes-node-ui %t.dir/hermes-node-ui 2>/dev/null || cp %hermes-node-ui %t.dir/hermes-node-ui
 // RUN: %timeout 60 %t.dir/hermes-node-ui %s %t.dir/hermes-node-imgui.node MISSING | %FileCheck --check-prefix=MISSING %s
 // RUN: printf 'not an elf' > %t.dir/hermes-node-imgui.node
 // RUN: %timeout 60 %t.dir/hermes-node-ui %s %t.dir/hermes-node-imgui.node UNLOADABLE | %FileCheck --check-prefix=UNLOADABLE %s

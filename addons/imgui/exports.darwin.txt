@@ -1,2 +1,10 @@
+# Copyright (c) Tzvetan Mikov.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+#
+# The addon's whole Mach-O export set, for ld64's -exported_symbols_list:
+# the two functions NAPI_MODULE_INIT() defines, underscore-prefixed. Keep
+# in step with exports.map.
 _napi_register_module_v1
 _node_api_module_get_api_version_v1
