@@ -25,8 +25,11 @@ Two deliverables:
 
 Part C later replaces the hand-written functions with generated ones for
 the whole API. So the calling convention chosen here is the one the
-generator must reproduce: every rule below has to be derivable from a C++
-signature, and each exception is listed as one.
+generator must reproduce. A C++ signature alone does not determine a
+binding function (nothing in `bool* p_open` says it may be `NULL`), so the
+unit is a signature **plus a row of metadata**, of the fixed kinds listed
+under "Metadata". Every rule below is a function of those two, and each
+exception is listed as one.
 
 ## Goals
 
@@ -107,7 +110,7 @@ them.
 | A pointer to an ImGui struct with no JavaScript form (`const ImGuiViewport*`, `const ImGuiWindowClass*`, `ImGuiStyle*`) | Omitted from the JavaScript signature and passed as `NULL`: `dockSpaceOverViewport(dockspaceId, flags)`, `styleColorsDark()`. |
 | `bool`, `int`, `float`, `double`, `ImGuiID`, `ImU32` | A boolean or a number. Integers are range-checked. |
 | An enum or flags type | A number. Every enumerator of every enum type that a bound function takes or returns is a constant on the module under its C++ name minus the `ImGui` or `Im` prefix: `imgui.WindowFlags_NoTitleBar`, `imgui.Col_Text`, `imgui.Key_Enter`, `imgui.DrawFlags_Closed`. |
-| `const ImVec2&`, `const ImVec4&` | An array of 2 or 4 numbers (any array-like with numeric elements is not accepted: a real `Array`). |
+| `const ImVec2&`, `const ImVec4&`, or either by value | An array of 2 or 4 numbers (any array-like with numeric elements is not accepted: a real `Array`). |
 | Returns `ImVec2` / `ImVec4` | Returns a new array, or fills and returns the array passed as an extra argument. That argument comes after every C++ parameter, so defaults before it are passed as `undefined`: `imgui.getWindowPos(out)`, `imgui.getMouseDragDelta(0, undefined, out)`. |
 | `bool* p`, `int* p`, `float* p`, `float v[N]`, `int v[N]` | A reference array: an `Array` of at least N elements of the right type, read before the call and written after it. A `NULL`-able pointer accepts `undefined` or `null`. |
 | `char* buf, size_t buf_size` | A one-element reference array holding a string, plus the capacity in bytes as the next argument (`imgui.inputText('Name', name, 256)`). The string is written back whenever the buffer differs from it after the call, whatever the widget returned: with `InputTextFlags_EnterReturnsTrue` ImGui edits the buffer on every keystroke and returns true only on Enter. A new string is created only then. |
@@ -116,10 +119,15 @@ them.
 
 Every binding function checks its arguments before calling ImGui, and
 checks that a frame is open (between `newFrame()` and `render()`), except
-the few that ImGui allows outside one: the settings functions, the style
-functions and `version`. Those need the ImGui context, which part A
-creates at the first `newFrame()` that finds a window; they create it the
-same way, and with no window they throw `ERR_IMGUI_NO_WINDOW`.
+exactly these, which ImGui allows outside one: `styleColorsDark`,
+`styleColorsLight`, `loadIniSettingsFromMemory`,
+`saveIniSettingsToMemory`, and `version` (a property, no context). The
+four functions need the ImGui context, which part A creates at the first
+`newFrame()` that finds a window; they create it the same way, and with
+no window they throw `ERR_IMGUI_NO_WINDOW`. Context creation is one
+function, and it configures error recovery and installs the error
+callback (see "Errors") before it returns, so no binding call can meet a
+context with ImGui's defaults.
 `loadIniSettingsFromMemory` is the one function that must be called
 *outside* a frame, and throws `ERR_IMGUI_USAGE` inside one: it rebuilds
 the dock nodes, which the frame's dock space is using. (The application's
@@ -129,6 +137,71 @@ Reset Layout therefore sets a flag and loads before the next
 `begin`/`end` pairing follows ImGui exactly and is the caller's job, as in
 C++: `end()` and `endChild()` are always called; every other `endX()` only
 when its `beginX()` returned true.
+
+### Metadata
+
+What a binding function needs beyond its C++ signature. The plan contains
+the full table of bound functions, one row each, with the JavaScript
+signature and these columns; that table is part of what the plan's review
+reviews, and part C's generator reads the same columns.
+
+- **Overload**: which C++ overload the row binds, and its JavaScript
+  name. Overloads not listed are not bound. In particular: `pushID` and
+  `getID` bind the string and the `int` overloads (dispatched on type),
+  not `const void*`; `treeNode(label)` and `treeNodeEx(label, flags)` bind
+  only those two, not the `str_id, fmt` or pointer-ID forms;
+  `drawList.addText(pos, col, text)` binds the overload without a font.
+- **Nullable**: which pointer and string parameters accept `undefined` /
+  `null`.
+- **Length**: for a pointer that is not written `v[N]`, how many elements
+  it addresses (one, for every function in this surface).
+- **Omitted**: parameters dropped from the JavaScript signature and
+  passed as `NULL` or zero: struct pointers with no JavaScript form,
+  `text_end`, and the `callback` / `user_data` pair of the `inputText`
+  family.
+- **Frame**: whether the function needs an open frame (all but the four
+  above) or must be outside one (`loadIniSettingsFromMemory`).
+- **Preconditions**: the checks the binding makes before calling ImGui,
+  beyond argument types; see "Errors".
+- **Rejected values**: flag bits and argument combinations refused before
+  ImGui is called. In this surface: the `InputTextFlags_Callback*` bits
+  (each needs a callback, and ImGui asserts or calls through NULL without
+  one).
+
+### Buffers
+
+- **`inputText` family.** The capacity is an integer from 1 to 2^24. The
+  binding owns a buffer of that many bytes for the call. The incoming
+  string is encoded to UTF-8 and, if longer than capacity minus one,
+  truncated at a character boundary; the buffer is always terminated.
+  After the call the buffer is compared with the *original* string's
+  encoding, and written back if it differs, so a truncation is written
+  back too.
+- **Plots.** There is no count argument: the count is the array's length.
+  `valuesOffset` must be an integer from 0 to length minus one (0 for an
+  empty array). For a `Float32Array` the data pointer is taken after every
+  other argument has been read, and nothing that can run JavaScript
+  happens between that and the ImGui call.
+
+### Re-entrancy and write-back
+
+Reading an element of a reference array, or writing one, can run
+JavaScript (an accessor defined on an index). So:
+
+- Every argument is read into native storage before ImGui is called;
+  ImGui never sees JavaScript memory except a `Float32Array`'s data, as
+  above.
+- The binding keeps an "inside a call" flag for the whole of each binding
+  function, `newFrame()` and `render()` included. Entering any of them
+  while it is set throws `ERR_IMGUI_REENTRANT` and calls nothing. The one
+  place it is lowered is around the `listClipper` callback, below.
+- If reading an argument throws, the exception propagates and ImGui is
+  not called.
+- Outputs are written after the call, in parameter order. If a write
+  throws, the exception propagates; ImGui's state has already changed and
+  later outputs are not written.
+- If the call raised a usage error, nothing is written back and
+  `ERR_IMGUI_USAGE` is thrown.
 
 ### Exceptions
 
@@ -141,13 +214,16 @@ Part C carries the same list.
   thickness)`. Colours there are `ImU32` numbers, made with
   `imgui.getColorU32(vec4)` or `imgui.colorConvertFloat4ToU32(vec4)`.
 - **List clipper.** `ImGuiListClipper` is a C++ object with a loop
-  protocol. It is bound as three functions over one implicit stack:
-  `imgui.listClipperBegin(count, itemHeight)`, `imgui.listClipperStep(out)`
-  (fills `out[0]`, `out[1]` with the display range; returns false at the
-  end, which also ends it), `imgui.listClipperEnd()` for leaving early.
+  protocol, and one left open by a throw cannot be cleaned up later. It is
+  bound as one function that owns the loop:
+  `imgui.listClipper(count, itemHeight, (start, end) => { ... })`. The
+  callback is called once per range `Step()` yields; the clipper lives on
+  the native stack and is ended when the callback returns or throws, and a
+  throw then propagates. The callback may call any binding function.
 - **Plots.** `plotLines` and `plotHistogram` take the values as a
-  `Float32Array` (used in place, no copy) or an `Array` of numbers, and no
-  `stride` argument; the getter overloads are not bound.
+  `Float32Array` (used in place, no copy) or an `Array` of numbers, with
+  no count and no `stride` argument (see "Buffers"); the getter overloads
+  are not bound.
 - **Settings.** `loadIniSettingsFromMemory(string)` and
   `saveIniSettingsToMemory()` (returns a string) take and return strings
   without a size.
@@ -164,9 +240,6 @@ Part C carries the same list.
   first. An array argument selects the `ImVec4` one, a number the
   `ImGuiCol` one (`getColorU32(imgui.Col_Text, alphaMul)`); the `ImU32`
   one is not bound.
-- **Paired functions ImGui does not guard.** See "Errors": the binding
-  keeps a depth count for these pairs, which a generator needs as a table
-  beside the signatures.
 
 ## Surface
 
@@ -223,7 +296,7 @@ conventions may not change.
 - **Draw list** (`imgui.drawList`): `addLine`, `addRect`, `addRectFilled`,
   `addCircle`, `addCircleFilled`, `addTriangleFilled`, `addBezierCubic`,
   `addPolyline`, `addText`, `pushClipRect`, `popClipRect`.
-- **Clipper**: `listClipperBegin`, `listClipperStep`, `listClipperEnd`.
+- **Clipper**: `listClipper`.
 - **Constants**: every enumerator of the enum types the functions above
   take or return. Each is emitted from the C++ identifier itself (a macro
   over the name), so a value cannot be mistyped.
@@ -235,48 +308,73 @@ conventions may not change.
   array that is too short), naming the function and the argument. ImGui is
   not called.
 - **No frame**: the existing `ERR_IMGUI_NO_FRAME`.
+- **Re-entry**: `ERR_IMGUI_REENTRANT`, above.
 - **Usage errors ImGui recovers from.** ImGui v1.93 reports these through
-  `IM_ASSERT_USER_ERROR` and repairs its stacks: an unmatched `end`,
-  `endPopup`, `endMenu`, `endCombo`, `endTable`, `endTabBar`,
-  `endMainMenuBar`, `popID`, `popStyleColor`, `popStyleVar` or
-  `popItemWidth`, and at the end of the frame whatever was left open. The
-  addon sets `io.ConfigErrorRecoveryEnableAssert = false` at every
-  `newFrame()` (so a recoverable error never aborts a Debug build) and
-  `io.ConfigErrorRecoveryEnableTooltip = false` (ImGui's tooltip carries a
-  button that turns the asserts back on), and installs ImGui's error
-  callback. An error reported during a binding call makes that call throw
-  an `Error` with `code` `ERR_IMGUI_USAGE` and ImGui's message, after
-  ImGui has recovered. Errors ImGui reports when the frame ends (an
-  unclosed `begin`, a `pushID` never popped) make `render()` throw the
-  same way, after it has drawn the recovered frame. Every such error is
-  also traced (`imgui: usage error: <msg>`). The one case that only
-  traces: the discarding `newFrame()` that part A already has for a frame
-  left open by an earlier throw.
-  - The error callback is `ImGuiContext::ErrorCallback`, which v1.93
-    declares in `imgui_internal.h`. That is the binding's one use of the
-    internal header; it stays in one file and is named in the README's
-    "Bumping ImGui" section.
-- **Unbalanced calls ImGui does not guard.** Several bound functions
-  assert plainly, or do not check at all, when called without their
-  opening call: `endGroup`, `endChild`, `endTooltip`, `endListBox`,
-  `endMenuBar`, `treePop`, `drawList.popClipRect`, and the table row and
-  column functions outside a table. These are the mistakes the pairing
-  rule above invites (calling `endListBox()` after a `beginListBox()` that
-  returned false). The binding keeps a depth count per such pair, reset at
-  `newFrame()`, raised only when the opening call succeeded, and throws
-  `ERR_IMGUI_USAGE` itself, without calling ImGui, when a closing call
-  would take the count below zero. This guards underflow, the case that
-  crashes; an opening call left unclosed is ImGui's end-of-frame error
-  above. The counts are not per window, so closing in a different window
-  from the opening one is not detected.
+  `IM_ASSERT_USER_ERROR` and repairs its state. From its source, for this
+  surface: an unmatched `end`, `endPopup`, `endMenu`, `endCombo`,
+  `endTable`, `endTabBar`, `endMainMenuBar`, `popID`, `popStyleColor`,
+  `popStyleVar` or `popItemWidth` when called; and, when a window or the
+  frame ends, an unclosed window, ID, tree node, group, style colour,
+  style variable, popup, tab bar or table. (The plan audits this list
+  against `ErrorRecoveryTryToRecoverWindowState` and each function, and
+  the README carries the audited list.) Context creation sets
+  `io.ConfigErrorRecoveryEnableAssert = false`, so a recoverable error
+  never aborts a Debug build, and `io.ConfigErrorRecoveryEnableTooltip =
+  false`, because ImGui's tooltip carries a button that turns the asserts
+  back on; `newFrame()` sets both again. It also installs ImGui's error
+  callback, which records the first message.
+  - An error reported during a binding call makes that call throw an
+    `Error` with `code` `ERR_IMGUI_USAGE` and ImGui's message, after ImGui
+    has recovered. ImGui's state is consistent afterwards and the frame
+    may continue.
+  - Errors ImGui reports when the frame ends make `render()` throw the
+    same way. `render()` then has ended the ImGui frame and closed the
+    binding's frame, has **not** taken the frame's target and has drawn
+    nothing, so the tick presents nothing, exactly as for a throw from
+    application code. This holds with or without a target: a usage error
+    takes precedence over the `false` return.
+  - Every such error is traced (`imgui: usage error: <msg>`). The one
+    case that only traces: the discarding `newFrame()` that part A already
+    has for a frame left open by an earlier throw.
+  - The error callback is `ImGuiContext::ErrorCallback`, declared in
+    `imgui_internal.h`.
+- **Preconditions ImGui does not check recoverably.** Several bound
+  functions assert plainly, or dereference without checking, when called
+  in the wrong state: `endGroup`, `endChild`, `endTooltip`, `endListBox`,
+  `endMenuBar`, `endTabItem`, `treePop`, `drawList.popClipRect`, and the
+  table row and column functions outside a table. These are the mistakes
+  the pairing rule invites (calling `endListBox()` after a
+  `beginListBox()` that returned false). For each, the binding first
+  evaluates **the same condition ImGui asserts or relies on, read from
+  ImGui's own state** (the group stack's size, the current window's tree
+  depth and flags, the current table and tab bar, the draw list's clip
+  stack), and throws `ERR_IMGUI_USAGE` without calling ImGui when it does
+  not hold. Because the state read is ImGui's, it stays right after ImGui
+  has recovered from an earlier error in the same frame, and it follows
+  ImGui's own rules (an `endChild()` after a `beginChild()` that returned
+  false is valid; a `treeNodeEx` with `TreeNodeFlags_NoTreePushOnOpen`
+  opens nothing to pop). The plan lists each function's conditions with
+  the source lines they come from.
+  - These reads need `imgui_internal.h`. Together with the error callback
+    they are the binding's whole use of the internal header, confined to
+    one file (`bind_guards.cpp`) and named in the README's "Bumping
+    ImGui" section: a bump re-audits that file against ImGui's source.
+  - A guard makes the call safe, not right: where ImGui's own check is
+    weaker than correct pairing (a second `endTabItem()` passes it), so is
+    the binding's.
+- **Not diagnosed, as in C++**: a `pushItemWidth` without its pop (ImGui
+  clears that stack when the window next begins) and a
+  `drawList.pushClipRect` without its pop (the window's own pop then
+  removes the wrong entry; the draw list is rebuilt next frame). Neither
+  is in ImGui's recovery and neither crashes.
 - **Assertions ImGui does not recover from**, other than those, remain
   `assert`: an abort in a Debug build and undefined behaviour in a Release
   build, as for a C++ program. The binding's argument checks cover the
   ones a wrong JavaScript value reaches directly (a negative count, an
   enum value out of range, a table column count over ImGui's limit, a
-  format string); each bound function's preconditions are written out in
-  the plan from ImGui's source. What is not covered is recorded in the
-  tracker. This is the limit of goal 3.
+  format string, a rejected flag); each bound function's preconditions are
+  written out in the plan from ImGui's source. What is not covered is
+  recorded in the tracker. This is the limit of goal 3.
 - **A throw from application code inside a frame** is unchanged from part
   A: the exception takes the host's ordinary path for a frame callback,
   and if the program survives it the next `newFrame()` discards the open
@@ -313,10 +411,14 @@ layout as an ini string), `README.md`. No npm dependencies.
   or the current directory. A directory is read with `fs.promises.readdir`
   when first opened, and shows "loading" until the promise resolves: the
   UI keeps drawing while Node does I/O. Errors are shown in the tree and
-  logged.
-- **Viewer.** The selected file, read with `fs.promises.readFile`, capped
-  at 1 MiB, split into lines and drawn through the list clipper so a long
-  file costs only its visible lines. A file that is not valid UTF-8 text
+  logged. In every panel the promise's result is stored in application
+  state by its continuation; the frame callback only draws the state it
+  finds and never awaits.
+- **Viewer.** The selected file's first 1 MiB, read with
+  `fs.promises.open` and bounded `FileHandle.read` calls (not `readFile`,
+  which reads the whole file whatever is shown), the handle closed in a
+  `finally`; then split into lines and drawn through the list clipper so a
+  long file costs only its visible lines. A truncated file says so. A file that is not valid UTF-8 text
   is shown as a hex dump. Above it a table of the file's `stat` fields.
 - **Widgets.** A gallery in tabs: basic (buttons, checkbox, radio,
   sliders, drags, inputs, combo, colour editors, progress bar), a table
@@ -338,18 +440,22 @@ layout as an ini string), `README.md`. No npm dependencies.
 
 The application has one test mode, selected by an environment variable:
 it then uses a fixed tree fixture as its root, a fixed clock for the
-canvas, and prints a line per state change (`APP opened <path> <bytes>`),
-so the test below has read-backs that do not depend on the machine.
+canvas, and prints a line per state change (`APP opened <path> <bytes>
+lines=<n>`, `APP dir <path> entries=<n>`, `APP error <path> <code>`), so
+the test below has read-backs that do not depend on the machine.
 
 ## Structure of the binding
 
 - `addons/imgui/bind/`: `bind_util.h` (argument readers and writers:
   string, number with range, vector, reference array of each kind; the
   frame check; the usage-error check; the registration macro), then one
-  `.cpp` per group above, and `bind_constants.cpp`.
+  `.cpp` per group above, `bind_constants.cpp`, and `bind_guards.cpp`
+  (the error callback and the precondition reads, the only unit that
+  includes `imgui_internal.h`).
 - A binding function is a few lines over those helpers, in a fixed shape:
-  read and check arguments, check the frame, call ImGui, check for a usage
-  error, write back, return. The fixed shape is what part C generates.
+  enter (the re-entrancy flag), read and check arguments, check the frame
+  and the preconditions, call ImGui, check for a usage error, write back,
+  return. The fixed shape is what part C generates.
 - `imgui_module.cpp` keeps the frame protocol and calls one registration
   function per group.
 - The addon's export list and public-API-only rule are unchanged.
@@ -362,44 +468,66 @@ To part A's rules: window tests named `test/ui-imgui-*.js` under
 no timing, each test shown able to fail by a mutation recorded in the
 progress file.
 
+New test hooks, under `HERMES_NODE_UI_TEST_HOOKS` as before:
+`__test.bindCalls()` returns, per binding function, how many times it
+has **called ImGui** (counted immediately before the call, so a rejected
+call does not count); `__test.state()` gains `windows`, the name, active
+flag and docked flag of each ImGui window in the last ended frame.
+
 - **`imgui-bind-surface.js`**: the module's exact export list and the
-  value of a sample of constants per enum type, against a checked-in
-  list. An added or removed function fails it.
-- **Coverage rule**: every exported function is called by at least one
-  test. `utils/check-imgui-bind-coverage.py` checks it from the checked-in
-  list and the test sources, run by an ungated lit test, the way
-  `ui-stderr-rule.js` runs its script.
-- **`ui-imgui-bind-args.js`**: for each convention, wrong types, counts
-  and ranges throw the documented error and do not reach ImGui (the item
-  count read back from the test hooks does not move); calls outside a
-  frame throw `ERR_IMGUI_NO_FRAME`.
+  value of a sample of constants per enum type, against a checked-in list
+  (`test/fixtures/imgui/bind-groups.js`, the function names by group). An
+  added or removed function fails it.
+- **Coverage rule, by execution**: each group's test ends by reading
+  `__test.bindCalls()` and failing unless every function in its group has
+  a non-zero count, and the surface test checks that the groups together
+  are the export list. So every bound function has reached ImGui in some
+  test, and a function added to the list without a test fails its group's
+  test.
+- **`ui-imgui-bind-args.js`**: for each convention, wrong types, counts,
+  ranges, formats, rejected flags and buffer rules throw the documented
+  error, and the function's `bindCalls()` count does not move; calls
+  outside a frame throw `ERR_IMGUI_NO_FRAME`; the four out-of-frame
+  functions work before the first `newFrame()`; an index accessor that
+  re-enters throws `ERR_IMGUI_REENTRANT`; an accessor that throws on read
+  prevents the call, and one that throws on write propagates after it.
 - **`ui-imgui-bind-errors.js`**: an unmatched `end`, `pushID` without
-  `popID`, `endTable` without `beginTable`, and each pair the binding
-  guards itself (`endListBox` after a false `beginListBox`, `treePop`,
-  `endGroup`, `popClipRect`, `tableNextRow` outside a table):
-  `ERR_IMGUI_USAGE` from the call or from `render()`, the trace line, and
-  the next frame works. Also `loadIniSettingsFromMemory` inside a frame,
-  and a format string with the wrong conversion.
+  `popID`, `endTable` without `beginTable`; each precondition the binding
+  checks itself, including the two the rule must get right (`endChild`
+  after a false `beginChild` is accepted; `treePop` after a
+  `NoTreePushOnOpen` node throws); a binding-checked closer called after
+  ImGui has recovered from an earlier error in the same frame;
+  `loadIniSettingsFromMemory` inside a frame. For each: `ERR_IMGUI_USAGE`
+  from the call or from `render()`, the trace line, no publication for a
+  throwing `render()` (with a target, without one, and in CLOSING), and
+  the next frame works. A throw makes the harness's `frame()` skip its
+  bookkeeping, as part A's exception test found, so these cases drive the
+  frame callback themselves and call `harness.resync` before the next
+  ordinary frame.
 - **One test per group** (`ui-imgui-bind-widgets.js`, `-windows.js`,
   `-tables.js`, `-popups.js`, `-drawlist.js`, `-plots.js`, ...): the
   script builds a small UI, reads item rectangles back with
   `getItemRectMin/Max`, injects mouse and key events at them through the
   existing harness, and checks the reference arrays and return values
   (click the checkbox: `v[0]` flips and the call returns true; drag the
-  slider; type into the field). Draw-list and plot tests check exact
-  pixels of flat-coloured shapes, as part A's scenes do.
-- **`ui-imgui-app.js`**: the application in test mode: all panels present
-  (window count and names read back), a click on a fixture file produces
-  `APP opened`, the viewer's line count matches the fixture, the canvas
-  shows the expected pixels at the fixed clock, Quit ends with status 0,
-  and no usage error is traced.
+  slider; type into the field, with and without `EnterReturnsTrue`).
+  Draw-list and plot tests check exact pixels of flat-coloured shapes, as
+  part A's scenes do. The `listClipper` test checks the ranges it is
+  given and that a throw from its callback leaves the next frame working.
+- **`ui-imgui-app.js`**: the application in test mode: every panel's
+  window is in `state().windows`, active and docked; a click on a fixture
+  file (at the rectangle the application prints for it in test mode)
+  produces `APP opened` with the fixture's byte and line counts; an
+  unreadable fixture entry produces `APP error`; the canvas shows the
+  expected pixels at the fixed clock; Quit ends with status 0; and no
+  usage error is traced.
 - The Mac round runs all of it on Metal at 2x, and a person looks at the
   application once on each platform (recorded as a hand check).
 
 ## Constraints
 
-- Part A's rules stand: public API only (plus the one internal-header use
-  above), logical units, no file written by the addon, new files carry the
+- Part A's rules stand: public API only (plus `imgui_internal.h` in
+  `bind_guards.cpp`, above), logical units, no file written by the addon, new files carry the
   project's copyright line, no commit hashes in documents.
 - Hermes: no `performance` global (the application takes time from the
   frame callback and `process.hrtime`), CommonJS only.
@@ -410,7 +538,7 @@ progress file.
 
 - The exact function list within the groups, fixed by writing the panels.
 - The helpers' names and the macro shape in `bind_util.h`.
-- How the usage-error flag is kept (per context) and reset.
+- How the usage-error and re-entrancy flags are kept and reset.
 - The default layout's ini text, produced by arranging the windows once
   and calling `saveIniSettingsToMemory()`.
 - The fixture tree for the application's test mode.
