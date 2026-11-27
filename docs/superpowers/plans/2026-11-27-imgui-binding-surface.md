@@ -612,8 +612,14 @@ there is no "Proposed addition" under any group.
     which need the group `BeginMenuBar()` opened still to be the top of
     the group stack: `g.GroupStack.Size > 0` and
     `g.GroupStack.back().WindowID == window->ID` (imgui.cpp:12719, 12722,
-    plain). (b): `g.GroupStack`. It fails when a `beginGroup()` inside the
-    menu bar was left open.
+    plain). (b): `g.GroupStack`. It fails when an `endGroup()` inside the
+    menu bar ended the menu bar's own group (which belongs to the window,
+    so `canEndGroup` lets it through): then no group is left, or the top
+    one is another window's. A `beginGroup()` left open inside the menu bar
+    does not make it fail: that group also belongs to the window, so
+    `EndMenuBar()` ends it in place of its own, and the window's `end()`
+    reports the menu bar's group as "Missing EndGroup()". (Corrected in
+    Task 5; the first version of this entry named that case.)
   - (c) `PopID()` (widgets:9396).
 - Notes: none.
 
@@ -1350,9 +1356,12 @@ All six pass a finished string and never let ImGui interpret `%`.
   ("Calling EndCombo() in wrong window!", widgets:2096), but only after
   decrementing `g.BeginComboDepth` (widgets:2091), a counter nothing
   restores (see Notes). So the binding makes ImGui's comparison first.
-  (b): `g.CurrentWindow->Name` equals `"##Combo_%02d"` formatted with
-  `g.BeginComboDepth - 1` (the name ImGui builds at widgets:2094 after
-  its decrement). When it does not, `ERR_IMGUI_USAGE` is thrown and ImGui
+  (b): `g.BeginComboDepth > 0`, and then `g.CurrentWindow->Name` equals
+  `"##Combo_%02d"` formatted with `g.BeginComboDepth - 1` (the name ImGui
+  builds at widgets:2094 after its decrement). The first condition is the
+  unmatched `endCombo()`: ImGui would take the counter to -1 and compare
+  with `"##Combo_-1"`. (Added in Task 5, which registers the two as
+  `canEndCombo:no-combo` and `canEndCombo:wrong-window`.) When it does not, `ERR_IMGUI_USAGE` is thrown and ImGui
   is not called, so the counter is not disturbed. ImGui's own message is
   therefore never raised through the binding. `EndCombo()` then calls
   `EndPopup()` (widgets:2097).
@@ -2927,7 +2936,7 @@ Read:
 | `g.CurrentWindow` (the pointer itself) | 2553 | every guard below; `listClipper` (window comparison, design) |
 | `g.CurrentWindow->ID` | 2998 | the label-id guard (27 functions), `endGroup`, `endMenuBar` |
 | `g.CurrentWindow->Flags` | 2999 | `endChild`, `endListBox` (`ImGuiWindowFlags_ChildWindow`); `endTooltip` (`_Tooltip`); `beginMenuBar`, `endMenuBar` (`_MenuBar`) |
-| `g.CurrentWindow->SkipItems` | 3039 | `beginMenuBar`, `endMenuBar`, `endTabItem` (ImGui returns before its assertions when it is set, so the guards do too) |
+| `g.CurrentWindow->SkipItems` | 3039 | `beginMenuBar`, `endMenuBar`, `endTabItem`, `beginPopupContextItem` (ImGui returns before its assertions when it is set, so the guards do too) |
 | `g.CurrentWindow->Name` | 2997 | `endCombo` |
 | `g.CurrentWindow->IDStack` (`Size`, `back()`) | 3068 | `treePop` |
 | `g.CurrentWindow->DC.MenuBarAppending` | 2964 | `beginMenuBar`, `endMenuBar` |

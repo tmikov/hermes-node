@@ -37,8 +37,42 @@
 //  GUARD_LABELID  button('') and beginChild('') at a window's root:
 //                 refused, not called (their item ID would be the window's
 //                 own, which ImGui asserts plainly); button('') inside
-//                 pushID('p'): accepted.
-//  DISCARD        newFrame(); begin('w'); newFrame(): no throw, `frame
+//                 pushID('p'): accepted. treeNode('') likewise refused.
+//  GUARD_TREE     treePop() with no node open; treePop() inside a node that
+//                 keeps stack data (TreeNodeFlags_DrawLinesFull) with a
+//                 pushID left unpopped; treePop() after the node's own ID
+//                 was popped with popID(): each refused, not called, and
+//                 the frame then balanced by hand.
+//  GUARD_TABITEM  endTabItem() inside a tab bar before any beginTabItem:
+//                 refused.
+//  GUARD_MENUBAR  endMenuBar() in a window without WindowFlags_MenuBar; in
+//                 one with it but no menu bar begun; after the menu bar's
+//                 own group was ended with endGroup(), with no group left
+//                 and with another window's group on top: each refused.
+//  GUARD_BEGINMENUBAR a second beginMenuBar() in one window before
+//                 endMenuBar(): refused.
+//  GUARD_TOOLTIP  endTooltip() in an ordinary window: refused.
+//  GUARD_LISTBOX  endListBox() after a beginListBox that returned false
+//                 (placed below its parent's visible area, `SETUP listbox
+//                 clipped` read back); inside a plain beginChild() with no
+//                 group open; inside one whose parent's top group is
+//                 another window's: each refused.
+//  GUARD_CONTEXTITEM beginPopupContextItem() with no strId after text(),
+//                 an item with no ID: refused; with a strId: accepted.
+//  GUARD_COMBO    a combo opened by a click shows as one active combo
+//                 popup window, `##Combo_<depth>`. endCombo() with no combo
+//                 open, and endCombo() from a child window begun inside
+//                 the combo: each refused. In that same frame the combo is
+//                 still active under the same name, and no other combo popup
+//                 window is.
+//  COMBO_LEFT_OPEN a frame leaves the open combo's endCombo() out
+//                 (render() throws); in the next frame the combo is active
+//                 under the same name as before, because newFrame() resets
+//                 g.BeginComboDepth.
+//  ENDMENU, ENDPOPUP, ENDTABBAR  endMenu(), endPopup() and endTabBar() with
+//                 nothing to end: ImGui's own recoverable checks, so
+//                 ERR_IMGUI_USAGE from the call, which did reach ImGui.
+//  DISCARD       newFrame(); begin('w'); newFrame(): no throw, `frame
 //                 discarded` traced, the frame that follows renders.
 //  GUARDS         every guard condition registered has refused at least
 //                 once (harness.checkGuardCoverage).
@@ -56,6 +90,12 @@
 //  fails;
 //  labelIdIsWindowId() returning false always: GUARD_LABELID aborts
 //  (ImGui's plain assertion, imgui.cpp:12319);
+//  each of canTreePop, canEndTabItem, canEndMenuBar, canBeginMenuBar,
+//  canEndTooltip, canEndListBox, canBeginPopupContextItem and canEndCombo
+//  returning nullptr always: its case aborts or fails (which, per guard,
+//  is recorded in the progress file);
+//  the reset of g.BeginComboDepth removed from guard::beginFrame():
+//  COMBO_LEFT_OPEN fails;
 //  a guard condition registered and never refused: GUARDS fails
 //  (`UNREFUSED <name>`);
 //  every usage error traced twice (throwUsage() tracing too): ONCE fails.
@@ -299,6 +339,7 @@ async function main() {
       imgui.begin('label id');
       message = refused('button', () => imgui.button('')).message;
       refused('beginChild', () => imgui.beginChild(''));
+      refused('treeNode', () => imgui.treeNode(''));
       // The same label one ID-stack level down is not the window's ID.
       const before = calls('button');
       imgui.pushID('p');
@@ -311,6 +352,275 @@ async function main() {
                                    'GUARD_LABELID WRONG ' + drew + ' ' +
                                        accepted);
     console.log('GUARD_LABELID message ' + message);
+  }
+
+  /** `name` must be accepted: called once more, nothing thrown. */
+  function accepted(name, fn) {
+    const before = calls(name);
+    const result = fn();
+    if (calls(name) !== before + 1)
+      fail('NOTCALLED ' + name);
+    return result;
+  }
+
+  /** A window of its own at a fixed place and size. */
+  function beginAt(name, flags) {
+    imgui.setNextWindowPos([40, 40]);
+    imgui.setNextWindowSize([300, 200]);
+    imgui.begin(name, null, flags);
+  }
+
+  // --- GUARD_TREE ------------------------------------------------------
+  {
+    const drew = await harness.frame(h, () => {
+      beginAt('tree');
+      refused('treePop', () => imgui.treePop());
+      // DrawLinesFull makes the node keep stack data (widgets:7097-7100,
+      // 7120-7121), so TreePop() compares its ID with the ID stack's top.
+      if (!imgui.treeNodeEx('lines', imgui.TreeNodeFlags_DefaultOpen |
+                                         imgui.TreeNodeFlags_DrawLinesFull))
+        fail('SETUP tree lines closed');
+      imgui.pushID('left');
+      refused('treePop', () => imgui.treePop());
+      imgui.popID();
+      accepted('treePop', () => imgui.treePop());
+      // A node without stack data whose ID was popped: only the window's
+      // own ID is left, which TreePop() asserts against (widgets:7426).
+      if (!imgui.treeNodeEx('popped', imgui.TreeNodeFlags_DefaultOpen))
+        fail('SETUP tree popped closed');
+      imgui.popID();
+      refused('treePop', () => imgui.treePop());
+      imgui.pushID('back');
+      accepted('treePop', () => imgui.treePop());
+      imgui.end();
+    });
+    console.log(drew ? 'GUARD_TREE ok' : 'GUARD_TREE render=' + drew);
+  }
+
+  // --- GUARD_TABITEM ---------------------------------------------------
+  {
+    const drew = await harness.frame(h, () => {
+      beginAt('tab item');
+      if (!imgui.beginTabBar('bar'))
+        fail('SETUP no tab bar');
+      refused('endTabItem', () => imgui.endTabItem());
+      imgui.endTabBar();
+      imgui.end();
+    });
+    console.log(drew ? 'GUARD_TABITEM ok' : 'GUARD_TABITEM render=' + drew);
+  }
+
+  // --- GUARD_MENUBAR ---------------------------------------------------
+  {
+    const drew = await harness.frame(h, () => {
+      beginAt('no menu bar');
+      refused('endMenuBar', () => imgui.endMenuBar());
+      imgui.end();
+      beginAt('menu bar', imgui.WindowFlags_MenuBar);
+      refused('endMenuBar', () => imgui.endMenuBar());
+      if (!imgui.beginMenuBar())
+        fail('SETUP no menu bar');
+      // The menu bar's own group (widgets:9332) belongs to this window, so
+      // endGroup() ends it; nothing is left on the group stack.
+      accepted('endGroup', () => imgui.endGroup());
+      refused('endMenuBar', () => imgui.endMenuBar());
+      imgui.beginGroup();
+      accepted('endMenuBar', () => imgui.endMenuBar());
+      imgui.end();
+      // The same with the implicit window's group below it.
+      imgui.beginGroup();
+      beginAt('menu bar 2', imgui.WindowFlags_MenuBar);
+      if (!imgui.beginMenuBar())
+        fail('SETUP no menu bar 2');
+      accepted('endGroup', () => imgui.endGroup());
+      refused('endMenuBar', () => imgui.endMenuBar());
+      imgui.beginGroup();
+      accepted('endMenuBar', () => imgui.endMenuBar());
+      imgui.end();
+      imgui.endGroup();
+    });
+    console.log(drew ? 'GUARD_MENUBAR ok' : 'GUARD_MENUBAR render=' + drew);
+  }
+
+  // --- GUARD_BEGINMENUBAR ----------------------------------------------
+  {
+    const drew = await harness.frame(h, () => {
+      beginAt('menu bar twice', imgui.WindowFlags_MenuBar);
+      if (!imgui.beginMenuBar())
+        fail('SETUP no menu bar twice');
+      refused('beginMenuBar', () => imgui.beginMenuBar());
+      imgui.endMenuBar();
+      imgui.end();
+    });
+    console.log(drew ? 'GUARD_BEGINMENUBAR ok' :
+                       'GUARD_BEGINMENUBAR render=' + drew);
+  }
+
+  // --- GUARD_TOOLTIP ---------------------------------------------------
+  {
+    const drew = await harness.frame(h, () => {
+      beginAt('tooltip');
+      refused('endTooltip', () => imgui.endTooltip());
+      imgui.end();
+    });
+    console.log(drew ? 'GUARD_TOOLTIP ok' : 'GUARD_TOOLTIP render=' + drew);
+  }
+
+  // --- GUARD_LISTBOX ---------------------------------------------------
+  {
+    // The placement GUARD_CHILD uses: far below a 300x200 parent's visible
+    // area. BeginListBox tests visibility before anything else
+    // (widgets:8971-8977), so it answers false on its first frame.
+    let shown = null;
+    const drew = await harness.frame(h, () => {
+      beginAt('list parent');
+      imgui.setCursorScreenPos([60, 2000]);
+      shown = imgui.beginListBox('##clipped', [100, 100]);
+      if (shown === false)
+        refused('endListBox', () => imgui.endListBox());
+      else
+        imgui.endListBox();
+      imgui.setCursorScreenPos([60, 60]);
+      imgui.beginChild('plain child', [100, 100]);
+      refused('endListBox', () => imgui.endListBox());
+      imgui.endChild();
+      imgui.end();
+      // A group of the implicit window under a child of another window.
+      imgui.beginGroup();
+      beginAt('list parent 2');
+      imgui.beginChild('plain child 2', [100, 100]);
+      refused('endListBox', () => imgui.endListBox());
+      imgui.endChild();
+      imgui.end();
+      imgui.endGroup();
+    });
+    if (shown !== false)
+      fail('SETUP listbox not clipped');
+    console.log('SETUP listbox clipped');
+    console.log(drew ? 'GUARD_LISTBOX ok' : 'GUARD_LISTBOX render=' + drew);
+  }
+
+  // --- GUARD_CONTEXTITEM -----------------------------------------------
+  {
+    const drew = await harness.frame(h, () => {
+      beginAt('context item');
+      imgui.text('no id');
+      refused('beginPopupContextItem', () => imgui.beginPopupContextItem());
+      refused('beginPopupContextItem',
+              () => imgui.beginPopupContextItem(null, 0));
+      if (accepted('beginPopupContextItem',
+                   () => imgui.beginPopupContextItem('named')))
+        imgui.endPopup();
+      imgui.end();
+    });
+    console.log(drew ? 'GUARD_CONTEXTITEM ok' :
+                       'GUARD_CONTEXTITEM render=' + drew);
+  }
+
+  /**
+   * The names of the active combo popup windows, `##Combo_<depth>`
+   * (widgets:2055); a child window of one is `##Combo_00/<name>_<id>`.
+   */
+  const comboWindows = () =>
+      imgui.__test.state()
+          .windows.filter((w) => /^##Combo_-?[0-9]+$/.test(w.name) && w.active)
+          .map((w) => w.name);
+
+  // --- GUARD_COMBO -----------------------------------------------------
+  let comboName;
+  // A combo in a window of its own; `extra` runs inside it while it is
+  // open, `before` ahead of it. `endIt` false leaves its endCombo() out.
+  let comboOpen = false, comboRect;
+  const comboDraw = (before, extra, endIt = true) => () => {
+    beginAt('combo');
+    if (before)
+      before();
+    comboOpen = imgui.beginCombo('##guarded', 'preview');
+    if (!comboOpen)
+      comboRect = harness.rect(imgui);
+    if (comboOpen) {
+      imgui.selectable('one');
+      if (extra)
+        extra();
+      if (endIt)
+        imgui.endCombo();
+    }
+    if (endIt || !comboOpen)
+      imgui.end();
+  };
+  {
+    const plain = comboDraw();
+    await harness.frame(h, plain);
+    await harness.frame(h, plain);
+    await harness.clickAt(h, plain, harness.center(comboRect));
+    await harness.until(h, plain, () => comboOpen, 'GUARD_COMBO open');
+    const names = comboWindows();
+    if (names.length !== 1)
+      fail('SETUP combo windows ' + JSON.stringify(names));
+    comboName = names[0];
+    console.log('SETUP combo ' + comboName);
+    const drew = await harness.frame(
+        h,
+        comboDraw(
+            () => refused('endCombo', () => imgui.endCombo()),
+            () => {
+              imgui.beginChild('in combo', [50, 50]);
+              refused('endCombo', () => imgui.endCombo());
+              imgui.endChild();
+            }));
+    const after = comboWindows();
+    const ok = drew && comboOpen && after.length === 1 &&
+        after[0] === comboName;
+    console.log(ok ? 'GUARD_COMBO ok' :
+                     'GUARD_COMBO WRONG ' + drew + ' ' + comboOpen + ' ' +
+                         JSON.stringify(after));
+  }
+
+  // --- COMBO_LEFT_OPEN -------------------------------------------------
+  {
+    let code = 'none';
+    await harness.rawTick(h, () => {
+      imgui.newFrame();
+      comboDraw(null, null, false)();
+      try {
+        imgui.render();
+      } catch (e) {
+        code = e.code;
+      }
+      return false;
+    });
+    const leftOpen = comboOpen;
+    await harness.resync(h);
+    await harness.frame(h, comboDraw());
+    const after = comboWindows();
+    const ok = code === 'ERR_IMGUI_USAGE' && leftOpen && comboOpen &&
+        after.length === 1 && after[0] === comboName;
+    console.log(ok ? 'COMBO_LEFT_OPEN ok' :
+                     'COMBO_LEFT_OPEN WRONG ' + code + ' ' + leftOpen + ' ' +
+                         comboOpen + ' ' + JSON.stringify(after));
+    // Closed by a click outside it, so that nothing later sees it.
+    const plain = comboDraw();
+    await harness.clickAt(h, plain, [600, 440]);
+    await harness.until(h, plain, () => !comboOpen, 'COMBO closed');
+  }
+
+  // --- ENDMENU, ENDPOPUP, ENDTABBAR ------------------------------------
+  {
+    const messages = {};
+    const drew = await harness.frame(h, () => {
+      beginAt('recoverable');
+      for (const [label, name] of
+               [['ENDMENU', 'endMenu'], ['ENDPOPUP', 'endPopup'],
+                ['ENDTABBAR', 'endTabBar']]) {
+        messages[label] =
+            accepted(name, () => usage(() => imgui[name]())).message;
+      }
+      imgui.end();
+    });
+    for (const label of Object.keys(messages)) {
+      console.log(drew ? label + ' ok' : label + ' render=' + drew);
+      console.log(label + ' message ' + messages[label]);
+    }
   }
 
   // --- DISCARD ---------------------------------------------------------
@@ -344,6 +654,23 @@ async function main() {
 // CHECK-NEXT: {{^}}GUARD_CHILD ok{{$}}
 // CHECK-NEXT: {{^}}GUARD_LABELID ok{{$}}
 // CHECK-NEXT: {{^}}GUARD_LABELID message imgui.button(): label gives the item the window's own ID (an empty label, or one ending in '###', at the root of a window); use '##name' or pushID(){{$}}
+// CHECK-NEXT: {{^}}GUARD_TREE ok{{$}}
+// CHECK-NEXT: {{^}}GUARD_TABITEM ok{{$}}
+// CHECK-NEXT: {{^}}GUARD_MENUBAR ok{{$}}
+// CHECK-NEXT: {{^}}GUARD_BEGINMENUBAR ok{{$}}
+// CHECK-NEXT: {{^}}GUARD_TOOLTIP ok{{$}}
+// CHECK-NEXT: {{^}}SETUP listbox clipped{{$}}
+// CHECK-NEXT: {{^}}GUARD_LISTBOX ok{{$}}
+// CHECK-NEXT: {{^}}GUARD_CONTEXTITEM ok{{$}}
+// CHECK-NEXT: {{^}}SETUP combo ##Combo_00{{$}}
+// CHECK-NEXT: {{^}}GUARD_COMBO ok{{$}}
+// CHECK-NEXT: {{^}}COMBO_LEFT_OPEN ok{{$}}
+// CHECK-NEXT: {{^}}ENDMENU ok{{$}}
+// CHECK-NEXT: {{^}}ENDMENU message imgui.endMenu(): Calling EndMenu() in wrong window!{{$}}
+// CHECK-NEXT: {{^}}ENDPOPUP ok{{$}}
+// CHECK-NEXT: {{^}}ENDPOPUP message imgui.endPopup(): Calling EndPopup() in wrong window!{{$}}
+// CHECK-NEXT: {{^}}ENDTABBAR ok{{$}}
+// CHECK-NEXT: {{^}}ENDTABBAR message imgui.endTabBar(): Mismatched BeginTabBar()/EndTabBar()!{{$}}
 // CHECK-NEXT: {{^}}DISCARD ok{{$}}
 // CHECK-NEXT: {{^}}GUARDS ok{{$}}
 // CODE: EXITCODE 0
@@ -368,6 +695,31 @@ async function main() {
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: EndChild() outside a child window{{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: an item ID equal to the window's own ID{{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: an item ID equal to the window's own ID{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: an item ID equal to the window's own ID{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: TreePop() with no tree node open{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: TreePop() with an ID pushed inside the tree node still on the ID stack{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: TreePop() after the tree node's own ID was popped{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndTabItem() with no tab item begun in the tab bar{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndMenuBar() in a window without WindowFlags_MenuBar{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndMenuBar() with no menu bar open{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndMenuBar() with no group open (the menu bar's own group was ended){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndMenuBar() with another window's group on top (the menu bar's own group was ended){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: BeginMenuBar() while this window's menu bar is open{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndTooltip() outside a tooltip{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndListBox() outside a child window{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndListBox() with no group open (the list box's group){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndListBox() with another window's group on top (not the list box's){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: BeginPopupContextItem() with no strId after an item that has no ID{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: BeginPopupContextItem() with no strId after an item that has no ID{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndCombo() with no combo open{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndCombo() in another window than the combo's popup{{$}}
+// COMBO_LEFT_OPEN's render(): the popup and its parent closed by EndFrame().
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing End(){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Must call EndPopup() and not End()!{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing End(){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Calling EndMenu() in wrong window!{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Calling EndPopup() in wrong window!{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Mismatched BeginTabBar()/EndTabBar()!{{$}}
 // The discarded frame's open window is reported, then the discard.
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing End(){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: frame discarded{{$}}

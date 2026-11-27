@@ -20,7 +20,7 @@
 //            `NOSAMPLE <name>`, so each later task must add its own.
 //  ARGTYPE   a value of the wrong type, or a missing one: TypeError,
 //            ERR_INVALID_ARG_TYPE; the message names the function and the
-//            argument (checked on begin, and on the six functions that
+//            argument (checked on begin, and on the eight functions that
 //            dispatch on an argument's type, whose message names both
 //            forms).
 //  REFARRAY  reference arrays that are not what they claim (Review Focus
@@ -168,6 +168,32 @@ const SAMPLES = {
   endListBox: [],
   getItemRectMin: [],
   getItemRectMax: [],
+  treeNode: ['t'],
+  treeNodeEx: ['t'],
+  treePop: [],
+  collapsingHeader: ['h'],
+  setNextItemOpen: [true],
+  beginTabBar: ['tb'],
+  endTabBar: [],
+  beginTabItem: ['ti'],
+  endTabItem: [],
+  beginMainMenuBar: [],
+  endMainMenuBar: [],
+  beginMenuBar: [],
+  endMenuBar: [],
+  beginMenu: ['m'],
+  endMenu: [],
+  menuItem: ['mi'],
+  openPopup: ['p'],
+  beginPopup: ['p'],
+  beginPopupModal: ['pm'],
+  beginPopupContextItem: [],
+  endPopup: [],
+  closeCurrentPopup: [],
+  setTooltip: ['t'],
+  setItemTooltip: ['t'],
+  beginTooltip: [],
+  endTooltip: [],
   pushStyleColor: [0, 0],
   popStyleColor: [],
   pushStyleVar: [0, 1],
@@ -270,6 +296,20 @@ async function main() {
                               'ERR_INVALID_ARG_TYPE').message);
       dispatched.push(rejects('selectable', () => imgui.selectable('s', 1),
                               'ERR_INVALID_ARG_TYPE').message);
+      dispatched.push(rejects('collapsingHeader',
+                              () => imgui.collapsingHeader('h', 'x'),
+                              'ERR_INVALID_ARG_TYPE').message);
+      dispatched.push(rejects('menuItem', () => imgui.menuItem('m', null, 1),
+                              'ERR_INVALID_ARG_TYPE').message);
+      rejects('collapsingHeader', () => imgui.collapsingHeader('h', [1]),
+              'ERR_INVALID_ARG_TYPE');
+      rejects('collapsingHeader', () => imgui.collapsingHeader('h', null, 'x'),
+              'ERR_INVALID_ARG_TYPE');
+      rejects('menuItem', () => imgui.menuItem('m', null, [1]),
+              'ERR_INVALID_ARG_TYPE');
+      rejects('menuItem', () => imgui.menuItem('m', 1), 'ERR_INVALID_ARG_TYPE');
+      rejects('beginPopupContextItem', () => imgui.beginPopupContextItem(1),
+              'ERR_INVALID_ARG_TYPE');
       // The dispatched forms' own arguments.
       rejects('radioButton', () => imgui.radioButton('r', [0], 'x'),
               'ERR_INVALID_ARG_TYPE');
@@ -502,6 +542,8 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.getID(): strId must be a string, or intId a number{{$}}
 // CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.radioButton(): active must be a boolean, or v an Array{{$}}
 // CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.selectable(): selected must be a boolean, or pSelected an Array{{$}}
+// CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.collapsingHeader(): flags must be a number, or pVisible an Array or null{{$}}
+// CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.menuItem(): selected must be a boolean, or pSelected an Array{{$}}
 // CHECK-NEXT: {{^}}REFARRAY ok{{$}}
 // CHECK-NEXT: {{^}}FLOAT ok{{$}}
 // CHECK-NEXT: {{^}}NUL ok{{$}}

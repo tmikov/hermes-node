@@ -8,9 +8,9 @@
 // The Widgets group (surface table, "Widgets").
 //
 // Every function whose entry says "Label-id: yes" checks its label with
-// Call::needLabelId() after needFrame(). endCombo's and endListBox's state
-// guards (canEndCombo, canEndListBox) are Task 5's, with the reset of
-// g.BeginComboDepth that canEndCombo rests on.
+// Call::needLabelId() after needFrame(). endCombo and endListBox run their
+// state guards (guard::canEndCombo, guard::canEndListBox); canEndCombo
+// rests on guard::beginFrame()'s reset of g.BeginComboDepth.
 
 #include "bind_guards.h"
 #include "bind_util.h"
@@ -606,6 +606,8 @@ napi_value endCombo(napi_env env, napi_callback_info info) {
   Call c(env, info, "endCombo");
   if (!c.ok() || !c.needFrame())
     return nullptr;
+  if (const char *msg = guard::canEndCombo())
+    return c.throwUsage("%s", msg);
   c.enterImGui();
   ImGui::EndCombo();
   if (!c.leaveImGui())
@@ -727,6 +729,8 @@ napi_value endListBox(napi_env env, napi_callback_info info) {
   Call c(env, info, "endListBox");
   if (!c.ok() || !c.needFrame())
     return nullptr;
+  if (const char *msg = guard::canEndListBox())
+    return c.throwUsage("%s", msg);
   c.enterImGui();
   ImGui::EndListBox();
   if (!c.leaveImGui())

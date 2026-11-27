@@ -13,7 +13,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-binding.md`
 | Task 2 | Constants, and flag and enum checking | done (GL) |
 | Task 3 | Windows, Layout, IDs, Text, Item and input queries | done (GL) |
 | Task 4 | Widgets | done (GL) |
-| Task 5 | Trees, tabs, menus, popups and tooltips | |
+| Task 5 | Trees, tabs, menus, popups and tooltips | done (GL) |
 | Task 6 | Tables | |
 | Task 7 | Style, plots, draw list, list clipper | |
 | Task 8 | Docking and settings | |
@@ -127,6 +127,37 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 4 | `ui-imgui-bind-input-text.js` | `inputTextMultiline`'s write-back removed | `TIMEOUT pressKey 257` in MULTILINE; test failed |
 | 4 | `ui-imgui-bind-input-text.js` | `ImGui::SetKeyboardFocusHere()` removed, `enterImGui()` kept (Task 3's owed text-field half) | `TIMEOUT FOCUS`; test failed |
 | 4 | `ui-imgui-bind-input-text.js` | `ImGui::IsItemDeactivatedAfterEdit()` replaced by `false` (Task 3's owed case) | `DEACTIVATE WRONG 0 0`; test failed |
+| 5 | the three new tests, `ui-imgui-bind-errors.js`, `ui-imgui-bind-args.js`, `imgui-bind-surface.js` | (RED) run against the Task 4 build, with the tests and `bind-groups.js` written and no Task 5 code | surface: `MISSING beginMainMenuBar beginMenu ... treeNodeEx treePop` (26 names); trees-tabs, menus and popups: `TypeError: undefined is not a function` at the first new call (`treeNode`, `beginMainMenuBar`, `beginPopup`); args: `WRONGCODE undefined (want ERR_IMGUI_NO_FRAME): undefined is not a function` (NOFRAME, the first new sample); errors: after `GUARD_CHILD ok`, `WRONGCODE undefined (want ERR_IMGUI_USAGE): undefined is not a function` (GUARD_LABELID's `treeNode('')`) |
+| 5 | `ui-imgui-bind-trees-tabs.js` | `ImGui::TreeNode()` replaced by `false`, `enterImGui()` kept | `TIMEOUT TREENODE open`; test failed |
+| 5 | `ui-imgui-bind-trees-tabs.js` | `enterImGui()` removed from `setNextItemOpen` | `UNCOVERED TreesTabs setNextItemOpen`; test failed |
+| 5 | `ui-imgui-bind-trees-tabs.js` | `collapsingHeader(label, pVisible)`'s write-back removed | `TIMEOUT HEADER hidden`; test failed |
+| 5 | `ui-imgui-bind-trees-tabs.js` | `beginTabItem`'s write-back of `pOpen` removed | `TIMEOUT TABCLOSE closed`; test failed |
+| 5 | `ui-imgui-bind-trees-tabs.js` | `beginTabItem`'s `TabItemFlags_Leading` with `_Trailing` check removed | ImGui aborted: `imgui_widgets.cpp:10852 ... TabItemEx ... Assertion ... failed`; test failed |
+| 5 | `ui-imgui-bind-trees-tabs.js` | `treeNodeEx` passing 0 for its flags | `TREEEX WRONG false 0 false none`; test failed |
+| 5 | `ui-imgui-bind-trees-tabs.js` | `ImGui::EndTabBar()` removed, `enterImGui()` kept | `Error: imgui.end(): Missing EndTabBar()`, uncaught; test failed |
+| 5 | `ui-imgui-bind-menus.js` | `ImGui::BeginMenu()` replaced by `false`, `enterImGui()` kept | `TIMEOUT MAINBAR open`; test failed |
+| 5 | `ui-imgui-bind-menus.js` | `enterImGui()` removed from `endMainMenuBar` | `UNCOVERED Menus endMainMenuBar`; test failed |
+| 5 | `ui-imgui-bind-menus.js` | `menuItem(label, shortcut, p)`'s write-back removed | `TIMEOUT MENUREF checked`; test failed |
+| 5 | `ui-imgui-bind-menus.js` | `ImGui::BeginMenuBar()` replaced by `false` | `MENUBAR WRONG false 0 false`, then `UNCOVERED Menus endMenuBar`; test failed |
+| 5 | `ui-imgui-bind-args.js` | `menuItem`'s dispatch TypeError removed (any third argument the first form) | `NOTHROW ERR_INVALID_ARG_TYPE` (ARGTYPE, `menuItem('m', null, 1)`); test failed |
+| 5 | `ui-imgui-bind-popups.js` | `ImGui::CloseCurrentPopup()` removed, `enterImGui()` kept | `TIMEOUT POPUP closed`; test failed |
+| 5 | `ui-imgui-bind-popups.js` | `enterImGui()` removed from `endPopup` | `UNCOVERED Popups endPopup`; test failed |
+| 5 | `ui-imgui-bind-popups.js` | `ImGui::SetItemTooltip()` removed | `TIMEOUT TOOLTIPS item`; test failed |
+| 5 | `ui-imgui-bind-popups.js` | `ImGui::SetTooltip()` removed | `TIMEOUT TOOLTIPS set`; test failed |
+| 5 | `ui-imgui-bind-popups.js` | `beginPopupModal`'s write-back of `pOpen` removed | `MODAL WRONG 0 1 false true`; test failed |
+| 5 | `ui-imgui-bind-popups.js` | `beginPopupModal`'s empty-name check removed | `NOTHROW ERR_INVALID_ARG_VALUE` (ImGui's own assertion is in `Begin()`, reached only when the popup is open, so nothing aborted); test failed |
+| 5 | `ui-imgui-bind-popups.js` | `beginPopupContextItem` passing NULL for every strId | ImGui aborted: `imgui.cpp:13617 ... BeginPopupContextItem ... Assertion id != 0 failed` (the `'tc'` call after `text`); test failed |
+| 5 | `ui-imgui-bind-popups.js` | `beginPopupModal` calling `BeginPopup()` instead | `TIMEOUT MODAL open`; test failed |
+| 5 | `ui-imgui-bind-popups.js` | `__test.setTooltipDelay()`'s two assignments removed (informational) | PASS: with the default 0.15 s + 0.15 s the tooltip still appeared within the 600-frame bound; see "Behaviours no test detects" |
+| 5 | `ui-imgui-bind-errors.js` | `canTreePop()` returning nullptr always | ImGui aborted in GUARD_TREE's first call: `imgui_widgets.cpp:7426 ... TreePop ... Assertion window->IDStack.Size > 1 failed`; test failed |
+| 5 | `ui-imgui-bind-errors.js` | `canEndTabItem()` returning nullptr always | aborted in GUARD_TABITEM: `imgui_widgets.cpp:10794 ... Assertion tab_bar->LastTabItemIdx >= 0 failed`; test failed |
+| 5 | `ui-imgui-bind-errors.js` | `canEndMenuBar()` returning nullptr always | aborted in GUARD_MENUBAR: `imgui_widgets.cpp:9362 ... Assertion window->Flags & ImGuiWindowFlags_MenuBar failed`; test failed |
+| 5 | `ui-imgui-bind-errors.js` | `canBeginMenuBar()` returning nullptr always | aborted in GUARD_BEGINMENUBAR: `imgui_widgets.cpp:9331 ... Assertion !window->DC.MenuBarAppending failed`; test failed |
+| 5 | `ui-imgui-bind-errors.js` | `canEndTooltip()` returning nullptr always | aborted in GUARD_TOOLTIP: `imgui.cpp:13088 ... EndTooltip ... Assertion ... ImGuiWindowFlags_Tooltip failed`; test failed |
+| 5 | `ui-imgui-bind-errors.js` | `canEndListBox()` returning nullptr always | aborted in GUARD_LISTBOX: `imgui_widgets.cpp:8997 ... EndListBox ... Assertion ... failed`; test failed |
+| 5 | `ui-imgui-bind-errors.js` | `canBeginPopupContextItem()` returning nullptr always | aborted in GUARD_CONTEXTITEM: `imgui.cpp:13617 ... Assertion id != 0 failed`; test failed |
+| 5 | `ui-imgui-bind-errors.js` | `canEndCombo()` returning nullptr always | no abort: ImGui's own check reported it, `CALLED endCombo: imgui.endCombo(): Calling EndCombo() in wrong window!` (GUARD_COMBO, the unmatched call); test failed |
+| 5 | `ui-imgui-bind-errors.js` | the reset of `g.BeginComboDepth` removed from `guard::beginFrame()` | `COMBO_LEFT_OPEN WRONG ERR_IMGUI_USAGE true true ["##Combo_01"]`; test failed |
 
 ## Behaviours no test detects
 
@@ -165,6 +196,13 @@ automated test would notice losing. Each task appends its own.
   It was checked by reading: the function writes
   `io.MouseDoubleClickTime` and `io.MouseSingleClickDelay` and returns the
   previous time.
+- **Task 5: `__test.setTooltipDelay()` takes effect.** With its two
+  assignments removed, TOOLTIPS still passed: at the default 0.15 s +
+  0.15 s the tooltip appears well inside `harness.until`'s 600-frame
+  bound. The hook exists to remove that dependency on frame time, so no
+  test can see it lost; it was checked by reading (it writes
+  `style.HoverStationaryDelay` and `style.HoverDelayShort` and returns
+  the previous `HoverDelayShort`).
 
 ## Notes
 
@@ -538,3 +576,122 @@ automated test would notice losing. Each task appends its own.
   buffer, `beginCombo`'s preview and `progressBar`'s overlay.
 - `test/ui-imgui-bind-layout.js`'s comments that pointed at Task 4 now
   name the cases in `ui-imgui-bind-input-text.js`.
+
+### Task 5
+
+- **Step 1, the combo facts, verified from the source before the reset
+  was added.** `g.BeginComboDepth` appears in four places and no others
+  (grep of `external/imgui/imgui/`): declared at internal:2808; set to 0
+  in the context's constructor (imgui.cpp:4549); incremented in
+  `BeginComboPopup()` only after the popup window's `Begin()` returned
+  true (widgets:2083); decremented in `EndCombo()` (widgets:2091), before
+  its "Calling EndCombo() in wrong window!" check (widgets:2096), which
+  returns with the counter already lowered. The two other reads format
+  the popup's name `"##Combo_%02d"` (widgets:2055, 2094). No combo can be
+  open across a frame boundary: `EndFrame()` runs
+  `ErrorRecoveryTryToRecoverState()` (imgui.cpp:6432-6433), which ends
+  every window above the depth stored at `NewFrame()` (imgui.cpp:
+  11981-12007, `StackSizesInNewFrame` stored at imgui.cpp:6162), then
+  `EndFrame()` ends the fallback window itself (imgui.cpp:6456), so the
+  window stack is empty when the frame ends; `EndFrame()` cannot be
+  skipped with windows open (its early return is for a frame already
+  ended, imgui.cpp:6425-6426); `NewFrame()` asserts that the last frame
+  was ended (imgui.cpp:11839); and the binding's `newFrame()` ends a frame
+  it finds open before starting the next one (`imgui_module.cpp`). The
+  recovery ends a combo's popup with `End()`, never `EndCombo()`, so the
+  counter stays one too high after a combo left open; at `newFrame()`
+  zero is the correct value. The reset was therefore added
+  (`guard::beginFrame()`, called by `newFrame()` before
+  `ImGui::NewFrame()`); nothing went to the tracker. COMBO_LEFT_OPEN
+  shows it: without the reset the next frame's combo is `##Combo_01`.
+- **Guards added, one name per condition** (all in
+  `addons/imgui/bind/bind_guards.cpp`, each with a refusal in
+  `ui-imgui-bind-errors.js`): `canTreePop:no-node`, `:id-mismatch`,
+  `:id-stack`; `canEndTabItem:no-tab-item`; `canBeginMenuBar:already-open`;
+  `canEndMenuBar:no-menu-bar-flag`, `:not-open`, `:no-group`,
+  `:wrong-window`; `canEndTooltip:not-tooltip`; `canEndListBox:not-child`,
+  `:no-group`, `:wrong-window`; `canEndCombo:no-combo`, `:wrong-window`;
+  `canBeginPopupContextItem:no-id`. Where ImGui returns before its
+  assertion (a window with `SkipItems`, a missing tab bar that
+  `EndTabItem()` reports recoverably, `BeginMenuBar()` in a window without
+  `WindowFlags_MenuBar`), the guard returns nullptr, so it never refuses
+  a call ImGui would accept. `endCombo` and `endListBox` in
+  `bind_widgets.cpp` gained only their guard calls (and the file comment
+  that said they were owed).
+- **Cases beyond the brief's list, each because a registered condition
+  needs a refusal of its own**: GUARD_TREE has a third case, a node whose
+  own ID was popped with `popID()` (`canTreePop:id-stack`, widgets:7426);
+  GUARD_MENUBAR has four (`endMenuBar()` without the flag, with no menu
+  bar begun, and after the menu bar's own group was ended with
+  `endGroup()`, once with no group left and once with another window's
+  on top); GUARD_LISTBOX has three (the clipped list box, which refuses as
+  not-child since its parent is a top-level window, then a plain child
+  with no group in its parent, then one whose parent's top group is the
+  implicit window's). The pushID case of GUARD_TREE needs a node that
+  keeps stack data, since ImGui compares IDs only then (widgets:7406-7410):
+  `TreeNodeFlags_DrawLinesFull` makes it (widgets:7097-7100); with
+  default flags the unpopped ID is popped in the node's place and the
+  window's `end()` reports "Missing PopID()".
+- **The brief's GUARD_COMBO and COMBO_LEFT_OPEN, as built.** The combo is
+  opened by a click (the errors test had no clicks before; it uses
+  `harness.clickAt`), `state().windows` shows it as `##Combo_00`
+  (printed, `SETUP combo ##Combo_00`). One frame then calls `endCombo()`
+  before the combo (no-combo) and from a child window begun inside it
+  (wrong-window, the child being `##Combo_00/in combo_<id>`); after that
+  frame the only active combo popup window is still `##Combo_00`. A child
+  of the popup also starts with `##Combo_`, so the read-back matches the
+  name exactly (`/^##Combo_-?[0-9]+$/`). Without `canEndCombo` the
+  unmatched call reaches ImGui, which reports "Calling EndCombo() in
+  wrong window!" itself, so that mutation fails as `CALLED endCombo`
+  rather than as an abort.
+- **ENDMENU, ENDPOPUP, ENDTABBAR** are one frame, each line printed with
+  ImGui's message, and each call counted (it reaches ImGui, which
+  recovers).
+- **Surface table corrected** (the source wins): `endMenuBar`'s entry said
+  the group condition fails "when a `beginGroup()` inside the menu bar was
+  left open"; such a group belongs to the window, so the condition holds
+  and `EndMenuBar()` ends it in place of the menu bar's own group (checked
+  by hand on 2026-11-27: `endMenuBar()` accepted, then `end()` threw
+  "Missing EndGroup()"). What fails it is an `endGroup()` inside the menu
+  bar (GUARD_MENUBAR).
+  `endCombo`'s entry gained the `BeginComboDepth > 0` condition (an
+  unmatched call would compare with `"##Combo_-1"`). The internal-state
+  table lists `beginPopupContextItem` as a reader of `SkipItems`.
+- **A tooltip delay made deterministic, through a new test hook.**
+  `setItemTooltip()`'s hover check uses `style.HoverFlagsForTooltipMouse`,
+  `Stationary | DelayShort` (imgui.cpp:1660, 13115): the item must have
+  been hovered with the mouse still for `HoverStationaryDelay` and then
+  for `HoverDelayShort` (0.15 s each, imgui.cpp:1657-1658), measured in
+  ImGui's time, which advances by the real frame time (imgui.cpp:
+  5199-5204, 5991-6004, 11135). `__test.setTooltipDelay(seconds)`
+  (`imgui_test_hooks.cpp`, documented in the README) sets both; the
+  popups test sets 0, so the tooltip shows one or two frames after the
+  mouse arrives however long frames take. `setTooltip()` and
+  `beginTooltip()` make no hover check of their own and are called while
+  `isItemHovered()` (no delay with default flags) is true. Menus opened
+  by a click in a menu bar, and context popups, have no delay.
+- **Window names the read-backs use**, from the source: `##MainMenuBar`
+  (widgets:9466), a menu `<label>###Menu_<depth %02d>` (imgui.cpp:13466),
+  a popup `##Popup_<id %08x>` with the id `getID(strId)` where it is
+  begun, or the item's for a context popup with no strId (imgui.cpp:
+  13438, 13616), a modal its own name (imgui.cpp:13510), a tooltip
+  `##Tooltip_<nn>` (imgui.cpp:13075-13077).
+- **Close buttons are located, not guessed**: the header's and the tab's
+  from the item rectangle, a pushed `StyleVar_FramePadding` of `[4, 4]`
+  and `getTextLineHeight()` (the font size), following CollapsingHeader
+  (widgets:7494-7495) and TabItemLabelAndCloseButton (widgets:11227-11228;
+  the tab bar takes its padding from the style at `BeginTabBar()`,
+  widgets:10041). A selected tab's close button is always shown
+  (`TabCloseButtonMinWidthSelected` -1, imgui.cpp:1620).
+- **Group names in `bind-groups.js`**: `TreesTabs`, `Menus`, `Popups`.
+  NOFRAME has a sample for every new function; ARGTYPE has the dispatch
+  messages of `collapsingHeader` ("flags must be a number, or pVisible an
+  Array or null") and `menuItem` ("selected must be a boolean, or
+  pSelected an Array"), and the dispatched forms' own arguments.
+- **One usage error in a group test.** TREEEX's refused `treePop()` after
+  `TreeNodeFlags_NoTreePushOnOpen` is traced by its guard, so the trees
+  test cannot forbid usage errors with an `--implicit-check-not`; it reads
+  them in a run of its own (`USAGE`, one `-NEXT` chain between `BEGIN` and
+  `END`) and allows exactly that one.
+- `treeNode('')` was added to GUARD_LABELID, to show the label-id check
+  applied in the new groups as well.

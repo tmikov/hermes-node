@@ -24,8 +24,11 @@ namespace guard {
 /// callback; called from context creation, before any binding call can
 /// meet the context.
 void configureContext();
-/// Re-asserts the recovery flags; called by newFrame() before
-/// ImGui::NewFrame().
+/// Re-asserts the recovery flags and sets g.BeginComboDepth to 0; called by
+/// newFrame() before ImGui::NewFrame(). The counter counts the combo popup
+/// windows currently begun, none is at that point (EndFrame() has closed
+/// every window), and a combo left open is closed by ImGui's recovery
+/// without the decrement (surface table, endCombo).
 void beginFrame();
 /// The first message ImGui reported since the last take, or nullptr;
 /// clears it. The pointer is valid until the next take.
@@ -42,9 +45,21 @@ bool labelIdIsWindowId(const char *label);
 // One per precondition of kind (b) in the surface table, named
 // can<Function>: returns nullptr when the call is safe, else the message
 // to throw. A refusal is counted under its condition's name and traced as
-// a usage error. Later tasks add theirs.
+// a usage error. Later tasks add theirs. Each one returns nullptr where
+// ImGui returns before its own assertion (a window with SkipItems set, for
+// the closers that test it), so a guard never refuses a call ImGui accepts.
 const char *canEndGroup();
 const char *canEndChild();
+const char *canEndListBox();
+const char *canEndCombo();
+const char *canTreePop();
+const char *canEndTabItem();
+const char *canBeginMenuBar();
+const char *canEndMenuBar();
+const char *canEndTooltip();
+/// \p hasStrId: whether a strId was passed (with none, the popup takes the
+/// last item's ID).
+const char *canBeginPopupContextItem(bool hasStrId);
 
 /// Every registered guard condition, `can<Function>:<condition>`, with how
 /// many times it has refused.

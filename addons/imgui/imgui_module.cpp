@@ -238,6 +238,9 @@ NAPI_MODULE_INIT() {
       !bind::registerLayout(env, exports) ||
       !bind::registerText(env, exports) ||
       !bind::registerWidgets(env, exports) ||
+      !bind::registerTreesTabs(env, exports) ||
+      !bind::registerMenus(env, exports) ||
+      !bind::registerPopups(env, exports) ||
       !bind::registerQueries(env, exports) ||
       !bind::registerStyle(env, exports))
     return nullptr;
