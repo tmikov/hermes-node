@@ -217,9 +217,26 @@ Part C carries the same list.
   protocol, and one left open by a throw cannot be cleaned up later. It is
   bound as one function that owns the loop:
   `imgui.listClipper(count, itemHeight, (start, end) => { ... })`. The
-  callback is called once per range `Step()` yields; the clipper lives on
-  the native stack and is ended when the callback returns or throws, and a
-  throw then propagates. The callback may call any binding function.
+  callback is called synchronously, once per range `Step()` yields; its
+  return value is ignored. The clipper lives on the native stack. Rules
+  while a callback is running:
+  - Binding functions may be called (the re-entrancy flag is lowered),
+    except `newFrame()` and `render()`, which throw `ERR_IMGUI_USAGE`
+    without doing anything: the clipper belongs to a window of the open
+    frame.
+  - The callback must leave the window scope as it found it. When it
+    returns or throws, the binding compares ImGui's current window and
+    window-stack depth with those recorded at entry. If they match, the
+    loop continues, or after a throw the clipper is ended normally and the
+    exception propagates. If they do not (the callback closed the owning
+    window, or left a child open), the clipper is **abandoned**: released
+    without another `Step()` and without moving any window's cursor (its
+    item count is cleared first, which is what makes `End()` skip the
+    seek), and `ERR_IMGUI_USAGE` is thrown, or the callback's own
+    exception if it threw. Scopes the callback left open are then ImGui's
+    ordinary end-of-frame errors.
+  - A nested `listClipper` inside the callback is allowed and follows the
+    same rules.
 - **Plots.** `plotLines` and `plotHistogram` take the values as a
   `Float32Array` (used in place, no copy) or an `Array` of numbers, with
   no count and no `stride` argument (see "Buffers"); the getter overloads
@@ -295,7 +312,12 @@ conventions may not change.
 - **Plots**: `plotLines`, `plotHistogram`.
 - **Draw list** (`imgui.drawList`): `addLine`, `addRect`, `addRectFilled`,
   `addCircle`, `addCircleFilled`, `addTriangleFilled`, `addBezierCubic`,
-  `addPolyline`, `addText`, `pushClipRect`, `popClipRect`.
+  `addPolyline`, `addText`. The draw list's `PushClipRect` /
+  `PopClipRect` are **not** bound: a window owns the bottom entries of
+  that stack, nothing in ImGui's state says which entries are the
+  caller's, and popping one of the window's makes the window's own `End()`
+  pop an empty stack. The canvas clips by being a child window. Part C
+  has to solve this before binding them.
 - **Clipper**: `listClipper`.
 - **Constants**: every enumerator of the enum types the functions above
   take or return. Each is emitted from the C++ identifier itself (a macro
@@ -330,9 +352,10 @@ conventions may not change.
   - Errors ImGui reports when the frame ends make `render()` throw the
     same way. `render()` then has ended the ImGui frame and closed the
     binding's frame, has **not** taken the frame's target and has drawn
-    nothing, so the tick presents nothing, exactly as for a throw from
-    application code. This holds with or without a target: a usage error
-    takes precedence over the `false` return.
+    nothing. So that `render()` contributes nothing to the tick, exactly
+    as for a throw from application code; the tick still presents if
+    another `render()` in it drew. This holds with or without a target: a
+    usage error takes precedence over the `false` return.
   - Every such error is traced (`imgui: usage error: <msg>`). The one
     case that only traces: the discarding `newFrame()` that part A already
     has for a frame left open by an earlier throw.
@@ -341,32 +364,31 @@ conventions may not change.
 - **Preconditions ImGui does not check recoverably.** Several bound
   functions assert plainly, or dereference without checking, when called
   in the wrong state: `endGroup`, `endChild`, `endTooltip`, `endListBox`,
-  `endMenuBar`, `endTabItem`, `treePop`, `drawList.popClipRect`, and the
-  table row and column functions outside a table. These are the mistakes
+  `endMenuBar`, `endTabItem`, `treePop`, and the table row and column
+  functions outside a table. These are the mistakes
   the pairing rule invites (calling `endListBox()` after a
   `beginListBox()` that returned false). For each, the binding first
   evaluates **the same condition ImGui asserts or relies on, read from
   ImGui's own state** (the group stack's size, the current window's tree
-  depth and flags, the current table and tab bar, the draw list's clip
-  stack), and throws `ERR_IMGUI_USAGE` without calling ImGui when it does
+  depth and flags, the current table and tab bar), and throws `ERR_IMGUI_USAGE` without calling ImGui when it does
   not hold. Because the state read is ImGui's, it stays right after ImGui
   has recovered from an earlier error in the same frame, and it follows
   ImGui's own rules (an `endChild()` after a `beginChild()` that returned
   false is valid; a `treeNodeEx` with `TreeNodeFlags_NoTreePushOnOpen`
   opens nothing to pop). The plan lists each function's conditions with
   the source lines they come from.
-  - These reads need `imgui_internal.h`. Together with the error callback
-    they are the binding's whole use of the internal header, confined to
-    one file (`bind_guards.cpp`) and named in the README's "Bumping
+  - These reads need `imgui_internal.h`. The binding's whole use of the
+    internal header is: the error callback, these reads, the window and
+    stack-depth comparison of `listClipper`, and the test hook's window
+    list (`state().windows`). All of it is behind helpers in one file
+    (`bind_guards.cpp`) and named in the README's "Bumping
     ImGui" section: a bump re-audits that file against ImGui's source.
   - A guard makes the call safe, not right: where ImGui's own check is
     weaker than correct pairing (a second `endTabItem()` passes it), so is
     the binding's.
-- **Not diagnosed, as in C++**: a `pushItemWidth` without its pop (ImGui
-  clears that stack when the window next begins) and a
-  `drawList.pushClipRect` without its pop (the window's own pop then
-  removes the wrong entry; the draw list is rebuilt next frame). Neither
-  is in ImGui's recovery and neither crashes.
+- **Not diagnosed, as in C++**: a `pushItemWidth` without its pop. It
+  is not in ImGui's recovery and does not crash: ImGui clears that stack
+  when the window next begins.
 - **Assertions ImGui does not recover from**, other than those, remain
   `assert`: an abort in a Debug build and undefined behaviour in a Release
   build, as for a C++ program. The binding's argument checks cover the
@@ -450,8 +472,7 @@ the test below has read-backs that do not depend on the machine.
   string, number with range, vector, reference array of each kind; the
   frame check; the usage-error check; the registration macro), then one
   `.cpp` per group above, `bind_constants.cpp`, and `bind_guards.cpp`
-  (the error callback and the precondition reads, the only unit that
-  includes `imgui_internal.h`).
+  (everything that needs `imgui_internal.h`, see "Errors").
 - A binding function is a few lines over those helpers, in a fixed shape:
   enter (the re-entrancy flag), read and check arguments, check the frame
   and the preconditions, call ImGui, check for a usage error, write back,
@@ -498,12 +519,16 @@ flag and docked flag of each ImGui window in the last ended frame.
   `NoTreePushOnOpen` node throws); a binding-checked closer called after
   ImGui has recovered from an earlier error in the same frame;
   `loadIniSettingsFromMemory` inside a frame. For each: `ERR_IMGUI_USAGE`
-  from the call or from `render()`, the trace line, no publication for a
-  throwing `render()` (with a target, without one, and in CLOSING), and
-  the next frame works. A throw makes the harness's `frame()` skip its
-  bookkeeping, as part A's exception test found, so these cases drive the
-  frame callback themselves and call `harness.resync` before the next
-  ordinary frame.
+  from the call or from `render()`, the trace line, and the next frame
+  works. For a throwing `render()`: no publication when nothing else drew
+  that tick (with a target and without one); and a tick with one
+  successful and one throwing `render()` publishes the successful one's
+  picture. A throw makes the harness's `frame()` skip its bookkeeping, as
+  part A's exception test found, so these cases drive the frame callback
+  themselves and call `harness.resync` before the next ordinary frame.
+  The CLOSING case is a run of its own, from an `'exit'` listener, with no
+  later frame and no resync: it asserts the thrown code, the trace and the
+  exit status.
 - **One test per group** (`ui-imgui-bind-widgets.js`, `-windows.js`,
   `-tables.js`, `-popups.js`, `-drawlist.js`, `-plots.js`, ...): the
   script builds a small UI, reads item rectangles back with
@@ -513,7 +538,10 @@ flag and docked flag of each ImGui window in the last ended frame.
   slider; type into the field, with and without `EnterReturnsTrue`).
   Draw-list and plot tests check exact pixels of flat-coloured shapes, as
   part A's scenes do. The `listClipper` test checks the ranges it is
-  given and that a throw from its callback leaves the next frame working.
+  given, a nested clipper, and each rule above: `render()` and
+  `newFrame()` from the callback, a callback that throws, one that closes
+  the owning window, one that leaves a child open (returning, and
+  throwing); after each, the next frame works.
 - **`ui-imgui-app.js`**: the application in test mode: every panel's
   window is in `state().windows`, active and docked; a click on a fixture
   file (at the rectangle the application prints for it in test mode)
