@@ -102,6 +102,7 @@ enum GuardId {
   kEndTableRegion,
   kEndChildTableRegion,
   kEndListBoxTableRegion,
+  kListClipperWrongWindow,
   kGuardCount
 };
 GuardCondition gGuards[kGuardCount] = {
@@ -137,6 +138,7 @@ GuardCondition gGuards[kGuardCount] = {
     {"canEnd:table-region", 0},
     {"canEndChild:table-region", 0},
     {"canEndListBox:table-region", 0},
+    {"canListClipper:wrong-window", 0},
 };
 
 /// The mask of tree depth \p depth in `DC.TreeHasStackDataDepthMask`: the
@@ -563,6 +565,31 @@ const char *canTableSetupColumn(bool hasLabel) {
       kTableSetupColumnNameOffset,
       "TableSetupColumn() with the table's column names already over 32767 "
       "bytes");
+}
+
+const char *canListClipper() {
+  ImGuiContext &g = *GImGui;
+  ImGuiTable *table = g.CurrentTable;
+  if (table == nullptr || !table->IsInsideRow ||
+      g.CurrentWindow == table->InnerWindow)
+    return nullptr;
+  return refuse(
+      kListClipperWrongWindow,
+      "listClipper() inside a table row, in another window than the table's "
+      "own (a window begun inside a cell is current)");
+}
+
+ScopeSnapshot snapshotScope() {
+  ImGuiContext &g = *GImGui;
+  return ScopeSnapshot{
+      g.CurrentWindow, g.CurrentWindowStack.Size, g.CurrentTable};
+}
+
+bool sameScope(const ScopeSnapshot &s) {
+  ImGuiContext &g = *GImGui;
+  return g.CurrentWindow == s.window &&
+      g.CurrentWindowStack.Size == s.windowStackSize &&
+      g.CurrentTable == s.table;
 }
 
 TableScope tableScope() {

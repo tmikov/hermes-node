@@ -13,16 +13,18 @@
 //
 //  EITHER    before the first newFrame(), the out-of-frame functions
 //            return values of the right type; getDisplaySize(out) returns
-//            `out` itself, filled.
+//            `out` itself, filled; styleColorsDark() and
+//            colorConvertFloat4ToU32() work.
 //  NOFRAME   every bound function that needs a frame, with valid
 //            arguments, outside a frame: ERR_IMGUI_NO_FRAME, not called.
 //            A function in bind-groups.js with no sample arguments here is
 //            `NOSAMPLE <name>`, so each later task must add its own.
 //  ARGTYPE   a value of the wrong type, or a missing one: TypeError,
 //            ERR_INVALID_ARG_TYPE; the message names the function and the
-//            argument (checked on begin, and on the eight functions that
+//            argument (checked on begin, and on the nine functions that
 //            dispatch on an argument's type, whose message names both
-//            forms).
+//            forms), and on the Array-or-Float32Array readers and the
+//            clipper's callback.
 //  REFARRAY  reference arrays that are not what they claim (Review Focus
 //            1): too short is ERR_OUT_OF_RANGE; a wrong element type, a
 //            hole, a Float32Array where an Array is required, and an array
@@ -206,7 +208,35 @@ const SAMPLES = {
   popStyleColor: [],
   pushStyleVar: [0, 1],
   popStyleVar: [],
+  getColorU32: [0],
+  plotLines: ['p', [0, 1]],
+  plotHistogram: ['p', [0, 1]],
+  'drawList.addLine': [[0, 0], [1, 1], 0xFFFFFFFF],
+  'drawList.addRect': [[0, 0], [1, 1], 0xFFFFFFFF],
+  'drawList.addRectFilled': [[0, 0], [1, 1], 0xFFFFFFFF],
+  'drawList.addCircle': [[0, 0], 1, 0xFFFFFFFF],
+  'drawList.addCircleFilled': [[0, 0], 1, 0xFFFFFFFF],
+  'drawList.addTriangleFilled': [[0, 0], [1, 0], [0, 1], 0xFFFFFFFF],
+  'drawList.addBezierCubic':
+      [[0, 0], [1, 0], [2, 0], [3, 0], 0xFFFFFFFF, 1],
+  'drawList.addPolyline': [[0, 0, 1, 1], 0xFFFFFFFF, 1],
+  'drawList.addText': [[0, 0], 0xFFFFFFFF, 't'],
+  listClipper: [1, 1, () => {}],
 };
+
+/**
+ * The functions that need neither a frame nor, for the last, a context:
+ * EITHER calls them before the first newFrame().
+ */
+const NO_FRAME_NEEDED =
+    ['styleColorsDark', 'styleColorsLight', 'colorConvertFloat4ToU32'];
+
+/** The function `name` names, `drawList.<f>` included. */
+function fnOf(imgui, name) {
+  return name.startsWith('drawList.') ?
+      imgui.drawList[name.slice('drawList.'.length)] :
+      imgui[name];
+}
 
 /** Names that are not called: a property, and the frame opener itself. */
 const NOT_CALLED = ['version', 'newFrame'];
@@ -260,6 +290,12 @@ async function main() {
     const got = imgui.getDisplaySize(out);
     if (got !== out || out[0] !== size[0] || out[1] !== size[1])
       bad.push('getDisplaySize(out)');
+    // The style functions work outside a frame (styleColorsLight is the
+    // style test's; dark is the default, so this leaves it unchanged).
+    if (imgui.styleColorsDark() !== undefined)
+      bad.push('styleColorsDark');
+    if (imgui.colorConvertFloat4ToU32([1, 0, 0, 1]) !== 0xFF0000FF)
+      bad.push('colorConvertFloat4ToU32');
     if (imgui.__test.state().frameOpen)
       bad.push('frameOpen');
     console.log(bad.length === 0 ? 'EITHER ok' : 'EITHER WRONG ' + bad);
@@ -268,11 +304,12 @@ async function main() {
   // --- NOFRAME ---------------------------------------------------------
   {
     for (const name of bindGroups.all()) {
-      if (NOT_CALLED.includes(name) || EITHER.includes(name))
+      if (NOT_CALLED.includes(name) || EITHER.includes(name) ||
+          NO_FRAME_NEEDED.includes(name))
         continue;
       if (!(name in SAMPLES))
         fail('NOSAMPLE ' + name);
-      rejects(name, () => imgui[name](...SAMPLES[name]),
+      rejects(name, () => fnOf(imgui, name)(...SAMPLES[name]),
               'ERR_IMGUI_NO_FRAME');
     }
     console.log('NOFRAME ok');
@@ -309,6 +346,21 @@ async function main() {
                               'ERR_INVALID_ARG_TYPE').message);
       dispatched.push(rejects('menuItem', () => imgui.menuItem('m', null, 1),
                               'ERR_INVALID_ARG_TYPE').message);
+      dispatched.push(rejects('getColorU32', () => imgui.getColorU32('x'),
+                              'ERR_INVALID_ARG_TYPE').message);
+      // The Float32Array-or-Array arguments.
+      rejects('plotLines', () => imgui.plotLines('p', 'x'),
+              'ERR_INVALID_ARG_TYPE');
+      rejects('plotLines', () => imgui.plotLines('p', new Float64Array(2)),
+              'ERR_INVALID_ARG_TYPE');
+      rejects('drawList.addPolyline',
+              () => imgui.drawList.addPolyline(new Int32Array(4), 0, 1),
+              'ERR_INVALID_ARG_TYPE');
+      rejects('drawList.addPolyline',
+              () => imgui.drawList.addPolyline([0, 0, 1, 1], 0),
+              'ERR_INVALID_ARG_TYPE');
+      rejects('listClipper', () => imgui.listClipper(1, 1, 'f'),
+              'ERR_INVALID_ARG_TYPE');
       rejects('collapsingHeader', () => imgui.collapsingHeader('h', [1]),
               'ERR_INVALID_ARG_TYPE');
       rejects('collapsingHeader', () => imgui.collapsingHeader('h', null, 'x'),
@@ -552,6 +604,7 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.selectable(): selected must be a boolean, or pSelected an Array{{$}}
 // CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.collapsingHeader(): flags must be a number, or pVisible an Array or null{{$}}
 // CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.menuItem(): selected must be a boolean, or pSelected an Array{{$}}
+// CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.getColorU32(): idx must be a number, or col an array of 4 numbers{{$}}
 // CHECK-NEXT: {{^}}REFARRAY ok{{$}}
 // CHECK-NEXT: {{^}}FLOAT ok{{$}}
 // CHECK-NEXT: {{^}}NUL ok{{$}}

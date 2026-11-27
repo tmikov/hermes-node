@@ -171,8 +171,36 @@ const groups = {
     'getMousePos',
     'getMouseDragDelta',
   ],
-  // Incomplete until Task 7.
-  Style: ['pushStyleColor', 'popStyleColor', 'pushStyleVar', 'popStyleVar'],
+  Style: [
+    'styleColorsDark',
+    'styleColorsLight',
+    'pushStyleColor',
+    'popStyleColor',
+    'pushStyleVar',
+    'popStyleVar',
+    'getColorU32',
+    'colorConvertFloat4ToU32',
+  ],
+  Plots: [
+    'plotLines',
+    'plotHistogram',
+  ],
+  // On the object `imgui.drawList`, named `drawList.<name>` here, in
+  // __test.bindCalls() and in their error messages.
+  DrawList: [
+    'drawList.addLine',
+    'drawList.addRect',
+    'drawList.addRectFilled',
+    'drawList.addCircle',
+    'drawList.addCircleFilled',
+    'drawList.addTriangleFilled',
+    'drawList.addBezierCubic',
+    'drawList.addPolyline',
+    'drawList.addText',
+  ],
+  Clipper: [
+    'listClipper',
+  ],
 };
 
 // The exported constants, per enum type, as the surface table's

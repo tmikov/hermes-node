@@ -28,6 +28,9 @@ add_library(hermes_node_imgui SHARED
   bind/bind_popups.cpp
   bind/bind_queries.cpp
   bind/bind_style.cpp
+  bind/bind_plots.cpp
+  bind/bind_drawlist.cpp
+  bind/bind_clipper.cpp
   ${IMGUI_SOURCES}
 )
 

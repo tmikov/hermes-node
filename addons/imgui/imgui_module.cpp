@@ -243,7 +243,10 @@ NAPI_MODULE_INIT() {
       !bind::registerTables(env, exports) ||
       !bind::registerPopups(env, exports) ||
       !bind::registerQueries(env, exports) ||
-      !bind::registerStyle(env, exports))
+      !bind::registerStyle(env, exports) ||
+      !bind::registerPlots(env, exports) ||
+      !bind::registerDrawList(env, exports) ||
+      !bind::registerClipper(env, exports))
     return nullptr;
   if (hnimgui::testHooksEnabled()) {
     napi_value hooks = hnimgui::createTestHooks(env);

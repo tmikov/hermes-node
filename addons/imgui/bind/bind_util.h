@@ -309,6 +309,10 @@ bool registerTables(napi_env env, napi_value exports);
 bool registerPopups(napi_env env, napi_value exports);
 bool registerQueries(napi_env env, napi_value exports);
 bool registerStyle(napi_env env, napi_value exports);
+bool registerPlots(napi_env env, napi_value exports);
+// `imgui.drawList` and its functions.
+bool registerDrawList(napi_env env, napi_value exports);
+bool registerClipper(napi_env env, napi_value exports);
 
 } // namespace bind
 } // namespace hnimgui

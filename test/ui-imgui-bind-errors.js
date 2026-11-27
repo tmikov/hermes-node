@@ -106,6 +106,8 @@
 //  TABLE_REGION   endChild(), end() and endListBox() inside a scrolling
 //                 table's cell (its region, a child window, with a group
 //                 open in the outer window for endListBox): each refused.
+//  CLIPPER_WRONG_WINDOW listClipper() in TABLE_WRONG_WINDOW's window, inside
+//                 the row: refused, not called, the callback never run.
 //  DISCARD       newFrame(); begin('w'); newFrame(): no throw, `frame
 //                 discarded` traced, the frame that follows renders.
 //  GUARDS         every guard condition registered has refused at least
@@ -133,6 +135,7 @@
 //  canTableSetupScrollFreeze, canEndTable, canTableSetupColumn, canEnd, and
 //  the table-region conditions of canEndChild and canEndListBox, returning
 //  nullptr always: its TABLE_* case aborts or fails;
+//  canListClipper() returning nullptr always: CLIPPER_WRONG_WINDOW aborts;
 //  the reset of g.BeginComboDepth removed from guard::beginFrame():
 //  COMBO_LEFT_OPEN fails;
 //  a guard condition registered and never refused: GUARDS fails
@@ -834,6 +837,30 @@ async function main() {
     console.log('TABLE_REGION ok');
   }
 
+  // --- CLIPPER_WRONG_WINDOW --------------------------------------------
+  // The window of TABLE_WRONG_WINDOW: the table is current, inside a row,
+  // and its inner window is not the current one. ImGuiListClipper::Begin()
+  // would end the row there (imgui.cpp:3494-3496), and TableEndRow()
+  // asserts plainly on the window (imgui_tables.cpp:2126).
+  {
+    let called = 0;
+    const drew = await harness.frame(h, () => {
+      beginAt('clipper wrong window');
+      imgui.beginTable('s', 2, imgui.TableFlags_ScrollY, [0, 100]);
+      imgui.tableNextRow();
+      imgui.tableNextColumn();
+      imgui.begin('clipper wrong window');
+      refused('listClipper',
+              () => imgui.listClipper(10, 10, () => ++called));
+      imgui.end();
+      imgui.endTable();
+      imgui.end();
+    });
+    console.log(drew && called === 0 ?
+                    'CLIPPER_WRONG_WINDOW ok' :
+                    'CLIPPER_WRONG_WINDOW WRONG ' + drew + ' ' + called);
+  }
+
   // --- DISCARD ---------------------------------------------------------
   {
     const drew = await harness.frame(h, () => {
@@ -902,6 +929,7 @@ async function main() {
 // CHECK-NEXT: {{^}}TABLE_CURSOR ok{{$}}
 // CHECK-NEXT: {{^}}TABLE_NAMES ok{{$}}
 // CHECK-NEXT: {{^}}TABLE_REGION ok{{$}}
+// CHECK-NEXT: {{^}}CLIPPER_WRONG_WINDOW ok{{$}}
 // CHECK-NEXT: {{^}}DISCARD ok{{$}}
 // CHECK-NEXT: {{^}}GUARDS ok{{$}}
 // CODE: EXITCODE 0
@@ -971,6 +999,7 @@ async function main() {
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: EndChild() in a scrolling table's own region; call EndTable() first{{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: End() in a scrolling table's own region; call EndTable() first{{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: EndListBox() in a scrolling table's own region; call EndTable() first{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: listClipper() inside a table row, in another window than the table's own (a window begun inside a cell is current){{$}}
 // The discarded frame's open window is reported, then the discard.
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing End(){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: frame discarded{{$}}

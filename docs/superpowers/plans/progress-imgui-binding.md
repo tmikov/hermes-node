@@ -15,7 +15,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-binding.md`
 | Task 4 | Widgets | done (GL) |
 | Task 5 | Trees, tabs, menus, popups and tooltips | done (GL) |
 | Task 6 | Tables | done (GL) |
-| Task 7 | Style, plots, draw list, list clipper | |
+| Task 7 | Style, plots, draw list, list clipper | done (GL) |
 | Task 8 | Docking and settings | |
 | Task 9 | The application | |
 | Task 10 | Documentation and the full suite | |
@@ -197,6 +197,32 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 6 | `ui-imgui-bind-errors.js` | `canEndChild`'s table-region condition removed | the same abort, at TABLE_REGION's `endChild()`; test failed |
 | 6 | `ui-imgui-bind-errors.js` | `canEndListBox`'s table-region condition removed | the same abort, at TABLE_REGION's `endListBox()` (through its `EndChild()`); test failed |
 | 6 | `ui-imgui-bind-errors.js` | a guard condition `canTableDummy:never` registered and never refused | `UNREFUSED canTableDummy:never`; test failed |
+| 7 | the four new tests, `imgui-bind-surface.js`, `ui-imgui-bind-args.js`, `ui-imgui-bind-errors.js` | (RED) run with the tests and `bind-groups.js` written and no Task 7 code | surface: `MISSING colorConvertFloat4ToU32 drawList.addBezierCubic ... styleColorsLight` (16 names); args: `TypeError: undefined is not a function` (EITHER's `styleColorsDark()`); style: `WRONGCODE undefined (want ERR_IMGUI_NO_WINDOW)`; drawlist: `TypeError: undefined is not a function` (NOWINDOW); plots, clipper: the same TypeError, uncaught in the first frame callback; errors: `WRONGCODE undefined (want ERR_IMGUI_USAGE)` at CLIPPER_WRONG_WINDOW |
+| 7 | `ui-imgui-bind-style.js` | (RED, after the first GREEN run) no case called `colorConvertFloat4ToU32` | `UNCOVERED Style colorConvertFloat4ToU32`; GETCOLOR gained its three conversions |
+| 7 | `ui-imgui-bind-drawlist.js` | `AddCircle()` removed, `enterImGui()` kept | `SHAPES WRONG circle-east@375,300=0,64,0 circle-west@264,300=0,64,0 circle-south@320,355=0,64,0 circle-north@320,244=0,64,0`; test failed |
+| 7 | `ui-imgui-bind-drawlist.js` | `enterImGui()` removed from `addTriangleFilled` | `UNCOVERED DrawList drawList.addTriangleFilled`; test failed |
+| 7 | `ui-imgui-bind-drawlist.js`, `ui-imgui-bind-style.js` | `getColorU32` returning 0 (the stand-in for a write-back: no Style, Plots or DrawList function writes a reference array) | drawlist: `COLOR WRONG 0 4278190335`; style: `THEMES WRONG {... "light":{"u32":0,"pixel":[240,240,240]}...}`, `COLOR WRONG`, `GETCOLOR WRONG`, `ALPHA WRONG 0 0`; both failed |
+| 7 | `ui-imgui-bind-drawlist.js` | `addPolyline`'s 16383-point cap removed | `NOTHROW ERR_OUT_OF_RANGE` in LIMITS; test failed |
+| 7 | `ui-imgui-bind-drawlist.js` | `addPolyline` passing one point fewer than given | `POLYLINE WRONG left@100,200=0,64,0 bottom@200,300=0,64,0 centre@200,200=255,128,0`; test failed |
+| 7 | `ui-imgui-bind-style.js` | `ImGui::StyleColorsLight()` removed, `enterImGui()` kept | `THEMES WRONG` (light and dark both `[46,46,46]`); test failed |
+| 7 | `ui-imgui-bind-style.js` | `enterImGui()` removed from `colorConvertFloat4ToU32` | `UNCOVERED Style colorConvertFloat4ToU32`; test failed |
+| 7 | `ui-imgui-bind-style.js` | `getColorU32`'s `Col_COUNT` refusal removed | `NOTHROW ERR_OUT_OF_RANGE` in GETCOLOR (the read past `Style.Colors[]` stays inside `ImGuiStyle`, so ASAN does not see it); test failed |
+| 7 | `ui-imgui-bind-style.js` | `pushStyleVar`'s float overload passing 1 instead of the value | `ALPHA WRONG 4278190335 4278190335`; test failed |
+| 7 | `ui-imgui-bind-plots.js` | `ImGui::PlotHistogram()` removed, `enterImGui()` kept | `RECTS WRONG hist {"min":[20,20],"max":[620,20]} ...`, `HISTOGRAM WRONG bar1@96,70=0,255,0`, `EMPTY WRONG`; test failed |
+| 7 | `ui-imgui-bind-plots.js` | `enterImGui()` removed from `plotLines` | `NOTCALLED plotLines` (REJECTED's accepted edge, before COVERAGE); test failed |
+| 7 | `ui-imgui-bind-plots.js` | `valuesOffset`'s upper bound removed | `NOTHROW ERR_OUT_OF_RANGE` in REJECTED; test failed |
+| 7 | `ui-imgui-bind-plots.js` | `valuesOffset` passed as 0 | `OFFSET WRONG differs`; test failed |
+| 7 | `ui-imgui-bind-plots.js` | the graph size passed as `ImVec2(0, 0)` | `RECTS WRONG hist {"min":[28,28],"max":[452,49]} ...`, `HISTOGRAM WRONG`, `EMPTY WRONG`; test failed |
+| 7 | `ui-imgui-bind-args.js` | `needFrame()` removed from `drawList.addText` | NOFRAME: `AddressSanitizer: SEGV ... in ImGui::GetCurrentWindow()` (outside a frame `g.CurrentWindow` is NULL, and `GetWindowDrawList()` dereferences it); test failed |
+| 7 | `ui-imgui-bind-clipper.js` | the scope comparison dropping the table | `SCOPE_ENDTABLE-ret WRONG {"error":null,...}`, `SCOPE_OPENTABLE-ret WRONG {"error":null,...}`: the loop went on and nothing aborted in the Debug build (the throwing variants still propagate their own error); test failed |
+| 7 | `ui-imgui-bind-clipper.js` | `ItemsCount` not set to -1 on abandon | first run: PASS (nothing observed the seek); the SCOPE_* cases then gained the cursor check, and with it: `SCOPE_ENDCHILD-ret WRONG {... "inside":[28,251],"after":[28,1747] ...}`, likewise for SCOPE_OPENCHILD and SCOPE_ENDTABLE, both variants (End() seeked the now-current window's cursor to the clipper's end); test failed |
+| 7 | `ui-imgui-bind-clipper.js` | the callback depth not raised (`++gCallbackDepth` removed from `CallbackScope`) | FRAMEFNS: `render()` from the callback ran and ended the frame, so the scope changed and `listClipper` threw its abandon `ERR_IMGUI_USAGE`, uncaught; test failed |
+| 7 | `ui-imgui-bind-clipper.js` | the callback not called (the ImGui loop kept) | `RANGES WRONG {"r":[],"texts":0,"lo":15,"hi":20}`, `TIMEOUT END last range at 10000`; test failed |
+| 7 | `ui-imgui-bind-clipper.js` | the callback given `(start, start)` (its arguments stand in for a write-back) | `RANGES WRONG {"r":[[0,0]],...}`; test failed |
+| 7 | `ui-imgui-bind-clipper.js` | `enterImGui()` removed from `listClipper` | `NOTCALLED listClipper` (REJECTED's count-0 call); test failed |
+| 7 | `ui-imgui-bind-clipper.js` | `itemHeight`'s check removed | `WRONGCODE ERR_IMGUI_USAGE (want ERR_OUT_OF_RANGE): ... ImGuiListClipper: Failed to calculate item height! ...` (0 reaches ImGui's measuring mode); test failed |
+| 7 | `ui-imgui-bind-clipper.js` | the pending-exception check removed (Step() called again after a throw) | PASS: not detected (see "Behaviours no test detects") |
+| 7 | `ui-imgui-bind-errors.js` | `canListClipper()` never refusing | aborted in CLIPPER_WRONG_WINDOW: `imgui_tables.cpp:2126: ... TableEndRow ... Assertion window == table->InnerWindow failed`; test failed |
 
 ## Behaviours no test detects
 
@@ -254,6 +280,21 @@ automated test would notice losing. Each task appends its own.
   `napi_create_string_utf8` (`hermes/API/napi/hermes_napi_string.cpp`)
   replaces an invalid sequence with U+FFFD rather than failing, so even
   such a buffer would come back as a valid string and never throw.
+- **Task 7: a `Float32Array` is used in place, not copied.** `plotLines`,
+  `plotHistogram` and `drawList.addPolyline` pass a Float32Array's own
+  data to ImGui (`Call::floats`). A copy would draw the same picture, so
+  no test can tell the two apart; checked by reading.
+- **Task 7: `listClipper` never steps a clipper again after the callback
+  threw.** With the pending-exception check removed, the loop calls
+  `Step()` once more with the exception pending; every clipper the tests
+  can build has one range, so that `Step()` only seeks to the end and
+  returns false, which is what the normal `End()` does, and the exception
+  still propagates. Seeing it would need a clipper with a second range
+  (a navigation or focused-item range, imgui.cpp:3647-3659), which no
+  bound function produces deterministically. Checked by reading.
+- **Task 7: the 2^30-value bound on a plot's values** (`kMaxPlotValues`,
+  `bind_plots.cpp`, the surface table's offset-overflow precondition) is
+  not tested: an Array or Float32Array of that length is 4 GiB or more.
 
 ## Notes
 
@@ -910,3 +951,67 @@ automated test would notice losing. Each task appends its own.
   added guards above.
 - `ui-imgui-bind-args.js` gained a NOFRAME sample for each of the eight
   functions (its `NOSAMPLE beginTable` was the first full-suite failure).
+
+### Task 7
+
+- **The Style, Plots, Draw list and Clipper sections are bound**: Style
+  completed in `bind_style.cpp`, the others in `bind_plots.cpp`,
+  `bind_drawlist.cpp` and `bind_clipper.cpp` (`registerPlots`,
+  `registerDrawList`, `registerClipper` in `bind_util.h`;
+  `imgui_module.cpp`; `addons/imgui/CMakeLists.txt`), and listed as the
+  `Style`, `Plots`, `DrawList` and `Clipper` groups in `bind-groups.js`.
+  `imgui.drawList` is a plain object of nine functions; each `Call` is
+  named `drawList.<name>`, so its messages say `imgui.drawList.addLine():`
+  and its `bindCalls()` key is the name the surface test and
+  `checkGroupCoverage` already used.
+- **The clipper** (`bind_clipper.cpp`): arguments, frame and the new guard
+  `canListClipper:wrong-window` (the surface table's (b) precondition:
+  `Begin()` ends an open row, `TableEndRow()` asserts the window,
+  tables:2126; refused in `ui-imgui-bind-errors.js` CLIPPER_WRONG_WINDOW,
+  added after TABLE_REGION, with its line in the ONCE chain), then
+  `guard::snapshotScope()`, `ImGuiListClipper` on the stack, `Begin()`,
+  and `Step()` in a loop calling the callback inside a `CallbackScope`.
+  After each callback the scope is compared first: a mismatch abandons
+  (`ItemsCount = -1; End()`, traced `listClipper: abandoned, the callback
+  changed the window scope`) and propagates the callback's exception or
+  throws `ERR_IMGUI_USAGE`; otherwise a pending exception ends the
+  clipper normally and propagates. `Step()` is never called after either.
+  `snapshotScope()` / `sameScope()` read `g.CurrentWindow`,
+  `g.CurrentWindowStack.Size` and `g.CurrentTable`, already in the surface
+  table's internal-state list.
+- **Facts read from the source that shaped the tests.** In this ImGui
+  `AddRect` and `AddCircle` stroke inside the outline by default
+  (`ImDrawFlags_StrokeInside`, imgui_draw.cpp:2359, 2710), `AddLine`,
+  paths and so `AddPolyline` and `AddBezierCubic` on it
+  (`ImDrawFlags_StrokeCenter`, imgui_draw.cpp:1021, 1999), so each
+  stroke's samples are placed accordingly, at pixel centres 3.5-4.5 units
+  from both edges; centred strokes run on half-integer coordinates so that
+  their 9 units cover whole pixels. The anti-aliasing flags were not
+  touched: every sample is in a flat interior, and every one matched
+  exactly with the default style. `addText` in the default font has
+  pixels exactly the given colour inside its `calcTextSize` box, so TEXT
+  asserts that and none outside. The histogram's bar n has the n-th
+  value's height (PlotEx draws from `tp0`, imgui_widgets.cpp:9146-9175).
+  The dark theme's opaque window background measured `[46, 46, 46]`; the
+  tests compare with `getColorU32(Col_WindowBg)`'s bytes rather than a
+  constant.
+- **The scope cases check the cursor.** The first run of the "ItemsCount
+  not set to -1" mutation passed: nothing observed `End()`'s seek. Each
+  SCOPE_* case now also requires the current window's cursor after
+  `listClipper` returns to be where the callback left it, which that
+  mutation breaks (Mutations). The scope comparison without the table
+  does not abort the Debug build; the returning variants of SCOPE_ENDTABLE
+  and SCOPE_OPENTABLE fail on the missing throw.
+- **No disagreement between the entries and the source.** Two notes on
+  the binding's choices within them: `listClipper` rejects a callback that
+  is not a function with `ERR_INVALID_ARG_TYPE` (a type rule, not a
+  "Rejected" line); `itemHeight` NaN is refused by the float reader
+  (`... must be a finite number ...`) before the "greater than 0" check.
+- `ui-imgui-bind-args.js`: NOFRAME resolves `drawList.<name>` and has a
+  sample for every new function; the three that need no frame are
+  skipped there and called in EITHER (`styleColorsDark()`,
+  `colorConvertFloat4ToU32()`); ARGTYPE gains `getColorU32`'s dispatch
+  message and the Float32Array-or-Array and callback type checks.
+- Task 1's list of checks still needing test cases had no Style entry
+  left (`Col_COUNT` / `StyleVar_COUNT` were Task 2's); `getColorU32`'s own
+  `Col_COUNT` refusal is GETCOLOR's.

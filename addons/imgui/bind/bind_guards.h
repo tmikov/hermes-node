@@ -91,6 +91,26 @@ const char *canEndTable();
 /// locked, that is, that no row was begun (tables:1858).
 const char *canTableSetupScrollFreeze();
 
+/// ImGuiListClipper::Begin() ends an open table row with TableEndRow()
+/// (imgui.cpp:3494-3496), which asserts plainly that the current window is
+/// the table's inner window (tables:2126): refused when a table is current,
+/// inside a row, in another window (the window of canTableRowCall's
+/// wrong-window condition). The later Step() and seek calls are covered by
+/// the scope comparison below.
+const char *canListClipper();
+
+/// What listClipper() compares after each callback (design, "Exceptions:
+/// List clipper"): the current window, the depth of the window stack, and
+/// the current table. A table that does not scroll changes the current
+/// table without opening a window, so the table is compared too.
+struct ScopeSnapshot {
+  const void *window;
+  int windowStackSize;
+  const void *table;
+};
+ScopeSnapshot snapshotScope();
+bool sameScope(const ScopeSnapshot &s);
+
 /// For __test.tableScope(): whether a table is current, and the names of
 /// the current window and of that table's inner window ("" without one).
 struct TableScope {
