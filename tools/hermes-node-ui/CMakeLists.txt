@@ -37,7 +37,10 @@ add_hermes_library(hermesNodeUiEvents STATIC
 target_include_directories(hermesNodeUiEvents PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(hermesNodeUiEvents PUBLIC hermesNodeCompositor sokol)
 
-add_hermes_tool(hermes-node-ui main.cpp)
+# named_addons.cpp registers `hermes-node:imgui`, whose init loads
+# hermes-node-imgui.node (addons/imgui/) from this binary's directory at
+# run time. There is no link dependency on the addon.
+add_hermes_tool(hermes-node-ui main.cpp named_addons.cpp)
 # Plain signature, not PRIVATE: hermes_node_link_setup() below links this
 # same target with the plain form (matching Hermes.cmake:141's own plain
 # link of hermesNapi, per that file's comment), and CMake refuses to mix

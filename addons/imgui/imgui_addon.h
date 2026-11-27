@@ -1,0 +1,44 @@
+/*
+ * Copyright (c) Tzvetan Mikov.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+// Declarations shared by the addon's units. Every unit sees exactly these;
+// everything else stays file-local. Some are declared ahead of the units
+// that define them (the platform half, the renderer, the test hooks), and
+// nothing calls those until they exist.
+
+#ifndef HERMES_NODE_IMGUI_ADDON_H
+#define HERMES_NODE_IMGUI_ADDON_H
+
+#include <hnui.h>
+#include <imgui.h>
+#include <node_api.h>
+
+namespace hnimgui {
+
+void trace(const char *fmt, ...); // "[ui] imgui: ..." when UI tracing is on
+bool testHooksEnabled(); // HERMES_NODE_UI_TEST_HOOKS, same rule as the host
+// platform
+void platformInit(hnui_window *w); // listener, clipboard hooks, backend flags
+void platformNewFrame(
+    hnui_window *w); // DisplaySize, DisplayFramebufferScale, DeltaTime
+void platformAfterRender(hnui_window *w); // cursor
+int lastCursorRequested(); // ImGuiMouseCursor last acted on, for state()
+// renderer
+void rendererInit(); // backend flags, sampler; lazily called
+void rendererDraw(
+    ImDrawData *dd,
+    const hnui_target &target); // textures, pass, draws
+struct RendererStats {
+  int commands, vertices, indices, liveTextures;
+};
+RendererStats rendererStats(); // totals of the last rendererDraw
+// test hooks
+napi_value createTestHooks(napi_env env); // the `__test` object
+
+} // namespace hnimgui
+
+#endif // HERMES_NODE_IMGUI_ADDON_H

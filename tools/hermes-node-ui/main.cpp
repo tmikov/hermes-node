@@ -10,6 +10,7 @@
 #include <hermes/node-compat/runtime/hermes_node_runtime.h>
 #include <hermes/node-compat/version.h>
 
+#include "named_addons.h"
 #include "ui_module.h"
 
 #include <hermes/node-compat/process/node_process.h>
@@ -163,6 +164,12 @@ int main(int argc, char **argv) {
            hermes::node_compat::initUiModule})) {
     return 1;
   }
+  // Beside it, and for the same reasons: `hermes-node:imgui` and any other
+  // product addon, each loaded at its first require() from a .node file in
+  // this executable's directory (named_addons.h). Registering costs
+  // nothing; a program that never asks for one never opens the file.
+  if (!registerNamedAddons(config))
+    return 1;
 
   UiHost host(std::move(config));
 
