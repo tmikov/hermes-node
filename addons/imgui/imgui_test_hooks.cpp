@@ -230,6 +230,21 @@ void sceneWidgets(const bool *drawCursor) {
   gWidgets.wheel += ImGui::GetIO().MouseWheel;
 }
 
+/// ImGui's io.MouseWheel as the `wheel` scene last saw it non-zero; 0
+/// until then. Never reset: a test compares it with the value it sent.
+double gLastWheel = 0;
+
+/// `wheel`: draws nothing; records this frame's io.MouseWheel in
+/// gLastWheel when it is non-zero. ImGui clears the field when the frame
+/// ends, so it is read here, inside the frame, which is what lets a test
+/// see the wheel reach ImGui under any other drawing (the demo window's,
+/// say) without the `widgets` scene.
+void sceneWheel() {
+  const float wheel = ImGui::GetIO().MouseWheel;
+  if (wheel != 0.0f)
+    gLastWheel = wheel;
+}
+
 /// `scene(name[, arg])`: draws immediately into the frame that is open, so
 /// it is called between newFrame() and render(); with no frame open it
 /// throws the no-frame error, as showDemoWindow() does. `arg` is optional:
@@ -320,6 +335,10 @@ napi_value scene(napi_env env, napi_callback_info info) {
   }
   if (std::strcmp(name, "glyphs") == 0) {
     sceneGlyphs(arg);
+    return nullptr;
+  }
+  if (std::strcmp(name, "wheel") == 0) {
+    sceneWheel();
     return nullptr;
   }
   if (std::strcmp(name, "widgets") == 0) {
@@ -446,6 +465,7 @@ napi_value state(napi_env env, napi_callback_info) {
       setBool(env, result, "keyADown", gWidgets.keyADown) &&
       setString(env, result, "text", gWidgets.text) &&
       setNumber(env, result, "wheel", gWidgets.wheel) &&
+      setNumber(env, result, "lastWheel", gLastWheel) &&
       setRect(env, result, "buttonRect", gWidgets.buttonRect) &&
       setRect(env, result, "fieldRect", gWidgets.fieldRect) &&
       setNumber(env, result, "cursor", lastCursorRequested());

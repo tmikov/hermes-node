@@ -36,6 +36,14 @@ Same thing using async `fs` callbacks and the event loop.
 
 Same thing using `fs/promises` and async/await.
 
+## imgui-demo/
+
+Dear ImGui's demo window, drawn from a JavaScript program by the
+`hermes-node:imgui` addon in a `hermes-node-ui` window. Needs a build with
+`-DHERMES_NODE_ENABLE_UI=ON` and runs with `hermes-node-ui`, not
+`hermes-node`; it is not part of `check-hermes-node-examples`. See
+`imgui-demo/README.md`.
+
 ## bufferutil-addon/
 
 Loads `bufferutil`, a real npm package with a prebuilt native NAPI addon

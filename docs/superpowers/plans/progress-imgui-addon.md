@@ -17,6 +17,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-addon-part-a.md`
 | Task 7 | Input | done (GL) |
 | Task 8 | Cursor and clipboard | done (GL; Metal unverified) |
 | Task 9 | Resize and HiDPI | done (GL at scale 1; the 2x case needs a Mac run) |
+| Task 10 | The demo window and the example | done (GL) |
 
 ## Mutations
 
@@ -83,6 +84,9 @@ Each test must be shown able to fail: the change made, and what it did.
 | 9 | `test/ui-imgui-resize.js` | (review of Task 9, run in Task 10) every texture destroyed and created again when the target size changes | with the count alone `TEXTURES same` would have passed (1 -> 1); `state().atlasTexId` added and compared: `TEXTURES changed 1 -> 1, atlas 65544 -> 131080`, and TEXTURE-ONCE fails on the second `imgui: texture 1 created` (checked on the run's `.err`); restored |
 | 9 | `test/ui-imgui-resize.js` | (review of Task 9, run in Task 10) every texture re-uploaded in place (`WantCreate` with its record kept, traced `replaced`) when the target size changes | `TEXTURES changed 1 -> 1, atlas 65544 -> 65551` (TEXTURE-ONCE cannot see this one: nothing is traced `created`); restored |
 | 9 | `test/ui-imgui-resize.js` | (review of Task 9, run in Task 10) SCALE: also `s.scaleX === Math.fround(win.dpiScale)`, both axes | not mutated separately: under Xvfb dpiScale is 1 and so is the scale, and the addon reads neither from dpiScale, so no addon change separates the two legs here; the leg is for a 2x Mac run |
+| 10 | `test/ui-imgui-demo.js` | (a) every `sg_draw_ex` skipped (`if (false)`) | `DEMO WRONG inside=0 notClear=0`, `DEMO vertices ok` still printed, test failed; restored |
+| 10 | `test/ui-imgui-demo.js` | (b) `HNUI_EVENT_MOUSE_WHEEL` not passed to `AddMouseWheelEvent` | `DEMO ok`, `DEMO vertices ok`, then `TIMEOUT DEMO wheel`, `EXITCODE 1`; restored |
+| 10 | `test/ui-imgui-demo.js` | (oracle) the clear row moved to y = 600, inside the demo window | `DEMO WRONG inside=349800 notClear=550 first 650,600` (the row crosses the window's 550 columns), test failed; restored |
 
 ## Notes
 
@@ -269,3 +273,32 @@ Each test must be shown able to fail: the change made, and what it did.
   from "a texture again"; the live count cannot.
 - MANY800 is new in `test/ui-imgui-resize.js`: FILL800 cannot see a stale
   projection (shown by mutation), MANY800 can.
+
+### Task 10
+
+- ImGui's demo window needed nothing new from the addon: no assertion in
+  `ShowDemoWindow`, no Sokol line, at 1280x800 under Xvfb.
+- Measured on the first captured frame (after 30): the non-clear pixels
+  span exactly (650,20)-(1199,699), the brief's first-use rectangle, so
+  the column x = 300 and the row y = 760 are outside it as given; 349,800
+  of the 350,000 pixels of (660,30)-(1190,690) are not the clear colour;
+  the frame has 760 vertices (3 commands, 1272 indices).
+- The wheel: the demo window, collapsed as on first use, does not scroll
+  (its `ScrollMax.y` read 0 through `imgui_internal.h`, in a probe only),
+  so comparing scroll offsets or captures could not show the wheel
+  arriving. Chosen instead: a `wheel` test scene that draws nothing and
+  records ImGui's `io.MouseWheel` inside the frame (ImGui clears it in
+  `EndFrame`, so `state()` cannot read it after `render()`), reported as
+  `state().lastWheel`, the last non-zero value seen. `DEMO scrolled`
+  prints once it reads the -1 sent; mutation (b) shows it can fail.
+- `examples/imgui-demo/demo.js` is the spec's program with two
+  departures the spec's sketch does not run as written: the window object
+  has no `requestAnimationFrame` (the module and the global do), so it
+  calls `ui.requestAnimationFrame`; and CommonJS has no top-level
+  `await`, so the body is an async `main()`. Run by hand under
+  `utils/with-display.py 20`: status 124, stderr only the Xvfb DPI
+  `[sapp:warning`; with `HERMES_NODE_DEBUG_NATIVE=UI` it traces the
+  context, the atlas texture and the pipeline, and every tick draws.
+- No `package.json`: `run-examples.sh` runs only directories with a
+  `run.sh` and skips those without `node_modules`, and this one has
+  neither, so it stays out of `check-hermes-node-examples`.
