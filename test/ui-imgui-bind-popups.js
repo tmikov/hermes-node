@@ -45,7 +45,9 @@
 // style.HoverStationaryDelay and style.HoverDelayShort (0.15 s each), are
 // measured in ImGui's time, which advances by the real frame time. The
 // test sets both to 0 with __test.setTooltipDelay(0), so the tooltip shows
-// a frame or two after the mouse arrives, however long frames take.
+// a frame or two after the mouse arrives, however long frames take; it
+// then restores the two values that call returned, and checks that they
+// were restored exactly.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
 //  ImGui::CloseCurrentPopup() removed, enterImGui() kept: POPUP fails;
@@ -236,7 +238,7 @@ async function main() {
 
   // --- TOOLTIPS --------------------------------------------------------
   {
-    imgui.__test.setTooltipDelay(0);
+    const savedDelays = imgui.__test.setTooltipDelay(0);
     const rects = {};
     let mode = 'none';
     const draw = inWindow(() => {
@@ -271,7 +273,17 @@ async function main() {
     }
     mode = 'none';
     await harness.moveTo(h, draw, BLANK);
-    imgui.__test.setTooltipDelay(0.15);
+    imgui.__test.setTooltipDelay(...savedDelays);
+    // What the hook returned is ImGui's defaults (0.15 each as a float,
+    // imgui.cpp:1657-1658), nothing in this test having changed them, and
+    // they are restored exactly: setting them again returns what was saved.
+    const DEFAULT = Math.fround(0.15);
+    if (savedDelays[0] !== DEFAULT || savedDelays[1] !== DEFAULT)
+      wrong.push('saved:' + JSON.stringify(savedDelays));
+    const now = imgui.__test.setTooltipDelay(...savedDelays);
+    if (now.length !== 2 || now[0] !== savedDelays[0] ||
+        now[1] !== savedDelays[1])
+      wrong.push('restore:' + JSON.stringify([savedDelays, now]));
     console.log(wrong.length === 0 ? 'TOOLTIPS ok' : 'TOOLTIPS WRONG ' + wrong);
   }
 

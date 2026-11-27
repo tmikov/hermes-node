@@ -56,6 +56,7 @@ const char *canTreePop();
 const char *canEndTabItem();
 const char *canBeginMenuBar();
 const char *canEndMenuBar();
+const char *canEndMainMenuBar();
 const char *canEndTooltip();
 /// \p hasStrId: whether a strId was passed (with none, the popup takes the
 /// last item's ID).

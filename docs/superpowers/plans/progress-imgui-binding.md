@@ -162,6 +162,12 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 4 (review) | `ui-imgui-bind-widgets.js` | `i` removed from the int conversions | `TypeError: imgui.sliderInt(): format must hold exactly one integer conversion (such as %d); got '%i'`, uncaught in FORMAT's frame; test failed |
 | 4 (review) | `ui-imgui-bind-widgets.js` | `%%` counted as a conversion instead of a literal | `TypeError: imgui.sliderFloat(): ... got '%%%.1f'`, uncaught in FORMAT's frame; test failed |
 | 4 (review) | `ui-imgui-bind-widgets.js` | `l` accepted as a length modifier | `NOTHROW ERR_INVALID_ARG_VALUE` (`'%ld'`); test failed |
+| 5 (review) | `ui-imgui-bind-errors.js` | (before the fix) `beginMainMenuBar(); endGroup(); endMainMenuBar();`, and the same with the implicit window's group underneath, run by hand | aborted: `imgui.h:2377 ... ImVector<ImGuiGroupData>::back() ... Assertion Size > 0 failed`, and `imgui.cpp:12722 ... EndGroup ... Assertion group_data.WindowID == window->ID failed` |
+| 5 (review) | `ui-imgui-bind-errors.js` | `canEndMainMenuBar()` returning nullptr always | aborted in GUARD_MAINMENUBAR: `imgui.h:2377 ... back() ... Assertion Size > 0 failed`; test failed |
+| 5 (review) | `ui-imgui-bind-errors.js` | the wrong-window condition of the shared `groupOpenIn()` removed (every group-ending guard at once) | aborted in GUARD_GROUP, the first wrong-window case: `imgui.cpp:12722 ... Assertion group_data.WindowID == window->ID failed`; test failed |
+| 5 (review) | `ui-imgui-bind-menus.js` | `ImGui::EndMenu()` removed, `enterImGui()` kept | the menu stays current, so the next `endMainMenuBar()` throws `imgui.endMainMenuBar(): Calling EndMainMenuBar() not from a menu-bar!` (ImGui's own report of the missing closer) in the first frame with the menu open, before CLOSERS prints; test failed |
+| 5 (review) | `ui-imgui-bind-menus.js` | `ImGui::EndMainMenuBar()` removed, `enterImGui()` kept | the first frame's `render()` throws `imgui.render(): Missing End()` (the bar left open), before CLOSERS prints; test failed |
+| 5 (review) | `ui-imgui-bind-popups.js` | `__test.setTooltipDelay()` returning the new values instead of the previous ones | `TOOLTIPS WRONG saved:[0,0]`; test failed |
 
 ## Behaviours no test detects
 
@@ -736,3 +742,52 @@ automated test would notice losing. Each task appends its own.
 - `sliderFloatN` selects its ImGui function with `if constexpr`.
 - The widgets test's header no longer lists its mutations; it points at
   the Mutations table.
+- **Review fix: `endMainMenuBar` guarded.** `EndMainMenuBar()` checks
+  only that a menu bar is open, recoverably (widgets:9483), and then its
+  `EndMenuBar()` ends the group on top (widgets:9401, 9405), so
+  `beginMainMenuBar(); endGroup(); endMainMenuBar();` aborted (reproduced,
+  both variants; see the Mutations table). `canEndMainMenuBar` applies
+  `endMenuBar`'s two group conditions when the menu bar is open and the
+  window does not skip items, as `canEndMainMenuBar:no-group` and
+  `:wrong-window`; GUARD_MAINMENUBAR refuses each. The group-stack pair of
+  checks is now one helper, `groupOpenIn()` in `bind_guards.cpp`, used by
+  `canEndGroup`, `canEndListBox`, `canEndMenuBar` and `canEndMainMenuBar`
+  with their own names and messages.
+- **Review fix: the other closers re-checked for the same pattern**
+  (a closer that calls another `End*` or pops what ImGui pushed):
+  `endMenu` -> `EndPopup()` -> `End()`, after ImGui's own recoverable
+  check of the `Popup | ChildMenu` flags (widgets:9755); `endPopup` ->
+  `End()` after its recoverable check (imgui.cpp:13525); `endCombo` ->
+  `EndPopup()`, its window the combo popup once `canEndCombo` passed;
+  `endTooltip` -> `End()` once `canEndTooltip` passed; `endListBox` ->
+  `EndChild()` and `EndGroup()`, both covered by `canEndListBox`;
+  `endTabBar` -> `TabBarLayout()`, `PopID()` (recoverable) and
+  `g.CurrentTabBarStack.pop_back()`, non-empty whenever `g.CurrentTabBar`
+  is set; `endTabItem` -> `PopID()` (recoverable). None of these has a
+  plain assertion that a sequence of bound calls reaches in the closer's
+  own code. What every window-ending closer does share is `End()`'s
+  window recovery (imgui.cpp:9039), which closes left-open scopes by
+  calling their closers itself; a sequence that damages one of those
+  scopes with another pair's closer makes that recovery abort. Besides
+  the menu-bar case already in the surface table's "Not covered" 3b, one
+  more was reproduced: `begin('w'); treeNodeEx('n',
+  TreeNodeFlags_DefaultOpen); popID(); end();` aborts in the recovery's
+  `TreePop()` (widgets:7426). It is added to 3b, not guarded: the call
+  that reaches the assertion is ImGui's, and preventing it needs the
+  binding to track which scopes its caller opened (part C).
+- **Review fix: `__test.setTooltipDelay(stationary[, delayShort])`
+  returns both previous values**, `[stationary, delayShort]`, and the
+  popups test restores exactly what it returned, then checks that the
+  saved values were ImGui's defaults (`Math.fround(0.15)`, imgui.cpp:
+  1657-1658) and that a second set returns them unchanged.
+- **Review fix: `endMenu` and `endMainMenuBar` have a behavioural
+  assertion**, CLOSERS in the menus test: `getWindowPos()` after
+  `endMenu()` is the main menu bar's, and after `endMainMenuBar()` the
+  window's current before `beginMainMenuBar()`. With either ImGui call
+  removed the run fails before CLOSERS prints, on ImGui's own report of the
+  closer left out (Mutations table).
+- **`endListBox()`'s accepted path is still exercised**:
+  `test/ui-imgui-bind-widgets.js` LISTBOX calls it after a `beginListBox`
+  that returned true, and `COVERAGE Widgets ok` counts only calls that
+  reached ImGui (a refused call is not counted), with usage errors
+  excluded from that test's trace.

@@ -569,31 +569,39 @@ napi_value setDoubleClickTime(napi_env env, napi_callback_info info) {
   return result;
 }
 
-/// `setTooltipDelay(seconds)`: sets style.HoverStationaryDelay and
-/// style.HoverDelayShort, the two delays of the hover check that
-/// setItemTooltip() makes with style.HoverFlagsForTooltipMouse
-/// (`Stationary | DelayShort`, imgui.cpp:1660, 5199-5204, 5991-5992), and
-/// returns the previous HoverDelayShort. Both are measured in ImGui's time,
-/// which advances by io.DeltaTime from the real clock, so with 0 a tooltip
-/// test does not depend on how long its frames take. Both default to 0.15
-/// (imgui.cpp:1657-1658), so restoring 0.15 restores both. Creates the
-/// context as the binding functions do; ERR_IMGUI_NO_WINDOW without a
-/// window.
+/// `setTooltipDelay(stationary, delayShort = stationary)`: sets
+/// style.HoverStationaryDelay and style.HoverDelayShort, the two delays of
+/// the hover check that setItemTooltip() makes with
+/// style.HoverFlagsForTooltipMouse (`Stationary | DelayShort`,
+/// imgui.cpp:1660, 5199-5204, 5991-5992), and returns their previous values
+/// as `[stationary, delayShort]`, so `setTooltipDelay(...previous)`
+/// restores both exactly. Both are measured in ImGui's time, which advances
+/// by io.DeltaTime from the real clock, so with 0 a tooltip test does not
+/// depend on how long its frames take. Creates the context as the binding
+/// functions do; ERR_IMGUI_NO_WINDOW without a window.
 napi_value setTooltipDelay(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  napi_valuetype type = napi_undefined;
-  double seconds = 0;
-  if (argc < 1 || napi_typeof(env, argv[0], &type) != napi_ok ||
-      type != napi_number ||
-      napi_get_value_double(env, argv[0], &seconds) != napi_ok ||
-      !(seconds >= 0 && seconds <= 1e6)) {
-    napi_throw_range_error(
-        env,
-        "ERR_OUT_OF_RANGE",
-        "imgui.__test.setTooltipDelay(): seconds must be in [0, 1e6]");
-    return nullptr;
+  double seconds[2] = {0, 0};
+  for (size_t i = 0; i < 2; ++i) {
+    // The second defaults to the first.
+    if (i == 1 && argc < 2) {
+      seconds[1] = seconds[0];
+      break;
+    }
+    napi_valuetype type = napi_undefined;
+    if (argc <= i || napi_typeof(env, argv[i], &type) != napi_ok ||
+        type != napi_number ||
+        napi_get_value_double(env, argv[i], &seconds[i]) != napi_ok ||
+        !(seconds[i] >= 0 && seconds[i] <= 1e6)) {
+      napi_throw_range_error(
+          env,
+          "ERR_OUT_OF_RANGE",
+          "imgui.__test.setTooltipDelay(): each delay must be in [0, 1e6] "
+          "seconds");
+      return nullptr;
+    }
   }
   if (!ensureContext(env)) {
     napi_throw_error(
@@ -604,12 +612,19 @@ napi_value setTooltipDelay(napi_env env, napi_callback_info info) {
     return nullptr;
   }
   ImGuiStyle &style = ImGui::GetStyle();
-  const double previous = style.HoverDelayShort;
-  style.HoverStationaryDelay = static_cast<float>(seconds);
-  style.HoverDelayShort = static_cast<float>(seconds);
+  const double previous[2] = {
+      style.HoverStationaryDelay, style.HoverDelayShort};
+  style.HoverStationaryDelay = static_cast<float>(seconds[0]);
+  style.HoverDelayShort = static_cast<float>(seconds[1]);
   napi_value result = nullptr;
-  if (napi_create_double(env, previous, &result) != napi_ok)
+  if (napi_create_array_with_length(env, 2, &result) != napi_ok)
     return nullptr;
+  for (uint32_t i = 0; i < 2; ++i) {
+    napi_value v = nullptr;
+    if (napi_create_double(env, previous[i], &v) != napi_ok ||
+        napi_set_element(env, result, i, v) != napi_ok)
+      return nullptr;
+  }
   return result;
 }
 

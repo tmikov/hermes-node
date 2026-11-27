@@ -31,11 +31,14 @@ napi_value beginMainMenuBar(napi_env env, napi_callback_info info) {
 }
 
 /// `endMainMenuBar()`, imgui.h:832. Outside a menu bar ImGui reports it
-/// recoverably (widgets:9483).
+/// recoverably (widgets:9483); inside one, the guard checks the group
+/// EndMenuBar() will end.
 napi_value endMainMenuBar(napi_env env, napi_callback_info info) {
   Call c(env, info, "endMainMenuBar");
   if (!c.ok() || !c.needFrame())
     return nullptr;
+  if (const char *msg = guard::canEndMainMenuBar())
+    return c.throwUsage("%s", msg);
   c.enterImGui();
   ImGui::EndMainMenuBar();
   if (!c.leaveImGui())

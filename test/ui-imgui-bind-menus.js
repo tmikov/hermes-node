@@ -16,6 +16,10 @@
 //  MAINBAR   beginMainMenuBar() returns true and `##MainMenuBar` is
 //            active; beginMenu('File') returns false, and no `File###Menu_00`
 //            window is active, until a click on it.
+//  CLOSERS   with the menu open, the current window (getWindowPos()) after
+//            endMenu() is the main menu bar again, and after
+//            endMainMenuBar() the window current before beginMainMenuBar();
+//            the menu and the bar are each at a position of their own.
 //  MENUITEM  in the open menu, menuItem('Open', 'Ctrl+O', false) returns
 //            true on a click on it, and the menu closes (its window is no
 //            longer active).
@@ -29,7 +33,9 @@
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
 //  ImGui::BeginMenu() replaced by false, enterImGui() kept: MAINBAR fails;
 //  enterImGui() removed from endMainMenuBar: COVERAGE fails;
-//  menuItem(label, shortcut, p)'s write-back removed: MENUREF fails.
+//  menuItem(label, shortcut, p)'s write-back removed: MENUREF fails;
+//  ImGui::EndMenu() or ImGui::EndMainMenuBar() removed, enterImGui()
+//  kept: CLOSERS fails.
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -65,13 +71,19 @@ async function main() {
   let barShown = false, menuOpen = false;
   let menuRect = null, openRect = null, checkRect = null;
   let openPresses = 0, checkPresses = 0;
+  // getWindowPos() of the current window around each closer: the window
+  // that endMenu() and endMainMenuBar() return to is read back.
+  const pos = {};
   const draw = () => {
+    pos.before = imgui.getWindowPos();
     barShown = imgui.beginMainMenuBar();
     if (!barShown)
       return;
+    pos.inBar = imgui.getWindowPos();
     menuOpen = imgui.beginMenu('File');
     menuRect = rect();
     if (menuOpen) {
+      pos.inMenu = imgui.getWindowPos();
       if (imgui.menuItem('Open', 'Ctrl+O', false))
         ++openPresses;
       openRect = rect();
@@ -79,8 +91,10 @@ async function main() {
         ++checkPresses;
       checkRect = rect();
       imgui.endMenu();
+      pos.afterMenu = imgui.getWindowPos();
     }
     imgui.endMainMenuBar();
+    pos.afterBar = imgui.getWindowPos();
   };
 
   async function openMenu(label) {
@@ -103,6 +117,17 @@ async function main() {
     console.log(ok ? 'MAINBAR ok' :
                      'MAINBAR WRONG ' + barShown + ' ' + bar + ' ' +
                          closedBefore);
+  }
+
+  // --- CLOSERS ---------------------------------------------------------
+  {
+    // The last frame drew the open menu. The menu is a window of its own,
+    // placed below the bar; endMenu() returns to the bar, and
+    // endMainMenuBar() to the window current before beginMainMenuBar().
+    const same = (a, b) => a[0] === b[0] && a[1] === b[1];
+    const ok = !same(pos.inMenu, pos.inBar) && same(pos.afterMenu, pos.inBar) &&
+        !same(pos.inBar, pos.before) && same(pos.afterBar, pos.before);
+    console.log(ok ? 'CLOSERS ok' : 'CLOSERS WRONG ' + JSON.stringify(pos));
   }
 
   // --- MENUITEM --------------------------------------------------------
@@ -164,6 +189,7 @@ main().catch((e) => {
 });
 
 // CHECK: {{^}}MAINBAR ok{{$}}
+// CHECK-NEXT: {{^}}CLOSERS ok{{$}}
 // CHECK-NEXT: {{^}}MENUITEM ok{{$}}
 // CHECK-NEXT: {{^}}MENUREF ok{{$}}
 // CHECK-NEXT: {{^}}MENUBAR ok{{$}}

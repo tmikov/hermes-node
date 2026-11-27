@@ -602,9 +602,23 @@ there is no "Proposed addition" under any group.
 - Preconditions:
   - (c) `g.CurrentWindow->DC.MenuBarAppending`: "Calling EndMainMenuBar()
     not from a menu-bar!" (widgets:9483).
-  - It then calls `EndMenuBar()` (widgets:9485), whose plain assertions
-    (widgets:9362-9363) hold once the check above passed, and `End()`
-    (widgets:9493).
+  - It then calls `EndMenuBar()` (widgets:9485), whose two flag
+    assertions (widgets:9362-9363) hold once the check above passed (a
+    menu bar is open only in a window with `ImGuiWindowFlags_MenuBar`,
+    widgets:9328-9349), and `End()` (widgets:9493).
+  - But `EndMenuBar()` also reads `g.GroupStack.back()` and calls
+    `EndGroup()` (widgets:9401, 9405), which the check above does not
+    cover: after `beginMainMenuBar(); endGroup();` (accepted by
+    `canEndGroup`, the menu bar's group belonging to `##MainMenuBar`) the
+    stack is empty and `ImVector::back()` asserts (imgui.h:2377); with
+    another window's group underneath, `EndGroup()`'s plain assertion does
+    (imgui.cpp:12722). Both were reproduced. (b), when
+    `g.CurrentWindow->DC.MenuBarAppending` is set and `SkipItems` is not:
+    `g.GroupStack.Size > 0` and `g.GroupStack.back().WindowID ==
+    g.CurrentWindow->ID`, the conditions of `endMenuBar`'s guard,
+    registered as `canEndMainMenuBar:no-group` and `:wrong-window`.
+    (Added after the Task 5 review; the first version of this entry said
+    `EndMenuBar()`'s assertions held.)
 - Notes: ImGui's check does not test that the window is the main menu bar
   (its own comment at widgets:9483), so a call inside any window's
   `beginMenuBar()` scope passes it and ends that window.
@@ -2928,7 +2942,16 @@ a C++ program.
    group; the window's `end()` then recovers the open menu bar by calling
    `EndMenuBar()` itself (imgui.cpp:12038-12041), which reads the empty
    group stack (widgets:9401). The binding's `canEndMenuBar` never runs,
-   because ImGui made the call. This is crash-capable and not prevented;
+   because ImGui made the call. The same holds for a tree node whose ID
+   was popped: `begin('w'); treeNodeEx('n', TreeNodeFlags_DefaultOpen);
+   popID(); end();` passes every guard (`popID` is recoverable, and `end`
+   has none), and the window's recovery then calls `TreePop()` itself
+   ("Missing TreePop()", imgui.cpp:12045), which asserts plainly
+   `window->IDStack.Size > 1` (widgets:7426); reproduced after Task 5. Every
+   bound closer that ends a window (`end`, `endChild`, `endPopup`,
+   `endMenu`, `endCombo`, `endTooltip`, `endListBox`, `endMainMenuBar`)
+   runs that recovery and inherits these sequences; none of them is a call
+   the binding makes in its own code. This is crash-capable and not prevented;
    preventing it needs the binding to track which scopes its caller
    opened, which is what part C should decide. ImGui's recovery is
    therefore not sufficient for these sequences.
@@ -2961,14 +2984,14 @@ Read:
 | `g.CurrentWindow` (the pointer itself) | 2553 | every guard below; `listClipper` (window comparison, design) |
 | `g.CurrentWindow->ID` | 2998 | the label-id guard (27 functions), `endGroup`, `endMenuBar` |
 | `g.CurrentWindow->Flags` | 2999 | `endChild`, `endListBox` (`ImGuiWindowFlags_ChildWindow`); `endTooltip` (`_Tooltip`); `beginMenuBar`, `endMenuBar` (`_MenuBar`) |
-| `g.CurrentWindow->SkipItems` | 3039 | `beginMenuBar`, `endMenuBar`, `endTabItem`, `beginPopupContextItem` (ImGui returns before its assertions when it is set, so the guards do too) |
+| `g.CurrentWindow->SkipItems` | 3039 | `beginMenuBar`, `endMenuBar`, `endMainMenuBar`, `endTabItem`, `beginPopupContextItem` (ImGui returns before its assertions when it is set, so the guards do too) |
 | `g.CurrentWindow->Name` | 2997 | `endCombo` |
 | `g.CurrentWindow->IDStack` (`Size`, `back()`) | 3068 | `treePop` |
-| `g.CurrentWindow->DC.MenuBarAppending` | 2964 | `beginMenuBar`, `endMenuBar` |
+| `g.CurrentWindow->DC.MenuBarAppending` | 2964 | `beginMenuBar`, `endMenuBar`, `endMainMenuBar` |
 | `g.CurrentWindow->DC.TreeDepth` | 2967 | `treePop` |
 | `g.CurrentWindow->DC.TreeHasStackDataDepthMask` | 2968 | `treePop` |
 | `g.TreeNodeStack` (`back().ID`) | 2639 | `treePop` |
-| `g.GroupStack` (`Size`, `back().WindowID`) | 2636; `ImGuiGroupData::WindowID` 1273 | `endGroup`, `endMenuBar`, `endListBox` |
+| `g.GroupStack` (`Size`, `back().WindowID`) | 2636; `ImGuiGroupData::WindowID` 1273 | `endGroup`, `endMenuBar`, `endMainMenuBar`, `endListBox` |
 | `g.CurrentWindowStack` (`Size`; the `Window` of the entry below the top) | 2548 | `endListBox` (the parent window whose group `EndGroup()` will close); `listClipper` (stack depth, design) |
 | `g.BeginComboDepth` | 2808 | `endCombo` |
 | `g.CurrentTable` | 2764 | `tableNextRow`, `tableSetColumnIndex` (not NULL); `endTable`, `tableNextColumn`, `tableHeadersRow`, `tableSetupScrollFreeze` (guard applied when not NULL); `listClipper` |

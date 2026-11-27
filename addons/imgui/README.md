@@ -300,7 +300,7 @@ rectangle edges are exact.
 
 `__test.setDoubleClickTime(seconds)` sets `io.MouseDoubleClickTime` (and `io.MouseSingleClickDelay` to `seconds + 0.2`, which ImGui requires to be larger), creating the context (`ERR_IMGUI_NO_WINDOW` without a window), and returns the previous value, so a double-click test does not depend on how long its frames take.
 
-`__test.setTooltipDelay(seconds)` sets `style.HoverStationaryDelay` and `style.HoverDelayShort`, the two delays of the hover check `setItemTooltip()` makes, creating the context (`ERR_IMGUI_NO_WINDOW` without a window), and returns the previous `HoverDelayShort`; both default to 0.15, so restoring 0.15 restores both. With 0 a tooltip test does not depend on how long its frames take.
+`__test.setTooltipDelay(stationary[, delayShort])` sets `style.HoverStationaryDelay` and `style.HoverDelayShort` (the second defaulting to the first), the two delays of the hover check `setItemTooltip()` makes, creating the context (`ERR_IMGUI_NO_WINDOW` without a window), and returns their previous values as `[stationary, delayShort]`, so `setTooltipDelay(...previous)` restores both. With 0 a tooltip test does not depend on how long its frames take.
 
 `__test.state()` returns, as of the last completed `newFrame()`/`render()`
 pair (except `frameOpen`, which is now): `frameOpen`, `displayWidth`,

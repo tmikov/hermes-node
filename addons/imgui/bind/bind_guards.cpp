@@ -87,6 +87,8 @@ enum GuardId {
   kEndMenuBarNotOpen,
   kEndMenuBarNoGroup,
   kEndMenuBarWrongWindow,
+  kEndMainMenuBarNoGroup,
+  kEndMainMenuBarWrongWindow,
   kEndTooltipNotTooltip,
   kBeginPopupContextItemNoId,
   kGuardCount
@@ -110,6 +112,8 @@ GuardCondition gGuards[kGuardCount] = {
     {"canEndMenuBar:not-open", 0},
     {"canEndMenuBar:no-group", 0},
     {"canEndMenuBar:wrong-window", 0},
+    {"canEndMainMenuBar:no-group", 0},
+    {"canEndMainMenuBar:wrong-window", 0},
     {"canEndTooltip:not-tooltip", 0},
     {"canBeginPopupContextItem:no-id", 0},
 };
@@ -126,6 +130,26 @@ const char *refuse(GuardId id, const char *msg) {
   ++gGuards[id].refused;
   trace("usage error: %s", msg);
   return msg;
+}
+
+/// The two conditions EndGroup() asserts plainly (imgui.cpp:12719, 12722),
+/// for an EndGroup() that will run in \p window: a group is open, and the
+/// top one was begun in \p window (null when there is no such window,
+/// which counts as the second condition failing). Every guard of a closer
+/// that ends a group goes through this, each refusing under its own two
+/// names and messages.
+const char *groupOpenIn(
+    const ImGuiWindow *window,
+    GuardId noGroup,
+    const char *noGroupMsg,
+    GuardId wrongWindow,
+    const char *wrongWindowMsg) {
+  ImGuiContext &g = *GImGui;
+  if (g.GroupStack.Size <= 0)
+    return refuse(noGroup, noGroupMsg);
+  if (window == nullptr || g.GroupStack.back().WindowID != window->ID)
+    return refuse(wrongWindow, wrongWindowMsg);
+  return nullptr;
 }
 
 } // namespace
@@ -180,14 +204,12 @@ bool labelIdIsWindowId(const char *label) {
 /// EndGroup() asserts plainly that a group is open (imgui.cpp:12719) and
 /// that it was begun in the current window (imgui.cpp:12722).
 const char *canEndGroup() {
-  ImGuiContext &g = *GImGui;
-  if (g.GroupStack.Size <= 0)
-    return refuse(kEndGroupNoGroup, "EndGroup() with no group open");
-  if (g.GroupStack.back().WindowID != g.CurrentWindow->ID)
-    return refuse(
-        kEndGroupWrongWindow,
-        "EndGroup() in another window than its BeginGroup()");
-  return nullptr;
+  return groupOpenIn(
+      GImGui->CurrentWindow,
+      kEndGroupNoGroup,
+      "EndGroup() with no group open",
+      kEndGroupWrongWindow,
+      "EndGroup() in another window than its BeginGroup()");
 }
 
 /// EndChild() asserts plainly that the current window is a child window
@@ -209,18 +231,13 @@ const char *canEndListBox() {
   ImGuiContext &g = *GImGui;
   if ((g.CurrentWindow->Flags & ImGuiWindowFlags_ChildWindow) == 0)
     return refuse(kEndListBoxNotChild, "EndListBox() outside a child window");
-  if (g.GroupStack.Size <= 0)
-    return refuse(
-        kEndListBoxNoGroup,
-        "EndListBox() with no group open (the list box's group)");
   const int n = g.CurrentWindowStack.Size;
-  if (n < 2 ||
-      g.GroupStack.back().WindowID != g.CurrentWindowStack[n - 2].Window->ID)
-    return refuse(
-        kEndListBoxWrongWindow,
-        "EndListBox() with another window's group on top (not the list "
-        "box's)");
-  return nullptr;
+  return groupOpenIn(
+      n >= 2 ? g.CurrentWindowStack[n - 2].Window : nullptr,
+      kEndListBoxNoGroup,
+      "EndListBox() with no group open (the list box's group)",
+      kEndListBoxWrongWindow,
+      "EndListBox() with another window's group on top (not the list box's)");
 }
 
 /// EndCombo() decrements g.BeginComboDepth (widgets:2091) and only then
@@ -311,17 +328,35 @@ const char *canEndMenuBar() {
         "EndMenuBar() in a window without WindowFlags_MenuBar");
   if (!window->DC.MenuBarAppending)
     return refuse(kEndMenuBarNotOpen, "EndMenuBar() with no menu bar open");
-  if (g.GroupStack.Size <= 0)
-    return refuse(
-        kEndMenuBarNoGroup,
-        "EndMenuBar() with no group open (the menu bar's own group was "
-        "ended)");
-  if (g.GroupStack.back().WindowID != window->ID)
-    return refuse(
-        kEndMenuBarWrongWindow,
-        "EndMenuBar() with another window's group on top (the menu bar's own "
-        "group was ended)");
-  return nullptr;
+  return groupOpenIn(
+      window,
+      kEndMenuBarNoGroup,
+      "EndMenuBar() with no group open (the menu bar's own group was ended)",
+      kEndMenuBarWrongWindow,
+      "EndMenuBar() with another window's group on top (the menu bar's own "
+      "group was ended)");
+}
+
+/// EndMainMenuBar() reports recoverably a current window whose menu bar is
+/// not open (widgets:9483), then calls EndMenuBar() (widgets:9485), which
+/// returns when the window skips items and otherwise reads the group
+/// stack's top and ends it (widgets:9401, 9405): the same group conditions
+/// as canEndMenuBar's, which ImGui's own check does not cover. With the
+/// menu bar open the window has WindowFlags_MenuBar (BeginMenuBar() sets
+/// MenuBarAppending only then, widgets:9328-9349), so EndMenuBar()'s two
+/// other assertions (widgets:9362-9363) hold.
+const char *canEndMainMenuBar() {
+  ImGuiWindow *window = GImGui->CurrentWindow;
+  if (!window->DC.MenuBarAppending || window->SkipItems)
+    return nullptr;
+  return groupOpenIn(
+      window,
+      kEndMainMenuBarNoGroup,
+      "EndMainMenuBar() with no group open (the menu bar's own group was "
+      "ended)",
+      kEndMainMenuBarWrongWindow,
+      "EndMainMenuBar() with another window's group on top (the menu bar's "
+      "own group was ended)");
 }
 
 /// EndTooltip() asserts plainly that the current window is a tooltip

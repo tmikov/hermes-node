@@ -51,6 +51,10 @@
 //                 and with another window's group on top: each refused.
 //  GUARD_BEGINMENUBAR a second beginMenuBar() in one window before
 //                 endMenuBar(): refused.
+//  GUARD_MAINMENUBAR endMainMenuBar() after the main menu bar's own group
+//                 was ended with endGroup(), with no group left and with
+//                 the implicit window's group on top: each refused (ImGui
+//                 checks only that a menu bar is open).
 //  GUARD_TOOLTIP  endTooltip() in an ordinary window: refused.
 //  GUARD_LISTBOX  endListBox() after a beginListBox that returned false
 //                 (placed below its parent's visible area, `SETUP listbox
@@ -90,8 +94,9 @@
 //  fails;
 //  labelIdIsWindowId() returning false always: GUARD_LABELID aborts
 //  (ImGui's plain assertion, imgui.cpp:12319);
-//  each of canTreePop, canEndTabItem, canEndMenuBar, canBeginMenuBar,
-//  canEndTooltip, canEndListBox, canBeginPopupContextItem and canEndCombo
+//  each of canTreePop, canEndTabItem, canEndMenuBar, canEndMainMenuBar,
+//  canBeginMenuBar, canEndTooltip, canEndListBox, canBeginPopupContextItem
+//  and canEndCombo
 //  returning nullptr always: its case aborts or fails (which, per guard,
 //  is recorded in the progress file);
 //  the reset of g.BeginComboDepth removed from guard::beginFrame():
@@ -456,6 +461,30 @@ async function main() {
                        'GUARD_BEGINMENUBAR render=' + drew);
   }
 
+  // --- GUARD_MAINMENUBAR -----------------------------------------------
+  {
+    const drew = await harness.frame(h, () => {
+      // EndMainMenuBar()'s own check is only that a menu bar is open
+      // (widgets:9483); its EndMenuBar() then ends the group on top.
+      if (!imgui.beginMainMenuBar())
+        fail('SETUP no main menu bar');
+      accepted('endGroup', () => imgui.endGroup());
+      refused('endMainMenuBar', () => imgui.endMainMenuBar());
+      imgui.beginGroup();
+      accepted('endMainMenuBar', () => imgui.endMainMenuBar());
+      imgui.beginGroup();
+      if (!imgui.beginMainMenuBar())
+        fail('SETUP no main menu bar 2');
+      accepted('endGroup', () => imgui.endGroup());
+      refused('endMainMenuBar', () => imgui.endMainMenuBar());
+      imgui.beginGroup();
+      accepted('endMainMenuBar', () => imgui.endMainMenuBar());
+      imgui.endGroup();
+    });
+    console.log(drew ? 'GUARD_MAINMENUBAR ok' :
+                       'GUARD_MAINMENUBAR render=' + drew);
+  }
+
   // --- GUARD_TOOLTIP ---------------------------------------------------
   {
     const drew = await harness.frame(h, () => {
@@ -658,6 +687,7 @@ async function main() {
 // CHECK-NEXT: {{^}}GUARD_TABITEM ok{{$}}
 // CHECK-NEXT: {{^}}GUARD_MENUBAR ok{{$}}
 // CHECK-NEXT: {{^}}GUARD_BEGINMENUBAR ok{{$}}
+// CHECK-NEXT: {{^}}GUARD_MAINMENUBAR ok{{$}}
 // CHECK-NEXT: {{^}}GUARD_TOOLTIP ok{{$}}
 // CHECK-NEXT: {{^}}SETUP listbox clipped{{$}}
 // CHECK-NEXT: {{^}}GUARD_LISTBOX ok{{$}}
@@ -705,6 +735,8 @@ async function main() {
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: EndMenuBar() with no group open (the menu bar's own group was ended){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: EndMenuBar() with another window's group on top (the menu bar's own group was ended){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: BeginMenuBar() while this window's menu bar is open{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndMainMenuBar() with no group open (the menu bar's own group was ended){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndMainMenuBar() with another window's group on top (the menu bar's own group was ended){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: EndTooltip() outside a tooltip{{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: EndListBox() outside a child window{{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: EndListBox() with no group open (the list box's group){{$}}
