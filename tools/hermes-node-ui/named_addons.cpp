@@ -40,11 +40,11 @@ const NamedAddon kNamedAddons[] = {
     {"imgui", "hermes-node-imgui.node", initImgui},
 };
 
-/// The running executable's directory, realpath'd -- the rule
-/// resolveKitDir() in tools/hermes-node/hermes-node.cpp uses, and for the
-/// same reason: argv[0] is whatever the caller chose to exec with. Empty
-/// when the executable's path cannot be determined at all.
-std::string executableDirectory() {
+/// The running executable's path, realpath'd -- the rule resolveKitDir()
+/// in tools/hermes-node/hermes-node.cpp uses, and for the same reason:
+/// argv[0] is whatever the caller chose to exec with. Empty when the
+/// executable's path cannot be determined at all.
+std::string executablePath() {
   char execBuf[PATH_MAX];
   size_t execSize = sizeof(execBuf);
   if (uv_exepath(execBuf, &execSize) != 0)
@@ -54,10 +54,7 @@ std::string executableDirectory() {
   char realBuf[PATH_MAX];
   if (const char *resolved = realpath(exePath.c_str(), realBuf))
     exePath = resolved;
-
-  size_t slash = exePath.find_last_of('/');
-  return slash == std::string::npos ? std::string(".")
-                                    : exePath.substr(0, slash);
+  return exePath;
 }
 
 napi_value
@@ -65,14 +62,14 @@ loadNamedAddon(napi_env env, const NamedAddon &addon, napi_value exports) {
   const std::string specifier =
       std::string(hermes::node_compat::kEmbedderModulePrefix) + addon.name;
 
-  const std::string dir = executableDirectory();
-  if (dir.empty()) {
+  const std::string exePath = executablePath();
+  if (exePath.empty()) {
     const std::string message = "Cannot find module '" + specifier +
         "': the directory of the running executable could not be determined";
     napi_throw_error(env, "MODULE_NOT_FOUND", message.c_str());
     return nullptr;
   }
-  const std::string path = dir + "/" + addon.fileName;
+  const std::string path = pathBesideExecutable(exePath, addon.fileName);
 
   // The one case classified before the shared loader runs: an absent file
   // is MODULE_NOT_FOUND, which is what an optional-dependency probe

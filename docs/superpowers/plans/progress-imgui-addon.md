@@ -89,6 +89,8 @@ Each test must be shown able to fail: the change made, and what it did.
 | 10 | `test/ui-imgui-demo.js` | (b) `HNUI_EVENT_MOUSE_WHEEL` not passed to `AddMouseWheelEvent` | `DEMO ok`, `DEMO vertices ok`, then `TIMEOUT DEMO wheel`, `EXITCODE 1`; restored |
 | 10 | `test/ui-imgui-demo.js` | (oracle) the clear row moved to y = 600, inside the demo window | `DEMO WRONG inside=349800 notClear=550 first 650,600` (the row crosses the window's 550 columns), test failed; restored |
 | final review | `test/ui-imgui-textures.js` | (I1, proving the defect) the `quad` scene's `hnui_target` left unsized as it was, then `memset` to 0 before `hnui_frame_target` | `Error: imgui.__test.scene('quad'): first use must be inside a frame callback`, TEXTURE run failed on `CODE`: the scene had depended on whatever its stack slot held. Fixed by zeroing it and setting `size`, as `render()` does |
+| Codex review | `test/imgui-missing.js`, `test/imgui-retry.js` | (C3) a failed embedder load cached: a scratch edit of `requireEmbedderModuleExports` in `libjs/loader.js` rethrowing the first error for the name | both failed: `UNLOADABLE MODULE_NOT_FOUND path=true` where `ERR_DLOPEN_FAILED` was expected; restored |
+| Codex review | `NamedAddonsTest.AddonPathIsBesideTheExecutable` (`unittests/UiHostTest.cpp`) | (C4) `pathBesideExecutable` answering `""` when the separator is at position 0, as the empty directory did before | the root case failed (`"" vs "/x.node"`); restored |
 
 ## Notes
 

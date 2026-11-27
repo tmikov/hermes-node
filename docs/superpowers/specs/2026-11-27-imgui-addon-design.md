@@ -347,19 +347,22 @@ repository does not have.
 prefixed `imgui:`, each saying what was done or read back: addon loaded
 and context created (version, docking), each texture created or replaced
 with its size, each texture destroyed, pipeline created with format and
-sample count,
-buffers grown, cursor set, hidden or shown, clipboard get outcomes by
-status or length (never contents), a discarded frame. A cursor or
-clipboard-write line is printed before its `hnui_*` call, so that it
-precedes the host's trace of applying the command on the platform thread;
-since a line printed before the call cannot claim the call happened, the
-write is traced as `clipboard write requested, <n> bytes`, and the host's
-own read-back line is the evidence that it took effect. A healthy program
-prints no line every frame. On failure paths two lines can repeat: a
-discarded frame, at every `newFrame()` that finds a frame open, and a
-buffer that could not grow, at every `render()` that needs it to. A failed
-texture upload is retried at every `render()` and traced once per texture,
-until it succeeds or the texture is destroyed. `addons/imgui/README.md` lists every line.
+sample count, buffers grown, cursor set, hidden or shown, clipboard get
+outcomes by status or length (never contents), a discarded frame. A
+cursor or clipboard-write line is printed before its `hnui_*` call, so
+that it precedes the host's trace of applying the command on the
+platform thread; since a line printed before the call cannot claim the
+call happened, the write is traced as `clipboard write requested, <n>
+bytes`, and the host's own read-back line is the evidence that it took
+effect. A healthy program prints no line every frame. On failure paths
+two lines can repeat: a discarded frame, at every `newFrame()` that
+finds a frame open, and a buffer that could not grow, at every
+`render()` that needs it to. A failed texture upload is retried at every
+`render()` and traced once per texture, until it succeeds or the
+renderer destroys the texture; a texture ImGui discards itself, never
+having been uploaded, stays marked as traced, which nothing can observe
+since ImGui never reuses a texture id. `addons/imgui/README.md` lists
+every line.
 
 ## Test hooks
 

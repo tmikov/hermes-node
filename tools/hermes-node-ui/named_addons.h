@@ -10,6 +10,8 @@
 
 #include <hermes/node-compat/runtime/hermes_node_runtime.h>
 
+#include <string>
+
 /// Registers one embedder module per named addon: `hermes-node:<name>`,
 /// whose init loads `<file>` from the directory of the running executable
 /// (realpath'd) through the loader `process.dlopen` uses, and returns that
@@ -24,5 +26,19 @@
 /// Returns false, having printed why, when a registration is refused (see
 /// `registerEmbedderModule()`). Call before the runtime starts.
 bool registerNamedAddons(hermes::node_compat::HermesNodeConfig &config);
+
+/// The path of \p fileName in the directory that holds \p exePath: the
+/// directory part of \p exePath, separator included, then \p fileName, so
+/// an executable directly in `/` gives `/<fileName>`. A path with no
+/// separator at all is taken to be in the current directory. Pure, so a
+/// unit test reaches it without an executable in `/`.
+inline std::string pathBesideExecutable(
+    const std::string &exePath,
+    const char *fileName) {
+  const size_t slash = exePath.find_last_of('/');
+  if (slash == std::string::npos)
+    return std::string("./") + fileName;
+  return exePath.substr(0, slash + 1) + fileName;
+}
 
 #endif // HERMES_NODE_UI_NAMED_ADDONS_H

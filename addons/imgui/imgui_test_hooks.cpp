@@ -146,12 +146,16 @@ void sceneQuad(napi_env env) {
     img.data.mip_levels[0].ptr = kPixels;
     img.data.mip_levels[0].size = sizeof(kPixels);
     img.label = "imgui-test-quad";
+    // Image first, as in imgui_renderer.cpp: a view of an invalid or
+    // failed image is a validation failure, which ends the process.
     const sg_image image = sg_make_image(&img);
-    sg_view_desc vd = {};
-    vd.texture.image = image;
-    const sg_view view = sg_make_view(&vd);
-    if (sg_query_image_state(image) != SG_RESOURCESTATE_VALID ||
-        sg_query_view_state(view) != SG_RESOURCESTATE_VALID) {
+    sg_view view = {};
+    if (sg_query_image_state(image) == SG_RESOURCESTATE_VALID) {
+      sg_view_desc vd = {};
+      vd.texture.image = image;
+      view = sg_make_view(&vd);
+    }
+    if (sg_query_view_state(view) != SG_RESOURCESTATE_VALID) {
       sg_destroy_view(view);
       sg_destroy_image(image);
       napi_throw_error(

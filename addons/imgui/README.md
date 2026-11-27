@@ -238,8 +238,11 @@ prints it on every tick), and `<vertex|index> buffer could not grow`, at
 every `render()` whose data does not fit while the larger buffer cannot be
 made. A texture that fails to upload keeps its ImGui status, so its upload
 is retried at every `render()`, but `texture <id> failed` is printed once
-per texture, until an upload of it succeeds or it is destroyed. Clipboard
-lines carry lengths, never contents.
+per texture, until an upload of it succeeds or the renderer destroys it. A
+texture ImGui discards itself, because no upload of it ever succeeded,
+never reaches the renderer and stays marked as traced; nothing can observe
+that, since ImGui never reuses a texture id. Clipboard lines carry
+lengths, never contents.
 
 | Line | When |
 |---|---|
@@ -314,15 +317,18 @@ the state it expects appears, bounded by a frame count.
 `test/imgui-*.js` need no window: `imgui-pin.js` (the README's tag against
 `IMGUI_VERSION`, and the docking branch), `imgui-load.js`,
 `imgui-missing.js` (a hard-linked copy of the binary in an empty
-directory), `imgui-symbols.js`. The window tests are `test/ui-imgui-*.js`,
-so that `utils/check-ui-stderr-rule.py` covers them, and share
-`test/fixtures/imgui/harness.js`: `ui-imgui-frame.js`, `-draw.js`,
-`-textures.js`, `-input.js`, `-clipboard.js`, `-cursor.js`, `-resize.js`
-and `-demo.js`. Pixels are compared exactly at sample points of captured
+directory, where one process meets the addon absent and then unloadable),
+`imgui-retry.js` (the same script, then the real addon put in place and
+loaded by the same process), `imgui-symbols.js`. The window tests are
+`test/ui-imgui-*.js`, so that `utils/check-ui-stderr-rule.py` covers them,
+and share `test/fixtures/imgui/harness.js`: `ui-imgui-frame.js`,
+`-draw.js`, `-textures.js`, `-input.js`, `-clipboard.js`, `-cursor.js`,
+`-resize.js` and `-demo.js`. Pixels are compared exactly at sample points of captured
 presented frames. Each test's header lists its cases and the mutations it
 was shown to fail under.
 
-`imgui-load.js`, `imgui-symbols.js` and every window test are gated on
+`imgui-load.js`, `imgui-retry.js`, `imgui-symbols.js` and every window
+test are gated on
 the lit feature `ui-imgui`, which `test/lit.cfg` sets when
 `hermes-node-ui` runs `test/fixtures/imgui/probe.js` successfully.
 `imgui-pin.js` requires only `ui-enabled`, and `imgui-missing.js` and

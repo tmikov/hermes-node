@@ -133,7 +133,10 @@ struct TextureRecord {
 /// The UniqueID of every texture whose last upload failed and was traced.
 /// A failed texture keeps its status, so ImGui asks again and the upload is
 /// retried at every render(); this keeps the failure to one trace line per
-/// texture until it succeeds or is destroyed.
+/// texture until it succeeds or is destroyed here. A texture ImGui
+/// discards itself (one never uploaded, with no BackendUserData) never
+/// reaches updateTexture() and keeps its entry, which nothing observes:
+/// ImGui does not reuse a texture id.
 std::unordered_set<int> gFailedTextures;
 
 /// Trace that \p tex failed (\p why, if not null), once per texture.
@@ -251,9 +254,13 @@ bool ensureDeviceObjects() {
   img.data.mip_levels[0].size = sizeof(kWhite);
   img.label = "imgui-white";
   gWhiteImage = sg_make_image(&img);
-  sg_view_desc view = {};
-  view.texture.image = gWhiteImage;
-  gWhiteView = sg_make_view(&view);
+  // A view only of a valid image: sg_make_view() of an invalid or failed
+  // one is a validation failure, which is a panic that ends the process.
+  if (sg_query_image_state(gWhiteImage) == SG_RESOURCESTATE_VALID) {
+    sg_view_desc view = {};
+    view.texture.image = gWhiteImage;
+    gWhiteView = sg_make_view(&view);
+  }
 
   gVertexBufferSize = kInitialVertices * sizeof(ImDrawVert);
   gVertexBuffer = makeStreamBuffer(gVertexBufferSize, false);
@@ -369,12 +376,20 @@ void updateTexture(ImTextureData *tex) {
     img.data.mip_levels[0].ptr = tex->GetPixels();
     img.data.mip_levels[0].size = static_cast<size_t>(tex->GetSizeInBytes());
     img.label = "imgui-texture";
+    // The image is checked before a view is made of it: sg_make_image()
+    // answers an invalid id when its pool is exhausted, and a failed image
+    // when the backend refuses it, and sg_make_view() of either is a
+    // validation failure, which is a panic that ends the process. On
+    // failure what was made is destroyed (a no-op for an invalid or failed
+    // id), and the previous texture and ImGui's status are left alone.
     const sg_image image = sg_make_image(&img);
-    sg_view_desc vd = {};
-    vd.texture.image = image;
-    const sg_view view = sg_make_view(&vd);
-    if (sg_query_image_state(image) != SG_RESOURCESTATE_VALID ||
-        sg_query_view_state(view) != SG_RESOURCESTATE_VALID) {
+    sg_view view = {};
+    if (sg_query_image_state(image) == SG_RESOURCESTATE_VALID) {
+      sg_view_desc vd = {};
+      vd.texture.image = image;
+      view = sg_make_view(&vd);
+    }
+    if (sg_query_view_state(view) != SG_RESOURCESTATE_VALID) {
       sg_destroy_view(view);
       sg_destroy_image(image);
       traceTextureFailed(tex, nullptr);
