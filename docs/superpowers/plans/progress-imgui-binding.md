@@ -52,6 +52,8 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 2 | `ui-imgui-bind-constants.js` | `pushStyleColor`'s `Col_COUNT` refusal removed | `NOTHROW ERR_OUT_OF_RANGE` at `pushStyleColor(imgui.Col_COUNT, 0)`; test failed |
 | 2 | `ui-imgui-bind-constants.js` | `FLT_MIN` exported as `-FLT_MIN` | `WRONG FLT_MIN=-1.1754943508222875e-38 want 1.1754943508222875e-38`; test failed |
 | 2 | `imgui-bind-surface.js` | the `Cond` entry removed from `bind-groups.js`'s `constantTypes` | `EXTRA Cond_Always Cond_Appearing Cond_FirstUseEver Cond_None Cond_Once`; test failed |
+| 2 (review) | `imgui-bind-surface.js` (no display) | the `HNIMGUI_CONST(ImGuiCond_Appearing)` line deleted, after the exact name lists were added | `MISSING Cond_Appearing`; test failed |
+| 2 (review) | `imgui-bind-surface.js`, `ui-imgui-bind-constants.js` | `HNIMGUI_CONST(ImGuiWindowFlags_NoDocking)` replaced by `HNIMGUI_CONST(ImGuiWindowFlags_ChildWindow)` (count unchanged) | surface: `EXTRA WindowFlags_ChildWindow`, `MISSING WindowFlags_NoDocking`; constants: `EXCLUDED WindowFlags_ChildWindow`, `WRONG WindowFlags_NoDocking=undefined want 524288`; both failed |
 | 3 | `ui-imgui-bind-windows.js`, `ui-imgui-bind-layout.js` | (RED) none recorded: the five sections were implemented before the two tests were first run (see the Task 3 notes) | - |
 | 3 | `ui-imgui-bind-windows.js` | `ImGui::SetNextWindowBgAlpha()` removed, `enterImGui()` kept (Windows: an ImGui call removed) | `BGALPHA WRONG 200,175=19,19,87 120,120=19,19,87 280,230=19,19,87` (the 0.25-alpha blue blended over the clear); `COVERAGE Windows ok` still printed; test failed |
 | 3 | `ui-imgui-bind-windows.js` | `enterImGui()` removed from `getScrollMaxY` (Windows: coverage) | `UNCOVERED Windows getScrollMaxY` (SCROLL still passed); test failed |
@@ -280,22 +282,25 @@ automated test would notice losing. Each task appends its own.
   has to write the accepting case), and checks the other half: a negative
   value made with `|` passes the integer reader and is refused by the mask
   (`... 0x80000000`).
-- **`bind-groups.js` carries per-type data, not 583 names**:
-  `constantTypes` (prefix -> count, kind, excluded names including the
-  obsolete ones) and `constantType(name)`, which maps a name to its type by
-  the text before the first `_` (`Mod_` counts under `Key`, the two float
-  limits under `FLT`). `constants` holds three hand-copied samples per type,
-  each with its `imgui.h` line, plus `FLT_MIN` / `FLT_MAX`. `all()` now
-  lists the groups' names only: `imgui-bind-surface.js` leaves every name
-  `constantType()` places out of its comparison (so an export of an unknown
-  prefix is still `EXTRA`) and reports an unexported sample as `MISSING`;
-  the per-type counts, excluded names and sample values moved from its
-  `CONSTANTS` line to `ui-imgui-bind-constants.js`. `ui-imgui-bind-args.js`
-  NOFRAME iterates `all()`, which is why the constants could not be in it.
-- **The `CONSTANTS` check needs a display** now, since it lives in a window
-  test (the brief's file list); `imgui-bind-surface.js` still checks,
-  without one, that every sample is exported and that nothing outside a
-  known type is.
+- **`bind-groups.js` pins every constant by name**: `constantTypes`
+  (prefix -> kind, the exact sorted `names` exported, and the excluded
+  names including the obsolete ones), generated once from the built module
+  and checked against the header parse and the table's per-type counts
+  (581 names, plus `FLT_MIN` / `FLT_MAX`); `allConstants()` lists them.
+  `constants` holds three hand-copied samples per type, each with its
+  `imgui.h` line, plus the float limits. `all()` lists the groups' names
+  only, because `ui-imgui-bind-args.js` NOFRAME iterates it.
+  `imgui-bind-surface.js` (no display) compares the module's names with
+  `all()` plus `allConstants()` exactly, so an added, removed or swapped
+  constant is `EXTRA` / `MISSING` there. `ui-imgui-bind-constants.js`
+  checks the per-type counts (from `names.length`), the excluded names and
+  the sample values. (Review fix: the first version counted constants per
+  type only, in the window test, so without a display a changed constant
+  failed nothing unless it was a sample, and a swap kept every count.)
+- **Out-of-range flags spellings**: `Call::int32` accepts only integers in
+  -2^31 .. 2^31-1, so a flags argument of 2^31 or 2^32-1 (bit 31 written
+  unsigned) is `ERR_OUT_OF_RANGE` before the mask is consulted; REJECT has
+  both cases.
 - `ImGuiMouseButton` has `kMouseButton` like every type, but a mouse-button
   argument will be read with `intIn(0, 4)` (G1); no function bound so far
   takes one.

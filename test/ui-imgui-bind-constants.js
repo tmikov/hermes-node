@@ -10,7 +10,9 @@
 // failure prints its own line and exits 1):
 //
 //  CONSTANTS for every type in bind-groups.js's constantTypes, the number
-//            of exported names of that type equals the table's count, and
+//            of exported names of that type equals the length of its
+//            `names` (the table's count; imgui-bind-surface.js compares the
+//            names themselves, without a display), and
 //            none of the table's excluded names is exported; every sample
 //            in bind-groups.js's `constants` (copied by hand from imgui.h)
 //            equals the module's value. Otherwise `COUNT <type> <got> want
@@ -27,7 +29,8 @@
 //  REJECT    refused with ERR_OUT_OF_RANGE and not called: a window flag
 //            no exported enumerator has (1 << 30), an internal one
 //            (WindowFlags_ChildWindow), a non-integer (2.5), a negative
-//            value with bit 31; beginChild's child and window flags; a
+//            value with bit 31, and 2^31 and 2^32 - 1 (a flags argument is
+//            a C int, so the unsigned spelling of bit 31 is out of range); beginChild's child and window flags; a
 //            combined ImGuiCond (3) for setNextWindowPos/Size; a slider
 //            flag in ImGuiSliderFlags_InvalidMask_ (bit 0); Col_COUNT and
 //            -1 for pushStyleColor, StyleVar_COUNT for pushStyleVar.
@@ -78,9 +81,9 @@ async function main() {
         counts[type] = (counts[type] || 0) + 1;
     }
     for (const [type, info] of Object.entries(bindGroups.constantTypes)) {
-      if ((counts[type] || 0) !== info.count)
+      if ((counts[type] || 0) !== info.names.length)
         bad.push('COUNT ' + type + ' ' + (counts[type] || 0) + ' want ' +
-                 info.count);
+                 info.names.length);
       for (const name of info.excluded) {
         if (has(name))
           bad.push('EXCLUDED ' + name);
@@ -152,6 +155,8 @@ async function main() {
       messages.push(rejects('begin', () => imgui.begin('w', null, 1 << 30)));
       rejects('begin', () => imgui.begin('w', null, 1 << 24));
       rejects('begin', () => imgui.begin('w', null, 2.5));
+      rejects('begin', () => imgui.begin('w', null, 2147483648));
+      rejects('begin', () => imgui.begin('w', null, 4294967295));
       const negative = imgui.WindowFlags_NoTitleBar | (1 << 31);
       if (!(negative < 0))
         fail('REJECT the value is not negative: ' + negative);

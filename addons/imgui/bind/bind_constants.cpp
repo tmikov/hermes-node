@@ -736,6 +736,7 @@ constexpr Constant kDrawFlagsList[] = {
     HNIMGUI_CONST(ImDrawFlags_UseTexForRoundCorners),
     HNIMGUI_CONST(ImDrawFlags_UseVtxOffset),
 };
+
 /// A flags type's valid mask: every bit some exported enumerator sets.
 template <size_t N>
 constexpr int maskOf(const Constant (&list)[N]) {

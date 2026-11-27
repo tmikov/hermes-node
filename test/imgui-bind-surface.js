@@ -7,12 +7,12 @@
 // surface (test/fixtures/imgui/bind-groups.js).
 //
 // - `EXPORTS ok`: the module's own property names, minus `__test`, with
-//   `drawList` replaced by `drawList.<name>` for each of its own, and
-//   minus the constants (the names bind-groups.js's constantType() places
-//   in a type), sorted, equal bind-groups.js's all(); and every sample in
-//   its `constants` is exported. Otherwise `EXTRA <names>` (exported, not
-//   listed) and/or `MISSING <names>` (listed, not exported). The constants
-//   themselves, per type, are test/ui-imgui-bind-constants.js's.
+//   `drawList` replaced by `drawList.<name>` for each of its own, sorted,
+//   equal bind-groups.js's all() and allConstants() together (the
+//   functions, and every exported constant by name). Otherwise
+//   `EXTRA <names>` (exported, not listed) and/or `MISSING <names>`
+//   (listed, not exported). Constant values are
+//   test/ui-imgui-bind-constants.js's.
 //
 // No window: it only loads the module and compares, so %timeout rather
 // than %with-display. The test hooks are on so that `__test` is present
@@ -21,8 +21,9 @@
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
 //  one name removed from bind-groups.js: `EXTRA <name>`;
 //  one name added to bind-groups.js that is not exported: `MISSING <name>`;
-//  one constant type (`Cond`) removed from bind-groups.js's constantTypes:
-//  `EXTRA Cond_Always ...`.
+//  one HNIMGUI_CONST line removed: `MISSING <name>`;
+//  one public enumerator swapped for an excluded one in a list:
+//  `EXTRA <excluded>` and `MISSING <public>`.
 //
 // REQUIRES: ui, ui-imgui
 // RUN: env HERMES_NODE_UI_TEST_HOOKS=1 %timeout 60 %hermes-node-ui %s | %FileCheck %s
@@ -42,18 +43,15 @@ function exportedNames() {
         names.push('drawList.' + sub);
       continue;
     }
-    if (bindGroups.constantType(name) === undefined)
-      names.push(name);
+    names.push(name);
   }
   return names.sort();
 }
 
 const exported = exportedNames();
-const listed = bindGroups.all();
+const listed = bindGroups.all().concat(bindGroups.allConstants()).sort();
 const extra = exported.filter((n) => !listed.includes(n));
-const missing = listed.filter((n) => !exported.includes(n))
-    .concat(Object.keys(bindGroups.constants)
-    .filter((n) => !Object.prototype.hasOwnProperty.call(imgui, n)));
+const missing = listed.filter((n) => !exported.includes(n));
 if (extra.length === 0 && missing.length === 0) {
   console.log('EXPORTS ok');
 } else {
