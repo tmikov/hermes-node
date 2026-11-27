@@ -1,0 +1,57 @@
+/*
+ * Copyright (c) Tzvetan Mikov.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+// Everything the binding needs from ImGui's internal state, behind
+// functions, so that bind_guards.cpp is the one unit including
+// imgui_internal.h. A bump of ImGui re-audits that file against ImGui's
+// source (the surface table's "Internal state read by bind_guards.cpp").
+
+#ifndef HERMES_NODE_IMGUI_BIND_GUARDS_H
+#define HERMES_NODE_IMGUI_BIND_GUARDS_H
+
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace hnimgui {
+namespace guard {
+
+/// Error recovery without asserts or the error tooltip, and the error
+/// callback; called from context creation, before any binding call can
+/// meet the context.
+void configureContext();
+/// Re-asserts the recovery flags; called by newFrame() before
+/// ImGui::NewFrame().
+void beginFrame();
+/// The first message ImGui reported since the last take, or nullptr;
+/// clears it. The pointer is valid until the next take.
+const char *takeUsageError();
+
+// One per precondition of kind (b) in the surface table, named
+// can<Function>: returns nullptr when the call is safe, else the message
+// to throw. A refusal is counted under its condition's name and traced as
+// a usage error. Later tasks add theirs.
+const char *canEndGroup();
+const char *canEndChild();
+
+/// Every registered guard condition, `can<Function>:<condition>`, with how
+/// many times it has refused.
+std::vector<std::pair<std::string, int>> guardRefusals();
+
+/// One ImGui window, for __test.state().windows.
+struct WindowInfo {
+  std::string name;
+  bool active;
+  bool docked;
+};
+/// Every window ImGui knows, as of the last ended frame.
+std::vector<WindowInfo> windowsOfLastFrame();
+
+} // namespace guard
+} // namespace hnimgui
+
+#endif // HERMES_NODE_IMGUI_BIND_GUARDS_H

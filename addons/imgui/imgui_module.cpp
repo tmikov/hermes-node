@@ -14,6 +14,9 @@
 
 #include "imgui_addon.h"
 
+#include "bind/bind_guards.h"
+#include "bind/bind_util.h"
+
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -98,12 +101,6 @@ bool gFrameOpen = false;
 /// The target of the last render() that drew; all zero before any.
 hnui_target gLastTarget = {};
 
-napi_value boolean(napi_env env, bool value) {
-  napi_value result = nullptr;
-  napi_get_boolean(env, value, &result);
-  return result;
-}
-
 void createContext(hnui_window *w) {
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
@@ -125,60 +122,60 @@ void createContext(hnui_window *w) {
 /// `newFrame()`: start an ImGui frame. Takes no target -- render() does,
 /// because taking one is what tells the host the tick drew. Returns false,
 /// having done nothing, only when this runtime has no window.
-napi_value newFrame(napi_env env, napi_callback_info) {
-  hnui_window *w = hnui_get_window(env);
-  if (w == nullptr)
-    return boolean(env, false);
-  if (gWindow == nullptr)
-    createContext(w);
+napi_value newFrame(napi_env env, napi_callback_info info) {
+  bind::Call c(env, info, "newFrame");
+  if (!c.ok())
+    return nullptr;
+  if (bind::insideCallback())
+    return c.throwUsage("not allowed inside a list clipper's callback");
+  if (!ensureContext(env))
+    return c.result(false);
   if (gFrameOpen) {
     // A second newFrame() in one callback, or the first one after a throw
     // left a frame open: the two cannot be told apart, so neither throws.
+    // What the discarded frame left open is reported (and traced) by
+    // EndFrame()'s recovery; it belongs to no call, so it is dropped.
     ImGui::EndFrame();
+    guard::takeUsageError();
     gFrameOpen = false;
     trace("frame discarded");
   }
+  guard::beginFrame();
   platformNewFrame(gWindow);
+  c.enterImGui();
   ImGui::NewFrame();
   gFrameOpen = true;
-  return boolean(env, true);
+  return c.result(true);
 }
 
 /// `render()`: end the frame, then draw it into this tick's target if
 /// there is one. Returns whether it drew: false outside a frame callback
-/// and in CLOSING, where hnui_frame_target has no target to give.
-napi_value render(napi_env env, napi_callback_info) {
-  if (!gFrameOpen)
-    return throwNoFrame(env, "render");
+/// and in CLOSING, where hnui_frame_target has no target to give. A usage
+/// error ImGui reports while ending the frame takes precedence: the frame
+/// is closed, no target is taken, nothing is drawn, and it throws.
+napi_value render(napi_env env, napi_callback_info info) {
+  bind::Call c(env, info, "render");
+  if (!c.ok())
+    return nullptr;
+  if (bind::insideCallback())
+    return c.throwUsage("not allowed inside a list clipper's callback");
+  if (!c.needFrame())
+    return nullptr;
+  c.enterImGui();
   ImGui::Render();
   gFrameOpen = false;
+  // Before hnui_frame_target: taking the target is what tells the host the
+  // tick drew.
+  if (!c.leaveImGui())
+    return nullptr;
   hnui_target target = {};
   target.size = static_cast<uint32_t>(sizeof(target));
   if (!hnui_frame_target(gWindow, &target))
-    return boolean(env, false);
+    return c.result(false);
   gLastTarget = target;
   rendererDraw(ImGui::GetDrawData(), target);
   platformAfterRender(gWindow);
-  return boolean(env, true);
-}
-
-/// `showDemoWindow()`: ImGui's own demo window, in the open frame.
-napi_value showDemoWindow(napi_env env, napi_callback_info) {
-  if (!gFrameOpen)
-    return throwNoFrame(env, "showDemoWindow");
-  ImGui::ShowDemoWindow();
-  return nullptr;
-}
-
-bool exportFunction(
-    napi_env env,
-    napi_value exports,
-    const char *name,
-    napi_callback cb) {
-  napi_value fn = nullptr;
-  return napi_create_function(env, name, NAPI_AUTO_LENGTH, cb, nullptr, &fn) ==
-      napi_ok &&
-      napi_set_named_property(env, exports, name, fn) == napi_ok;
+  return c.result(true);
 }
 
 } // namespace
@@ -189,6 +186,19 @@ bool frameOpen() {
 
 const hnui_target &lastTarget() {
   return gLastTarget;
+}
+
+bool ensureContext(napi_env env) {
+  // Asked every time, as part A's newFrame() did, so that a runtime with
+  // no window gets false whether or not the context exists.
+  hnui_window *w = hnui_get_window(env);
+  if (w == nullptr)
+    return false;
+  if (gWindow != nullptr)
+    return true;
+  createContext(w);
+  guard::configureContext();
+  return true;
 }
 
 napi_value throwNoFrame(napi_env env, const char *name) {
@@ -214,10 +224,16 @@ NAPI_MODULE_INIT() {
           napi_ok ||
       napi_set_named_property(env, exports, "version", version) != napi_ok)
     return nullptr;
-  if (!hnimgui::exportFunction(env, exports, "newFrame", hnimgui::newFrame) ||
-      !hnimgui::exportFunction(env, exports, "render", hnimgui::render) ||
-      !hnimgui::exportFunction(
-          env, exports, "showDemoWindow", hnimgui::showDemoWindow))
+  namespace bind = hnimgui::bind;
+  if (!bind::registerFunction(env, exports, "newFrame", hnimgui::newFrame) ||
+      !bind::registerFunction(env, exports, "render", hnimgui::render) ||
+      !bind::registerFrame(env, exports) ||
+      !bind::registerWindows(env, exports) ||
+      !bind::registerLayout(env, exports) ||
+      !bind::registerText(env, exports) ||
+      !bind::registerWidgets(env, exports) ||
+      !bind::registerQueries(env, exports) ||
+      !bind::registerStyle(env, exports))
     return nullptr;
   if (hnimgui::testHooksEnabled()) {
     napi_value hooks = hnimgui::createTestHooks(env);

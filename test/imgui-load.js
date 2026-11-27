@@ -12,9 +12,10 @@
 //   addon's init trace appears exactly once on stderr, so neither call
 //   loaded it a second time.
 // - `version` is ImGui's own `IMGUI_VERSION`.
-// - `KEYS` is every export, sorted. It is the guard that the test hooks
-//   are absent when HERMES_NODE_UI_TEST_HOOKS is not set, and the HOOKS
-//   run that `__test` is present when it is.
+// - `TEST` says whether `__test` is exported. It is the guard that the
+//   test hooks are absent when HERMES_NODE_UI_TEST_HOOKS is not set, and
+//   the HOOKS run that `__test` is present when it is. The exact export
+//   list is test/imgui-bind-surface.js's.
 // - Plain hermes-node does not register the name.
 //
 // No window, so %timeout rather than %with-display.
@@ -44,13 +45,13 @@ if (process.argv[2] === 'plain') {
   const b = require('hermes-node:imgui');
   console.log('SAME ' + (a === b));
   console.log('VERSION ' + a.version);
-  console.log('KEYS ' + Object.keys(a).sort().join(','));
+  console.log('TEST ' + Object.keys(a).includes('__test'));
 }
 
 // OUT: {{^}}RESOLVE hermes-node:imgui{{$}}
 // OUT-NEXT: {{^}}SAME true{{$}}
 // OUT-NEXT: {{^}}VERSION 1.93.0{{$}}
-// OUT-NEXT: {{^}}KEYS newFrame,render,showDemoWindow,version{{$}}
+// OUT-NEXT: {{^}}TEST false{{$}}
 
 // ERR: {{^}}[ui] imgui: addon loaded (imgui 1.93.0){{$}}
 // ERR-NOT: imgui: addon loaded
@@ -58,4 +59,4 @@ if (process.argv[2] === 'plain') {
 // PLAIN: {{^}}PLAIN MODULE_NOT_FOUND{{$}}
 
 // With the test hooks on, and only then, `__test` is exported as well.
-// HOOKS: {{^}}KEYS __test,newFrame,render,showDemoWindow,version{{$}}
+// HOOKS: {{^}}TEST true{{$}}

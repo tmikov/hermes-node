@@ -6,10 +6,15 @@
  */
 
 // The `__test` object, exported only under HERMES_NODE_UI_TEST_HOOKS:
-// `scene(name[, arg])` draws a fixed native scene into the open frame, and
-// `state()` reads back what ImGui and the renderer hold.
+// `scene(name[, arg])` draws a fixed native scene into the open frame,
+// `state()` reads back what ImGui and the renderer hold, `bindCalls()` how
+// many times each binding function has called ImGui, and `guards()` how
+// many times each guard condition has refused.
 
 #include "imgui_addon.h"
+
+#include "bind/bind_guards.h"
+#include "bind/bind_util.h"
 
 #include <sokol_gfx.h>
 
@@ -405,9 +410,26 @@ bool setBool(napi_env env, napi_value object, const char *name, bool v) {
       napi_set_named_property(env, object, name, value) == napi_ok;
 }
 
+/// `windows`: `[{name, active, docked}]`, every window ImGui knows, as of
+/// the last ended frame.
+bool setWindows(napi_env env, napi_value object) {
+  const std::vector<guard::WindowInfo> windows = guard::windowsOfLastFrame();
+  return setArray(
+      env,
+      object,
+      "windows",
+      static_cast<uint32_t>(windows.size()),
+      [&](uint32_t i, napi_value *out) {
+        return napi_create_object(env, out) == napi_ok &&
+            setString(env, *out, "name", windows[i].name.c_str()) &&
+            setBool(env, *out, "active", windows[i].active) &&
+            setBool(env, *out, "docked", windows[i].docked);
+      });
+}
+
 /// `state()`: as of the last completed newFrame()/render() pair, except
 /// `frameOpen`, which is now. Before the context exists the ImGui fields
-/// read as zero.
+/// read as zero and `windows` is empty.
 napi_value state(napi_env env, napi_callback_info) {
   napi_value result = nullptr;
   if (napi_create_object(env, &result) != napi_ok)
@@ -473,8 +495,35 @@ napi_value state(napi_env env, napi_callback_info) {
       setNumber(env, result, "lastWheel", gLastWheel) &&
       setRect(env, result, "buttonRect", gWidgets.buttonRect) &&
       setRect(env, result, "fieldRect", gWidgets.fieldRect) &&
-      setNumber(env, result, "cursor", lastCursorRequested());
+      setNumber(env, result, "cursor", lastCursorRequested()) &&
+      setWindows(env, result);
   return ok ? result : nullptr;
+}
+
+/// An object of name -> count.
+napi_value countsObject(
+    napi_env env,
+    const std::vector<std::pair<std::string, int>> &counts) {
+  napi_value result = nullptr;
+  if (napi_create_object(env, &result) != napi_ok)
+    return nullptr;
+  for (const auto &entry : counts) {
+    if (!setNumber(env, result, entry.first.c_str(), entry.second))
+      return nullptr;
+  }
+  return result;
+}
+
+/// `bindCalls()`: binding function name -> how many times it has called
+/// ImGui. A function never called is absent.
+napi_value bindCalls(napi_env env, napi_callback_info) {
+  return countsObject(env, bind::bindCalls());
+}
+
+/// `guards()`: guard condition name -> how many times it has refused.
+/// Every registered condition is present, refused or not.
+napi_value guards(napi_env env, napi_callback_info) {
+  return countsObject(env, guard::guardRefusals());
 }
 
 } // namespace
@@ -486,7 +535,11 @@ napi_value createTestHooks(napi_env env) {
   const struct {
     const char *name;
     napi_callback cb;
-  } functions[] = {{"scene", scene}, {"state", state}};
+  } functions[] = {
+      {"scene", scene},
+      {"state", state},
+      {"bindCalls", bindCalls},
+      {"guards", guards}};
   for (const auto &f : functions) {
     napi_value fn = nullptr;
     if (napi_create_function(

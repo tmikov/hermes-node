@@ -14,6 +14,15 @@ add_library(hermes_node_imgui SHARED
   imgui_platform.cpp
   imgui_renderer.cpp
   imgui_test_hooks.cpp
+  bind/bind_util.cpp
+  bind/bind_guards.cpp
+  bind/bind_frame.cpp
+  bind/bind_windows.cpp
+  bind/bind_layout.cpp
+  bind/bind_text.cpp
+  bind/bind_widgets.cpp
+  bind/bind_queries.cpp
+  bind/bind_style.cpp
   ${IMGUI_SOURCES}
 )
 

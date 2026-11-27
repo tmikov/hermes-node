@@ -46,7 +46,29 @@ async function open(options) {
   const win = await ui.createWindow(Object.assign(
       {title: 'hermes-node imgui test', width: 640, height: 480}, options));
   const imgui = require('hermes-node:imgui');
-  return {ui, win, imgui, published: 0, generation: 1};
+  const h = {ui, win, imgui, published: 0, generation: 1};
+  h.run = (drawFn) => frame(h, drawFn);
+  return h;
+}
+
+/**
+ * A handle for an application's own window, `{ui, win, imgui, frame}`
+ * from `app`, where `app.frame` is already a whole frame (its own
+ * newFrame() and render()) returning what render() returned. Every helper
+ * then runs `app.frame` as its frame and ignores its `drawFn` argument
+ * (pass `null`). Resolves once `h.published` has been read from the host.
+ */
+async function adopt(app) {
+  const h = {
+    ui: app.ui,
+    win: app.win,
+    imgui: app.imgui,
+    published: 0,
+    generation: 1,
+  };
+  h.run = () => tick(h, [app.frame]).then((r) => r[0]);
+  await resync(h);
+  return h;
 }
 
 /**
@@ -119,7 +141,7 @@ async function resync(h) {
  */
 async function until(h, drawFn, predicate, label) {
   for (let i = 0; i < UNTIL_FRAME_BOUND; ++i) {
-    await frame(h, drawFn);
+    await h.run(drawFn);
     if (predicate(h.imgui.__test.state()))
       return;
   }
@@ -172,9 +194,9 @@ async function captureWith(h, outPath, run) {
   return readPpm(outPath);
 }
 
-/** Capture one `frame(h, drawFn)`; returns the parsed image. */
+/** Capture one `h.run(drawFn)`; returns the parsed image. */
 function capture(h, drawFn, outPath) {
-  return captureWith(h, outPath, () => frame(h, drawFn));
+  return captureWith(h, outPath, () => h.run(drawFn));
 }
 
 /** Capture one `tick(h, fns)`; returns the parsed image. */
@@ -215,11 +237,226 @@ function pixelAt(image, x, y) {
   return [image.data[i], image.data[i + 1], image.data[i + 2]];
 }
 
+/**
+ * One frame callback running `fn` in its own tick, without the
+ * bookkeeping `tick()` does for `h.published`: for a frame whose render()
+ * throws. Resolves with what `fn` returned, or rejects with what it threw,
+ * from a setImmediate after the tick, as `tick()` does. Follow it with
+ * `resync(h)` before the next ordinary frame.
+ */
+function rawTick(h, fn) {
+  return new Promise((resolve, reject) => {
+    h.ui.requestAnimationFrame(() => {
+      let result;
+      try {
+        result = fn();
+      } catch (e) {
+        setImmediate(() => reject(e));
+        return;
+      }
+      setImmediate(() => resolve(result));
+    });
+  });
+}
+
+// --- Helpers of the binding's tests (part B) ------------------------------
+
+/**
+ * `{min, max}` of the last item, read with getItemRectMin/Max; for use
+ * inside a draw function, after the item.
+ */
+function rect(imgui) {
+  return {min: imgui.getItemRectMin(), max: imgui.getItemRectMax()};
+}
+
+/** The centre of a `rect()`, in whole units (ImGui floors the mouse). */
+function center(r) {
+  return [
+    Math.floor((r.min[0] + r.max[0]) / 2),
+    Math.floor((r.min[1] + r.max[1]) / 2),
+  ];
+}
+
+/**
+ * Whether ImGui's mouse position is `[x, y]`. It goes through float and a
+ * dpiScale division, so it is compared to within 0.01.
+ */
+function mouseAt(s, x, y) {
+  return Math.abs(s.mouseX - x) < 0.01 && Math.abs(s.mouseY - y) < 0.01;
+}
+
+/**
+ * Inject a mouse move to `[x, y]` and run frames of `drawFn` until ImGui
+ * has that position. An injected event arrives frames later (see
+ * `inject`), so this waits on the read-back, never on a frame count.
+ */
+async function moveTo(h, drawFn, [x, y]) {
+  inject(h, {type: 'MOUSE_MOVE', mouseX: x, mouseY: y});
+  await until(h, drawFn, (s) => mouseAt(s, x, y), 'moveTo ' + x + ',' + y);
+}
+
+/**
+ * Inject a press of `button` (ImGui's numbering, 0..2, which is also
+ * Sokol's) at `[x, y]` and wait until ImGui has it down.
+ */
+async function buttonDown(h, drawFn, [x, y], button) {
+  inject(h, {type: 'MOUSE_DOWN', button, mouseX: x, mouseY: y});
+  await until(h, drawFn, (s) => s.mouseDown[button], 'down ' + button);
+}
+
+/** The release matching `buttonDown`. */
+async function buttonUp(h, drawFn, [x, y], button) {
+  inject(h, {type: 'MOUSE_UP', button, mouseX: x, mouseY: y});
+  await until(h, drawFn, (s) => !s.mouseDown[button], 'up ' + button);
+}
+
+/**
+ * A click at `[x, y]`: move there, press, release, each read back before
+ * the next is sent, then one more frame. A widget's return value is true
+ * for one frame somewhere inside these waits, so `drawFn` should
+ * accumulate it (`clicked = imgui.button('b') || clicked`).
+ */
+async function clickAt(h, drawFn, at, button = 0) {
+  await moveTo(h, drawFn, at);
+  await buttonDown(h, drawFn, at, button);
+  await buttonUp(h, drawFn, at, button);
+  await h.run(drawFn);
+}
+
+/**
+ * A left-button drag from `from` to `to`, through their midpoint, each
+ * step read back; then one more frame.
+ */
+async function dragFromTo(h, drawFn, from, to) {
+  const mid = [
+    Math.floor((from[0] + to[0]) / 2),
+    Math.floor((from[1] + to[1]) / 2),
+  ];
+  await moveTo(h, drawFn, from);
+  await buttonDown(h, drawFn, from, 0);
+  await moveTo(h, drawFn, mid);
+  await moveTo(h, drawFn, to);
+  await buttonUp(h, drawFn, to, 0);
+  await h.run(drawFn);
+}
+
+/**
+ * Inject `text` as CHAR events, one per code point, then run frames until
+ * `done(state)`, the test's own predicate on what typing must have
+ * changed.
+ */
+async function typeText(h, drawFn, text, done) {
+  for (const ch of text)
+    inject(h, {type: 'CHAR', charCode: ch.codePointAt(0)});
+  await until(h, drawFn, done, 'typeText ' + JSON.stringify(text));
+}
+
+/**
+ * Inject a key down and up (Sokol's key code and modifier bits), then run
+ * frames until `done(state)`.
+ */
+async function pressKey(h, drawFn, sappKeyCode, modifiers, done) {
+  inject(h, {type: 'KEY_DOWN', keyCode: sappKeyCode, modifiers});
+  inject(h, {type: 'KEY_UP', keyCode: sappKeyCode, modifiers});
+  await until(h, drawFn, done, 'pressKey ' + sappKeyCode);
+}
+
+/** The class an error code belongs to (Node's split, and the design's). */
+function errorClassOf(code) {
+  if (code === 'ERR_INVALID_ARG_TYPE' || code === 'ERR_INVALID_ARG_VALUE')
+    return TypeError;
+  if (code === 'ERR_OUT_OF_RANGE')
+    return RangeError;
+  return Error;
+}
+
+/**
+ * Call `fn`, which must throw an error with `code` whose class is the one
+ * that code belongs to (exactly: a TypeError does not pass for Error).
+ * Returns the error. Otherwise prints `NOTHROW <code>`, `WRONGCODE <got>`
+ * or `WRONGCLASS <got>` and exits 1.
+ */
+function expectThrow(fn, code) {
+  let error;
+  try {
+    fn();
+  } catch (e) {
+    error = e;
+  }
+  if (error === undefined) {
+    console.log('NOTHROW ' + code);
+    process.exit(1);
+  }
+  if (error === null || typeof error !== 'object' || error.code !== code) {
+    console.log(
+        'WRONGCODE ' + (error && error.code) + ' (want ' + code + '): ' +
+        (error && error.message));
+    process.exit(1);
+  }
+  const cls = errorClassOf(code);
+  if (Object.getPrototypeOf(error) !== cls.prototype) {
+    console.log(
+        'WRONGCLASS ' + (error.constructor && error.constructor.name) +
+        ' (want ' + cls.name + ' for ' + code + ')');
+    process.exit(1);
+  }
+  return error;
+}
+
+/** How many times binding function `name` has called ImGui. */
+function calls(h, name) {
+  return h.imgui.__test.bindCalls()[name] || 0;
+}
+
+/**
+ * Prints `COVERAGE <group> ok` when every function of `group` in
+ * bind-groups.js has reached ImGui at least once; otherwise
+ * `UNCOVERED <group> <names...>` and exits 1. A name that is not a
+ * function on the module (`version`) has no call to count and is skipped.
+ */
+function checkGroupCoverage(h, group) {
+  const bindGroups = require('./bind-groups.js');
+  const names = bindGroups.groups[group];
+  if (names === undefined) {
+    console.log('UNCOVERED ' + group + ' (no such group)');
+    process.exit(1);
+  }
+  const counts = h.imgui.__test.bindCalls();
+  const uncovered = names.filter((name) => {
+    const target = name.startsWith('drawList.') ?
+        h.imgui.drawList[name.slice('drawList.'.length)] :
+        h.imgui[name];
+    return typeof target === 'function' && !(counts[name] > 0);
+  });
+  if (uncovered.length !== 0) {
+    console.log('UNCOVERED ' + group + ' ' + uncovered.join(' '));
+    process.exit(1);
+  }
+  console.log('COVERAGE ' + group + ' ok');
+}
+
+/**
+ * Prints `GUARDS ok` when every registered guard condition has refused at
+ * least once; otherwise `UNREFUSED <names...>` and exits 1.
+ */
+function checkGuardCoverage(h) {
+  const guards = h.imgui.__test.guards();
+  const unrefused =
+      Object.keys(guards).filter((name) => !(guards[name] > 0)).sort();
+  if (unrefused.length !== 0) {
+    console.log('UNREFUSED ' + unrefused.join(' '));
+    process.exit(1);
+  }
+  console.log('GUARDS ok');
+}
+
 module.exports = {
   CLEAR,
   open,
+  adopt,
   tick,
   frame,
+  rawTick,
   resync,
   until,
   inject,
@@ -227,4 +464,15 @@ module.exports = {
   captureTick,
   readPpm,
   pixelAt,
+  rect,
+  center,
+  moveTo,
+  clickAt,
+  dragFromTo,
+  typeText,
+  pressKey,
+  expectThrow,
+  calls,
+  checkGroupCoverage,
+  checkGuardCoverage,
 };

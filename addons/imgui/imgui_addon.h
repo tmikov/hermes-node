@@ -25,6 +25,10 @@ bool frameOpen(); // between a newFrame() and its render()
 const hnui_target &lastTarget(); // of the last drawing render(); zero before
 // throws ERR_IMGUI_NO_FRAME naming `imgui.<name>()`; returns nullptr
 napi_value throwNoFrame(napi_env env, const char *name);
+// The one context, created for this runtime's window if it does not exist
+// yet, with error recovery configured (guard::configureContext()) before it
+// returns. False, having done nothing, when there is no window.
+bool ensureContext(napi_env env);
 // platform
 void platformInit(hnui_window *w); // listener, clipboard hooks, backend flags
 void platformNewFrame(
