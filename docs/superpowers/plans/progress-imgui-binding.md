@@ -223,6 +223,10 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 7 | `ui-imgui-bind-clipper.js` | `itemHeight`'s check removed | `WRONGCODE ERR_IMGUI_USAGE (want ERR_OUT_OF_RANGE): ... ImGuiListClipper: Failed to calculate item height! ...` (0 reaches ImGui's measuring mode); test failed |
 | 7 | `ui-imgui-bind-clipper.js` | the pending-exception check removed (Step() called again after a throw) | PASS: not detected (see "Behaviours no test detects") |
 | 7 | `ui-imgui-bind-errors.js` | `canListClipper()` never refusing | aborted in CLIPPER_WRONG_WINDOW: `imgui_tables.cpp:2126: ... TableEndRow ... Assertion window == table->InnerWindow failed`; test failed |
+| 6 (review) | `ui-imgui-bind-errors.js` | (before the fix) `beginTable('s', 1, ScrollY, [0, 100]); tableNextRow(); tableNextColumn(); beginTable('n', 1);` then `endChild()`, `end()` or `endListBox()` (the last with a group open outside), run by hand | each aborted: `imgui.h:2377 ... ImVector<ImVec4>::back() ... Assertion Size > 0 failed` |
+| 6 (review) | `ui-imgui-bind-errors.js` | `inTableRegion()` reverted to the top table only (the walk stops after the first plain table) | aborted in TABLE_REGION's nested case: `imgui.h:2377 ... Size > 0 failed`; test failed |
+| 6 (review) | `ui-imgui-bind-errors.js` | `canTableSetupColumn`'s all-disabled refusal removed | `NOTHROW ERR_IMGUI_USAGE` in TABLE_DISABLED; test failed. The abort it prevents was measured by hand in Task 6: `imgui_tables.cpp:1005 ... Assertion table->LeftMostEnabledColumn >= 0 && ... failed` |
+| 6 (review) | `ui-imgui-bind-errors.js` | the all-disabled check reading only `Columns[i].Flags` (the queued reconcile requests ignored) | `NOTHROW ERR_IMGUI_USAGE` at TABLE_DISABLED's second frame, whose first column is queued for reconciliation; test failed |
 
 ## Behaviours no test detects
 
@@ -924,7 +928,7 @@ automated test would notice losing. Each task appends its own.
   window (an ended scrolling table's region through `beginChild()` with
   its `strId`; a window holding an open table re-entered while a later
   table is open), whose every exit aborts or hangs so that a guard on the
-  table calls could not help; every column disabled (tables:1005); a
+  table calls could not help; every column disabled through visibility (tables:1005; the `TableColumnFlags_Disabled` variant is guarded since the review, below); a
   sortable table with 64 or more sorted columns (tables:3154); a tree node
   keeping stack data left open in a scrolling table's cell (widgets:7410,
   from inside `endTable()`). Note 4 there gains the `treePop()` that
@@ -1015,3 +1019,36 @@ automated test would notice losing. Each task appends its own.
 - Task 1's list of checks still needing test cases had no Style entry
   left (`Col_COUNT` / `StyleVar_COUNT` were Task 2's); `getColorU32`'s own
   `Col_COUNT` refusal is GETCOLOR's.
+
+### Task 6 (review)
+
+- **The table-region guard walks the recovery's table chain.** With a
+  plain table nested in a scrolling table's cell, `g.CurrentTable` is the
+  plain one, whose inner and outer window are both the region, so the
+  first version (top table only) passed; `End()`'s recovery then ends the
+  plain table, `EndTable()` makes current the table of the slot below
+  because that slot was begun in the same window (tables:470, 1670-1671),
+  and the loop (imgui.cpp:12019-12023) ends the scrolling table from
+  inside `End()`. Reproduced first, as the review asked: all three closers
+  aborted (Mutations). `inTableRegion()` now walks `g.TablesTempData`
+  from `g.TablesTempDataStacked - 1` exactly as that loop would, and
+  refuses at the first table in the run with a region of its own. The
+  O(1) alternative (the parent window's table index) was not used: it
+  answers for one specific shape, while the walk is the recovery's own
+  sequence of reads and so holds at any depth and stops where the
+  recovery stops. TABLE_REGION now covers one nested plain table under
+  each closer, two under `endChild()`, and four accepted counterparts.
+- **The wrong-window state with no row open is tested** (TABLE_WRONG_NOROW):
+  each of `tableNextRow()`, `tableNextColumn()` (returning true) and
+  `tableHeadersRow()` is accepted, and `tableSetColumnIndex(1)` is then
+  accepted, which reads back that the call opened a row. No usage error
+  is traced. It replaces the "measured by hand" statement.
+- **`canTableSetupColumn:all-disabled`.** The review was right that the
+  `TableColumnFlags_Disabled` variant of "every column disabled" can be
+  read before the layout. It is guarded where it becomes inevitable, at
+  the `tableSetupColumn` that would declare the last column with every
+  column disabled: refusing a row function instead would not help, since
+  `EndTable()` and the frame-end recovery run the same layout. A declared
+  column's flags are read from the queued reconcile request when there is
+  one (TABLE_DISABLED's second frame, and its mutation). Visibility from
+  `DefaultHide` or settings stays in "Not covered" 3d, reworded.

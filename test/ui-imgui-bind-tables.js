@@ -13,12 +13,12 @@
 //
 //  COLUMNS     a 3-column table with TableFlags_Borders and fixed widths
 //              100, 150 and 200 (tableSetupColumn, ColumnFlags_WidthFixed):
-//              the x of the first item in each cell steps by exactly the
-//              column's width plus one and the same padding, read from the
-//              two pairs of adjacent cells (ImGui's layout puts each cell
+//              from each cell's first item to the next one's, x grows by
+//              exactly the column's width plus a residual that is the same
+//              for both pairs of adjacent cells (ImGui's layout puts each cell
 //              at the previous one's start plus its WidthGiven, which is
 //              the width asked for here, plus CellSpacingX1 +
-//              CellSpacingX2 + 2 * CellPaddingX, imgui_tables.cpp:1232-1250);
+//              CellSpacingX2 + 2 * CellPaddingX, imgui_tables.cpp:1190-1198, 1282);
 //              the same on the next frame.
 //  HEADERS     the same table with tableHeadersRow() first, TableHeaderBg
 //              (and the Header colours a hover would use) pushed to an

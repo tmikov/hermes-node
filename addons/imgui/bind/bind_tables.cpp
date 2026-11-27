@@ -99,7 +99,8 @@ napi_value tableSetupColumn(napi_env env, napi_callback_info info) {
         "TableColumnFlags_WidthFixed");
   if (!c.needFrame())
     return nullptr;
-  if (const char *msg = guard::canTableSetupColumn(!noLabel && !label.empty()))
+  if (const char *msg =
+          guard::canTableSetupColumn(!noLabel && !label.empty(), flags))
     return c.throwUsage("%s", msg);
   c.enterImGui();
   ImGui::TableSetupColumn(

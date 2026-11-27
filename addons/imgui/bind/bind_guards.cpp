@@ -99,6 +99,7 @@ enum GuardId {
   kTableSetupScrollFreezeLayoutLocked,
   kEndTableCursorMoved,
   kTableSetupColumnNameOffset,
+  kTableSetupColumnAllDisabled,
   kEndTableRegion,
   kEndChildTableRegion,
   kEndListBoxTableRegion,
@@ -135,6 +136,7 @@ GuardCondition gGuards[kGuardCount] = {
     {"canTableSetupScrollFreeze:layout-locked", 0},
     {"canEndTable:cursor-moved", 0},
     {"canTableSetupColumn:name-offset", 0},
+    {"canTableSetupColumn:all-disabled", 0},
     {"canEnd:table-region", 0},
     {"canEndChild:table-region", 0},
     {"canEndListBox:table-region", 0},
@@ -175,22 +177,38 @@ const char *groupOpenIn(
   return nullptr;
 }
 
-/// Whether the current window is the region of the current table, a table
-/// with ScrollX or ScrollY, whose inner window is a child of its own
-/// (tables:340, 432-433). End() of that window runs the window recovery
-/// before popping it (imgui.cpp:9038-9039), which finds the table open in
-/// the window and calls EndTable() (imgui.cpp:12019-12023); EndTable()
-/// ends the child itself (tables:1612-1616), so the window is ended twice:
-/// the clip rectangle stack is popped past empty (imgui.cpp:6296-6297,
-/// imgui.h:2377). ErrorRecoveryTryToRecoverState(), at the end of the
-/// frame, calls EndTable() instead of End() for that window
-/// (imgui.cpp:11990-11994), so only a closer called inside the region meets
-/// it.
+/// Whether End() of the current window would end a scrolling table's
+/// region from inside itself. End() runs the window recovery before popping
+/// the window (imgui.cpp:9038-9039), which calls EndTable() for as long as
+/// the current table's inner window is the current window
+/// (imgui.cpp:12019-12023). A table without ScrollX/ScrollY has the window
+/// as both its outer and inner window; EndTable() of it makes current the
+/// table of the temp-data slot below, if that slot was begun with this
+/// window as its inner one (tables:470, 1670-1671), so the loop goes on to
+/// the table the plain ones were nested in. A table with ScrollX/ScrollY
+/// has a child of its own as inner window (tables:340, 432-433), and
+/// EndTable() ends that child itself (tables:1612-1616): reached from this
+/// loop, the window is ended twice and the clip rectangle stack is popped
+/// past empty (imgui.cpp:6296-6297, imgui.h:2377). This walks the same
+/// chain without changing anything. ErrorRecoveryTryToRecoverState(), at
+/// the end of the frame, calls EndTable() instead of End() for such a
+/// window (imgui.cpp:11990-11994), so only a closer called inside the
+/// region meets it.
 bool inTableRegion() {
   ImGuiContext &g = *GImGui;
   ImGuiTable *table = g.CurrentTable;
-  return table != nullptr && table->InnerWindow == g.CurrentWindow &&
-      table->InnerWindow != table->OuterWindow;
+  // The slot EndTable() pops for `table`: the top one (tables:1670).
+  int slot = g.TablesTempDataStacked - 1;
+  while (table != nullptr && table->InnerWindow == g.CurrentWindow) {
+    if (table->InnerWindow != table->OuterWindow)
+      return true;
+    // EndTable() of a plain table: the slot below, if begun in this window.
+    --slot;
+    table = nullptr;
+    if (slot >= 0 && g.TablesTempData[slot].WindowID == g.CurrentWindow->ID)
+      table = g.Tables.GetByIndex(g.TablesTempData[slot].TableIndex);
+  }
+  return false;
 }
 
 } // namespace
@@ -554,12 +572,40 @@ const char *canEndTable() {
 /// header row reads every name (tables:3259, 3307). Only when ImGui gets as
 /// far as storing the name: its three recoverable checks return first
 /// (tables:1739-1741).
-const char *canTableSetupColumn(bool hasLabel) {
+///
+/// Before that: the column that would complete the declaration with every
+/// column carrying TableColumnFlags_Disabled. The layout every table runs
+/// (the first row function, EndTable(), or the frame-end recovery's
+/// EndTable()) enables a column only without that flag (tables:940),
+/// whatever the user or the settings say, and asserts plainly that one is
+/// enabled (tables:1005), so from this call on nothing could end the table.
+/// A declared column's flags are in Columns[i].Flags (tables:823), or,
+/// once the table is reconciling a changed set of columns, in the queued
+/// request the layout applies (tables:1779-1786, 1840-1843). Columns left
+/// undeclared get no flags (tables:924-930).
+const char *canTableSetupColumn(bool hasLabel, int flags) {
   ImGuiTable *table = GImGui->CurrentTable;
-  if (!hasLabel || table == nullptr ||
-      table->DeclColumnsCount >= table->ColumnsCount || table->IsLayoutLocked)
+  if (table == nullptr || table->DeclColumnsCount >= table->ColumnsCount ||
+      table->IsLayoutLocked)
     return nullptr;
-  if (table->ColumnsNames.size() <= INT16_MAX)
+  if (table->DeclColumnsCount == table->ColumnsCount - 1 &&
+      (flags & ImGuiTableColumnFlags_Disabled)) {
+    bool allDisabled = true;
+    for (int i = 0; i < table->DeclColumnsCount && allDisabled; ++i) {
+      ImGuiTableColumnFlags f = table->Columns[i].Flags;
+      for (const ImGuiTableReconcileColumnData &r :
+           table->TempData->ReconcileColumnsRequests)
+        if (r.ColumnNewIdx == i)
+          f = r.Flags;
+      allDisabled = (f & ImGuiTableColumnFlags_Disabled) != 0;
+    }
+    if (allDisabled)
+      return refuse(
+          kTableSetupColumnAllDisabled,
+          "TableSetupColumn() would leave every column with "
+          "TableColumnFlags_Disabled");
+  }
+  if (!hasLabel || table->ColumnsNames.size() <= INT16_MAX)
     return nullptr;
   return refuse(
       kTableSetupColumnNameOffset,

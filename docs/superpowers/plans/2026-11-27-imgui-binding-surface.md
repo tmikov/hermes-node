@@ -358,8 +358,21 @@ there is no "Proposed addition" under any group.
     window and calls `EndTable()` (imgui.cpp:12019-12023), which ends the
     child itself (tables:1612-1616), so the window is ended twice and the
     clip rectangle stack is popped past empty (imgui.cpp:6296-6297,
-    imgui.h:2377, plain; measured). (b): `g.CurrentTable->InnerWindow ==
-    g.CurrentWindow` with `InnerWindow != OuterWindow` (`canEnd`, Task 6).
+    imgui.h:2377, plain; measured). The recovery loops while the current
+    table's inner window is the current window, and ending a table without
+    a region of its own makes current the table of the temp-data slot
+    below when that slot was begun in the same window (tables:470,
+    1670-1671): so plain tables nested in the region's cell lead to the
+    same abort (measured: one plain table, under `end`, `endChild` and
+    `endListBox`). (b): the same chain walked without changing anything,
+    from `g.CurrentTable` down `g.TablesTempData` from
+    `g.TablesTempDataStacked - 1` while the table's inner window is the
+    current window, refusing at a table whose `InnerWindow !=
+    OuterWindow` (`canEnd:table-region`, Task 6). The walk was chosen over
+    a single read of the parent window's table index because it is the
+    recovery's own sequence of reads, whatever the depth; a plain table in
+    a child of the region, or plain tables only, stop it and are accepted
+    (`ui-imgui-bind-errors.js` TABLE_REGION).
 - Notes: the same mistake at the end of the frame is recovered without
   this: `ErrorRecoveryTryToRecoverState()` calls `EndTable()` rather than
   `End()` for such a window (imgui.cpp:11990-11994).
@@ -1721,8 +1734,8 @@ refused. The wrong-window condition below is therefore kept, applied
 exactly where ImGui asserts it: in `EndTable()` always (tables:1476), and
 in `TableEndRow()` (tables:2126), that is, in a row function only when a
 row is open and the call ends it. In that state with no row open,
-`tableNextRow`, `tableNextColumn` and `tableHeadersRow` were each run
-unguarded and nothing asserted (measured).
+`tableNextRow`, `tableNextColumn` and `tableHeadersRow` are each accepted
+and open a row (`ui-imgui-bind-errors.js` TABLE_WRONG_NOROW).
 
 ### `beginTable`
 
@@ -1813,6 +1826,15 @@ unguarded and nothing asserted (measured).
     `g.CurrentTable->ColumnsNames.size() <= 32767`, applied only when
     ImGui gets as far as storing the name (the three (c) checks above
     pass) (`canTableSetupColumn:name-offset`).
+  - the column that completes the declaration with every column holding
+    `TableColumnFlags_Disabled`: the layout every table runs (a row
+    function, `EndTable()`, or the frame-end recovery's) enables only
+    columns without it (tables:940) and asserts that one is enabled
+    (tables:1005), so nothing could end the table after this call. (b):
+    `DeclColumnsCount == ColumnsCount - 1`, the call's flags, and each
+    declared column's flags, from `Columns[i].Flags` (tables:823) or, in
+    reconcile mode, from the queued request (tables:1759-1789, 1840-1843)
+    (`canTableSetupColumn:all-disabled`).
 - Notes: `userData` is an `ImGuiID`, a number 0..2^32-1; it is only
   copied into sort specs, which are a non-goal.
 
@@ -3050,11 +3072,17 @@ a C++ program.
 3d. **A table column layout ImGui cannot build** (Task 6, each measured
    as an abort from the first row function). Both depend on state that
    `TableUpdateLayout()` itself computes from settings and defaults
-   before asserting, so no read made before the call can predict them:
-   - every column disabled: `TableColumnFlags_Disabled` on each, or a
-     `TableFlags_Hideable` table with `TableColumnFlags_DefaultHide` on
-     each (`TableInitColumnDefaults`, tables:1697), asserts
-     `LeftMostEnabledColumn >= 0` (tables:1005);
+   before asserting, and cannot be predicted without reimplementing that
+   function's enable and sort logic:
+   - every column disabled through the user's or the settings' visibility:
+     a `TableFlags_Hideable` table with `TableColumnFlags_DefaultHide` on
+     each (`TableInitColumnDefaults`, tables:1697), or columns hidden and
+     loaded from settings, asserts `LeftMostEnabledColumn >= 0`
+     (tables:1005). The variant that can be read before the call, every
+     column declared with `TableColumnFlags_Disabled` (which the layout
+     honours whatever the visibility, tables:940), is guarded at the
+     `tableSetupColumn` that would complete it
+     (`canTableSetupColumn:all-disabled`);
    - a `TableFlags_Sortable` table with 64 or more enabled columns
      holding a sort order (`TableColumnFlags_DefaultSort` on each, or
      sorted by the user with `SortMulti`) asserts `sort_order_count < 64`
@@ -3135,6 +3163,8 @@ Read:
 | `g.CurrentTable->CurrentColumn`, `->ColumnsCount` | 3373, 3371 | `tableNextColumn` (whether it ends the row) |
 | `g.CurrentTable->DeclColumnsCount` | 3426 | `tableSetupColumn` |
 | `g.CurrentTable->ColumnsNames` (`size()`) | 3416 | `tableSetupColumn` |
+| `g.CurrentTable->Columns[i].Flags`, `->TempData->ReconcileColumnsRequests` (`ColumnNewIdx`, `Flags`) | 3243, 3495, 3317 and 3312 | `tableSetupColumn` (all disabled) |
+| `g.TablesTempData` (`WindowID`, `TableIndex`), `g.TablesTempDataStacked`; `g.Tables.GetByIndex` | 2767, 2766; 3488, 3489 | `end`, `endChild`, `endListBox` (the recovery's table chain) |
 | `g.CurrentTable->RowPosY2`, `->InnerWindow->DC.CursorPos` | 3377, 2939 | `endTable` |
 | `g.CurrentTabBar` and `->LastTabItemIdx` | 2773, 3221 | `endTabItem` |
 | `g.LastItemData.ID` | 2624 | `beginPopupContextItem` (when `strId` is null) |

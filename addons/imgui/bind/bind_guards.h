@@ -82,7 +82,10 @@ const char *canTableSetColumnIndex();
 /// table's names buffer (tables:1746-1750); one that does not fit is later
 /// read out of range (tables:1909, imgui.h:2369). \p hasLabel: a label
 /// that is neither null nor empty.
-const char *canTableSetupColumn(bool hasLabel);
+/// Also refuses the call that would declare the last column with every
+/// column TableColumnFlags_Disabled, which the layout asserts against
+/// (tables:1005). \p flags: the call's column flags.
+const char *canTableSetupColumn(bool hasLabel, int flags);
 /// EndTable() asserts plainly that the cursor is at the bottom of the last
 /// row (tables:1493); with no row begun, it is wherever the caller moved it.
 /// Called after canTableRowCall(TableRowCall::EndTable).

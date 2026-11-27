@@ -98,6 +98,15 @@
 //                 tableNextColumn() inside the row is accepted; once the
 //                 row is full, tableNextColumn(), tableNextRow(),
 //                 tableHeadersRow() and endTable() are each refused.
+//  TABLE_WRONG_NOROW the same state before the table's first row, once
+//                 for each of tableNextRow(), tableNextColumn() and
+//                 tableHeadersRow(): accepted (ImGui asserts on the window
+//                 only when ending a row), and the row it opened is read
+//                 back by tableSetColumnIndex(1) being accepted.
+//  TABLE_DISABLED tableSetupColumn() declaring the last column with every
+//                 column TableColumnFlags_Disabled: refused, in a new
+//                 table and in one whose columns are being reconciled;
+//                 the same column without the flag accepted.
 //  TABLE_CURSOR   endTable() with the cursor moved before the first row:
 //                 refused; with it put back, accepted.
 //  TABLE_NAMES    tableSetupColumn() labels whose offsets in the table's
@@ -105,7 +114,13 @@
 //                 an empty label accepted; the header row then draws.
 //  TABLE_REGION   endChild(), end() and endListBox() inside a scrolling
 //                 table's cell (its region, a child window, with a group
-//                 open in the outer window for endListBox): each refused.
+//                 open in the outer window for endListBox): each refused;
+//                 the same with a plain table nested in the cell, and
+//                 endChild() with two: refused. Accepted, each with ImGui's
+//                 "Missing EndTable()": endChild() of a child of the region
+//                 holding a plain table, end() of a window holding two
+//                 nested plain tables, endListBox() of a list box holding
+//                 one; and a child whose plain table was ended.
 //  CLIPPER_WRONG_WINDOW listClipper() in TABLE_WRONG_WINDOW's window, inside
 //                 the row: refused, not called, the callback never run.
 //  DISCARD       newFrame(); begin('w'); newFrame(): no throw, `frame
@@ -134,7 +149,10 @@
 //  each of canTableRowCall, canTableSetColumnIndex,
 //  canTableSetupScrollFreeze, canEndTable, canTableSetupColumn, canEnd, and
 //  the table-region conditions of canEndChild and canEndListBox, returning
-//  nullptr always: its TABLE_* case aborts or fails;
+//  nullptr always: its TABLE_* case aborts or fails; the table-region
+//  walk stopping at the top table: TABLE_REGION's nested case aborts;
+//  canTableSetupColumn's all-disabled check off, or blind to queued
+//  reconcile requests: TABLE_DISABLED fails;
 //  canListClipper() returning nullptr always: CLIPPER_WRONG_WINDOW aborts;
 //  the reset of g.BeginComboDepth removed from guard::beginFrame():
 //  COMBO_LEFT_OPEN fails;
@@ -793,8 +811,84 @@ async function main() {
                                              ' ' + moved);
   }
 
+  // --- TABLE_WRONG_NOROW -----------------------------------------------
+  // The same state as TABLE_WRONG_WINDOW, before the table's first row:
+  // each row function is accepted and opens a row (TableEndRow(), the one
+  // that asserts on the window, has no row to end), which
+  // tableSetColumnIndex(1) being accepted afterwards reads back.
+  {
+    const results = {};
+    // A window's first frame skips its items, and then beginTable() of a
+    // scrolling table returns false; frames run until all three were shown.
+    let drew = true;
+    for (let i = 0; i < 10 && Object.keys(results).length < 3; ++i)
+     drew = await harness.frame(h, () => {
+      for (const name of ['tableNextRow', 'tableNextColumn',
+                          'tableHeadersRow']) {
+        const win = 'wrong norow ' + name;
+        beginAt(win);
+        if (!imgui.beginTable('norow ' + name, 2, imgui.TableFlags_ScrollY,
+                              [0, 100])) {
+          imgui.end();
+          continue;
+        }
+        imgui.begin(win);
+        const scope = imgui.__test.tableScope();
+        if (!(scope.table && scope.currentWindow === win &&
+              scope.innerWindow.startsWith(win + '/norow ')))
+          fail('SETUP wrong norow ' + JSON.stringify(scope));
+        const r = accepted(name, () => imgui[name]());
+        const row = accepted('tableSetColumnIndex',
+                             () => imgui.tableSetColumnIndex(1));
+        results[name] = r + ' ' + row;
+        imgui.end();
+        imgui.endTable();
+        imgui.end();
+      }
+    });
+    console.log(drew && Object.keys(results).length === 3 ?
+                    'TABLE_WRONG_NOROW ok' :
+                       'TABLE_WRONG_NOROW render=' + drew);
+    for (const name of Object.keys(results))
+      console.log('TABLE_WRONG_NOROW ' + name + ' ' + results[name]);
+  }
+
+  // --- TABLE_DISABLED --------------------------------------------------
+  // The layout enables only columns without TableColumnFlags_Disabled and
+  // asserts that one is (imgui_tables.cpp:940, 1005), so the call declaring
+  // the last column with every column disabled is refused. The second
+  // frame redeclares the same table's columns under new names, which ImGui
+  // queues for reconciliation (imgui_tables.cpp:1759-1789) instead of
+  // writing their flags: the guard reads them from the queue.
+  {
+    const D = imgui.TableColumnFlags_Disabled;
+    const draw = (first) => () => {
+      beginAt('table disabled');
+      imgui.beginTable('d', 2);
+      if (first) {
+        imgui.tableSetupColumn('a');
+        imgui.tableSetupColumn('b');
+      } else {
+        accepted('tableSetupColumn', () => imgui.tableSetupColumn('x', D));
+        refused('tableSetupColumn', () => imgui.tableSetupColumn('y', D));
+        accepted('tableSetupColumn', () => imgui.tableSetupColumn('y'));
+      }
+      imgui.tableNextRow();
+      imgui.endTable();
+      imgui.beginTable('fresh', 1);
+      refused('tableSetupColumn', () => imgui.tableSetupColumn('z', D));
+      imgui.tableNextRow();
+      imgui.endTable();
+      imgui.end();
+    };
+    const drew = await harness.frame(h, draw(true)) &&
+        await harness.frame(h, draw(false));
+    console.log(drew ? 'TABLE_DISABLED ok' : 'TABLE_DISABLED render=' + drew);
+  }
+
   // --- TABLE_CURSOR, TABLE_NAMES, TABLE_REGION -------------------------
   {
+    const regionMessages = [];
     const drew = await harness.frame(h, () => {
       beginAt('table misc');
       // EndTable() asserts plainly that the cursor is where the last row
@@ -828,13 +922,64 @@ async function main() {
       refused('endChild', () => imgui.endChild());
       refused('end', () => imgui.end());
       refused('endListBox', () => imgui.endListBox());
+      // A plain table nested in the region: End()'s recovery would end it,
+      // go on to the scrolling table below it and end that one too
+      // (imgui.cpp:12019-12023, imgui_tables.cpp:1670-1671).
+      imgui.beginTable('nested 1', 1);
+      imgui.tableNextRow();
+      imgui.tableNextColumn();
+      refused('endChild', () => imgui.endChild());
+      refused('end', () => imgui.end());
+      refused('endListBox', () => imgui.endListBox());
+      // Two levels of plain tables.
+      imgui.beginTable('nested 2', 1);
+      imgui.tableNextRow();
+      imgui.tableNextColumn();
+      refused('endChild', () => imgui.endChild());
+      imgui.endTable();
+      imgui.endTable();
+      // A plain table in a child of the region ends with the child: the
+      // recovery stops at the region's table, begun in another window.
+      imgui.beginChild('child of region', [50, 50]);
+      imgui.beginTable('in child', 1);
+      regionMessages.push(accepted('endChild',
+                                   () => usage(() => imgui.endChild()))
+                              .message);
+      imgui.beginChild('child ended', [50, 50]);
+      imgui.beginTable('ended', 1);
+      imgui.tableNextRow();
+      imgui.endTable();
+      accepted('endChild', () => imgui.endChild());
       imgui.endTable();
       imgui.endGroup();
+      imgui.end();
+      // Plain tables only, two levels, in a window and in a list box: each
+      // closer is accepted and ImGui's recovery ends the tables.
+      imgui.setNextWindowPos([360, 40]);
+      imgui.setNextWindowSize([200, 200]);
+      imgui.begin('plain nest');
+      imgui.beginTable('p1', 1);
+      imgui.tableNextRow();
+      imgui.tableNextColumn();
+      imgui.beginTable('p2', 1);
+      regionMessages.push(
+          accepted('end', () => usage(() => imgui.end())).message);
+      beginAt('plain list box');
+      if (imgui.beginListBox('lb', [100, 100])) {
+        imgui.beginTable('p3', 1);
+        regionMessages.push(accepted('endListBox',
+                                     () => usage(() => imgui.endListBox()))
+                                .message);
+      }
       imgui.end();
     });
     console.log(drew ? 'TABLE_CURSOR ok' : 'TABLE_CURSOR render=' + drew);
     console.log('TABLE_NAMES ok');
-    console.log('TABLE_REGION ok');
+    console.log(regionMessages.length === 3 ? 'TABLE_REGION ok' :
+                                              'TABLE_REGION WRONG ' +
+                                                  regionMessages.length);
+    for (const m of regionMessages)
+      console.log('TABLE_REGION accepted ' + m);
   }
 
   // --- CLIPPER_WRONG_WINDOW --------------------------------------------
@@ -926,9 +1071,17 @@ async function main() {
 // CHECK-NEXT: {{^}}TABLE_FREEZE_LATE ok{{$}}
 // CHECK-NEXT: {{^}}SETUP wrong window: table current, current window wrong window, inner window wrong window/s_<id>{{$}}
 // CHECK-NEXT: {{^}}TABLE_WRONG_WINDOW ok{{$}}
+// CHECK-NEXT: {{^}}TABLE_WRONG_NOROW ok{{$}}
+// CHECK-NEXT: {{^}}TABLE_WRONG_NOROW tableNextRow undefined true{{$}}
+// CHECK-NEXT: {{^}}TABLE_WRONG_NOROW tableNextColumn true true{{$}}
+// CHECK-NEXT: {{^}}TABLE_WRONG_NOROW tableHeadersRow undefined true{{$}}
+// CHECK-NEXT: {{^}}TABLE_DISABLED ok{{$}}
 // CHECK-NEXT: {{^}}TABLE_CURSOR ok{{$}}
 // CHECK-NEXT: {{^}}TABLE_NAMES ok{{$}}
 // CHECK-NEXT: {{^}}TABLE_REGION ok{{$}}
+// CHECK-NEXT: {{^}}TABLE_REGION accepted imgui.endChild(): Missing EndTable(){{$}}
+// CHECK-NEXT: {{^}}TABLE_REGION accepted imgui.end(): Missing EndTable(){{$}}
+// CHECK-NEXT: {{^}}TABLE_REGION accepted imgui.endListBox(): Missing EndTable(){{$}}
 // CHECK-NEXT: {{^}}CLIPPER_WRONG_WINDOW ok{{$}}
 // CHECK-NEXT: {{^}}DISCARD ok{{$}}
 // CHECK-NEXT: {{^}}GUARDS ok{{$}}
@@ -994,11 +1147,22 @@ async function main() {
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: TableNextRow() ending a row in another window than the table's own (a window begun inside a cell is current){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: TableHeadersRow() ending a row in another window than the table's own (a window begun inside a cell is current){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: EndTable() in another window than the table's own (a window begun inside a cell is current){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: TableSetupColumn() would leave every column with TableColumnFlags_Disabled{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: TableSetupColumn() would leave every column with TableColumnFlags_Disabled{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: TableSetupColumn() would leave every column with TableColumnFlags_Disabled{{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: EndTable() with the cursor moved before the table's first row{{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: TableSetupColumn() with the table's column names already over 32767 bytes{{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: EndChild() in a scrolling table's own region; call EndTable() first{{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: End() in a scrolling table's own region; call EndTable() first{{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: EndListBox() in a scrolling table's own region; call EndTable() first{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndChild() in a scrolling table's own region; call EndTable() first{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: End() in a scrolling table's own region; call EndTable() first{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndListBox() in a scrolling table's own region; call EndTable() first{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndChild() in a scrolling table's own region; call EndTable() first{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing EndTable(){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing EndTable(){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing EndTable(){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing EndTable(){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: listClipper() inside a table row, in another window than the table's own (a window begun inside a cell is current){{$}}
 // The discarded frame's open window is reported, then the discard.
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing End(){{$}}
