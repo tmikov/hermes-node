@@ -200,6 +200,56 @@ bool convertSappEvent(
   return true;
 }
 
+namespace {
+
+bool isHighSurrogate(uint32_t cp) {
+  return cp >= 0xD800 && cp <= 0xDBFF;
+}
+
+bool isLowSurrogate(uint32_t cp) {
+  return cp >= 0xDC00 && cp <= 0xDFFF;
+}
+
+} // namespace
+
+void SappEventConverter::convert(
+    const sapp_event &in,
+    const PlatformSource &src,
+    std::vector<UiEvent> &out) {
+  const bool isChar = in.type == SAPP_EVENTTYPE_CHAR;
+  UiEvent ev;
+
+  if (havePendingHigh_) {
+    havePendingHigh_ = false;
+    if (isChar && isLowSurrogate(in.char_code)) {
+      sapp_event combined = in;
+      combined.char_code = 0x10000 + ((pendingHigh_.char_code - 0xD800) << 10) +
+          (in.char_code - 0xDC00);
+      if (convertSappEvent(combined, src, &ev))
+        out.push_back(std::move(ev));
+      return;
+    }
+    // An orphan. Converted as a CHAR of U+FFFD against the state it
+    // arrived with; no callback of that source is reached for a CHAR.
+    sapp_event orphan = pendingHigh_;
+    orphan.char_code = 0xFFFD;
+    PlatformSource orphanSrc;
+    orphanSrc.window = pendingWindow_;
+    if (convertSappEvent(orphan, orphanSrc, &ev))
+      out.push_back(std::move(ev));
+  }
+
+  if (isChar && isHighSurrogate(in.char_code)) {
+    havePendingHigh_ = true;
+    pendingHigh_ = in;
+    pendingWindow_ = src.window;
+    return;
+  }
+
+  if (convertSappEvent(in, src, &ev))
+    out.push_back(std::move(ev));
+}
+
 const char *domCodeForKey(int keyCode) {
   switch (keyCode) {
     case SAPP_KEYCODE_SPACE:

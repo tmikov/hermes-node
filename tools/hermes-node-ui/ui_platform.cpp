@@ -60,6 +60,11 @@ std::vector<GenerationId> gWrappedGenerations;
 /// Platform thread only.
 WindowState gTracked;
 
+/// The event converter, which holds a UTF-16 high surrogate from one CHAR
+/// event to the next (SappEventConverter). Platform thread only: every
+/// event, real or injected, is converted there.
+SappEventConverter gConverter;
+
 /// Whether the tick machine has been told the tracked minimized state. An
 /// ICONIFIED that arrives before `gPresentReady` has no machine to tell, so
 /// the first frame after readiness catches it up. Platform thread only.
@@ -780,24 +785,28 @@ void uiHandlePlatformEvent(
       uiTestHookQuitCancelled();
   }
 
-  UiEvent converted;
-  if (!convertSappEvent(event, source, &converted))
-    return;
-  gTracked = converted.window;
+  // Zero, one or two events: a held surrogate produces none, an orphaned
+  // one is delivered ahead of the event that exposed it.
+  std::vector<UiEvent> converted;
+  gConverter.convert(event, source, converted);
+  for (UiEvent &ev : converted) {
+    gTracked = ev.window;
 
-  // A minimized window receives no ticks (spec: Frames). Told here, on the
-  // platform thread, before the event is even queued -- so by the time a
-  // `minimize` listener requests a frame, the machine already withholds
-  // it. Before readiness there is no machine; onFrame catches it up.
-  if ((converted.type == UiEventType::kMinimize ||
-       converted.type == UiEventType::kRestore) &&
-      gPresentReady.load(std::memory_order_acquire)) {
-    gTick->setMinimized(converted.window.minimized);
-    gTickMinimizedSynced = true;
+    // A minimized window receives no ticks (spec: Frames). Told here, on
+    // the platform thread, before the event is even queued -- so by the
+    // time a `minimize` listener requests a frame, the machine already
+    // withholds it. Before readiness there is no machine; onFrame catches
+    // it up.
+    if ((ev.type == UiEventType::kMinimize ||
+         ev.type == UiEventType::kRestore) &&
+        gPresentReady.load(std::memory_order_acquire)) {
+      gTick->setMinimized(ev.window.minimized);
+      gTickMinimizedSynced = true;
+    }
+
+    gInput.push(std::move(ev));
+    postEventDispatch();
   }
-
-  gInput.push(converted);
-  postEventDispatch();
 }
 
 int uiRunPlatformLoop() {
