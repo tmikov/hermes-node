@@ -34,7 +34,7 @@ void platformNewFrame(
 void platformAfterRender(hnui_window *w); // cursor
 int lastCursorRequested(); // ImGuiMouseCursor last acted on, for state()
 // renderer
-void rendererInit(); // backend flags, sampler; lazily called
+void rendererInit(); // backend flags and checks; GPU objects wait for a draw
 void rendererDraw(
     ImDrawData *dd,
     const hnui_target &target); // textures, pass, draws

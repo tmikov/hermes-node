@@ -6,10 +6,12 @@
  */
 
 // The `__test` object, exported only under HERMES_NODE_UI_TEST_HOOKS:
-// `scene(name)` draws a fixed native scene into the open frame, and
+// `scene(name[, arg])` draws a fixed native scene into the open frame, and
 // `state()` reads back what ImGui and the renderer hold.
 
 #include "imgui_addon.h"
+
+#include <sokol_gfx.h>
 
 #include <cstring>
 #include <string>
@@ -18,25 +20,102 @@ namespace hnimgui {
 
 namespace {
 
-/// A full-window flat fill through the background draw list. Anti-aliased
-/// fill is off for the call, so the rectangle has no feathered fringe and
-/// its edges are the window's. (1.93 merged ImDrawListFlags into
-/// ImDrawFlags; ImDrawListFlags_AntiAliasedFill is ImDrawFlags_AAFill now,
-/// scoped with PushDrawFlag/PopDrawFlag.)
-void sceneFill() {
+/// Every scene draws on the background draw list with anti-aliased fill
+/// off, so a rectangle has no feathered fringe and its edges are exactly
+/// its coordinates. (1.93 merged ImDrawListFlags into ImDrawFlags;
+/// ImDrawListFlags_AntiAliasedFill is ImDrawFlags_AAFill now, scoped with
+/// PushDrawFlag/PopDrawFlag.)
+ImDrawList *beginScene() {
   ImDrawList *list = ImGui::GetBackgroundDrawList();
   list->PushDrawFlag(ImDrawFlags_AAFill, false);
-  list->AddRectFilled(
-      ImVec2(0.0f, 0.0f), ImGui::GetIO().DisplaySize, IM_COL32(255, 0, 0, 255));
+  return list;
+}
+
+void endScene(ImDrawList *list) {
   list->PopDrawFlag();
 }
 
-/// `scene(name)`: draws immediately into the frame that is open, so it is
-/// called between newFrame() and render(); with no frame open it throws
-/// the no-frame error, as showDemoWindow() does.
+/// Fill the whole display with \p color.
+void fillDisplay(ImDrawList *list, ImU32 color) {
+  list->AddRectFilled(ImVec2(0.0f, 0.0f), ImGui::GetIO().DisplaySize, color);
+}
+
+/// `fill`: a full-window red fill.
+void sceneFill() {
+  ImDrawList *list = beginScene();
+  fillDisplay(list, IM_COL32(255, 0, 0, 255));
+  endScene(list);
+}
+
+/// `clip`: a green fill of the whole display under a clip rectangle
+/// (100,100)-(300,200), so only that rectangle is drawn.
+void sceneClip() {
+  ImDrawList *list = beginScene();
+  list->PushClipRect(ImVec2(100.0f, 100.0f), ImVec2(300.0f, 200.0f), true);
+  fillDisplay(list, IM_COL32(0, 255, 0, 255));
+  list->PopClipRect();
+  endScene(list);
+}
+
+/// `many`: 4x4 quads tiling a 640x480 display, 160 columns by 120 rows,
+/// 76,800 vertices in one list: past 16-bit indices, so ImGui splits the
+/// list into commands with non-zero vertex offsets, and past the
+/// renderer's initial buffer sizes. Quad (c, r) is red, green or blue for
+/// (c + r) % 3 = 0, 1, 2.
+void sceneMany() {
+  static const ImU32 kColors[3] = {
+      IM_COL32(255, 0, 0, 255),
+      IM_COL32(0, 255, 0, 255),
+      IM_COL32(0, 0, 255, 255)};
+  ImDrawList *list = beginScene();
+  for (int r = 0; r < 120; ++r) {
+    for (int c = 0; c < 160; ++c) {
+      const ImVec2 min(4.0f * c, 4.0f * r);
+      list->AddRectFilled(
+          min, ImVec2(min.x + 4.0f, min.y + 4.0f), kColors[(c + r) % 3]);
+    }
+  }
+  endScene(list);
+}
+
+/// `two`: a full-window fill, red for arg 0 and blue for any other.
+void sceneTwo(int arg) {
+  ImDrawList *list = beginScene();
+  fillDisplay(
+      list, arg == 0 ? IM_COL32(255, 0, 0, 255) : IM_COL32(0, 0, 255, 255));
+  endScene(list);
+}
+
+/// A user callback that shrinks the viewport to the top-left quarter of
+/// the framebuffer, which only a reset of the render state undoes.
+void quarterViewport(const ImDrawList *, const ImDrawCmd *) {
+  const ImDrawData *dd = ImGui::GetDrawData();
+  const int fbWidth =
+      static_cast<int>(dd->DisplaySize.x * dd->FramebufferScale.x);
+  const int fbHeight =
+      static_cast<int>(dd->DisplaySize.y * dd->FramebufferScale.y);
+  sg_apply_viewport(0, 0, fbWidth / 4, fbHeight / 4, true);
+}
+
+/// `callback`: the quarter-viewport callback, then ImGui's reset callback,
+/// then a full-window green fill, which covers the whole window only if
+/// the reset re-applied the viewport.
+void sceneCallback() {
+  ImDrawList *list = beginScene();
+  list->AddCallback(quarterViewport, nullptr);
+  list->AddCallback(
+      ImGui::GetPlatformIO().DrawCallback_ResetRenderState, nullptr);
+  fillDisplay(list, IM_COL32(0, 255, 0, 255));
+  endScene(list);
+}
+
+/// `scene(name[, arg])`: draws immediately into the frame that is open, so
+/// it is called between newFrame() and render(); with no frame open it
+/// throws the no-frame error, as showDemoWindow() does. `arg` is an
+/// optional integer some scenes take; it defaults to 0.
 napi_value scene(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
   char name[32] = {};
   size_t length = 0;
@@ -47,6 +126,16 @@ napi_value scene(napi_env env, napi_callback_info info) {
         env, nullptr, "imgui.__test.scene(): a scene name is required");
     return nullptr;
   }
+  int32_t arg = 0;
+  napi_valuetype argType = napi_undefined;
+  if (argc >= 2)
+    napi_typeof(env, argv[1], &argType);
+  if (argType != napi_undefined &&
+      napi_get_value_int32(env, argv[1], &arg) != napi_ok) {
+    napi_throw_type_error(
+        env, nullptr, "imgui.__test.scene(): the argument must be a number");
+    return nullptr;
+  }
   if (!frameOpen())
     return throwNoFrame(env, "__test.scene");
 
@@ -54,6 +143,22 @@ napi_value scene(napi_env env, napi_callback_info info) {
     return nullptr;
   if (std::strcmp(name, "fill") == 0) {
     sceneFill();
+    return nullptr;
+  }
+  if (std::strcmp(name, "clip") == 0) {
+    sceneClip();
+    return nullptr;
+  }
+  if (std::strcmp(name, "many") == 0) {
+    sceneMany();
+    return nullptr;
+  }
+  if (std::strcmp(name, "two") == 0) {
+    sceneTwo(arg);
+    return nullptr;
+  }
+  if (std::strcmp(name, "callback") == 0) {
+    sceneCallback();
     return nullptr;
   }
   const std::string message =
