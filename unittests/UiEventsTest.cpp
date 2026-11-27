@@ -190,6 +190,115 @@ TEST(SappEventConvertTest, CharCodeBecomesUtf8) {
   }
 }
 
+namespace {
+
+sapp_event charEvent(uint32_t cp, uint32_t modifiers = 0, bool repeat = false) {
+  sapp_event e = makeEvent(SAPP_EVENTTYPE_CHAR);
+  e.char_code = cp;
+  e.modifiers = modifiers;
+  e.key_repeat = repeat;
+  return e;
+}
+
+/// The text of every event \p conv produces for \p events, in order, with
+/// "<key>" standing for a non-text event.
+std::vector<std::string> convertAll(
+    SappEventConverter &conv,
+    const std::vector<sapp_event> &events) {
+  std::vector<UiEvent> out;
+  for (const sapp_event &e : events)
+    conv.convert(e, plainSource(), out);
+  std::vector<std::string> texts;
+  for (const UiEvent &ev : out)
+    texts.push_back(ev.type == UiEventType::kTextInput ? ev.text : "<key>");
+  return texts;
+}
+
+const char kReplacement[] = "\xEF\xBF\xBD";
+
+} // namespace
+
+TEST(SappEventConvertTest, SurrogatePairBecomesOneCharacter) {
+  SappEventConverter conv;
+  std::vector<UiEvent> out;
+  conv.convert(charEvent(0xD83D), plainSource(), out);
+  EXPECT_TRUE(out.empty()) << "a high surrogate is held, not delivered";
+  conv.convert(
+      charEvent(0xDE00, SAPP_MODIFIER_SHIFT, true), plainSource(), out);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].type, UiEventType::kTextInput);
+  EXPECT_EQ(out[0].text, "\xF0\x9F\x98\x80"); // U+1F600
+  // Modifiers and repeat come from the low surrogate's event.
+  EXPECT_EQ(out[0].modifiers, HNUI_MOD_SHIFT);
+  EXPECT_TRUE(out[0].repeat);
+
+  // The pairing is spent: the next character stands alone.
+  out.clear();
+  conv.convert(charEvent('a'), plainSource(), out);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].text, "a");
+}
+// Mutation: in SappEventConverter::convert, convert every event through
+// convertSappEvent() alone. Fails (two U+FFFD events).
+
+TEST(SappEventConvertTest, UnpairedSurrogatesBecomeReplacementCharacters) {
+  using V = std::vector<std::string>;
+  {
+    // A high surrogate followed by an ordinary character: the orphan is
+    // delivered first, as its own event.
+    SappEventConverter conv;
+    EXPECT_EQ(
+        convertAll(conv, {charEvent(0xD83D), charEvent('a')}),
+        (V{kReplacement, "a"}));
+  }
+  {
+    // ...followed by a non-text event, which is delivered after it.
+    SappEventConverter conv;
+    EXPECT_EQ(
+        convertAll(conv, {charEvent(0xD83D), makeEvent(SAPP_EVENTTYPE_KEY_UP)}),
+        (V{kReplacement, "<key>"}));
+  }
+  {
+    // ...followed by another high surrogate, which is then paired.
+    SappEventConverter conv;
+    EXPECT_EQ(
+        convertAll(
+            conv, {charEvent(0xD83D), charEvent(0xD83D), charEvent(0xDE00)}),
+        (V{kReplacement, "\xF0\x9F\x98\x80"}));
+  }
+  {
+    // A lone low surrogate.
+    SappEventConverter conv;
+    EXPECT_EQ(convertAll(conv, {charEvent(0xDE00)}), (V{kReplacement}));
+  }
+  {
+    // A high surrogate followed by an event the converter refuses: the
+    // orphan is still delivered.
+    SappEventConverter conv;
+    EXPECT_EQ(
+        convertAll(
+            conv, {charEvent(0xD83D), makeEvent(SAPP_EVENTTYPE_TOUCHES_BEGAN)}),
+        (V{kReplacement}));
+  }
+}
+// Mutation: drop the orphan instead of delivering it. Fails.
+
+TEST(SappEventConvertTest, OrphanKeepsTheStateItArrivedWith) {
+  SappEventConverter conv;
+  std::vector<UiEvent> out;
+  PlatformSource first = plainSource();
+  first.window.focused = true;
+  conv.convert(charEvent(0xD83D, SAPP_MODIFIER_CTRL), first, out);
+  PlatformSource second = plainSource();
+  second.window.focused = false;
+  conv.convert(makeEvent(SAPP_EVENTTYPE_KEY_UP), second, out);
+  ASSERT_EQ(out.size(), 2u);
+  EXPECT_EQ(out[0].text, kReplacement);
+  EXPECT_EQ(out[0].modifiers, HNUI_MOD_CTRL);
+  EXPECT_TRUE(out[0].window.focused);
+  EXPECT_FALSE(out[1].window.focused);
+}
+
 TEST(SappEventConvertTest, WheelCarriesScrollInDxDy) {
   PlatformSource src = plainSource();
   src.window.dpiScale = 2.0;

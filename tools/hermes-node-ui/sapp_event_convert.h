@@ -43,10 +43,59 @@ struct PlatformSource {
 ///
 /// \return false for an event type this layer does not forward, and for a
 ///   paste whose clipboard read failed. \p out is unspecified then.
+///
+/// Stateless, so a UTF-16 surrogate in a CHAR event becomes U+FFFD here;
+/// SappEventConverter below pairs them, and is what the host calls.
 bool convertSappEvent(
     const sapp_event &in,
     const PlatformSource &src,
     UiEvent *out);
+
+/// convertSappEvent() with the one piece of state it cannot do without:
+/// the pairing of UTF-16 surrogates into one character.
+///
+/// Sokol's macOS backend sends each UTF-16 code unit of a key's characters
+/// as a CHAR event of its own (`keyDown:` in sokol_app.h), so a character
+/// outside the Basic Multilingual Plane arrives as a high surrogate followed
+/// by a low one. X11 delivers whole code points and never takes the paths
+/// below; an injected event can.
+///
+/// - A CHAR carrying a high surrogate (U+D800-U+DBFF) produces nothing and
+///   is held.
+/// - A CHAR carrying a low surrogate (U+DC00-U+DFFF) that follows a held
+///   high one produces ONE text event with the combined code point. Its
+///   modifiers and repeat flag are the low-surrogate event's.
+/// - A held high surrogate followed by anything else is an orphan: it is
+///   delivered as a text event of its own carrying U+FFFD, ahead of the
+///   event that exposed it, which is then converted as usual. Delivered
+///   rather than dropped, so that a keystroke the platform sent is never
+///   silently lost, and as an event of its own because a text event
+///   carries one character. A held surrogate waits for the next event,
+///   however late; nothing flushes it on a timer.
+/// - A lone low surrogate yields U+FFFD, as any non-scalar value does.
+///
+/// No text event ever carries an unpaired surrogate.
+///
+/// Not synchronized. The host's instance lives in ui_platform.cpp and is
+/// touched only on the platform thread, which converts every event, real
+/// and injected.
+class SappEventConverter {
+ public:
+  /// Convert \p in, appending what it produces to \p out: nothing (a held
+  /// high surrogate, or an event convertSappEvent() refuses), one event, or
+  /// two (an orphan's U+FFFD, then \p in's own).
+  void convert(
+      const sapp_event &in,
+      const PlatformSource &src,
+      std::vector<UiEvent> &out);
+
+ private:
+  bool havePendingHigh_ = false;
+  /// The held high surrogate's event, and the window state it arrived
+  /// with, so an orphan is converted as it would have been at the time.
+  sapp_event pendingHigh_{};
+  WindowState pendingWindow_{};
+};
 
 /// The KeyboardEvent.code name for one of our key codes, or nullptr.
 const char *domCodeForKey(int keyCode);
