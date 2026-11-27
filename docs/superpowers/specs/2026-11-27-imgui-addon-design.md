@@ -255,7 +255,9 @@ platform, renderer and module surface are separate units.
 - HiDPI follows from the logical-unit model and nothing else: with the
   texture protocol below, ImGui rasterizes fonts at the framebuffer scale
   itself. The style is not scaled and the font size is not multiplied;
-  doing either as well would double the UI at 2x. `createWindow` defaults
+  doing either as well would double the UI at 2x. No font is added: ImGui
+  picks its default itself, the bitmap one at 1x and the vector one at
+  2x. `createWindow` defaults
   `highDpi` to false, so the demo and one test pass `highDpi: true`.
   Xvfb is always scale 1: the 2x case is seen only on the Mac.
 
@@ -268,12 +270,14 @@ repository does not have.
   `ImDrawVert`. Its colour format and sample count come from the target,
   so it is rebuilt if a later target differs.
 - One shader with hand-written sources for the two backends: GLSL at the
-  version the producing GL context provides (the builder takes it from
-  what `demo_visual.c`'s `sokol_gl` already compiles to), and Metal
-  Shading Language. Which one is used is decided at run time from
-  `sg_query_backend()`.
+  `#version 410`, which is what `sokol_gl` already compiles on the
+  producing GL 4.3 core context, and Metal Shading Language source,
+  compiled by Sokol at run time. Nothing in this repository compiles MSL
+  from source yet (`sokol_gl` carries precompiled bytecode on macOS), so
+  the plan takes the renderer to the Mac early. Which one is used is
+  decided at run time from `sg_query_backend()`.
 - **Vertex and index data go through `sg_append_buffer`, never
-  `sg_update_buffer`.** Sokol allows one update of a buffer per Sokol
+  `sg_update_buffer`**, on buffers created with `usage.dynamic_update`. Sokol allows one update of a buffer per Sokol
   frame and any number of appends, and a Sokol frame here is a host
   commit, not an ImGui frame: two `render()` calls in one tick share
   one. Each `render()` appends all its draw lists and draws with the
@@ -298,6 +302,10 @@ repository does not have.
   a draw command's vertex offset becomes the draw's base vertex, or the
   vertex buffer binding's offset, whichever this Sokol supports on both
   backends.
+- ImGui's reset-render-state draw callback
+  (`platform_io.DrawCallback_ResetRenderState` at this version) is
+  honoured by re-applying the pipeline and bindings; any other user
+  callback is called.
 - `render()` owns one pass on the target: it clears to a fixed dark
   colour and draws. Targets are single-sampled on both backends today;
   the pipeline takes the sample count from the target regardless. Sharing the
@@ -336,10 +344,16 @@ absent otherwise:
   update after the first upload.
 - `__test.state()`: returns what ImGui holds, read back: display size and
   framebuffer scale, mouse position, `WantCaptureMouse`,
-  `WantCaptureKeyboard`, `WantTextInput`, the scene's button click count,
-  the text field's contents, the last cursor ImGui requested, and the
-  last frame's draw-list totals (commands, vertices, indices, live
-  textures).
+  `WantCaptureKeyboard`, `WantTextInput`, the mouse buttons ImGui holds
+  down (`io.MouseDown`, in ImGui's numbering), the scene's button click
+  count, a count of frames in which the scene saw a new press of the A
+  key (`IsKeyPressed` with repeat off), the text field's contents, the
+  last cursor ImGui requested, and the last frame's draw-list totals
+  (commands, vertices, indices, live textures). **Sampling point:** it
+  reports the state as of the last completed `newFrame()`/`render()`
+  pair. ImGui spreads queued input over frames (its input trickle), so a
+  test runs frames until the state it expects appears, bounded by a
+  frame count and never by time.
 
 These exist so that the tests can assert on ImGui's state before B gives
 JavaScript a way to build UI. B's binding replaces most of their use.
@@ -354,7 +368,7 @@ succeeds in the built binary. It has a forcing-function test, red when
 
 | Test | Proves |
 |---|---|
-| load | The name resolves; `version` matches the pin; the context trace line; plain `hermes-node` refuses the name. `require.resolve()` of the name loads it too, and a following `require()` returns the same object. |
+| load | The name resolves; `version` matches the pin; the context trace line; plain `hermes-node` refuses the name. `require.resolve()` of the name returns the specifier string and loads the addon (its init trace line appears once); two following `require()` calls return the identical object. |
 | missing file | A copy of the binary in an empty directory throws `MODULE_NOT_FOUND` naming the path, from `require()` and from `require.resolve()`, twice in one process. A file there that is not a loadable addon throws `ERR_DLOPEN_FAILED`. Needs no display. |
 | pixels | The flat-fill scene and the textured quad, captured from the presented frame, compared exactly at sample points. Per backend. |
 | many, clip | `many`: exact colours at sample points in the first, a middle and the last quad, and the buffer-growth trace. `clip`: the fill's colour inside the clip rectangle, the clear colour outside it. |
