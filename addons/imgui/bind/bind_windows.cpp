@@ -5,8 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// The Windows group (surface table, "Windows"). Task 1 binds the part the
-// core's tests need; Task 3 completes it.
+// The Windows group (surface table, "Windows").
 
 #include "bind_guards.h"
 #include "bind_util.h"
@@ -144,6 +143,130 @@ napi_value setNextWindowSize(napi_env env, napi_callback_info info) {
   return c.undefined();
 }
 
+/// `setNextWindowBgAlpha(alpha)`, imgui.h:499.
+napi_value setNextWindowBgAlpha(napi_env env, napi_callback_info info) {
+  Call c(env, info, "setNextWindowBgAlpha");
+  float alpha = 0.0f;
+  if (!c.ok() || !c.f32(0, "alpha", &alpha) || !c.needFrame())
+    return nullptr;
+  c.enterImGui();
+  ImGui::SetNextWindowBgAlpha(alpha);
+  if (!c.leaveImGui())
+    return nullptr;
+  return c.undefined();
+}
+
+/// `getWindowPos(out?)`, imgui.h:484.
+napi_value getWindowPos(napi_env env, napi_callback_info info) {
+  Call c(env, info, "getWindowPos");
+  if (!c.ok() || !c.outArray(0, "out") || !c.needFrame())
+    return nullptr;
+  c.enterImGui();
+  const ImVec2 v = ImGui::GetWindowPos();
+  if (!c.leaveImGui())
+    return nullptr;
+  return c.resultVec2(0, v);
+}
+
+/// `getWindowSize(out?)`, imgui.h:485.
+napi_value getWindowSize(napi_env env, napi_callback_info info) {
+  Call c(env, info, "getWindowSize");
+  if (!c.ok() || !c.outArray(0, "out") || !c.needFrame())
+    return nullptr;
+  c.enterImGui();
+  const ImVec2 v = ImGui::GetWindowSize();
+  if (!c.leaveImGui())
+    return nullptr;
+  return c.resultVec2(0, v);
+}
+
+/// `getContentRegionAvail(out?)`, imgui.h:586.
+napi_value getContentRegionAvail(napi_env env, napi_callback_info info) {
+  Call c(env, info, "getContentRegionAvail");
+  if (!c.ok() || !c.outArray(0, "out") || !c.needFrame())
+    return nullptr;
+  c.enterImGui();
+  const ImVec2 v = ImGui::GetContentRegionAvail();
+  if (!c.leaveImGui())
+    return nullptr;
+  return c.resultVec2(0, v);
+}
+
+/// `isWindowFocused(flags = 0)`, imgui.h:480.
+napi_value isWindowFocused(napi_env env, napi_callback_info info) {
+  Call c(env, info, "isWindowFocused");
+  int flags = 0;
+  if (!c.ok() ||
+      (!c.isMissing(0) && !c.flags(0, "flags", kFocusedFlags, &flags)) ||
+      !c.needFrame())
+    return nullptr;
+  c.enterImGui();
+  const bool focused = ImGui::IsWindowFocused(flags);
+  if (!c.leaveImGui())
+    return nullptr;
+  return c.result(focused);
+}
+
+/// `isWindowHovered(flags = 0)`, imgui.h:481. Flags outside
+/// ImGuiHoveredFlags_AllowedMaskForIsWindowHovered are ImGui's own
+/// recoverable error (imgui.cpp:9225), thrown by leaveImGui().
+napi_value isWindowHovered(napi_env env, napi_callback_info info) {
+  Call c(env, info, "isWindowHovered");
+  int flags = 0;
+  if (!c.ok() ||
+      (!c.isMissing(0) && !c.flags(0, "flags", kHoveredFlags, &flags)) ||
+      !c.needFrame())
+    return nullptr;
+  c.enterImGui();
+  const bool hovered = ImGui::IsWindowHovered(flags);
+  if (!c.leaveImGui())
+    return nullptr;
+  return c.result(hovered);
+}
+
+/// `getScrollY()`, imgui.h:514.
+napi_value getScrollY(napi_env env, napi_callback_info info) {
+  Call c(env, info, "getScrollY");
+  if (!c.ok() || !c.needFrame())
+    return nullptr;
+  c.enterImGui();
+  const float v = ImGui::GetScrollY();
+  if (!c.leaveImGui())
+    return nullptr;
+  return c.result(static_cast<double>(v));
+}
+
+/// `getScrollMaxY()`, imgui.h:518.
+napi_value getScrollMaxY(napi_env env, napi_callback_info info) {
+  Call c(env, info, "getScrollMaxY");
+  if (!c.ok() || !c.needFrame())
+    return nullptr;
+  c.enterImGui();
+  const float v = ImGui::GetScrollMaxY();
+  if (!c.leaveImGui())
+    return nullptr;
+  return c.result(static_cast<double>(v));
+}
+
+/// `setScrollHereY(centerYRatio = 0.5)`, imgui.h:520.
+napi_value setScrollHereY(napi_env env, napi_callback_info info) {
+  Call c(env, info, "setScrollHereY");
+  float ratio = 0.5f;
+  if (!c.ok() || (!c.isMissing(0) && !c.f32(0, "centerYRatio", &ratio)))
+    return nullptr;
+  // SetScrollFromPosY asserts plainly on the ratio (imgui.cpp:12979); NaN
+  // is already refused by f32().
+  if (!(ratio >= 0.0f && ratio <= 1.0f))
+    return c.throwRange("centerYRatio must be from 0 to 1; got %g", ratio);
+  if (!c.needFrame())
+    return nullptr;
+  c.enterImGui();
+  ImGui::SetScrollHereY(ratio);
+  if (!c.leaveImGui())
+    return nullptr;
+  return c.undefined();
+}
+
 } // namespace
 
 bool registerWindows(napi_env env, napi_value exports) {
@@ -152,7 +275,18 @@ bool registerWindows(napi_env env, napi_value exports) {
       registerFunction(env, exports, "beginChild", beginChild) &&
       registerFunction(env, exports, "endChild", endChild) &&
       registerFunction(env, exports, "setNextWindowPos", setNextWindowPos) &&
-      registerFunction(env, exports, "setNextWindowSize", setNextWindowSize);
+      registerFunction(env, exports, "setNextWindowSize", setNextWindowSize) &&
+      registerFunction(
+             env, exports, "setNextWindowBgAlpha", setNextWindowBgAlpha) &&
+      registerFunction(env, exports, "getWindowPos", getWindowPos) &&
+      registerFunction(env, exports, "getWindowSize", getWindowSize) &&
+      registerFunction(
+             env, exports, "getContentRegionAvail", getContentRegionAvail) &&
+      registerFunction(env, exports, "isWindowFocused", isWindowFocused) &&
+      registerFunction(env, exports, "isWindowHovered", isWindowHovered) &&
+      registerFunction(env, exports, "getScrollY", getScrollY) &&
+      registerFunction(env, exports, "getScrollMaxY", getScrollMaxY) &&
+      registerFunction(env, exports, "setScrollHereY", setScrollHereY);
 }
 
 } // namespace bind

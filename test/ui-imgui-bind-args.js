@@ -20,7 +20,7 @@
 //            `NOSAMPLE <name>`, so each later task must add its own.
 //  ARGTYPE   a value of the wrong type, or a missing one: TypeError,
 //            ERR_INVALID_ARG_TYPE; the message names the function and the
-//            argument (checked on begin, and on the three functions that
+//            argument (checked on begin, and on the four functions that
 //            dispatch on an argument's type, whose message names both
 //            forms).
 //  REFARRAY  reference arrays that are not what they claim (Review Focus
@@ -87,6 +87,51 @@ const SAMPLES = {
   endChild: [],
   setNextWindowPos: [[0, 0]],
   setNextWindowSize: [[10, 10]],
+  setNextWindowBgAlpha: [1],
+  getWindowPos: [],
+  getWindowSize: [],
+  getContentRegionAvail: [],
+  isWindowFocused: [],
+  isWindowHovered: [],
+  getScrollY: [],
+  getScrollMaxY: [],
+  setScrollHereY: [],
+  sameLine: [],
+  separator: [],
+  separatorText: ['s'],
+  spacing: [],
+  dummy: [[1, 1]],
+  newLine: [],
+  indent: [],
+  unindent: [],
+  setNextItemWidth: [10],
+  pushItemWidth: [10],
+  popItemWidth: [],
+  getCursorScreenPos: [],
+  getTextLineHeight: [],
+  getTextLineHeightWithSpacing: [],
+  getFrameHeight: [],
+  calcTextSize: ['t'],
+  alignTextToFramePadding: [],
+  getID: ['a'],
+  textColored: [[1, 1, 1, 1], 't'],
+  textDisabled: ['t'],
+  textWrapped: ['t'],
+  bulletText: ['t'],
+  labelText: ['l', 't'],
+  isItemHovered: [],
+  isItemClicked: [],
+  isItemActive: [],
+  isItemDeactivatedAfterEdit: [],
+  setItemDefaultFocus: [],
+  setKeyboardFocusHere: [],
+  isKeyPressed: [512],
+  isKeyDown: [512],
+  isMouseDown: [0],
+  isMouseClicked: [0],
+  isMouseDoubleClicked: [0],
+  getMousePos: [],
+  getMouseDragDelta: [],
   beginGroup: [],
   endGroup: [],
   setCursorScreenPos: [[0, 0]],
@@ -193,6 +238,8 @@ async function main() {
       dispatched.push(rejects('pushStyleVar', () => imgui.pushStyleVar(0, 'x'),
                               'ERR_INVALID_ARG_TYPE').message);
       dispatched.push(rejects('pushID', () => imgui.pushID(true),
+                              'ERR_INVALID_ARG_TYPE').message);
+      dispatched.push(rejects('getID', () => imgui.getID(true),
                               'ERR_INVALID_ARG_TYPE').message);
     });
     console.log('ARGTYPE ok');
@@ -408,6 +455,7 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.pushStyleColor(): col must be a number or an array of 4 numbers{{$}}
 // CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.pushStyleVar(): val must be a number or an array of 2 numbers{{$}}
 // CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.pushID(): strId must be a string, or intId a number{{$}}
+// CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.getID(): strId must be a string, or intId a number{{$}}
 // CHECK-NEXT: {{^}}REFARRAY ok{{$}}
 // CHECK-NEXT: {{^}}FLOAT ok{{$}}
 // CHECK-NEXT: {{^}}NUL ok{{$}}

@@ -11,7 +11,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-binding.md`
 |------|-------------|--------|
 | Task 1 | Binding core, the error model, and the Frame group | done (GL) |
 | Task 2 | Constants, and flag and enum checking | done (GL) |
-| Task 3 | Windows, Layout, IDs, Text, Item and input queries | |
+| Task 3 | Windows, Layout, IDs, Text, Item and input queries | done (GL) |
 | Task 4 | Widgets | |
 | Task 5 | Trees, tabs, menus, popups and tooltips | |
 | Task 6 | Tables | |
@@ -52,6 +52,45 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 2 | `ui-imgui-bind-constants.js` | `pushStyleColor`'s `Col_COUNT` refusal removed | `NOTHROW ERR_OUT_OF_RANGE` at `pushStyleColor(imgui.Col_COUNT, 0)`; test failed |
 | 2 | `ui-imgui-bind-constants.js` | `FLT_MIN` exported as `-FLT_MIN` | `WRONG FLT_MIN=-1.1754943508222875e-38 want 1.1754943508222875e-38`; test failed |
 | 2 | `imgui-bind-surface.js` | the `Cond` entry removed from `bind-groups.js`'s `constantTypes` | `EXTRA Cond_Always Cond_Appearing Cond_FirstUseEver Cond_None Cond_Once`; test failed |
+| 3 | `ui-imgui-bind-windows.js`, `ui-imgui-bind-layout.js` | (RED) none recorded: the five sections were implemented before the two tests were first run (see the Task 3 notes) | - |
+| 3 | `ui-imgui-bind-windows.js` | `ImGui::SetNextWindowBgAlpha()` removed, `enterImGui()` kept (Windows: an ImGui call removed) | `BGALPHA WRONG 200,175=19,19,87 120,120=19,19,87 280,230=19,19,87` (the 0.25-alpha blue blended over the clear); `COVERAGE Windows ok` still printed; test failed |
+| 3 | `ui-imgui-bind-windows.js` | `enterImGui()` removed from `getScrollMaxY` (Windows: coverage) | `UNCOVERED Windows getScrollMaxY` (SCROLL still passed); test failed |
+| 3 | `ui-imgui-bind-windows.js` | `begin()`'s `write(pOpen)` removed (Windows: a write-back) | `CLOSE WRONG open=true active=true at=329,60`; test failed |
+| 3 | `ui-imgui-bind-windows.js` | `setScrollHereY`'s 0..1 check removed (Windows: an argument check) | ImGui aborted in REJECTED: `imgui.cpp:12979 ... Assertion center_y_ratio >= 0.0f && center_y_ratio <= 1.0f failed`; test failed |
+| 3 | `ui-imgui-bind-windows.js` | `begin()`'s empty-name check removed | aborted in REJECTED: `imgui.cpp:8003 ... Assertion name != __null && name[0] != '\0' failed`; test failed |
+| 3 | `ui-imgui-bind-windows.js` | `beginChild`'s `WindowFlags_AlwaysAutoResize` check removed | aborted: `imgui.cpp:6904 ... Cannot specify ImGuiWindowFlags_AlwaysAutoResize for BeginChild()`; test failed |
+| 3 | `ui-imgui-bind-windows.js` | `beginChild`'s `ChildFlags_AlwaysAutoResize` with `_ResizeX`/`_ResizeY` check removed | aborted: `imgui.cpp:6907 ... Cannot use ImGuiChildFlags_ResizeX or ImGuiChildFlags_ResizeY with ImGuiChildFlags_AlwaysAutoResize!`; test failed |
+| 3 | `ui-imgui-bind-windows.js` | `beginChild`'s "`AlwaysAutoResize` needs `AutoResizeX`/`Y`" check removed | aborted: `imgui.cpp:6908 ... Must use ImGuiChildFlags_AutoResizeX or ImGuiChildFlags_AutoResizeY with ImGuiChildFlags_AlwaysAutoResize!`; test failed |
+| 3 | `ui-imgui-bind-windows.js` | `getWindowPos(out)` returning a new array instead of `out` (`resultVec2` given an argument index past argc) | `POS WRONG pos=40,50 size=300,200 out=/300,200 same=false/true`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `ImGui::Indent()` removed, `enterImGui()` kept (Layout: an ImGui call removed) | `INDENT WRONG 28 28 8` (the unindent then moved the next item left of the margin); test failed |
+| 3 | `ui-imgui-bind-layout.js` | `ImGui::PopItemWidth()` removed | `WIDTH WRONG 390,123,90,90,90`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `enterImGui()` removed from `getFrameHeight` (Layout: coverage) | `UNCOVERED Layout getFrameHeight`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `pushID(number)` dispatched to the string overload (`PushID(std::to_string(id).c_str())`) | `IDS WRONG {... "int7":1753019048,"str7":1753019048 ...}`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `getID(number)` dispatched to the string overload | `IDS WRONG {... "getInt":3327332898,"getStr":3327332898}`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `ImGui::PopID()` removed (IDs: an ImGui call removed) | the layout window's `end()` threw `imgui.end(): Missing PopID()`, uncaught, after `GREEN ok`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `ImGui::TextColored()` replaced by `TextUnformatted()` (Text: an ImGui call removed) | `GREEN WRONG 0 0`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `ImGui::IsKeyDown()` replaced by `false`, `enterImGui()` kept (Queries: an ImGui call removed) | `TIMEOUT KEY down`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `ImGui::SetKeyboardFocusHere()` removed | `FOCUSHERE WRONG before={"here":false,"other":true} after={"here":false,"other":true}`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `isMouseDoubleClicked` always false (ImGui call result discarded) | `DOUBLE WRONG never seen` after five attempts; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `getMouseDragDelta(..., out)` returning a new array (Queries: the out write-back) | `DRAG WRONG 40,30 ` (the value right, `out` left empty); test failed |
+| 3 | `ui-imgui-bind-layout.js` | the mouse-button range check removed (`kLastMouseButton` = `INT32_MAX`; Queries: an argument check) | aborted in REJECTED: `imgui.cpp:10766 ... IsMouseClicked ... Assertion button >= 0 && button < ... failed`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `readKey`'s named-key-or-single-modifier check removed, the enum check kept | aborted in REJECTED: `imgui.cpp:10286 ... GetKeyData ... Assertion IsNamedKey(key) ... failed`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `setKeyboardFocusHere`'s `offset >= -1` check removed | aborted in REJECTED: `imgui.cpp:9687 ... Assertion offset >= -1 failed`; test failed |
+| 3 | `ui-imgui-bind-windows.js` | `IsWindowHovered()`'s result replaced by false | `HOVER WRONG inside=false outside=false`; test failed |
+| 3 | `ui-imgui-bind-windows.js` | `IsWindowFocused()`'s result replaced by false | `FOCUS WRONG afterB={"a":false,"b":false} afterA={"a":false,"b":false}`; test failed |
+| 3 | `ui-imgui-bind-windows.js` | `ImGui::SetScrollHereY()` removed | `SCROLL WRONG before=0,452 after=0/452`; test failed |
+| 3 | `ui-imgui-bind-windows.js` | `GetContentRegionAvail()` replaced by `GetWindowSize()` | `AVAIL WRONG 300,200 out=300,200`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `ImGui::SameLine()` removed | `SAMELINE WRONG` (the second button at y 70, the first at 47); test failed |
+| 3 | `ui-imgui-bind-layout.js` | `ImGui::BeginGroup()` removed | GROUP's `endGroup()` refused by its guard, `imgui.endGroup(): EndGroup() with no group open`, uncaught, after `INDENT ok`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `Dummy()` given its size transposed | `DUMMY WRONG {"min":[28,47],"max":[68,77]}`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `ImGui::SetCursorScreenPos()` removed | `CURSOR WRONG 28,47 28,47 28,47`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `ImGui::Spacing()` removed | `SPACING WRONG` with `"plain":4,"spacing":4`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `calcTextSize` passing false for `hideTextAfterDoubleHash` | `TEXTSIZE WRONG` with `"hidden":[42,13]` where `"size":[21,13]`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `ImGui::AlignTextToFramePadding()` removed | `HEIGHTS WRONG` with `"cursorY":64,"alignedY":64`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `textDisabled` passing its text as the format (`TextDisabled(s.c_str(), 1234567)`) | `TEXTS WRONG empty= percent=49/14` (`%d` formatted); test failed |
+| 3 | `ui-imgui-bind-layout.js` | `IsItemHovered()`'s result replaced by false | `HOVERED WRONG false false`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `IsItemClicked()`'s result replaced by false | `CLICK WRONG [true,false,true,true,false]`; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `GetMousePos()` replaced by `(0, 0)` | `MOUSEPOS WRONG 0,0 0,0`; test failed |
 
 ## Behaviours no test detects
 
@@ -133,13 +172,11 @@ automated test would notice losing. Each task appends its own.
   the frame is open and the error is thrown. The discard path still only
   traces.
 - **Checks implemented in Task 1 that still need their test cases:**
-  - `begin('')` -> `ERR_INVALID_ARG_VALUE`: `begin()` in
-    `addons/imgui/bind/bind_windows.cpp`.
-  - `beginChild`'s three flag combinations -> `ERR_OUT_OF_RANGE`
-    (`WindowFlags_AlwaysAutoResize` in `windowFlags`;
-    `ChildFlags_AlwaysAutoResize` with `_ResizeX`/`_ResizeY`; it without
-    `_AutoResizeX`/`_AutoResizeY`): `beginChild()` in
-    `addons/imgui/bind/bind_windows.cpp`.
+  - ~~`begin('')` -> `ERR_INVALID_ARG_VALUE`~~: tested in Task 3,
+    `test/ui-imgui-bind-windows.js` REJECTED.
+  - ~~`beginChild`'s three flag combinations -> `ERR_OUT_OF_RANGE`~~:
+    tested in Task 3, `test/ui-imgui-bind-windows.js` REJECTED, with a
+    mutation for each.
   - `sliderFloat3`'s `SliderFlags_WrapAround` rejection and its `format`
     check: `sliderFloat3()` in `addons/imgui/bind/bind_widgets.cpp`
     (the format check itself is `Call::format()` / `validFormat()` in
@@ -263,3 +300,105 @@ automated test would notice losing. Each task appends its own.
   argument will be read with `intIn(0, 4)` (G1); no function bound so far
   takes one.
 
+### Task 3
+
+- **The five sections are bound as their entries say**, in the files
+  Task 1 created for them: `bind_windows.cpp` (Windows), `bind_layout.cpp`
+  (Layout and IDs), `bind_text.cpp` (Text), `bind_queries.cpp` (Item and
+  input queries). The brief's "Create" for those four files is out of
+  date, and `addons/imgui/CMakeLists.txt` needed no change: the files were
+  already listed. No (b) guard was added, since none of these entries has
+  one beyond Task 1's `canEndGroup` and `canEndChild`, so
+  `ui-imgui-bind-errors.js` is unchanged and `GUARDS ok` still holds.
+- **No RED run was recorded.** The four bind files were extended before
+  the two new tests were first run, so the first run was already green;
+  each test's ability to fail is shown by the mutations instead (every
+  case of both tests has at least one that breaks it).
+- **No disagreement between the surface table and ImGui's source** was
+  found in these five sections; no entry was changed.
+- **Two keys of the argument rules, implemented once each**:
+  `kLastMouseButton` (4) for every mouse-button argument (`intIn(0, 4)`,
+  G1's exception), and `readKey()` in `bind_queries.cpp` for `isKeyDown` /
+  `isKeyPressed`: `enumValue(kKey)` first (G1), then GetKeyData's own
+  condition (imgui.cpp:10283-10286), a named key or exactly one of the
+  four `Mod_` keys, which refuses `Key_None` / `Mod_None`,
+  `Key_NamedKey_END` and `Key_NamedKey_COUNT` with `key must be a named key
+  or a single Mod_ constant; got <n>`.
+- **`getID` dispatches like `pushID`**, with the same two-form TypeError;
+  `ui-imgui-bind-args.js` ARGTYPE checks it, and NOFRAME has a sample for
+  every new function.
+- **Behaviour asserted in Task 4, called here only for coverage:**
+  `isItemDeactivatedAfterEdit` (called every frame of the queries case;
+  a button never edits, so it is always false here) and the text-field
+  half of `setKeyboardFocusHere` (activation of an inputable item). The
+  button half is asserted here: FOCUSHERE.
+- **`setItemDefaultFocus` has no behavioural assertion, and none could be
+  written with this surface.** It applies only while its window is
+  appearing and ImGui has a navigation init request for it
+  (imgui.cpp:9716-9730), and its effect is the navigation id of the
+  window, which nothing bound reads (`IsItemFocused` is not bound) and
+  which is not drawn without keyboard navigation
+  (`ImGuiConfigFlags_NavEnableKeyboard` is not set by the addon). It is
+  called in FOCUSHERE so that its count is non-zero.
+- **The two windows tests follow the brief with these choices, each the
+  strongest true assertion found:**
+  - CLOSE locates the close button from `getWindowPos()`,
+    `getWindowSize()`, `getTextLineHeight()` and a pushed
+    `StyleVar_FramePadding` of `[4, 4]`, following
+    RenderWindowTitleBarContents (imgui.cpp:7865), rather than from
+    default style values.
+  - SCROLL reads the scroll inside the parent window, right after its
+    `begin()` (where ImGui applies a scroll request), and runs up to ten
+    frames for a new window's content size to settle before reading
+    `getScrollMaxY() > 0`. `getScrollY() === getScrollMaxY()` held exactly.
+  - AVAIL: the brief names no assertion for `getContentRegionAvail`; it is
+    exactly `[280, 180]` at the start of a 300x200 window with no title
+    bar and a 10-unit WindowPadding.
+  - BGALPHA pushes `Col_WindowBg` as `[0, 0, 1, 0.25]` and checks the
+    interior is `(0, 0, 255)` exactly: without `setNextWindowBgAlpha(1)`
+    the window is the blend `(19, 19, 87)` (the mutation).
+  - WIDTH: no single-value slider is bound before Task 4, so the slider is
+    `sliderFloat3` with a hidden label (`'##next'`), whose item is the
+    group of its three fields and is exactly the item width
+    (PushMultiItemsWidths). `popItemWidth()` is checked by the next
+    slider returning to the default width.
+  - GREEN scans every pixel of the `textColored` item's rectangle for
+    exact `(0, 255, 0)`, and the same text drawn with `text()` beside it
+    for none. Some glyph pixels do come out exactly `(0, 255, 0)` at scale
+    1 (observed: the case passes, and with `TextColored` replaced it counts
+    0); why the font's coverage is fully opaque there was not looked into.
+    This is the one assertion on glyph pixels, as the brief asks, rather
+    than on a flat area 3 px from any edge, which a glyph does not have.
+  - HEIGHTS: "positive and ordered" is asserted as
+    `getTextLineHeight() > 0`, equal to `text('abc')`'s height, and less
+    than both other heights; `alignTextToFramePadding` lowers the next text
+    by `(frameHeight - lineHeight) / 2`.
+  - Beyond the brief: GROUP (`beginGroup`/`endGroup`'s item is the union
+    of its two buttons), SPACING (`spacing`, `newLine`, `separator`,
+    `separatorText` geometry), TEXTS (each text variant is a non-empty
+    item; `textDisabled('%d')` is as wide as `'xx'`, so no `%` is
+    interpreted), and `calcTextSize`'s `hideTextAfterDoubleHash` and
+    `wrapWidth`.
+- **DOUBLE depends on ImGui's time, which is the frame clock.**
+  `isMouseDoubleClicked` is true only when two clicks fall within
+  `io.MouseDoubleClickTime` (0.30 s) of ImGui's own time, which advances by
+  `io.DeltaTime`, measured from the real clock (imgui_platform.cpp). The
+  four button events are injected together, so ImGui's input trickling
+  spreads them over four consecutive frames; and the case tries up to five
+  times, each attempt a fresh pair (a failed attempt means the gap
+  exceeded the double-click time, so the next one starts a new count). A
+  run whose frames all took over ~75 ms would still fail it. The
+  assertion is otherwise a read-back, like every other.
+- **`beginChild`'s label-id guard (its `Label-id: yes`) is still Task 4's**,
+  as Task 1's notes rule (`labelIdIsWindowId` comes with Task 4's STRINGS
+  case and mutation); until then `beginChild('')` directly in a window
+  reaches ImGui's plain assertion.
+- **`isWindowHovered` and `isItemHovered` with flags outside their allowed
+  masks** (kind (c), imgui.cpp:9225 and 5114) throw `ERR_IMGUI_USAGE`
+  after the call; both tests' REJECTED pin the message and that the call
+  was counted.
+- **`check-hermes-node-unit` was red once** before this commit, with
+  `SurfaceTableTest.DisplacementRacesCompletionUnderLoad` the only failure
+  (in two of three runs); it passed 5/5 alone and the third suite run was
+  460/460. That is the open load-dependency issue in `dz/` for that test,
+  not this task: nothing here touches the compositor.
