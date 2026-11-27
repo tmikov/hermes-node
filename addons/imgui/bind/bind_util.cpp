@@ -66,14 +66,39 @@ bool isIntConversion(char c) {
   return std::strchr("diuxXo", c) != nullptr;
 }
 
-/// Whether \p fmt holds exactly one printf conversion and it fits \p kind:
-/// flags, a width and a precision allowed, no `*`, no length modifier.
-/// `%%` is a literal and does not count.
-bool validFormat(const std::string &fmt, FormatKind kind) {
+/// The longest conversion specification, from its `%` to its conversion
+/// character inclusive, that ImGui can copy. ImParseFormatSanitizeForPrinting
+/// and ImParseFormatSanitizeForScanning copy the specification into a
+/// `char[32]` and check only with a plain assertion that its length plus
+/// the terminator is less than 32, that is at most 30 bytes
+/// (imgui_widgets.cpp:3713-3714, 3728-3729). The copies: fmt_sanitized[32]
+/// in RoundScalarWithFormatT (imgui_widgets.cpp:2516-2517), reached from
+/// DragBehaviorT and SliderBehaviorT when the value changes (2636, 3250,
+/// 3272); format_sanitized[32] in DataTypeApplyFromText (2402-2409), on the
+/// text entry of an int slider, drag or input; and fmt_buf[32] in
+/// TempInputScalar, which ImParseFormatTrimDecorations fills with a bounded
+/// copy that would silently truncate (3823-3825, 3704). Everything else that
+/// formats with the whole format string writes a fixed buffer through
+/// ImFormatString, which is vsnprintf with the buffer's size
+/// (imgui.cpp:2466-2478): value_buf[64] in DragScalar and SliderScalar
+/// (2838-2839, 3450), buf[64] in InputScalar (3887-3891), v_str[64] in
+/// RoundScalarWithFormatT (2521-2522), data_buf[32] in TempInputScalar
+/// (3826-3828). Those truncate the text and cannot overflow.
+constexpr size_t kMaxFormatSpec = 30;
+
+enum class FormatProblem { None, Wrong, TooLong };
+
+/// Why \p fmt is not accepted for \p kind (None when it is): exactly
+/// one printf conversion that fits \p kind, with flags, a width and a
+/// precision allowed, no `*`, no `$`, no length modifier, at most
+/// kMaxFormatSpec bytes long. `%%` is a literal and does not count, as in
+/// ImGui's own ImParseFormatFindStart (imgui_widgets.cpp:3659-3669).
+FormatProblem formatProblem(const std::string &fmt, FormatKind kind) {
   int conversions = 0;
   for (size_t i = 0; i < fmt.size(); ++i) {
     if (fmt[i] != '%')
       continue;
+    const size_t start = i;
     ++i;
     if (i < fmt.size() && fmt[i] == '%')
       continue;
@@ -87,13 +112,15 @@ bool validFormat(const std::string &fmt, FormatKind kind) {
         ++i;
     }
     if (i >= fmt.size())
-      return false;
+      return FormatProblem::Wrong;
     const char c = fmt[i];
     if (kind == FormatKind::Float ? !isFloatConversion(c) : !isIntConversion(c))
-      return false;
+      return FormatProblem::Wrong;
+    if (i - start + 1 > kMaxFormatSpec)
+      return FormatProblem::TooLong;
     ++conversions;
   }
-  return conversions == 1;
+  return conversions == 1 ? FormatProblem::None : FormatProblem::Wrong;
 }
 
 } // namespace
@@ -393,7 +420,18 @@ bool Call::format(
     std::string *out) {
   if (!string(i, what, out))
     return false;
-  if (!validFormat(*out, kind)) {
+  const FormatProblem problem = formatProblem(*out, kind);
+  if (problem == FormatProblem::TooLong) {
+    throwType(
+        "ERR_INVALID_ARG_VALUE",
+        "%s: the conversion must be at most %zu characters long, from its "
+        "'%%' to its conversion character; got '%s'",
+        what,
+        kMaxFormatSpec,
+        out->c_str());
+    return false;
+  }
+  if (problem != FormatProblem::None) {
     throwType(
         "ERR_INVALID_ARG_VALUE",
         "%s must hold exactly one %s conversion (such as %s); got '%s'",
@@ -736,8 +774,13 @@ bool Call::write(RefFloat &r) {
 
 bool Call::write(RefString &r) {
   // Compared with the original string's encoding, not the truncated copy,
-  // so that a truncation is written back too.
-  const size_t n = std::strlen(r.buffer.data());
+  // so that a truncation is written back too. Bounded by the capacity,
+  // although the buffer stays terminated: ImGui never writes its last byte
+  // with anything but the terminator. ImGui inserts only whole code points
+  // when the buffer is full (STB_TEXTEDIT_INSERTCHARS,
+  // imgui_widgets.cpp:4311-4313), and napi_create_string_utf8 would turn an
+  // invalid sequence into U+FFFD rather than fail.
+  const size_t n = strnlen(r.buffer.data(), r.buffer.size());
   if (n == r.original.size() &&
       std::memcmp(r.buffer.data(), r.original.data(), n) == 0)
     return true;

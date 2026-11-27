@@ -27,6 +27,9 @@
 //             fits is not written back at all (a setter counts writes).
 //  EMOJI      a field holding U+1F600: End, then x typed: the string is
 //             U+1F600 followed by x.
+//  FULL       a field of capacity 5 holding 'ab': End, U+1F600 and x typed:
+//             the emoji does not fit and is not inserted, not even in part;
+//             the string comes back as 'abx'.
 //  SURROGATE  'a\ud800bc' at capacity 5: written back as 'a�', the
 //             unpaired surrogate encoded as U+FFFD.
 //  CAPACITY   capacity 0, 2^24 + 1 and 1.5: ERR_OUT_OF_RANGE, not called;
@@ -240,6 +243,28 @@ async function main() {
     await harness.clickAt(h, draw, BLANK);
   }
 
+  // --- FULL ------------------------------------------------------------
+  {
+    // Capacity 5 holding 'ab' leaves room for two more bytes: ImGui
+    // inserts only whole code points (STB_TEXTEDIT_INSERTCHARS,
+    // imgui_widgets.cpp:4311-4313), so a 4-byte emoji is refused and the
+    // x after it fits.
+    const s = ['ab'];
+    let r;
+    const draw = inWindow(() => {
+      imgui.inputText('full', s, 5);
+      r = rect();
+    });
+    await settle(draw);
+    await harness.clickAt(h, draw, harness.center(r));
+    harness.inject(h, {type: 'KEY_DOWN', keyCode: SAPP_KEYCODE_END});
+    harness.inject(h, {type: 'KEY_UP', keyCode: SAPP_KEYCODE_END});
+    harness.inject(h, {type: 'CHAR', charCode: 0x1F600});
+    await type(draw, 'x', () => s[0] !== 'ab');
+    console.log(s[0] === 'abx' ? 'FULL ok' : 'FULL WRONG ' + JSON.stringify(s[0]));
+    await harness.clickAt(h, draw, BLANK);
+  }
+
   // --- SURROGATE -------------------------------------------------------
   {
     const s = ['a\ud800bc'];
@@ -431,6 +456,7 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}ENTER ok{{$}}
 // CHECK-NEXT: {{^}}TRUNCATE ok{{$}}
 // CHECK-NEXT: {{^}}EMOJI ok{{$}}
+// CHECK-NEXT: {{^}}FULL ok{{$}}
 // CHECK-NEXT: {{^}}SURROGATE ok{{$}}
 // CHECK-NEXT: {{^}}CAPACITY ok{{$}}
 // CHECK-NEXT: {{^}}FLAGS ok{{$}}

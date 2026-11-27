@@ -44,8 +44,14 @@
 //            a non-empty item.
 //  FORMAT    a slider with format '%.1f units' draws; '%s', '%d', '%f %f'
 //            and '%' on a float (sliders, dragFloat, inputFloat,
-//            sliderFloat2..4), '%f' and '%s' on an int: ERR_INVALID_ARG_VALUE,
-//            not called.
+//            sliderFloat2..4), '%f' and '%s' on an int, and the adversarial
+//            spellings ('%ld', '%hhd', '%ls', '%n', '%*d', '%5$d', '%.*f',
+//            '%lf', '%Lf') on both: ERR_INVALID_ARG_VALUE, not called.
+//            '%%%.1f', '%i' and '%04x' are accepted.
+//  FORMATLEN a 30-byte conversion is accepted by sliderFloat and dragInt
+//            and then driven through ImGui's 32-byte copy of it (a drag to
+//            the maximum; a Ctrl+click, 7 and Enter); one byte longer is
+//            ERR_INVALID_ARG_VALUE, not called.
 //  REJECTED  arrowButton(Dir_None / Dir_COUNT); SliderFlags_WrapAround on
 //            every slider (accepted by dragFloat); slider bounds beyond
 //            FLT_MAX/2 and INT_MIN/2 .. INT_MAX/2 (the edges accepted);
@@ -54,12 +60,9 @@
 //            ERR_OUT_OF_RANGE, not called.
 //  COVERAGE  every Widgets function has reached ImGui.
 //
-// THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
-//  ImGui::SmallButton() removed, enterImGui() kept: BUTTONS fails;
-//  enterImGui() removed from bullet: COVERAGE fails;
-//  radioButton's write-back of v removed: RADIO fails;
-//  the WrapAround check of sliderFloat removed: REJECTED fails (abort);
-//  the format check removed: FORMAT fails.
+// THE MUTATIONS THIS MUST BREAK: the full list, with what each did, is the
+// Mutations table of docs/superpowers/plans/progress-imgui-binding.md
+// (the rows for this file, Task 4 and its review).
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -476,14 +479,17 @@ async function main() {
 
   // --- FORMAT ----------------------------------------------------------
   {
-    let r, drew;
+    let r, drew, accepted = 0;
     await h.run(inWindow(() => {
       const before = calls('sliderFloat');
       imgui.sliderFloat('##units', [0.5], 0, 1, '%.1f units');
       r = rect();
       drew = calls('sliderFloat') === before + 1;
       const value = 'ERR_INVALID_ARG_VALUE';
-      for (const fmt of ['%s', '%d', '%f %f', '%', 'none']) {
+      // Adversarial spellings: a length modifier, %n, '*' and '$'.
+      const adversarial = ['%ld', '%hhd', '%ls', '%n', '%*d', '%5$d', '%.*f',
+                           '%lf', '%Lf'];
+      for (const fmt of ['%s', '%d', '%f %f', '%', 'none', ...adversarial]) {
         rejects('sliderFloat',
                 () => imgui.sliderFloat('f', [0], 0, 1, fmt), value);
         rejects('sliderFloat2',
@@ -497,13 +503,82 @@ async function main() {
         rejects('inputFloat',
                 () => imgui.inputFloat('f', [0], 0, 0, fmt), value);
       }
-      for (const fmt of ['%f', '%s', '%d %d']) {
+      for (const fmt of ['%f', '%s', '%d %d', ...adversarial]) {
         rejects('sliderInt', () => imgui.sliderInt('i', [0], 0, 1, fmt), value);
         rejects('dragInt', () => imgui.dragInt('i', [0], 1, 0, 0, fmt), value);
       }
+      // Accepted: a literal percent before the conversion (ImGui's
+      // ImParseFormatFindStart skips '%%' the same way), and '%i'.
+      const acceptedBefore = calls('sliderFloat') + calls('sliderInt');
+      imgui.sliderFloat('pct', [0.5], 0, 1, '%%%.1f');
+      imgui.sliderInt('i conv', [1], 0, 2, '%i');
+      imgui.sliderInt('x conv', [1], 0, 2, '%04x');
+      accepted = calls('sliderFloat') + calls('sliderInt') - acceptedBefore;
     }));
-    const ok = drew && width(r) > 0;
-    console.log(ok ? 'FORMAT ok' : 'FORMAT WRONG ' + drew + ' ' + JSON.stringify(r));
+    const ok = drew && width(r) > 0 && accepted === 3;
+    console.log(ok ? 'FORMAT ok' :
+                     'FORMAT WRONG ' + drew + ' ' + accepted + ' ' +
+                         JSON.stringify(r));
+  }
+
+  // --- FORMATLEN -------------------------------------------------------
+  {
+    // ImGui copies a conversion specification into 32-byte buffers with
+    // only a plain assertion (imgui_widgets.cpp:3714, 3729), on a float
+    // slider whose value changes (RoundScalarWithFormatT) and on the text
+    // entry of an int drag (DataTypeApplyFromText): 30 bytes is the most it
+    // takes. Each candidate is drawn; one that is accepted is then driven
+    // through that copy, so a limit that is too generous aborts here.
+    const float30 = '%.' + '0'.repeat(26) + '1f';
+    const int30 = '%' + '0'.repeat(27) + '1d';
+    const results = [];
+    for (const [kind, fmt] of [['float', float30], ['float', '%.' + '0'.repeat(27) + '1f'],
+                               ['int', int30], ['int', int30.slice(0, -1) + '1d']]) {
+      const name = kind === 'float' ? 'sliderFloat' : 'dragInt';
+      const v = [0];
+      let r = null, threw = null, counted = 0;
+      const draw = inWindow(() => {
+        const before = calls(name);
+        try {
+          if (kind === 'float')
+            imgui.sliderFloat('##len', v, 0, 10, fmt);
+          else
+            imgui.dragInt('##len', v, 1, 0, 0, fmt);
+          r = rect();
+        } catch (e) {
+          threw = e;
+        }
+        counted = calls(name) - before;
+      });
+      await settle(draw);
+      if (threw !== null) {
+        results.push(fmt.length + ':' + threw.code + '/' + counted);
+        continue;
+      }
+      if (kind === 'float') {
+        const y = Math.floor((r.min[1] + r.max[1]) / 2);
+        const from = harness.center(r);
+        await harness.dragFromTo(h, draw, from, [Math.floor(r.max[0]) + 60, y]);
+      } else {
+        // Ctrl+click turns the drag into a text field (DragScalar,
+        // imgui_widgets.cpp:2792), whose Enter applies the text through
+        // DataTypeApplyFromText.
+        const at = harness.center(r);
+        await harness.moveTo(h, draw, at);
+        harness.inject(h, {type: 'MOUSE_DOWN', button: LEFT, modifiers: 2,
+                           mouseX: at[0], mouseY: at[1]});
+        await harness.until(h, draw, (s) => s.mouseDown[LEFT], 'FORMATLEN down');
+        harness.inject(h, {type: 'MOUSE_UP', button: LEFT, modifiers: 0,
+                           mouseX: at[0], mouseY: at[1]});
+        await harness.until(h, draw, (s) => s.wantTextInput, 'FORMATLEN input');
+        harness.inject(h, {type: 'CHAR', charCode: 0x37}); // 7
+        await harness.pressKey(h, draw, SAPP_KEYCODE_ENTER, 0, () => v[0] === 7);
+      }
+      results.push(fmt.length + ':' + v[0]);
+    }
+    const got = results.join(' ');
+    const want = '30:10 31:ERR_INVALID_ARG_VALUE/0 30:7 31:ERR_INVALID_ARG_VALUE/0';
+    console.log(got === want ? 'FORMATLEN ok' : 'FORMATLEN WRONG ' + got);
   }
 
   // --- REJECTED --------------------------------------------------------
@@ -617,6 +692,7 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}LISTBOX ok{{$}}
 // CHECK-NEXT: {{^}}TEXTFIELDS ok{{$}}
 // CHECK-NEXT: {{^}}FORMAT ok{{$}}
+// CHECK-NEXT: {{^}}FORMATLEN ok{{$}}
 // CHECK-NEXT: {{^}}REJECTED ok{{$}}
 // CHECK-NEXT: {{^}}COVERAGE Widgets ok{{$}}
 // CODE: EXITCODE 0

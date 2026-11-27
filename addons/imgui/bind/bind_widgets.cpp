@@ -365,11 +365,12 @@ sliderFloatN(napi_env env, napi_callback_info info, const char *name) {
       !c.needFrame())
     return nullptr;
   c.enterImGui();
+  static_assert(N >= 2 && N <= 4, "SliderFloat2 .. SliderFloat4");
   bool changed = false;
-  if (N == 2)
+  if constexpr (N == 2)
     changed = ImGui::SliderFloat2(
         label.c_str(), v.ptr(), vMin, vMax, format.c_str(), flags);
-  else if (N == 3)
+  else if constexpr (N == 3)
     changed = ImGui::SliderFloat3(
         label.c_str(), v.ptr(), vMin, vMax, format.c_str(), flags);
   else

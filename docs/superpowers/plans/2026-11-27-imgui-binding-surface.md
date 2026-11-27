@@ -121,6 +121,31 @@ applied" at the end lists them.
   `FLT_MAX` is the plots' "compute from the data" (imgui.h:812, 814).
   JavaScript's own `-Number.MIN_VALUE` converts to `-0.0f` and must not
   be used for the first.
+- **G5, formats.** A `format` argument (sliders, drags, `inputFloat`)
+  must hold exactly one printf conversion of the value's kind (`f F e E
+  g G a A` for a float, `d i u x X o` for an int), with flags (`-+ #0`),
+  a width and a precision allowed and nothing else: no `*`, no `$`, no
+  length modifier, no `%n`; `%%` is a literal, as in ImGui's own
+  `ImParseFormatFindStart` (widgets:3659-3669). Anything else is
+  `ERR_INVALID_ARG_VALUE`. The conversion specification, from its `%` to
+  its conversion character inclusive, is also at most **30 bytes**:
+  `ImParseFormatSanitizeForPrinting` and `ImParseFormatSanitizeForScanning`
+  copy it into a `char[32]` and check only with a plain assertion that its
+  length plus the terminator is below 32 (widgets:3713-3714, 3728-3729).
+  Those copies are `fmt_sanitized[32]` in `RoundScalarWithFormatT`
+  (widgets:2516-2517), reached from `DragBehaviorT` and `SliderBehaviorT`
+  when a float value changes (widgets:2636, 3250, 3272), and
+  `format_sanitized[32]` in `DataTypeApplyFromText` (widgets:2402-2409),
+  reached from an int widget's text entry; `TempInputScalar`'s
+  `fmt_buf[32]` is filled by a bounded copy that would truncate instead
+  (widgets:3823-3825, 3704). The whole string has no limit: everywhere
+  else it is used it formats into a fixed buffer through `ImFormatString`,
+  which is `vsnprintf` bounded by that buffer (imgui.cpp:2466-2478):
+  `value_buf[64]` in `DragScalar` / `SliderScalar` (widgets:2838-2839,
+  3450), `buf[64]` in `InputScalar` (widgets:3887-3891), `v_str[64]` in
+  `RoundScalarWithFormatT` (widgets:2521-2522), `data_buf[32]` in
+  `TempInputScalar` (widgets:3826-3828). A long decoration is truncated on
+  screen, never overflowed.
 
 ## Shared preconditions
 

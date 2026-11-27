@@ -158,6 +158,10 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 5 | `ui-imgui-bind-errors.js` | `canBeginPopupContextItem()` returning nullptr always | aborted in GUARD_CONTEXTITEM: `imgui.cpp:13617 ... Assertion id != 0 failed`; test failed |
 | 5 | `ui-imgui-bind-errors.js` | `canEndCombo()` returning nullptr always | no abort: ImGui's own check reported it, `CALLED endCombo: imgui.endCombo(): Calling EndCombo() in wrong window!` (GUARD_COMBO, the unmatched call); test failed |
 | 5 | `ui-imgui-bind-errors.js` | the reset of `g.BeginComboDepth` removed from `guard::beginFrame()` | `COMBO_LEFT_OPEN WRONG ERR_IMGUI_USAGE true true ["##Combo_01"]`; test failed |
+| 4 (review) | `ui-imgui-bind-widgets.js` | the 30-byte limit on a conversion specification removed (`formatProblem`, `bind_util.cpp`) | FORMATLEN: the 31-byte float format was accepted, and the drag that followed aborted ImGui: `imgui_widgets.cpp:3714: ImParseFormatSanitizeForPrinting ... Assertion (size_t)(fmt_end - fmt_in + 1) < fmt_out_size failed`; test failed |
+| 4 (review) | `ui-imgui-bind-widgets.js` | `i` removed from the int conversions | `TypeError: imgui.sliderInt(): format must hold exactly one integer conversion (such as %d); got '%i'`, uncaught in FORMAT's frame; test failed |
+| 4 (review) | `ui-imgui-bind-widgets.js` | `%%` counted as a conversion instead of a literal | `TypeError: imgui.sliderFloat(): ... got '%%%.1f'`, uncaught in FORMAT's frame; test failed |
+| 4 (review) | `ui-imgui-bind-widgets.js` | `l` accepted as a length modifier | `NOTHROW ERR_INVALID_ARG_VALUE` (`'%ld'`); test failed |
 
 ## Behaviours no test detects
 
@@ -203,6 +207,18 @@ automated test would notice losing. Each task appends its own.
   test can see it lost; it was checked by reading (it writes
   `style.HoverStationaryDelay` and `style.HoverDelayShort` and returns
   the previous `HoverDelayShort`).
+- **Task 4 (review): `Call::write(RefString)` measures the buffer with
+  `strnlen` bounded by its capacity**, not `strlen`. The buffer is always
+  terminated (the binding terminates it and ImGui never writes its last
+  byte with anything else), so no test can tell the two apart; the bound
+  is a defence. Its neighbour, invalid UTF-8 coming back from ImGui, was
+  checked by reading and is not reachable: when the buffer is full ImGui
+  inserts only whole code points (`STB_TEXTEDIT_INSERTCHARS`,
+  imgui_widgets.cpp:4311-4313), which FULL in
+  `ui-imgui-bind-input-text.js` exercises; and Hermes's
+  `napi_create_string_utf8` (`hermes/API/napi/hermes_napi_string.cpp`)
+  replaces an invalid sequence with U+FFFD rather than failing, so even
+  such a buffer would come back as a valid string and never throw.
 
 ## Notes
 
@@ -695,3 +711,28 @@ automated test would notice losing. Each task appends its own.
   `END`) and allows exactly that one.
 - `treeNode('')` was added to GUARD_LABELID, to show the label-id check
   applied in the new groups as well.
+
+### Task 4, review fixes
+
+- **Format strings are bounded.** A conversion specification longer than
+  30 bytes is `ERR_INVALID_ARG_VALUE` (`formatProblem()`,
+  `kMaxFormatSpec`, `addons/imgui/bind/bind_util.cpp`), with its own
+  message. Every fixed-size copy of the format in the widgets bound was
+  checked (`char fmt`, `fmt_buf`, `ImParseFormat*` in imgui_widgets.cpp):
+  the three 32-byte ones set the bound; every whole-string use is a
+  bounded `vsnprintf`. The surface table's new rule G5 holds the line
+  numbers. FORMATLEN drives an accepted 30-byte format through each
+  assertion that guards those copies (a float slider whose value changes;
+  Ctrl+click text entry on `dragInt`) and checks that 31 bytes is refused.
+- **The validator's spellings are pinned**: FORMAT rejects `%ld`,
+  `%hhd`, `%ls`, `%n`, `%*d`, `%5$d`, `%.*f`, `%lf`, `%Lf` and accepts
+  `%%%.1f`, `%i`, `%04x`. `%i` was already accepted (the int set was
+  `diuxXo` from Task 1); the review's finding was a misreading, and the
+  case now pins it. ImGui's scanner keeps `i` (ImParseFormatSanitizeForScanning
+  strips only width, precision and flags), so typed text in an `%i`
+  field is read by `sscanf("%i")`, where a leading 0 means octal: ImGui's
+  behaviour, not checked here. `%%` is a literal for both the validator
+  and `ImParseFormatFindStart`, so the two find the same conversion.
+- `sliderFloatN` selects its ImGui function with `if constexpr`.
+- The widgets test's header no longer lists its mutations; it points at
+  the Mutations table.
