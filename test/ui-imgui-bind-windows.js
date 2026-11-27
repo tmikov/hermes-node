@@ -38,6 +38,10 @@
 //            setScrollHereY outside 0..1 (NaN included): ERR_OUT_OF_RANGE.
 //            None reaches ImGui. isWindowHovered with an item-only flag is
 //            ImGui's own recoverable error: ERR_IMGUI_USAGE, after the call.
+//  SIZES     a size component of 2^31 or more, to setNextWindowSize or
+//            beginChild: ERR_OUT_OF_RANGE, not called. The largest float
+//            below 2^31 is accepted by both: getWindowSize() reads it back
+//            in the window and in the child.
 //  COVERAGE  every Windows function has reached ImGui.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
@@ -48,7 +52,8 @@
 //  assertion aborts);
 //  begin('')'s check removed: REJECTED fails (ImGui aborts);
 //  each of beginChild's three flag checks removed: REJECTED fails;
-//  getWindowPos(out) returning a new array instead of out: POS fails.
+//  getWindowPos(out) returning a new array instead of out: POS fails;
+//  setNextWindowSize's or beginChild's size bound removed: SIZES fails.
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -63,6 +68,11 @@ const harness = require('./fixtures/imgui/harness.js');
 
 const capturePath = process.argv[2];
 const OUTSIDE = [600, 440];
+
+// 2^31, where ImGui's (int) conversion of a size becomes undefined, and
+// the largest float below it.
+const INT_LIMIT = 2147483648;
+const LARGEST_BELOW_LIMIT = 2147483520;
 
 function fail(line) {
   console.log(line);
@@ -323,6 +333,37 @@ async function main() {
     console.log('REJECTED usage ' + usage);
   }
 
+  // --- SIZES -----------------------------------------------------------
+  {
+    // SetWindowSize converts each positive component with IM_TRUNC
+    // (imgui.cpp:9361, 9365), undefined from 2^31 up; beginChild's size
+    // reaches it through CalcItemSize (imgui.cpp:12615-12622) and
+    // SetNextWindowSize (imgui.cpp:6961).
+    const range = 'ERR_OUT_OF_RANGE';
+    let message, outer, child;
+    await h.run(() => windowAt('sizes', [40, 50], [300, 200], () => {
+      for (const s of [[INT_LIMIT, 100], [100, INT_LIMIT], [3e38, 3e38]]) {
+        message = rejects('setNextWindowSize', () => imgui.setNextWindowSize(s),
+                          range).message;
+        rejects('beginChild', () => imgui.beginChild('c', s), range);
+      }
+    }));
+    const L = LARGEST_BELOW_LIMIT;
+    await h.run(() => {
+      imgui.setNextWindowPos([40, 50]);
+      imgui.setNextWindowSize([L, L]);
+      imgui.begin('huge');
+      outer = imgui.getWindowSize();
+      imgui.beginChild('c', [L, 100]);
+      child = imgui.getWindowSize();
+      imgui.endChild();
+      imgui.end();
+    });
+    const ok = same(outer, [L, L]) && same(child, [L, 100]);
+    console.log(ok ? 'SIZES ok' : 'SIZES WRONG ' + outer + ' / ' + child);
+    console.log('SIZES message ' + message);
+  }
+
   harness.checkGroupCoverage(h, 'Windows');
   process.exit(0);
 }
@@ -342,6 +383,8 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}REJECTED ok{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.begin(): name must not be empty{{$}}
 // CHECK-NEXT: {{^}}REJECTED usage imgui.isWindowHovered(): Invalid flags for IsWindowHovered()!{{$}}
+// CHECK-NEXT: {{^}}SIZES ok{{$}}
+// CHECK-NEXT: {{^}}SIZES message imgui.setNextWindowSize(): size[0] must be less than 2147483648; got 3e+38{{$}}
 // CHECK-NEXT: {{^}}COVERAGE Windows ok{{$}}
 // CODE: EXITCODE 0
 

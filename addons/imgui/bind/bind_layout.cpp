@@ -148,11 +148,18 @@ napi_value endGroup(napi_env env, napi_callback_info info) {
   return c.undefined();
 }
 
-/// `setNextItemWidth(itemWidth)`, imgui.h:561.
+/// `setNextItemWidth(itemWidth)`, imgui.h:561. The width is bounded below
+/// 2^31: CalcItemWidth converts it to int (IM_TRUNC, imgui.cpp:12601) for
+/// every widget sized by it, and so does a tab item's width
+/// (BeginTabItem, widgets:10876; ShrinkWidths, widgets:1875, 1914). A
+/// negative width is replaced by max(1, avail + w) before the conversion
+/// (imgui.cpp:12597-12600), and a negative tab width is not used
+/// (widgets:10219), so it is not bounded.
 napi_value setNextItemWidth(napi_env env, napi_callback_info info) {
   Call c(env, info, "setNextItemWidth");
   float v = 0.0f;
-  if (!c.ok() || !c.f32(0, "itemWidth", &v) || !c.needFrame())
+  if (!c.ok() || !c.f32(0, "itemWidth", &v) ||
+      !c.belowIntLimit(v, "itemWidth") || !c.needFrame())
     return nullptr;
   c.enterImGui();
   ImGui::SetNextItemWidth(v);
@@ -161,11 +168,14 @@ napi_value setNextItemWidth(napi_env env, napi_callback_info info) {
   return c.undefined();
 }
 
-/// `pushItemWidth(itemWidth)`, imgui.h:559.
+/// `pushItemWidth(itemWidth)`, imgui.h:559. Bounded as
+/// setNextItemWidth(): the pushed width is what CalcItemWidth converts
+/// (imgui.cpp:12595, 12601) when no next width is set.
 napi_value pushItemWidth(napi_env env, napi_callback_info info) {
   Call c(env, info, "pushItemWidth");
   float v = 0.0f;
-  if (!c.ok() || !c.f32(0, "itemWidth", &v) || !c.needFrame())
+  if (!c.ok() || !c.f32(0, "itemWidth", &v) ||
+      !c.belowIntLimit(v, "itemWidth") || !c.needFrame())
     return nullptr;
   c.enterImGui();
   ImGui::PushItemWidth(v);

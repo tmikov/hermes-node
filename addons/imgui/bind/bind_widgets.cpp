@@ -478,7 +478,12 @@ napi_value inputText(napi_env env, napi_callback_info info) {
 }
 
 /// `inputTextMultiline(label, buf, bufSize, size = [0, 0], flags = 0)`,
-/// imgui.h:735.
+/// imgui.h:735. Each component of `size` is bounded below 2^31: the field
+/// is a child window of the frame's size (InputTextEx, widgets:4821,
+/// 4856), whose positive components SetWindowSize converts to int
+/// (IM_TRUNC, imgui.cpp:9361, 9365). A zero width is the item width,
+/// bounded by setNextItemWidth() and pushItemWidth(); a negative component
+/// becomes max(4, avail + size) (CalcItemSize, imgui.cpp:12615-12622).
 napi_value inputTextMultiline(napi_env env, napi_callback_info info) {
   Call c(env, info, "inputTextMultiline");
   std::string label;
@@ -487,6 +492,8 @@ napi_value inputTextMultiline(napi_env env, napi_callback_info info) {
   int flags = 0;
   if (!c.ok() || !c.string(0, "label", &label) || !textBuffer(c, 1, 2, &buf) ||
       (!c.isMissing(3) && !c.vec2(3, "size", &size)) ||
+      !c.belowIntLimit(size.x, "size[0]") ||
+      !c.belowIntLimit(size.y, "size[1]") ||
       !inputTextFlags(c, 4, "flags", true, &flags) || !c.needFrame() ||
       !c.needLabelId("label", label))
     return nullptr;

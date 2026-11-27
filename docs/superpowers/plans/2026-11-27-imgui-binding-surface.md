@@ -389,7 +389,8 @@ there is no "Proposed addition" under any group.
 - Frame: open.
 - Rejected: `ImGuiWindowFlags_AlwaysAutoResize` in `windowFlags`;
   `ImGuiChildFlags_AlwaysAutoResize` together with `_ResizeX` or
-  `_ResizeY`, or without `_AutoResizeX` or `_AutoResizeY`.
+  `_ResizeY`, or without `_AutoResizeX` or `_AutoResizeY`; a `size`
+  component of 2^31 or more (`ERR_OUT_OF_RANGE`).
 - Label-id: yes.
 - Preconditions (all in `BeginChildEx`, plain, kind (a) unless said):
   - `id != 0` (imgui.cpp:6895): the hash of `strId`; not checkable from
@@ -404,6 +405,11 @@ there is no "Proposed addition" under any group.
   - label-id: `EndChild()` submits the child as an item with
     `child_window->ChildId` (imgui.cpp:7034, 7046), which is the hash of
     `strId` (imgui.cpp:6993). (b).
+  - a positive `size` component is the child's size as it is
+    (`CalcItemSize`, imgui.cpp:12615-12622), set with `SetNextWindowSize`
+    (imgui.cpp:6961), which `SetWindowSize` converts to `int`
+    (imgui.cpp:9361, 9365): undefined from 2^31 up. (a). A negative one
+    becomes `max(4, avail + size)`, zero the available region.
 - Notes: the `ImGuiID` overload is not bound (ruling 4).
 
 ### `endChild`
@@ -444,11 +450,18 @@ there is no "Proposed addition" under any group.
 - C++: `IMGUI_API void SetNextWindowSize(const ImVec2& size, ImGuiCond
   cond = 0);` (`imgui.h:493`)
 - Overload: only one. Nullable: none. Omitted: none.
-- Frame: open. Rejected: none.
-- Preconditions: `cond == 0 || ImIsPowerOfTwo(cond)` (imgui.cpp:9444,
-  plain). Covered by G1: `ImGuiCond` is an enum type, so a combination of
-  conditions is not an exported enumerator.
-- Notes: none.
+- Frame: open.
+- Rejected: a `size` component of 2^31 or more (`ERR_OUT_OF_RANGE`).
+- Preconditions:
+  - `cond == 0 || ImIsPowerOfTwo(cond)` (imgui.cpp:9444, plain). Covered
+    by G1: `ImGuiCond` is an enum type, so a combination of conditions is
+    not an exported enumerator.
+  - `SetWindowSize` converts each positive component to `int`
+    (`IM_TRUNC`, imgui.cpp:9361, 9365), undefined from 2^31 up. (a). Zero
+    or a negative component asks for auto-fit and is not converted
+    (imgui.cpp:9358-9364).
+- Notes: the window's rectangles are converted again with its position
+  added; see "Not covered", item 3f.
 
 ### `setNextWindowBgAlpha`
 
@@ -844,18 +857,31 @@ there is no "Proposed addition" under any group.
 - C++: `IMGUI_API void SetNextItemWidth(float item_width);`
   (`imgui.h:561`)
 - Overload: only one. Nullable: none. Omitted: none.
-- Frame: open. Rejected: none.
-- Preconditions: none found (imgui.cpp:12536-12541).
+- Frame: open.
+- Rejected: an `itemWidth` of 2^31 or more (`ERR_OUT_OF_RANGE`).
+- Preconditions: none in the function (imgui.cpp:12536-12541). The width
+  is converted to `int` later, undefined from 2^31 up: by
+  `CalcItemWidth` (`IM_TRUNC`, imgui.cpp:12601) for every widget sized by
+  it, and as a tab item's width by `BeginTabItem` (widgets:10876) and
+  `ShrinkWidths` (widgets:1875, 1914). (a) for a positive width. A
+  negative one is replaced by `max(1, avail + w)` before the conversion
+  (imgui.cpp:12597-12600), and a negative tab width is not used
+  (widgets:10219), so it is accepted at any magnitude.
 - Notes: C++ code commonly passes `-FLT_MIN` here: `-imgui.FLT_MIN`
-  (G4).
+  (G4). The bound keeps the width's own conversion defined, not every
+  coordinate derived from it: see "Not covered", item 3f.
 
 ### `pushItemWidth`
 
 - JS: `imgui.pushItemWidth(itemWidth) -> undefined`
 - C++: `IMGUI_API void PushItemWidth(float item_width);` (`imgui.h:559`)
 - Overload: only one. Nullable: none. Omitted: none.
-- Frame: open. Rejected: none.
-- Preconditions: none found (imgui.cpp:12544-12551).
+- Frame: open.
+- Rejected: an `itemWidth` of 2^31 or more (`ERR_OUT_OF_RANGE`).
+- Preconditions: none in the function (imgui.cpp:12544-12551). The pushed
+  width is what `CalcItemWidth` converts when no next width is set
+  (imgui.cpp:12595, 12601), as for `setNextItemWidth`. (a) for a positive
+  width; a negative one is accepted, as there.
 - Notes: a push without its pop is not diagnosed (design, "Errors").
 
 ### `popItemWidth`
@@ -1321,13 +1347,19 @@ All six pass a finished string and never let ImGui interpret `%`.
 - Omitted: `callback` and `user_data`, passed as NULL.
 - Frame: open.
 - Rejected: the six `_Callback*` bits; `ImGuiInputTextFlags_ElideLeft`;
-  `_WordWrap` together with `_Password`.
+  `_WordWrap` together with `_Password`; a `size` component of 2^31 or
+  more (`ERR_OUT_OF_RANGE`).
 - Label-id: yes.
 - Preconditions (plain, (a)): the callback rules of `inputText`;
   `_CallbackHistory` with multi-line (widgets:4803); `_ElideLeft` with
   multi-line (widgets:4805); `_WordWrap` with `_Password`
   (widgets:4806); the buffer rules (widgets:4802, 4932, 4954); label-id
-  (widgets:4835).
+  (widgets:4835); the field is a child window of the frame's size
+  (widgets:4821, 4856), whose positive components `SetWindowSize`
+  converts to `int` (imgui.cpp:9361, 9365), undefined from 2^31 up. A
+  zero width is the item width (bounded by `setNextItemWidth` and
+  `pushItemWidth`); a negative component becomes `max(4, avail + size)`
+  (`CalcItemSize`, imgui.cpp:12615-12622).
 - Notes: it adds `ImGuiInputTextFlags_Multiline` itself (widgets:4090),
   and it opens a group and a child window of its own.
 
@@ -3143,6 +3175,28 @@ a C++ program.
    at a depth whose stack-data bit is clear, because the table had
    raised the tree depth (tables:457), and the node's entry is left on
    `g.TreeNodeStack`.
+
+3f. **Screen coordinates that reach 2^31 by accumulation** (Task 8
+   survey). ImGui converts positions to `int` in many places, each
+   undefined at 2^31 or more in magnitude: `ItemSize` truncates the next
+   line's cursor, `window->Pos.x + DC.Indent.x + ColumnsOffset.x` and
+   `line_y1 + line_height + ItemSpacing.y` (`IM_TRUNC`,
+   imgui.cpp:12406-12407); `SetWindowPos` truncates the position
+   (imgui.cpp:9311), which with a pivot is `pos - size * pivot`
+   (imgui.cpp:8426); `Begin()` floors and truncates the window's inner
+   rectangles, position plus size (`ImFloor`, imgui.cpp:8649-8652;
+   `ImTrunc`, 8716-8717; `ImFloor` is `(int)` too,
+   imgui_internal.h:558); `ImFont::RenderText` truncates the position of
+   every text it draws (imgui_draw.cpp:7353-7354). A bound on one argument does not prevent
+   these, because the value converted is a sum: `setNextWindowPos`
+   (position and pivot), `setCursorScreenPos`, `indent` (which
+   accumulates), `sameLine`, `dummy`, `progressBar`'s size, and the
+   position of an item or window sized near the bounds above all reach
+   them. The bounded arguments (`setNextItemWidth`, `pushItemWidth`,
+   `setNextWindowSize`, `beginChild`'s and `inputTextMultiline`'s size,
+   `plotLines`/`plotHistogram`'s `graphSize[0]`) are the ones ImGui
+   converts as they are. This is undefined behaviour rather than an
+   assertion, and no sanitizer in the test builds reports it.
 
 Recorded here for completeness, although not assertions:
 

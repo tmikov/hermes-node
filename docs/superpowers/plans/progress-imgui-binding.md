@@ -239,6 +239,13 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 6 (review) | `ui-imgui-bind-errors.js` | `inTableRegion()` reverted to the top table only (the walk stops after the first plain table) | aborted in TABLE_REGION's nested case: `imgui.h:2377 ... Size > 0 failed`; test failed |
 | 6 (review) | `ui-imgui-bind-errors.js` | `canTableSetupColumn`'s all-disabled refusal removed | `NOTHROW ERR_IMGUI_USAGE` in TABLE_DISABLED; test failed. The abort it prevents was measured by hand in Task 6: `imgui_tables.cpp:1005 ... Assertion table->LeftMostEnabledColumn >= 0 && ... failed` |
 | 6 (review) | `ui-imgui-bind-errors.js` | the all-disabled check reading only `Columns[i].Flags` (the queued reconcile requests ignored) | `NOTHROW ERR_IMGUI_USAGE` at TABLE_DISABLED's second frame, whose first column is queued for reconciliation; test failed |
+| 8 (widths) | `ui-imgui-bind-layout.js`, `ui-imgui-bind-windows.js`, `ui-imgui-bind-input-text.js` | (RED) run against Task 7's build, with ITEMWIDTH, SIZES and MLSIZE written and no bound | each `NOTHROW ERR_OUT_OF_RANGE` at its first case (`setNextItemWidth(2147483648)`, `setNextWindowSize([2147483648, 100])`, `inputTextMultiline(..., [2147483648, 100])`); all three failed |
+| 8 (widths) | `ui-imgui-bind-layout.js` | `setNextItemWidth`'s bound removed | `NOTHROW ERR_OUT_OF_RANGE`; test failed |
+| 8 (widths) | `ui-imgui-bind-layout.js` | `pushItemWidth`'s bound removed | `NOTHROW ERR_OUT_OF_RANGE`; test failed |
+| 8 (widths) | `ui-imgui-bind-layout.js` | `Call::belowIntLimit` bounding below 2147483520 instead of 2^31 (the largest accepted value refused) | `RangeError: imgui.setNextItemWidth(): itemWidth must be less than 2147483648; got 2.14748e+09`, uncaught, after `WIDTH ok`; test failed |
+| 8 (widths) | `ui-imgui-bind-windows.js` | `setNextWindowSize`'s `size[1]` bound removed | `NOTHROW ERR_OUT_OF_RANGE` at `[100, 2147483648]`; test failed |
+| 8 (widths) | `ui-imgui-bind-windows.js` | `beginChild`'s two size bounds removed | `NOTHROW ERR_OUT_OF_RANGE`; test failed |
+| 8 (widths) | `ui-imgui-bind-input-text.js` | `inputTextMultiline`'s `size[1]` bound removed | `NOTHROW ERR_OUT_OF_RANGE`; test failed |
 
 ## Behaviours no test detects
 
@@ -1095,3 +1102,34 @@ automated test would notice losing. Each task appends its own.
   column's flags are read from the queued reconcile request when there is
   one (TABLE_DISABLED's second frame, and its mutation). Visibility from
   `DefaultHide` or settings stays in "Not covered" 3d, reworded.
+
+### Task 8
+
+- **The item width and four sizes are bounded below 2^31** (its own
+  commit, before the docking group). ImGui converts them to `int` as they
+  are, which is undefined from 2^31 up: the item width in
+  `CalcItemWidth` (`IM_TRUNC`, imgui.cpp:12601; also a tab's width,
+  widgets:10876, 1875, 1914), a window's size in `SetWindowSize`
+  (imgui.cpp:9361, 9365), reached by `setNextWindowSize`, by
+  `beginChild`'s size through `CalcItemSize` and `SetNextWindowSize`
+  (imgui.cpp:12615-12622, 6961), and by `inputTextMultiline`'s size
+  through its child window (widgets:4821, 4856). Only positive values are
+  converted as they are; negatives become `max(1 or 4, avail + v)` first,
+  so they are accepted at any magnitude (`Call::belowIntLimit`,
+  `bind_util.h`). The surface entries say so. ITEMWIDTH
+  (`ui-imgui-bind-layout.js`), SIZES (`-windows.js`) and MLSIZE
+  (`-input-text.js`) reject 2^31 and 3e38, accept 2147483520 (the
+  largest float below 2^31) and read back the item or window size drawn
+  with it; ITEMWIDTH also draws a slider 1 wide with -3e38.
+- **The survey of the other size and position arguments** found the same
+  conversion only as a sum: `ItemSize`'s next-line cursor (imgui.cpp:
+  12406-12407), `SetWindowPos` (9311, with a pivot 8426), the window's
+  inner rectangles (8649-8652, 8716-8717) and every drawn text's position
+  (imgui_draw.cpp:7353-7354). `setNextWindowPos`, `setCursorScreenPos`,
+  `indent`, `sameLine`, `dummy` and `progressBar`'s size reach them, but
+  no bound on the argument alone prevents it, so they are listed as "Not
+  covered" 3f rather than bounded. `plotLines`/`plotHistogram`'s
+  `graphSize[0]` was already bounded (Task 7). No sanitizer in the test
+  builds reports float-to-int overflow, so the accepted cases show only
+  that the call is made and draws, not that nothing downstream overflows.
+

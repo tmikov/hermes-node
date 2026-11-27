@@ -56,7 +56,11 @@ napi_value end(napi_env env, napi_callback_info info) {
 }
 
 /// `beginChild(strId, size = [0, 0], childFlags = 0, windowFlags = 0)`,
-/// imgui.h:472.
+/// imgui.h:472. Each component of `size` is bounded below 2^31: a positive
+/// one is the child's size as it is (CalcItemSize, imgui.cpp:12615-12622),
+/// set with SetNextWindowSize (imgui.cpp:6961) and converted to int by
+/// SetWindowSize (imgui.cpp:9361, 9365). A negative one becomes
+/// max(4, avail + size), and zero the available region.
 napi_value beginChild(napi_env env, napi_callback_info info) {
   Call c(env, info, "beginChild");
   std::string strId;
@@ -64,7 +68,9 @@ napi_value beginChild(napi_env env, napi_callback_info info) {
   int childFlags = 0;
   int windowFlags = 0;
   if (!c.ok() || !c.string(0, "strId", &strId) ||
-      (!c.isMissing(1) && !c.vec2(1, "size", &size)))
+      (!c.isMissing(1) && !c.vec2(1, "size", &size)) ||
+      !c.belowIntLimit(size.x, "size[0]") ||
+      !c.belowIntLimit(size.y, "size[1]"))
     return nullptr;
   if ((!c.isMissing(2) &&
        !c.flags(2, "childFlags", kChildFlags, &childFlags)) ||
@@ -131,12 +137,17 @@ napi_value setNextWindowPos(napi_env env, napi_callback_info info) {
   return c.undefined();
 }
 
-/// `setNextWindowSize(size, cond = 0)`, imgui.h:493.
+/// `setNextWindowSize(size, cond = 0)`, imgui.h:493. Each component is
+/// bounded below 2^31: SetWindowSize converts a positive one to int
+/// (IM_TRUNC, imgui.cpp:9361, 9365); zero or a negative one asks for
+/// auto-fit instead and is not converted (imgui.cpp:9358-9364).
 napi_value setNextWindowSize(napi_env env, napi_callback_info info) {
   Call c(env, info, "setNextWindowSize");
   ImVec2 size;
   int cond = 0;
-  if (!c.ok() || !c.vec2(0, "size", &size))
+  if (!c.ok() || !c.vec2(0, "size", &size) ||
+      !c.belowIntLimit(size.x, "size[0]") ||
+      !c.belowIntLimit(size.y, "size[1]"))
     return nullptr;
   if ((!c.isMissing(1) && !c.enumValue(1, "cond", kCond, &cond)) ||
       !c.needFrame())

@@ -209,6 +209,12 @@ class Call {
   bool floats(size_t i, const char *what, size_t maxCount, FloatSpan *out);
   // The optional output array of a vector getter: absent, or an Array.
   bool outArray(size_t i, const char *what);
+  // A width or size ImGui converts to int with `(float)(int)v` (IM_TRUNC
+  // and ImTrunc, imgui_internal.h:298, 556), undefined from 2^31 up:
+  // ERR_OUT_OF_RANGE when \p v, the value named \p what, is 2^31 or more.
+  // A negative value is not converted as it is, so it is not bounded here;
+  // each caller says why.
+  bool belowIntLimit(float v, const char *what);
 
   // After the arguments are read: counts the call, then the caller calls
   // ImGui.

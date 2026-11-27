@@ -21,6 +21,10 @@
 //  WIDTH     setNextItemWidth(123) gives a slider 123 wide; pushItemWidth(90)
 //            gives the next two sliders 90; after popItemWidth() a slider
 //            has the default width again (not 90).
+//  ITEMWIDTH an item width of 2^31 or more, to setNextItemWidth or
+//            pushItemWidth: ERR_OUT_OF_RANGE, not called. The largest
+//            float below 2^31 is accepted by both, and a slider is drawn
+//            that wide; -3e38 makes a slider 1 wide.
 //  CURSOR    setCursorScreenPos([200, 150]): getCursorScreenPos() reads it
 //            (also into a passed array), and the next item's min is there.
 //  SPACING   spacing() and newLine() each widen the gap between two text
@@ -83,7 +87,9 @@
 //  enterImGui() removed from getFrameHeight: COVERAGE fails;
 //  getMouseDragDelta writing a new array instead of `out`: DRAG fails;
 //  the mouse-button range check removed: REJECTED fails (ImGui aborts);
-//  pushID(number) dispatched to the string overload: IDS fails.
+//  pushID(number) dispatched to the string overload: IDS fails;
+//  setNextItemWidth's or pushItemWidth's 2^31 bound removed: ITEMWIDTH
+//  fails.
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -102,6 +108,11 @@ const OUTSIDE = [600, 440];
 // Sokol's key code for A, and ImGui's left mouse button (also Sokol's).
 const SAPP_KEYCODE_A = 65;
 const LEFT = 0;
+
+// 2^31, where ImGui's (int) conversion of a width becomes undefined, and
+// the largest float below it.
+const INT_LIMIT = 2147483648;
+const LARGEST_BELOW_LIMIT = 2147483520;
 
 function fail(line) {
   console.log(line);
@@ -229,6 +240,44 @@ async function main() {
     const ok = widths[1] === 123 && widths[2] === 90 && widths[3] === 90 &&
         widths[4] === widths[0] && widths[0] !== 90 && widths[0] !== 123;
     console.log(ok ? 'WIDTH ok' : 'WIDTH WRONG ' + widths);
+  }
+
+  // --- ITEMWIDTH -------------------------------------------------------
+  {
+    // CalcItemWidth converts a positive item width with IM_TRUNC,
+    // (float)(int)w (imgui.cpp:12601), undefined from 2^31 up; a negative
+    // one is first replaced by max(1, avail + w) (imgui.cpp:12597-12600).
+    const v = [0];
+    let message, next, pushed, negative;
+    await h.run(() => {
+      imgui.setNextWindowPos([20, 20]);
+      imgui.setNextWindowSize([600, 440]);
+      imgui.begin('itemwidth');
+      for (const w of [INT_LIMIT, 3e38]) {
+        message = rejects('setNextItemWidth', () => imgui.setNextItemWidth(w),
+                          'ERR_OUT_OF_RANGE').message;
+        rejects('pushItemWidth', () => imgui.pushItemWidth(w),
+                'ERR_OUT_OF_RANGE');
+      }
+      imgui.setNextItemWidth(LARGEST_BELOW_LIMIT);
+      imgui.sliderFloat('##next', v, 0, 1);
+      next = rect();
+      imgui.pushItemWidth(LARGEST_BELOW_LIMIT);
+      imgui.sliderFloat('##pushed', v, 0, 1);
+      pushed = rect();
+      imgui.popItemWidth();
+      imgui.setNextItemWidth(-3e38);
+      imgui.sliderFloat('##negative', v, 0, 1);
+      negative = rect();
+      imgui.end();
+    });
+    // The item's max is min + width rounded to a float.
+    const want = (r) => Math.fround(r.min[0] + LARGEST_BELOW_LIMIT) - r.min[0];
+    const ok = width(next) === want(next) && width(pushed) === want(pushed) &&
+        width(next) > 2e9 && width(negative) === 1;
+    console.log(ok ? 'ITEMWIDTH ok' :
+                     'ITEMWIDTH WRONG ' + JSON.stringify([next, pushed, negative]));
+    console.log('ITEMWIDTH message ' + message);
   }
 
   // --- CURSOR ----------------------------------------------------------
@@ -705,6 +754,8 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}GROUP ok{{$}}
 // CHECK-NEXT: {{^}}DUMMY ok{{$}}
 // CHECK-NEXT: {{^}}WIDTH ok{{$}}
+// CHECK-NEXT: {{^}}ITEMWIDTH ok{{$}}
+// CHECK-NEXT: {{^}}ITEMWIDTH message imgui.setNextItemWidth(): itemWidth must be less than 2147483648; got 3e+38{{$}}
 // CHECK-NEXT: {{^}}CURSOR ok{{$}}
 // CHECK-NEXT: {{^}}SPACING ok{{$}}
 // CHECK-NEXT: {{^}}TEXTSIZE ok{{$}}

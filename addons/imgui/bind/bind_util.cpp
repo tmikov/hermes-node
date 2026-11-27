@@ -353,6 +353,13 @@ bool Call::f32(size_t i, const char *what, float *out) {
   return f32Value(arg(i), what, out);
 }
 
+bool Call::belowIntLimit(float v, const char *what) {
+  if (v < 2147483648.0f)
+    return true;
+  throwRange("%s must be less than 2147483648; got %g", what, v);
+  return false;
+}
+
 bool Call::f64(size_t i, const char *what, double *out) {
   if (typeOf(i) != napi_number) {
     throwType("ERR_INVALID_ARG_TYPE", "%s must be a number", what);

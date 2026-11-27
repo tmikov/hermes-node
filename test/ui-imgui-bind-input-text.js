@@ -34,6 +34,9 @@
 //             unpaired surrogate encoded as U+FFFD.
 //  CAPACITY   capacity 0, 2^24 + 1 and 1.5: ERR_OUT_OF_RANGE, not called;
 //             1 and 2^24 accepted.
+//  MLSIZE     an inputTextMultiline size component of 2^31 or more:
+//             ERR_OUT_OF_RANGE, not called; the largest float below 2^31
+//             accepted, and the field drawn that wide.
 //  FLAGS      each InputTextFlags_Callback* bit on each of the three:
 //             ERR_OUT_OF_RANGE, not called; WordWrap on the single-line two,
 //             ElideLeft and WordWrap | Password on the multi-line one: the
@@ -56,7 +59,8 @@
 //  TRUNCATE fails;
 //  labelIdIsWindowId returning false always: STRINGS aborts (Debug build);
 //  ImGui::SetKeyboardFocusHere() removed, enterImGui() kept: FOCUS fails;
-//  ImGui::IsItemDeactivatedAfterEdit() replaced by false: DEACTIVATE fails.
+//  ImGui::IsItemDeactivatedAfterEdit() replaced by false: DEACTIVATE fails;
+//  inputTextMultiline's size bound removed: MLSIZE fails.
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -295,6 +299,26 @@ async function main() {
     console.log(accepted === 2 ? 'CAPACITY ok' : 'CAPACITY accepted ' + accepted);
   }
 
+  // --- MLSIZE ----------------------------------------------------------
+  {
+    // The multi-line field is a child window of the frame's size
+    // (BeginChildEx, widgets:4856), whose positive components SetWindowSize
+    // converts with IM_TRUNC (imgui.cpp:9361, 9365).
+    const L = 2147483520; // the largest float below 2^31
+    let message, r;
+    await h.run(inWindow(() => {
+      for (const s of [[2147483648, 100], [100, 2147483648]])
+        message = rejects('inputTextMultiline',
+                          () => imgui.inputTextMultiline('s', ['x'], 8, s),
+                          'ERR_OUT_OF_RANGE').message;
+      imgui.inputTextMultiline('##big', ['x'], 8, [L, 100]);
+      r = rect();
+    }));
+    const ok = width(r) === Math.fround(r.min[0] + L) - r.min[0];
+    console.log(ok ? 'MLSIZE ok' : 'MLSIZE WRONG ' + JSON.stringify(r));
+    console.log('MLSIZE message ' + message);
+  }
+
   // --- FLAGS -----------------------------------------------------------
   {
     let accepted = 0;
@@ -459,6 +483,8 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}FULL ok{{$}}
 // CHECK-NEXT: {{^}}SURROGATE ok{{$}}
 // CHECK-NEXT: {{^}}CAPACITY ok{{$}}
+// CHECK-NEXT: {{^}}MLSIZE ok{{$}}
+// CHECK-NEXT: {{^}}MLSIZE message imgui.inputTextMultiline(): size[1] must be less than 2147483648; got 2.14748e+09{{$}}
 // CHECK-NEXT: {{^}}FLAGS ok{{$}}
 // CHECK-NEXT: {{^}}HINT ok{{$}}
 // CHECK-NEXT: {{^}}MULTILINE ok{{$}}
