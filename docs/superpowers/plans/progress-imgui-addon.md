@@ -22,8 +22,11 @@ Each test must be shown able to fail: the change made, and what it did.
 | 2 | the 14 dlopen/addon tests (`test-native-addon.js`, `bundle-natives.js`, ...) | `loadNativeAddon` looks up `napi_register_module_v1_x` instead | 6 of 14 failed (`test-native-addon`, `test-native-addon-pkg`, `test-cli-eval-require`, `bundle-natives`, `bundle-natives-errors`, `build-exe-natives`); restored |
 | 3 | `test/imgui-missing.js` | `stat()` check in `named_addons.cpp` replaced by `if (false)` | the missing file reached dlopen: `MISSING ERR_DLOPEN_FAILED path=true`, test failed; restored |
 | 3 | `test/ui-imgui-feature.js`, `test/imgui-load.js` | `registerNamedAddons()` call in `main.cpp` disabled | `ui-imgui-feature.js` FAIL (`agree binary=off lit=off` fails ON), `imgui-load.js` UNSUPPORTED; restored |
-| 3 | `test/imgui-symbols.js` | the three visibility properties removed from `addons/imgui/CMakeLists.txt` | `EXPORTS bad: 2562 unexpected (2506 ImGui)`, test failed; restored |
+| 3 | `test/imgui-symbols.js` | the three visibility properties removed from `addons/imgui/CMakeLists.txt` (before the export list existed; with it, this alone no longer fails) | `EXPORTS bad: 2562 unexpected (2506 ImGui)`, test failed; restored |
 | 3 | `test/imgui-load.js` | init trace line emitted twice | ERR run failed on its `-NOT` line; restored |
+| 3 | `test/imgui-symbols.js` | with a temporary `std::vector<std::string>` in the init: export list kept | PASS, 2 exports |
+| 3 | `test/imgui-symbols.js` | same `std::vector` probe, `--version-script` option dropped | `EXPORTS bad: 16 unexpected`, test failed; restored |
+| 3 | `test/imgui-symbols.js` | export list and the three visibility properties both dropped | `EXPORTS bad: 2562 unexpected (2506 ImGui)`, test failed; restored |
 
 ## Notes
 
@@ -42,11 +45,12 @@ Each test must be shown able to fail: the change made, and what it did.
 - libstdc++ declares namespace `std` with default visibility, so a
   `std::` template instantiated in the addon (a `std::vector<char>` in the
   first draft of `trace`) is exported as a weak symbol despite
-  `-fvisibility=hidden`; `test/imgui-symbols.js` caught ten of them. The
-  trace now formats into a C buffer. Later tasks that instantiate `std::`
-  templates will trip the same test; the fix then is an explicit export
-  list (a version script / `-exported_symbols_list`) rather than avoiding
-  the standard library.
+  `-fvisibility=hidden`; `test/imgui-symbols.js` caught ten of them. Ruled:
+  an explicit export list on top of the visibility properties
+  (`addons/imgui/exports.map` as an ELF version script,
+  `exports.darwin.txt` as ld64's `-exported_symbols_list`, both a
+  `LINK_DEPENDS`), so the addon's code may use std containers freely. The
+  macOS half has not been linked anywhere yet.
 - `test/imgui-missing.js` copies the whole `hermes-node-ui` binary (about
   190 MB under ASAN) into `%t.dir`, because a symlink would be realpath'd
   back to `bin/`; it deletes the copy when it passes.

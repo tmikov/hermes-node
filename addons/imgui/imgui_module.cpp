@@ -53,10 +53,7 @@ void trace(const char *fmt, ...) {
   }
   // The whole line in one buffer and one fwrite, so lines from different
   // threads cannot interleave (the host's ui_trace.cpp explains why one
-  // write matters). A C buffer rather than a std::vector: libstdc++ gives
-  // namespace std default visibility, so its template instantiations would
-  // be exported from the addon despite -fvisibility=hidden
-  // (test/imgui-symbols.js).
+  // write matters). On the stack unless the line is long.
   char stackBuf[512];
   const size_t needed = prefixLen + static_cast<size_t>(bodyLen) + 2;
   char *line = needed <= sizeof(stackBuf)

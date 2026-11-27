@@ -51,11 +51,27 @@ set_target_properties(hermes_node_imgui PROPERTIES
   # second addon carrying another copy cannot collide with it. Hermes's
   # -fvisibility=hidden is scoped to its own subdirectory and does not reach
   # here. The N-API init stays exported through NAPI_MODULE_INIT's own
-  # visibility attribute; test/imgui-symbols.js checks the result.
+  # visibility attribute; the export list below is the second layer, and
+  # test/imgui-symbols.js checks the result.
   CXX_VISIBILITY_PRESET hidden
   C_VISIBILITY_PRESET hidden
   VISIBILITY_INLINES_HIDDEN ON
 )
+# And an explicit export list on top of it. Hidden visibility does not reach
+# std:: template instantiations: libstdc++ declares namespace std with
+# default visibility, so a std::vector used anywhere in the addon is exported
+# as a weak symbol. The list names the two NAPI_MODULE_INIT() functions and
+# nothing else. ld64 takes no comments, so macOS has a file of its own with
+# the Mach-O (underscore-prefixed) names; keep the two in step.
 if(APPLE)
-  target_link_options(hermes_node_imgui PRIVATE -undefined dynamic_lookup)
+  set(_imgui_exports ${CMAKE_CURRENT_SOURCE_DIR}/exports.darwin.txt)
+  target_link_options(hermes_node_imgui PRIVATE
+    -undefined dynamic_lookup
+    -Wl,-exported_symbols_list,${_imgui_exports})
+else()
+  set(_imgui_exports ${CMAKE_CURRENT_SOURCE_DIR}/exports.map)
+  target_link_options(hermes_node_imgui PRIVATE
+    -Wl,--version-script=${_imgui_exports})
 endif()
+set_target_properties(hermes_node_imgui PROPERTIES
+  LINK_DEPENDS ${_imgui_exports})

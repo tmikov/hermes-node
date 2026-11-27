@@ -8,16 +8,21 @@
 // ImGui is compiled into the addon, and its symbols must stay the addon's
 // own: exported, they would be interposed against any other copy of ImGui
 // in the process (a second addon carrying one), and whichever loaded first
-// would silently serve both. The addon's CMake target sets hidden
-// visibility for that reason, since Hermes's own -fvisibility=hidden stops
-// at its subdirectory. This reads the defined external symbols back with
-// `nm` and requires them to be exactly the two NAPI_MODULE_INIT defines.
-// Anything else is printed: an ImGui name (`ImGui...`, `Im` + an upper-case
-// letter) is the failure this exists for, and any other name is reported
-// too.
+// would silently serve both. Two layers keep them in: hidden visibility on
+// the addon's CMake target (Hermes's own -fvisibility=hidden stops at its
+// subdirectory), and an explicit export list (addons/imgui/exports.map,
+// exports.darwin.txt), which also covers what visibility cannot -- libstdc++
+// gives namespace std default visibility, so a std:: template the addon
+// instantiates is otherwise exported as a weak symbol. This reads the
+// defined external symbols back with `nm` and requires them to be exactly
+// the two NAPI_MODULE_INIT defines. Anything else is printed: an ImGui name
+// (`ImGui...`, `Im` + an upper-case letter) is the failure this exists for,
+// and any other name is reported too.
 //
-// THE MUTATION THIS MUST BREAK: remove the three visibility properties from
-// addons/imgui/CMakeLists.txt. Every ImGui function is then exported.
+// THE MUTATIONS THIS MUST BREAK: remove the export-list link option and the
+// three visibility properties from addons/imgui/CMakeLists.txt (every ImGui
+// function is exported); or remove only the export-list option while any
+// addon unit instantiates a std:: template (the template is exported).
 //
 // REQUIRES: ui, ui-imgui
 // RUN: %hermes-node %s %hermes_node_imgui | %FileCheck %s
