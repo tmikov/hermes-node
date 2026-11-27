@@ -29,24 +29,41 @@
 //             counted. Then harness.resync(h): frames drawn into
 //             generation 1 after its retirement got no publication id, so
 //             the count is re-read from the host.
-//  TEXTURES   the renderer's live texture count is the same before the
-//             resize and after the resync: the atlas was not remade.
+//  TEXTURES   the renderer's live texture count, and the id it handed
+//             ImGui for the font atlas (state().atlasTexId, a Sokol view
+//             id, which a re-created texture does not keep), are the same
+//             before the resize and after the resync: the atlas was not
+//             remade. The count alone cannot see a destroy-and-create.
 //  FILL800    a `fill` frame captured at the new size (the capture's
 //             agreement fields are the 800x600 window's) is red out to
-//             (790,590), so DisplaySize, the projection and the viewport
-//             all cover the new framebuffer.
+//             (790,590), so DisplaySize and the viewport cover the new
+//             framebuffer. A full-display fill covers the viewport under
+//             any projection that maps the display onto at least the
+//             viewport, so this cannot see a stale projection; MANY800
+//             can.
+//  MANY800    the `many` scene (4x4 quads tiling 640x480) captured at the
+//             new size: quad centres have their colours, the last quad's
+//             at (638,478) included, and (700,300) and (400,550), outside
+//             the tiling, are the clear colour. A projection still over
+//             640x480 stretches the tiling to 800x600 and fails both.
 //
 // Its trace: the host's `generation 2: started at 800x600, replacing
 // generation 1 at 640x480`; and exactly one `imgui: pipeline created` and
-// one `imgui: texture <n> created` in the whole run, each a FileCheck run
-// of its own whose -NOT covers everything after the first occurrence (and
-// a FileCheck pattern matches the first occurrence, so nothing precedes
-// it).
+// one `imgui: texture <n> created` in the whole run. Each is two FileCheck
+// runs: PIPELINE / TEXTURE check the one line's exact text, and
+// PIPELINE-ONCE / TEXTURE-ONCE read the stderr with that line's first
+// occurrence replaced by a marker (`awk`), under an --implicit-check-not
+// of the line, which covers the whole input: a second occurrence anywhere
+// fails, before the first or after it, while the marker proves the first
+// was there to replace.
 //
 // `highdpi` (`open({highDpi: true})`).
 //
 //  SCALE      ImGui's DisplayFramebufferScale is the window's framebuffer
-//             size over its logical size, both axes.
+//             size over its logical size, both axes, and it is also
+//             exactly win.dpiScale (as a float), both axes. The second
+//             leg is independent of the addon's formula, which the first
+//             repeats.
 //  SCALEVALUE that scale, printed and unchecked: 1 under Xvfb, 2 on a
 //             Retina Mac, so a Mac run's log shows the 2x case was run.
 //  CLIP       the `clip` scene's rectangle, sampled at logical points
@@ -64,9 +81,16 @@
 //      it, where SCALE and CLIP fail;
 //  (b) DisplaySize read once, at context creation: RESIZED fails with
 //      TIMEOUT RESIZED.
+//  (c) the projection taken from the first frame's display size and
+//      never updated: MANY800 fails (FILL800 cannot, as said above); the
+//      viewport taken from the first frame's size: FILL800 fails;
+//  (d) the pipeline made again, and the textures re-created, when the
+//      target size changes: PIPELINE-ONCE, TEXTURE-ONCE and
+//      `TEXTURES same` fail.
 // And the two exclusions, by a doctored stderr file: a second
-// `imgui: pipeline created` line fails PIPELINE, a second
-// `imgui: texture <n> created` line fails TEXTURE.
+// `imgui: pipeline created` line fails PIPELINE-ONCE, a second
+// `imgui: texture <n> created` line fails TEXTURE-ONCE, wherever in the
+// file it is put.
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -78,7 +102,9 @@
 // RUN: %FileCheck --check-prefix=RESIZE %s < %t.resize.out
 // RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=GEN %s < %t.resize.err
 // RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=PIPELINE %s < %t.resize.err
+// RUN: awk '!seen && /imgui: pipeline created/ { seen = 1; print "FIRST PIPELINE LINE"; next } { print }' %t.resize.err | %FileCheck --implicit-check-not='imgui: pipeline created' --check-prefix=PIPELINE-ONCE %s
 // RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=TEXTURE %s < %t.resize.err
+// RUN: awk '!seen && /imgui: texture [0-9]+ created/ { seen = 1; print "FIRST TEXTURE LINE"; next } { print }' %t.resize.err | %FileCheck --implicit-check-not='{{imgui: texture [0-9]+ created}}' --check-prefix=TEXTURE-ONCE %s
 //
 // RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s highdpi %t.highdpi > %t.highdpi.out 2> %t.highdpi.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck --check-prefix=HIGHDPI %s < %t.highdpi.out
@@ -95,6 +121,7 @@ const driverPath = process.argv[4];
 
 const RED = [255, 0, 0];
 const GREEN = [0, 255, 0];
+const BLUE = [0, 0, 255];
 
 const SAPP_MOUSEBUTTON_LEFT = 0;
 const IMGUI_LEFT = 0;
@@ -136,6 +163,7 @@ async function runResize() {
   await harness.capture(h, glyphs, out('before'));
   console.log('BEFORE matched');
   const texturesBefore = state().liveTextures;
+  const atlasBefore = state().atlasTexId;
 
   // --- RESIZED ----------------------------------------------------------
   const driver = await startDriver({ui: h.ui, driverPath, title});
@@ -163,11 +191,14 @@ async function runResize() {
   // --- TEXTURES ---------------------------------------------------------
   {
     const after = state().liveTextures;
+    const atlasAfter = state().atlasTexId;
     console.log(
         'TEXTURES ' +
-        (after === texturesBefore ?
+        (after === texturesBefore && atlasAfter === atlasBefore &&
+                 atlasBefore !== 0 ?
              'same' :
-             'changed ' + texturesBefore + ' -> ' + after));
+             'changed ' + texturesBefore + ' -> ' + after + ', atlas ' +
+                 atlasBefore + ' -> ' + atlasAfter));
   }
 
   // --- FILL800 ----------------------------------------------------------
@@ -180,6 +211,23 @@ async function runResize() {
       [8, 590, RED],
       [790, 590, RED],
       [400, 300, RED],
+    ]);
+  }
+
+  // --- MANY800 ----------------------------------------------------------
+  {
+    const image = await harness.capture(
+        h, () => imgui.__test.scene('many'), out('many800'));
+    const colors = [RED, GREEN, BLUE];
+    const quad = (c, r) => [4 * c + 2, 4 * r + 2, colors[(c + r) % 3]];
+    report('MANY800', image, win.dpiScale, [
+      quad(0, 0),
+      quad(80, 60),
+      quad(159, 0),
+      quad(0, 119),
+      quad(159, 119),
+      [700, 300, harness.CLEAR],
+      [400, 550, harness.CLEAR],
     ]);
   }
 
@@ -201,12 +249,14 @@ async function runHighDpi() {
     const s = state();
     const wantX = Math.fround(win.framebufferWidth / win.width);
     const wantY = Math.fround(win.framebufferHeight / win.height);
+    const dpi = Math.fround(win.dpiScale);
     console.log(
         'SCALE ' +
-        (s.scaleX === wantX && s.scaleY === wantY ?
+        (s.scaleX === wantX && s.scaleY === wantY && s.scaleX === dpi &&
+                 s.scaleY === dpi ?
              'ok' :
              'WRONG ' + s.scaleX + 'x' + s.scaleY + ' want ' + wantX + 'x' +
-                 wantY));
+                 wantY + ' and dpiScale ' + dpi));
     console.log('SCALEVALUE ' + s.scaleX);
   }
 
@@ -275,14 +325,15 @@ main().catch((e) => {
 // RESIZE-NEXT: {{^}}GENERATION 2{{$}}
 // RESIZE-NEXT: {{^}}TEXTURES same{{$}}
 // RESIZE-NEXT: {{^}}FILL800 ok{{$}}
+// RESIZE-NEXT: {{^}}MANY800 ok{{$}}
 
 // GEN: {{^}}[ui] generation 2: started at 800x600, replacing generation 1 at 640x480{{$}}
 
 // PIPELINE: {{^}}[ui] imgui: pipeline created (format {{[0-9]+}}, samples 1){{$}}
-// PIPELINE-NOT: imgui: pipeline created
+// PIPELINE-ONCE: {{^}}FIRST PIPELINE LINE{{$}}
 
 // TEXTURE: {{^}}[ui] imgui: texture {{[0-9]+}} created {{[0-9]+}}x{{[0-9]+}}{{$}}
-// TEXTURE-NOT: imgui: texture {{[0-9]+}} created
+// TEXTURE-ONCE: {{^}}FIRST TEXTURE LINE{{$}}
 
 // HIGHDPI: {{^}}SCALE ok{{$}}
 // HIGHDPI-NEXT: {{^}}SCALEVALUE {{[0-9.]+}}{{$}}

@@ -396,8 +396,14 @@ napi_value state(napi_env env, napi_callback_info) {
   bool wantCaptureMouse = false;
   bool wantCaptureKeyboard = false;
   bool wantTextInput = false;
+  double atlasTexId = 0;
   if (ImGui::GetCurrentContext() != nullptr) {
     const ImGuiIO &io = ImGui::GetIO();
+    // The id the renderer handed ImGui for the font atlas's texture (its
+    // Sokol view id), 0 before the atlas is uploaded. A texture re-created
+    // gets a new view, and so a new id.
+    if (io.Fonts != nullptr && io.Fonts->TexData != nullptr)
+      atlasTexId = static_cast<double>(io.Fonts->TexData->GetTexID());
     display = io.DisplaySize;
     scale = io.DisplayFramebufferScale;
     mouse = io.MousePos;
@@ -422,6 +428,7 @@ napi_value state(napi_env env, napi_callback_info) {
       setNumber(env, result, "vertices", stats.vertices) &&
       setNumber(env, result, "indices", stats.indices) &&
       setNumber(env, result, "liveTextures", stats.liveTextures) &&
+      setNumber(env, result, "atlasTexId", atlasTexId) &&
       setNumber(env, result, "mouseX", mouse.x) &&
       setNumber(env, result, "mouseY", mouse.y) &&
       setArray(env,

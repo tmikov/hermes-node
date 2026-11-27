@@ -76,6 +76,13 @@ Each test must be shown able to fail: the change made, and what it did.
 | 9 | `test/ui-imgui-resize.js` | (b) `DisplaySize` set on the first frame only (a cached size) | `TIMEOUT RESIZED` after `BEFORE matched`, test failed; restored |
 | 9 | `test/ui-imgui-resize.js` | (extra) `harness.resync` sets `h.published` to the reported id plus one | `CAPTURE unmatched ...fill800.ppm` after `TEXTURES same`, test failed: FILL800's capture depends on the id resync read back; restored |
 | 9 | `test/ui-imgui-resize.js` | (exclusions, doctored `.err`) one more `[ui] imgui: pipeline created (format 23, samples 1)` appended to a passing run's stderr; then one more `[ui] imgui: texture 2 created 512x128` | PIPELINE failed (`PIPELINE-NOT: excluded string found in input`), TEXTURE failed likewise; both pass on the undoctored file |
+| 9 | `test/ui-imgui-resize.js` | (review of Task 9, run in Task 10) the exclusions rewritten as PIPELINE-ONCE / TEXTURE-ONCE: `awk` replaces the first occurrence by a marker, FileCheck reads that under an `--implicit-check-not` of the line. Doctored `.err`: one more pipeline line, then one more texture line, put before the original, in the middle, and at the end; then the original line removed | all six doctored files fail their run (exit 1), wherever the extra line sits; the file with the line removed fails too (marker missing); the undoctored file passes both |
+| 9 | `test/ui-imgui-resize.js` | (review of Task 9, run in Task 10) the projection taken from the first frame's display size (`static const` L/R/T/B in `setupRenderState`) | test PASSED as it stood: FILL800's full-display fill covers the viewport under a projection over 640x480 too. MANY800 added (the `many` tiling at 800x600); it fails: `MANY800 WRONG 322,242=0,255,0 want 0,0,255 ... 700,300=0,0,255 want 26,26,31 ...`; restored |
+| 9 | `test/ui-imgui-resize.js` | (review of Task 9, run in Task 10) the viewport taken from the first frame's size | `FILL800 WRONG 790,8=26,26,31 want 255,0,0 ...`, MANY800 also WRONG; restored |
+| 9 | `test/ui-imgui-resize.js` | (review of Task 9, run in Task 10) `ensurePipeline` rebuilding when the target size changes | PIPELINE-ONCE failed on the second `imgui: pipeline created`; restored |
+| 9 | `test/ui-imgui-resize.js` | (review of Task 9, run in Task 10) every texture destroyed and created again when the target size changes | with the count alone `TEXTURES same` would have passed (1 -> 1); `state().atlasTexId` added and compared: `TEXTURES changed 1 -> 1, atlas 65544 -> 131080`, and TEXTURE-ONCE fails on the second `imgui: texture 1 created` (checked on the run's `.err`); restored |
+| 9 | `test/ui-imgui-resize.js` | (review of Task 9, run in Task 10) every texture re-uploaded in place (`WantCreate` with its record kept, traced `replaced`) when the target size changes | `TEXTURES changed 1 -> 1, atlas 65544 -> 65551` (TEXTURE-ONCE cannot see this one: nothing is traced `created`); restored |
+| 9 | `test/ui-imgui-resize.js` | (review of Task 9, run in Task 10) SCALE: also `s.scaleX === Math.fround(win.dpiScale)`, both axes | not mutated separately: under Xvfb dpiScale is 1 and so is the scale, and the addon reads neither from dpiScale, so no addon change separates the two legs here; the leg is for a 2x Mac run |
 
 ## Notes
 
@@ -253,3 +260,12 @@ Each test must be shown able to fail: the change made, and what it did.
 - Under Xvfb the `highdpi` run's scale is 1, so it repeats the `resize`
   run's geometry. `SCALEVALUE` is printed unchecked so a Mac run's log
   shows whether the 2x case ran.
+
+#### Task 9 review leftovers (done at the start of Task 10)
+
+- `state()` gains `atlasTexId`: the ImTextureID the renderer handed ImGui
+  for the font atlas, which is its Sokol view id. A re-created texture
+  gets a new view, so it is the read-back that tells "the same texture"
+  from "a texture again"; the live count cannot.
+- MANY800 is new in `test/ui-imgui-resize.js`: FILL800 cannot see a stale
+  projection (shown by mutation), MANY800 can.
