@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <unordered_set>
 
 namespace hnimgui {
 
@@ -40,7 +41,8 @@ constexpr float kClear[4] = {
 constexpr size_t kInitialVertices = 16384;
 constexpr size_t kInitialIndices = 32768;
 
-/// The largest texture ImGui may ask for (platform_io.Renderer_TextureMax*).
+/// The largest texture ImGui may ask for (platform_io.Renderer_TextureMax*),
+/// lowered in rendererInit() to the device's limit where that is smaller.
 constexpr int kTextureMaxSize = 8192;
 
 /// The vertex shader's one uniform block: the projection, column-major.
@@ -127,6 +129,22 @@ struct TextureRecord {
   sg_image image;
   sg_view view;
 };
+
+/// The UniqueID of every texture whose last upload failed and was traced.
+/// A failed texture keeps its status, so ImGui asks again and the upload is
+/// retried at every render(); this keeps the failure to one trace line per
+/// texture until it succeeds or is destroyed.
+std::unordered_set<int> gFailedTextures;
+
+/// Trace that \p tex failed (\p why, if not null), once per texture.
+void traceTextureFailed(const ImTextureData *tex, const char *why) {
+  if (!gFailedTextures.insert(tex->UniqueID).second)
+    return;
+  if (why != nullptr)
+    trace("texture %d failed (%s)", tex->UniqueID, why);
+  else
+    trace("texture %d failed", tex->UniqueID);
+}
 
 /// The backend cannot be drawn on (decided once in rendererInit()), so
 /// the renderer only clears.
@@ -339,7 +357,9 @@ void updateTexture(ImTextureData *tex) {
       tex->Status == ImTextureStatus_WantUpdates) {
     // ImGui's default, and the only format this renderer uploads.
     if (tex->Format != ImTextureFormat_RGBA32) {
-      trace("texture %d failed (format %d)", tex->UniqueID, tex->Format);
+      char why[32];
+      std::snprintf(why, sizeof(why), "format %d", tex->Format);
+      traceTextureFailed(tex, why);
       return;
     }
     sg_image_desc img = {};
@@ -357,7 +377,7 @@ void updateTexture(ImTextureData *tex) {
         sg_query_view_state(view) != SG_RESOURCESTATE_VALID) {
       sg_destroy_view(view);
       sg_destroy_image(image);
-      trace("texture %d failed", tex->UniqueID);
+      traceTextureFailed(tex, nullptr);
       return;
     }
     auto *record = static_cast<TextureRecord *>(tex->BackendUserData);
@@ -374,6 +394,7 @@ void updateTexture(ImTextureData *tex) {
     record->view = view;
     tex->SetTexID(static_cast<ImTextureID>(view.id));
     tex->SetStatus(ImTextureStatus_OK);
+    gFailedTextures.erase(tex->UniqueID);
     trace(
         "texture %d %s %dx%d",
         tex->UniqueID,
@@ -392,6 +413,7 @@ void updateTexture(ImTextureData *tex) {
     tex->SetTexID(ImTextureID_Invalid);
     tex->BackendUserData = nullptr;
     tex->SetStatus(ImTextureStatus_Destroyed);
+    gFailedTextures.erase(tex->UniqueID);
     trace("texture %d destroyed", tex->UniqueID);
   }
 }
@@ -539,9 +561,15 @@ void rendererInit() {
   // indices reach lists of any size.
   io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
 
+  // The device's limit, read at the point sg_query_backend() below is: both
+  // need only a set-up instance, which a window's existence implies.
+  int textureMax = kTextureMaxSize;
+  const int deviceMax = sg_query_limits().max_image_size_2d;
+  if (deviceMax > 0 && deviceMax < textureMax)
+    textureMax = deviceMax;
   ImGuiPlatformIO &pio = ImGui::GetPlatformIO();
-  pio.Renderer_TextureMaxWidth = kTextureMaxSize;
-  pio.Renderer_TextureMaxHeight = kTextureMaxSize;
+  pio.Renderer_TextureMaxWidth = textureMax;
+  pio.Renderer_TextureMaxHeight = textureMax;
   pio.DrawCallback_ResetRenderState = resetRenderStateCallback;
 
   const sg_backend backend = sg_query_backend();

@@ -14,8 +14,7 @@
 // - `version` is ImGui's own `IMGUI_VERSION`.
 // - `KEYS` is every export, sorted. It is the guard that the test hooks
 //   are absent when HERMES_NODE_UI_TEST_HOOKS is not set, and the HOOKS
-//   run that `__test` is present when it is; later tasks extend the line
-//   as they add exports.
+//   run that `__test` is present when it is.
 // - Plain hermes-node does not register the name.
 //
 // No window, so %timeout rather than %with-display.

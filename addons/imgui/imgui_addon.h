@@ -6,9 +6,7 @@
  */
 
 // Declarations shared by the addon's units. Every unit sees exactly these;
-// everything else stays file-local. Some are declared ahead of the units
-// that define them (the platform half, the renderer, the test hooks), and
-// nothing calls those until they exist.
+// everything else stays file-local.
 
 #ifndef HERMES_NODE_IMGUI_ADDON_H
 #define HERMES_NODE_IMGUI_ADDON_H

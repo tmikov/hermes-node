@@ -125,7 +125,8 @@ sg_view gQuadView = {};
 /// creation.
 void sceneQuad(napi_env env) {
   if (gQuadView.id == SG_INVALID_ID) {
-    hnui_target target;
+    hnui_target target = {};
+    target.size = static_cast<uint32_t>(sizeof(target));
     if (!hnui_frame_target(hnui_get_window(env), &target)) {
       napi_throw_error(
           env,

@@ -19,8 +19,7 @@ schedules the next.
 ## Running it
 
 It needs a build configured with `-DHERMES_NODE_ENABLE_UI=ON`, which builds
-both `hermes-node-ui` and the addon beside it (`cmake-build-asan` is
-configured that way). From the project root:
+both `hermes-node-ui` and the addon beside it. From the project root:
 
 ```sh
 <build dir>/bin/hermes-node-ui examples/imgui-demo/demo.js

@@ -88,6 +88,7 @@ Each test must be shown able to fail: the change made, and what it did.
 | 10 | `test/ui-imgui-demo.js` | (a) every `sg_draw_ex` skipped (`if (false)`) | `DEMO WRONG inside=0 notClear=0`, `DEMO vertices ok` still printed, test failed; restored |
 | 10 | `test/ui-imgui-demo.js` | (b) `HNUI_EVENT_MOUSE_WHEEL` not passed to `AddMouseWheelEvent` | `DEMO ok`, `DEMO vertices ok`, then `TIMEOUT DEMO wheel`, `EXITCODE 1`; restored |
 | 10 | `test/ui-imgui-demo.js` | (oracle) the clear row moved to y = 600, inside the demo window | `DEMO WRONG inside=349800 notClear=550 first 650,600` (the row crosses the window's 550 columns), test failed; restored |
+| final review | `test/ui-imgui-textures.js` | (I1, proving the defect) the `quad` scene's `hnui_target` left unsized as it was, then `memset` to 0 before `hnui_frame_target` | `Error: imgui.__test.scene('quad'): first use must be inside a frame callback`, TEXTURE run failed on `CODE`: the scene had depended on whatever its stack slot held. Fixed by zeroing it and setting `size`, as `render()` does |
 
 ## Notes
 
@@ -144,9 +145,10 @@ Each test must be shown able to fail: the change made, and what it did.
 - The shared header gained a small module section, `frameOpen()`,
   `lastTarget()` and `throwNoFrame()`, which the test hooks need and the
   plan's block did not list.
-- `utils/format.sh` does not cover `addons/` (its `FORMAT_DIRS` is `lib
-  tools include unittests`), so the addon's sources were formatted with
-  `clang-format-18 -style=file` directly.
+- At this task `utils/format.sh` did not cover `addons/` (its
+  `FORMAT_DIRS` was `lib tools include unittests`), so the addon's sources
+  were formatted with `clang-format-18 -style=file` directly. It has
+  covered `addons/` since the tidy-up commit before Task 5.
 
 ### Task 5
 
@@ -330,3 +332,23 @@ Each test must be shown able to fail: the change made, and what it did.
   (01a21c59-bcb6), behaviours no test detects (01a21c59-bd05), and the
   addon in no release (01a21c59-bd54). The build found no `hnui` gap, so
   none is filed.
+
+### Final review
+
+- The `quad` test scene passed an unsized `hnui_target` to
+  `hnui_frame_target` (the Mutations row above shows the scene depended on
+  stack contents). It is now zeroed and sized. Every other `hnui` struct
+  the addon passes (`render()`'s `hnui_target`, `platformNewFrame()`'s
+  `hnui_window_state`) already was.
+- A failed texture upload is still retried at every `render()`, and its
+  `texture <id> failed` line is now printed once per texture. The texture
+  size limit given to ImGui is lowered to the device's
+  `max_image_size_2d` where that is below 8192 (the suite's GL driver
+  reports 16384). Neither is reachable by a test; both are listed in
+  01a21c59-bd05.
+- Runs on Linux, 2026-11-27:
+  - `cmake --build cmake-build-asan --target check-hermes-node` (Debug,
+    ASAN, Sokol validation on): JS 247 passed, 10 unsupported, 0 failed;
+    unit 456 passed.
+  - `cmake-build-noasan` (Release, `-DNDEBUG`, UI on, Sokol validation
+    off): every `imgui-*.js` and `ui-imgui-*.js`, 13 of 13 passed.

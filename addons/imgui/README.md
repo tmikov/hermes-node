@@ -31,9 +31,11 @@ Not supported:
 - IME composition, gamepad input, loading fonts, a change of DPI scale
   while running.
 - Windows.
-- Release builds. `HERMES_NODE_ENABLE_UI` is off in the release
-  workflows, so no release carries the addon or `hermes-node-ui`; how the
-  addon would be packaged is undecided.
+- Published releases. The release workflows build without
+  `HERMES_NODE_ENABLE_UI`, so no release tarball carries the addon or
+  `hermes-node-ui`; how the addon would be packaged is undecided. (This is
+  about what is shipped, not the build type: a local Release build with
+  the option on builds both.)
 - `imgui.ini`: `io.IniFilename` and `io.LogFilename` are NULL, so the
   addon never writes a file into the current directory.
 
@@ -156,6 +158,12 @@ Platform half (`imgui_platform.cpp`):
   repeated `TEXT_INPUT` is passed on. Modifiers are sent with every mouse
   button and key event. Focus and blur go to `AddFocusEvent`, mouse leave
   moves the mouse to `-FLT_MAX`.
+- Input that arrives before the first `newFrame()` is not seen by ImGui:
+  the context, and with it the listener, do not exist yet, and nothing
+  replays earlier events. In practice ImGui starts with the mouse position
+  unknown, so nothing shows as hovered until the next mouse event, even
+  with the pointer already over the window; a key or button held across
+  that first frame is not known to be down.
 - The time step comes from a monotonic clock read in `newFrame()`, never
   below 1e-5 s (ImGui asserts on a time step that is not positive), and
   1/60 s on the first frame.
@@ -222,8 +230,16 @@ directly:
 ## Trace lines
 
 Under `HERMES_NODE_DEBUG_NATIVE=UI` the addon prints these to stderr, each
-prefixed `[ui] imgui: `, each written with one `fwrite`. None is printed
-per frame. Clipboard lines carry lengths, never contents.
+prefixed `[ui] imgui: `, each written with one `fwrite`. A healthy program
+prints none of them every frame. Two can repeat once something has gone
+wrong: `frame discarded`, at every `newFrame()` that finds a frame open (so
+a program that throws between `newFrame()` and `render()` on every tick
+prints it on every tick), and `<vertex|index> buffer could not grow`, at
+every `render()` whose data does not fit while the larger buffer cannot be
+made. A texture that fails to upload keeps its ImGui status, so its upload
+is retried at every `render()`, but `texture <id> failed` is printed once
+per texture, until an upload of it succeeds or it is destroyed. Clipboard
+lines carry lengths, never contents.
 
 | Line | When |
 |---|---|
@@ -235,7 +251,7 @@ per frame. Clipboard lines carry lengths, never contents.
 | `device objects failed; nothing will be drawn` | The shader, sampler, white image or buffers could not be made. |
 | `pipeline created (format <f>, samples <n>)`, `pipeline failed (format <f>, samples <n>)` | A pipeline was made, or could not be, for a target. |
 | `texture <id> created <w>x<h>`, `texture <id> replaced <w>x<h>` | An ImGui texture uploaded for the first time, or uploaded again under the same id. |
-| `texture <id> failed (format <f>)`, `texture <id> failed` | A texture in a format other than RGBA32, or whose image or view was not valid. |
+| `texture <id> failed (format <f>)`, `texture <id> failed` | A texture in a format other than RGBA32, or whose image or view was not valid. Printed once per texture; the upload is retried at every `render()`. |
 | `texture <id> destroyed` | ImGui asked for a texture to be destroyed. |
 | `vertex buffer grown to <n> bytes`, `index buffer grown to <n> bytes` | A buffer replaced by a larger one. |
 | `vertex buffer could not grow to <n> bytes`, `index buffer could not grow to <n> bytes` | The larger buffer could not be made; the rest of that `render()` draws nothing. |

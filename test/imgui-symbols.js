@@ -25,7 +25,7 @@
 // addon unit instantiates a std:: template (the template is exported).
 //
 // REQUIRES: ui, ui-imgui
-// RUN: %hermes-node %s %hermes_node_imgui | %FileCheck %s
+// RUN: %timeout 60 %hermes-node %s %hermes_node_imgui | %FileCheck %s
 
 'use strict';
 
