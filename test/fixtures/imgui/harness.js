@@ -64,6 +64,9 @@ async function open(options) {
  * any frame callback would draw.
  */
 function tick(h, fns) {
+  // With no callbacks nothing would ever resolve the promise.
+  if (fns.length === 0)
+    throw new Error('harness.tick(): fns must name at least one callback');
   return new Promise((resolve) => {
     const results = new Array(fns.length);
     let remaining = fns.length;

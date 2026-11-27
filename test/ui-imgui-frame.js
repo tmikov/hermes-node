@@ -159,8 +159,10 @@ async function main() {
     const s = imgui.__test.state();
     const ok = s.frameOpen === false && s.displayWidth === 640 &&
         s.displayWidth === win.width && s.displayHeight === win.height &&
-        s.scaleX === win.framebufferWidth / win.width &&
-        s.scaleY === win.framebufferHeight / win.height &&
+        // The addon's scale is a float32 (ImVec2), so compare it with
+        // the same quotient rounded to float32.
+        s.scaleX === Math.fround(win.framebufferWidth / win.width) &&
+        s.scaleY === Math.fround(win.framebufferHeight / win.height) &&
         s.targetWidth === win.framebufferWidth &&
         s.targetHeight === win.framebufferHeight &&
         s.targetGeneration === h.generation;
