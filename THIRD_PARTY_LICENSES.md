@@ -95,6 +95,20 @@ Asynchronous DNS resolver. Statically linked.
 
 See `external/cares/cares/LICENSE.md` for the full text.
 
+## imgui
+
+Dear ImGui, an immediate-mode GUI library, compiled into the
+`hermes-node:imgui` addon (`hermes-node-imgui.node`) -- and only when
+`HERMES_NODE_ENABLE_UI` is on, which it is not by default. Nothing from
+imgui reaches the `hermes-node` binary.
+
+- Upstream: https://github.com/ocornut/imgui (pinned at tag `v1.93.0-docking`)
+- License: MIT (`external/imgui/imgui/LICENSE.txt`)
+- Copyright: 2014-2026 Omar Cornut
+
+See `external/imgui/imgui/LICENSE.txt` for the full text, and
+`external/imgui/README.md` for which files are vendored and why.
+
 ## libuv
 
 Asynchronous I/O library. Statically linked.

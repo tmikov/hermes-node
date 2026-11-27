@@ -127,6 +127,7 @@ if(HERMES_NODE_ENABLE_UI)
   # plausibly" is the argument, and keeping the target out of the graph
   # entirely is the fact.
   add_subdirectory(external/sokol)
+  add_subdirectory(external/imgui)
   add_subdirectory(lib/compositor)
   # The GPU half: GL on Linux and other non-Apple Unix, Metal on macOS. It
   # refuses to configure on any other platform, so hermesNodeCompositorGpu
