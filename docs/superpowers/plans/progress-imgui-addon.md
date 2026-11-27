@@ -11,7 +11,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-addon-part-a.md`
 | Task 1 | Vendor Dear ImGui | done |
 | Task 2 | Extract loadNativeAddon() from process.dlopen | done |
 | Task 3 | Load a named addon; the addon skeleton | done |
-| Task 4 | The frame protocol, and a cleared target | in progress (Step 0 done) |
+| Task 4 | The frame protocol, and a cleared target | done |
 
 ## Mutations
 
@@ -29,6 +29,11 @@ Each test must be shown able to fail: the change made, and what it did.
 | 3 | `test/imgui-symbols.js` | same `std::vector` probe, `--version-script` option dropped | `EXPORTS bad: 16 unexpected`, test failed; restored |
 | 3 | `test/imgui-symbols.js` | export list and the three visibility properties both dropped | `EXPORTS bad: 2562 unexpected (2506 ImGui)`, test failed; restored |
 | 4 | `test/ui-present.js` | give-up branch of `maybeCapture()` sets `publicationId` to 0 again | `REBLIT matched=false framesObserved=240 presenting=WRONG got=0 want=1`, test failed; restored |
+| 4 | `test/ui-imgui-frame.js` | (a) target taken in `newFrame()` instead of `render()` | the throwing tick traced `drew`; TRACE run failed on `nothing drawn`; restored |
+| 4 | `test/ui-imgui-frame.js` | (b) clear colour set to black | `CLEARED WRONG 8,8=0,0,0 ...` at all five points, test failed; restored |
+| 4 | `test/ui-imgui-frame.js` | (c) `ImGui::EndFrame()` removed from the second `newFrame()` | ImGui asserted (`Forgot to call Render() or EndFrame()`), `EXITCODE 134`, test failed; restored |
+| 4 | `test/ui-imgui-frame.js` | (d) `render()` throws when `hnui_frame_target` refuses | the OUTSIDE `render()` threw and the script stopped, test failed; with OUTSIDE temporarily wrapped in a `try`, also `EXIT threw imgui.render(): ...`; restored |
+| 4 | `test/ui-imgui-frame.js` | (unplanned, found while writing it) `harness.tick` resolving from inside the last callback | OUTSIDE's `render()` ran at the host's post-callback checkpoint, still inside the tick, and drew: `OUTSIDE render=true`, test failed; the harness now resolves from a `setImmediate` |
 
 ## Notes
 
@@ -60,3 +65,31 @@ Each test must be shown able to fail: the change made, and what it did.
   `bin/`.
 - The UI-off configuration (`cmake-build-asan-noui`) still configures and
   builds `hermes-node`.
+
+### Task 4
+
+- The tick-machine barrier `resync(h)` relies on was confirmed by reading
+  `lib/compositor/tick_machine.cpp`: `shouldSendTickLocked` refuses unless
+  the state is `kIdle`, and a drawing tick leaves `kIdle`
+  (`endCallbacksDrew(true)` -> `kGpuPending` -> `kPublishedAwaitingTake`)
+  until `takeFrame` (which also sets `presentingPublicationId_`) or a drop
+  returns it. So once a callback-only tick has run, the last publication
+  has been taken or dropped. Matches the independent review.
+- A promise resolved from inside a frame callback continues at the host's
+  checkpoint after that callback, still inside the tick, where
+  `hnui_frame_target` answers. `harness.tick` therefore resolves from a
+  `setImmediate`; code after `await tick(...)` runs outside the tick.
+- ImGui 1.93 merged `ImDrawListFlags` into `ImDrawFlags`, and with
+  `IMGUI_DISABLE_OBSOLETE_FUNCTIONS` the old names are gone: the `fill`
+  scene turns anti-aliased fill off with
+  `PushDrawFlag(ImDrawFlags_AAFill, false)` / `PopDrawFlag()`.
+- No other ImGui precondition surfaced: with
+  `ImGuiBackendFlags_RendererHasTextures` set in `rendererInit` and a
+  framebuffer scale that is never 0, `NewFrame()` and `Render()` ran
+  without asserting.
+- The shared header gained a small module section, `frameOpen()`,
+  `lastTarget()` and `throwNoFrame()`, which the test hooks need and the
+  plan's block did not list.
+- `utils/format.sh` does not cover `addons/` (its `FORMAT_DIRS` is `lib
+  tools include unittests`), so the addon's sources were formatted with
+  `clang-format-18 -style=file` directly.

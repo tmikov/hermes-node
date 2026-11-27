@@ -13,8 +13,9 @@
 //   loaded it a second time.
 // - `version` is ImGui's own `IMGUI_VERSION`.
 // - `KEYS` is every export, sorted. It is the guard that the test hooks
-//   are absent when HERMES_NODE_UI_TEST_HOOKS is not set; later tasks
-//   extend the line as they add exports.
+//   are absent when HERMES_NODE_UI_TEST_HOOKS is not set, and the HOOKS
+//   run that `__test` is present when it is; later tasks extend the line
+//   as they add exports.
 // - Plain hermes-node does not register the name.
 //
 // No window, so %timeout rather than %with-display.
@@ -27,6 +28,7 @@
 // RUN: %FileCheck --check-prefix=OUT %s < %t.out
 // RUN: %FileCheck --check-prefix=ERR %s < %t.err
 // RUN: %timeout 60 %hermes-node %s plain | %FileCheck --check-prefix=PLAIN %s
+// RUN: env HERMES_NODE_UI_TEST_HOOKS=1 %timeout 60 %hermes-node-ui %s | %FileCheck --check-prefix=HOOKS %s
 
 'use strict';
 
@@ -49,9 +51,12 @@ if (process.argv[2] === 'plain') {
 // OUT: {{^}}RESOLVE hermes-node:imgui{{$}}
 // OUT-NEXT: {{^}}SAME true{{$}}
 // OUT-NEXT: {{^}}VERSION 1.93.0{{$}}
-// OUT-NEXT: {{^}}KEYS version{{$}}
+// OUT-NEXT: {{^}}KEYS newFrame,render,showDemoWindow,version{{$}}
 
 // ERR: {{^}}[ui] imgui: addon loaded (imgui 1.93.0){{$}}
 // ERR-NOT: imgui: addon loaded
 
 // PLAIN: {{^}}PLAIN MODULE_NOT_FOUND{{$}}
+
+// With the test hooks on, and only then, `__test` is exported as well.
+// HOOKS: {{^}}KEYS __test,newFrame,render,showDemoWindow,version{{$}}

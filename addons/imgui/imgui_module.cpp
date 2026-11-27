@@ -5,9 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// The addon's N-API surface and its tracing. Loaded by hermes-node-ui as
-// `hermes-node:imgui` (tools/hermes-node-ui/named_addons.cpp), from
-// hermes-node-imgui.node beside the binary.
+// The addon's N-API surface, the frame state machine and tracing. Loaded by
+// hermes-node-ui as `hermes-node:imgui` (tools/hermes-node-ui/
+// named_addons.cpp), from hermes-node-imgui.node beside the binary.
+//
+// Everything here runs on the JS thread of the runtime that loaded the
+// addon, which is the window's owner thread: N-API calls arrive on no other.
 
 #include "imgui_addon.h"
 
@@ -79,10 +82,124 @@ bool testHooksEnabled() {
   // else on. Read once.
   static const bool enabled = [] {
     const char *value = std::getenv("HERMES_NODE_UI_TEST_HOOKS");
-    return value != nullptr && value[0] != '\0' &&
-        std::strcmp(value, "0") != 0;
+    return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
   }();
   return enabled;
+}
+
+namespace {
+
+/// The window the context was created for. One context per process, made
+/// at the first newFrame() that finds a window.
+hnui_window *gWindow = nullptr;
+/// Between a newFrame() and the render() (or the next newFrame()) that
+/// ends its frame.
+bool gFrameOpen = false;
+/// The target of the last render() that drew; all zero before any.
+hnui_target gLastTarget = {};
+
+napi_value boolean(napi_env env, bool value) {
+  napi_value result = nullptr;
+  napi_get_boolean(env, value, &result);
+  return result;
+}
+
+void createContext(hnui_window *w) {
+  IMGUI_CHECKVERSION();
+  ImGui::CreateContext();
+  ImGuiIO &io = ImGui::GetIO();
+  // A toolkit must not drop imgui.ini or imgui_log.txt into the current
+  // directory of whatever program loaded it.
+  io.IniFilename = nullptr;
+  io.LogFilename = nullptr;
+  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  platformInit(w);
+  rendererInit();
+  gWindow = w;
+  trace(
+      "context created (imgui %s, docking=%d)",
+      ImGui::GetVersion(),
+      (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) != 0 ? 1 : 0);
+}
+
+/// `newFrame()`: start an ImGui frame. Takes no target -- render() does,
+/// because taking one is what tells the host the tick drew. Returns false,
+/// having done nothing, only when this runtime has no window.
+napi_value newFrame(napi_env env, napi_callback_info) {
+  hnui_window *w = hnui_get_window(env);
+  if (w == nullptr)
+    return boolean(env, false);
+  if (gWindow == nullptr)
+    createContext(w);
+  if (gFrameOpen) {
+    // A second newFrame() in one callback, or the first one after a throw
+    // left a frame open: the two cannot be told apart, so neither throws.
+    ImGui::EndFrame();
+    gFrameOpen = false;
+    trace("frame discarded");
+  }
+  platformNewFrame(gWindow);
+  ImGui::NewFrame();
+  gFrameOpen = true;
+  return boolean(env, true);
+}
+
+/// `render()`: end the frame, then draw it into this tick's target if
+/// there is one. Returns whether it drew: false outside a frame callback
+/// and in CLOSING, where hnui_frame_target has no target to give.
+napi_value render(napi_env env, napi_callback_info) {
+  if (!gFrameOpen)
+    return throwNoFrame(env, "render");
+  ImGui::Render();
+  gFrameOpen = false;
+  hnui_target target = {};
+  target.size = static_cast<uint32_t>(sizeof(target));
+  if (!hnui_frame_target(gWindow, &target))
+    return boolean(env, false);
+  gLastTarget = target;
+  rendererDraw(ImGui::GetDrawData(), target);
+  platformAfterRender(gWindow);
+  return boolean(env, true);
+}
+
+/// `showDemoWindow()`: ImGui's own demo window, in the open frame.
+napi_value showDemoWindow(napi_env env, napi_callback_info) {
+  if (!gFrameOpen)
+    return throwNoFrame(env, "showDemoWindow");
+  ImGui::ShowDemoWindow();
+  return nullptr;
+}
+
+bool exportFunction(
+    napi_env env,
+    napi_value exports,
+    const char *name,
+    napi_callback cb) {
+  napi_value fn = nullptr;
+  return napi_create_function(env, name, NAPI_AUTO_LENGTH, cb, nullptr, &fn) ==
+      napi_ok &&
+      napi_set_named_property(env, exports, name, fn) == napi_ok;
+}
+
+} // namespace
+
+bool frameOpen() {
+  return gFrameOpen;
+}
+
+const hnui_target &lastTarget() {
+  return gLastTarget;
+}
+
+napi_value throwNoFrame(napi_env env, const char *name) {
+  char message[160];
+  std::snprintf(
+      message,
+      sizeof(message),
+      "imgui.%s(): no frame is open; call imgui.newFrame() first",
+      name);
+  napi_throw_error(env, "ERR_IMGUI_NO_FRAME", message);
+  return nullptr;
 }
 
 } // namespace hnimgui
@@ -97,6 +214,17 @@ NAPI_MODULE_INIT() {
           napi_ok ||
       napi_set_named_property(env, exports, "version", version) != napi_ok)
     return nullptr;
+  if (!hnimgui::exportFunction(env, exports, "newFrame", hnimgui::newFrame) ||
+      !hnimgui::exportFunction(env, exports, "render", hnimgui::render) ||
+      !hnimgui::exportFunction(
+          env, exports, "showDemoWindow", hnimgui::showDemoWindow))
+    return nullptr;
+  if (hnimgui::testHooksEnabled()) {
+    napi_value hooks = hnimgui::createTestHooks(env);
+    if (hooks == nullptr ||
+        napi_set_named_property(env, exports, "__test", hooks) != napi_ok)
+      return nullptr;
+  }
 
   hnimgui::trace("addon loaded (imgui %s)", IMGUI_VERSION);
   return exports;

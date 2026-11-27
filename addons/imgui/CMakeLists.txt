@@ -11,6 +11,9 @@
 
 add_library(hermes_node_imgui SHARED
   imgui_module.cpp
+  imgui_platform.cpp
+  imgui_renderer.cpp
+  imgui_test_hooks.cpp
   ${IMGUI_SOURCES}
 )
 

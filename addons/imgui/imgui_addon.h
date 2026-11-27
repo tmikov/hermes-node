@@ -22,6 +22,11 @@ namespace hnimgui {
 // "[ui] imgui: ..." when UI tracing is on
 void trace(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 bool testHooksEnabled(); // HERMES_NODE_UI_TEST_HOOKS, same rule as the host
+// frame state, for the test hooks
+bool frameOpen(); // between a newFrame() and its render()
+const hnui_target &lastTarget(); // of the last drawing render(); zero before
+// throws ERR_IMGUI_NO_FRAME naming `imgui.<name>()`; returns nullptr
+napi_value throwNoFrame(napi_env env, const char *name);
 // platform
 void platformInit(hnui_window *w); // listener, clipboard hooks, backend flags
 void platformNewFrame(
