@@ -44,7 +44,9 @@
   };
   process.emit = function(event) {
     var list = handlers[event];
-    if (!list) return false;
+    // An emptied list is no listeners: removing the last one leaves the
+    // array behind, and _fatalException below decides from this answer.
+    if (!list || list.length === 0) return false;
     var args = Array.prototype.slice.call(arguments, 1);
     var copy = list.slice();
     for (var i = 0; i < copy.length; i++) {
