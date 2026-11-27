@@ -31,6 +31,7 @@ add_library(hermes_node_imgui SHARED
   bind/bind_plots.cpp
   bind/bind_drawlist.cpp
   bind/bind_clipper.cpp
+  bind/bind_docking.cpp
   ${IMGUI_SOURCES}
 )
 

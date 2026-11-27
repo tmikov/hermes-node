@@ -13,8 +13,9 @@
 //
 //  EITHER    before the first newFrame(), the out-of-frame functions
 //            return values of the right type; getDisplaySize(out) returns
-//            `out` itself, filled; styleColorsDark() and
-//            colorConvertFloat4ToU32() work.
+//            `out` itself, filled; styleColorsDark(),
+//            colorConvertFloat4ToU32(), saveIniSettingsToMemory() (a
+//            string) and loadIniSettingsFromMemory('') work.
 //  NOFRAME   every bound function that needs a frame, with valid
 //            arguments, outside a frame: ERR_IMGUI_NO_FRAME, not called.
 //            A function in bind-groups.js with no sample arguments here is
@@ -73,6 +74,7 @@ const EITHER = [
   'getDisplaySize',
   'wantCaptureMouse',
   'wantCaptureKeyboard',
+  'saveIniSettingsToMemory',
 ];
 
 /**
@@ -222,14 +224,20 @@ const SAMPLES = {
   'drawList.addPolyline': [[0, 0, 1, 1], 0xFFFFFFFF, 1],
   'drawList.addText': [[0, 0], 0xFFFFFFFF, 't'],
   listClipper: [1, 1, () => {}],
+  dockSpaceOverViewport: [],
 };
 
 /**
- * The functions that need neither a frame nor, for the last, a context:
- * EITHER calls them before the first newFrame().
+ * The functions that need no frame (colorConvertFloat4ToU32 no context
+ * either), or must be outside one (loadIniSettingsFromMemory): EITHER
+ * calls them before the first newFrame().
  */
-const NO_FRAME_NEEDED =
-    ['styleColorsDark', 'styleColorsLight', 'colorConvertFloat4ToU32'];
+const NO_FRAME_NEEDED = [
+  'styleColorsDark',
+  'styleColorsLight',
+  'colorConvertFloat4ToU32',
+  'loadIniSettingsFromMemory',
+];
 
 /** The function `name` names, `drawList.<f>` included. */
 function fnOf(imgui, name) {
@@ -296,6 +304,12 @@ async function main() {
       bad.push('styleColorsDark');
     if (imgui.colorConvertFloat4ToU32([1, 0, 0, 1]) !== 0xFF0000FF)
       bad.push('colorConvertFloat4ToU32');
+    // The settings: an empty load changes nothing that this test reads
+    // (test/ui-imgui-bind-docking.js is their behaviour).
+    if (typeof imgui.saveIniSettingsToMemory() !== 'string')
+      bad.push('saveIniSettingsToMemory');
+    if (imgui.loadIniSettingsFromMemory('') !== undefined)
+      bad.push('loadIniSettingsFromMemory');
     if (imgui.__test.state().frameOpen)
       bad.push('frameOpen');
     console.log(bad.length === 0 ? 'EITHER ok' : 'EITHER WRONG ' + bad);

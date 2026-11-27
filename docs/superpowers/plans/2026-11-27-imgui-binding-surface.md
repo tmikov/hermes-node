@@ -574,9 +574,43 @@ there is no "Proposed addition" under any group.
   - `dockspace_id != 0` (imgui.cpp:20922, plain): a zero argument is
     replaced by `GetID("DockSpace")` first (imgui.cpp:21045-21046), so it
     cannot be reached.
+  - not twice in a frame with the same ID: `node->IsDockSpace() == false`
+    for a node already updated this frame (imgui.cpp:20937-20939, plain;
+    "Cannot call DockSpace() twice a frame with the same ID"), skipped with
+    `DockNodeFlags_KeepAliveOnly`. (b): `canDockSpaceOverViewport:twice`,
+    on the node `DockContextFindNodeByID` gives for the ID the call will
+    use; for a zero argument that is the default ID, computed as ImGui
+    computes it (the host window is `"WindowOverViewport_%08X"` of the
+    viewport's ID, imgui.cpp:21035-21036, and `GetID("DockSpace")` in it
+    hashes with that window's ID as the seed, imgui.cpp:4852-4853). With
+    the main viewport (ID `0x11111111`, imgui.cpp:1518) the default is
+    `0x08BD597D` in every run (`ui-imgui-bind-docking.js` STABLE).
+  - a root node: `IM_ASSERT(node->IsRootNode())` (imgui.cpp:20985, plain),
+    reached by an ID naming a split node's child (one loaded from
+    settings, for instance) that was not updated this frame. (b):
+    `canDockSpaceOverViewport:not-root`, refused for any node with a
+    parent, which is stricter than ImGui in two respects: when the node was
+    already updated this frame, or with `KeepAliveOnly`, ImGui returns
+    early and marks the child as a dock space (imgui.cpp:20937-20950),
+    which then asserts at the next submission of that ID; and the host
+    window's `SkipItems`, which would make ImGui take the keep-alive path
+    (imgui.cpp:20914-20915), is set inside the call and is not read.
+  - `DockNodeFlags_PassthruCentralNode` and `_KeepAliveOnly`: besides
+    the dock node's own handling, they add host window flags
+    (imgui.cpp:21027-21033). The one assertion found on the first
+    (`IM_ASSERT(node->IsDockSpace())` for the central node's hole,
+    imgui.cpp:19619) holds for every node `DockSpace()` set up, since it
+    marks it a dock space first (imgui.cpp:20943); `_KeepAliveOnly`
+    returns before any other (imgui.cpp:20946-20950).
 - Notes: it begins and ends a host window of its own
   (imgui.cpp:21041-21049), pushing and popping three style variables.
-  `dockspaceId` and the return value are `ImGuiID`s (G3).
+  `dockspaceId` and the return value are `ImGuiID`s (G3). It is to be
+  called before the windows it hosts: one submitted earlier in the frame
+  is undocked, not asserted on (`BeginDocked`, imgui.cpp:21642-21647).
+  With a layout loaded before the first frame the windows are docked in
+  that frame, but the split lays out only nodes that were visible in the
+  previous one (imgui.cpp:20615-20618), so they tile from the second
+  frame (measured, `ui-imgui-bind-docking.js` FIRST).
 
 ### `loadIniSettingsFromMemory`
 
@@ -591,12 +625,25 @@ there is no "Proposed addition" under any group.
   none.
 - Preconditions: `g.Initialized` (imgui.cpp:16614, plain): satisfied by
   context creation. ImGui's own "not between NewFrame() and EndFrame()"
-  assertion is commented out (imgui.cpp:16615), so the outside-only rule
-  is the binding's, as the design says.
+  assertion is commented out (imgui.cpp:16615), and so is the one
+  restricting it to before the first frame (imgui.cpp:16616): loading
+  between frames, with windows docked, is what the binding's tests do.
+  The outside-only rule is the binding's, as the design says; its
+  refusal is traced as a guard's is (`usage error: must be called outside
+  a frame (before newFrame())`).
+  - The string's size: `Buf.resize((int)ini_size + 1)` (imgui.cpp:16622)
+    and `ImVector`'s `int` capacity growth need it well below 2^31. Not
+    checked: a Hermes string holds at most 2^28 UTF-16 units
+    (`MAX_STRING_LENGTH`, hermes/include/hermes/VM/StringPrimitive.h:136),
+    at most 805,306,368 bytes encoded, which stays inside both.
+  - The content is not validated, and ImGui trusts it: see "Not covered",
+    item 3g.
 - Notes: passing the byte length rather than 0 matters: with
   `ini_size == 0` ImGui calls `ImStrlen(ini_data)` (imgui.cpp:16620-16621).
   The data is copied (imgui.cpp:16622-16626), so the encoded buffer need
-  not outlive the call.
+  not outlive the call. Before the first frame the docking handler prunes
+  dock nodes no window refers to (imgui.cpp:21870-21871); between frames
+  it does not.
 
 ### `saveIniSettingsToMemory`
 
@@ -607,7 +654,11 @@ there is no "Proposed addition" under any group.
 - Omitted: `out_ini_size` (design, "Exceptions: Settings").
 - Frame: either. With no window it throws `ERR_IMGUI_NO_WINDOW`.
   Rejected: none.
-- Preconditions: none found (imgui.cpp:16704-16715).
+- Preconditions: none found in the function (imgui.cpp:16704-16715). Its
+  handlers assert plainly on state the settings may have built: a dock
+  node tree 256 or more deep (imgui.cpp:21927, measured); see "Not
+  covered", item 3g. Before the first frame it returns
+  `"[Docking][Data]\n\n"` (measured).
 - Notes: it also clears `g.SettingsDirtyTimer` (imgui.cpp:16707), a
   side effect with `io.IniFilename == NULL` that nothing reads.
 
@@ -3198,6 +3249,30 @@ a C++ program.
    converts as they are. This is undefined behaviour rather than an
    assertion, and no sanitizer in the test builds reports it.
 
+3g. **A settings string ImGui cannot apply** (Task 8, each measured by
+   hand). `LoadIniSettingsFromMemory` parses with no validation ("Zero-
+   tolerance, no error reporting", imgui.cpp:16609), and the docking
+   handler builds dock nodes from whatever IDs and parents the string
+   names (`DockContextBuildNodesFromSettings`, imgui.cpp:18570-18604).
+   Loaded between frames (windows exist, so nothing is pruned,
+   imgui.cpp:21870-21871):
+   - a node naming itself as its parent (`DockNode ID=0x00000005
+     Parent=0x00000005`): the load never returns (`DockNodeGetRootNode`
+     follows the cycle), and the run ended at its time limit;
+   - a window settings line whose `DockId` names no node (`[Window][W]`
+     with `DockId=0x0000DEAD,0`, W active in the previous frame): abort in
+     the load, `IM_ASSERT(node != NULL)` (imgui.cpp:18618);
+   - a chain of 300 nodes, each the parent of the next: the load returns,
+     and the next `saveIniSettingsToMemory()` aborts on the tree's depth
+     (imgui.cpp:21927).
+   Loaded before the first frame, the first and third were pruned and did
+   nothing. Preventing these needs the binding to parse and check the
+   string against ImGui's model of a dock tree, which is ImGui's parser
+   written again; a settings string is trusted input, as ImGui's own
+   `imgui.ini` is. The 98 assertions of the docking section
+   (imgui.cpp:18000-22100) were not each audited for what a string can
+   reach.
+
 Recorded here for completeness, although not assertions:
 
 4. Guards are ImGui's own conditions and are as weak as they are (the
@@ -3259,11 +3334,17 @@ Read:
 | `g.CurrentTabBar` and `->LastTabItemIdx` | 2773, 3221 | `endTabItem` |
 | `g.LastItemData.ID` | 2624 | `beginPopupContextItem` (when `strId` is null) |
 | `g.Windows` | 2545 | the test hook `__test.state().windows` (design) |
+| `DockContextFindNodeByID(&g, id)` (a function) | 3969 | `dockSpaceOverViewport` |
+| `ImGuiDockNode::ParentNode`, `::LastFrameActive`, `::IsDockSpace()` (`MergedFlags`); `g.FrameCount` | 2136, 2153, 2177; 2514 | `dockSpaceOverViewport` |
+| `ImHashStr`, `ImFormatString` (functions) | 388, 429 | `dockSpaceOverViewport` (its default ID) |
 
 Also taken from ImGui's private source rather than a header: the
 expression of `TREE_NODE_GET_DEPTH_MASK` (widgets:7019-7020), repeated in
 `treePop`'s guard, and the format `"##Combo_%02d"` of a combo popup's
-window name (widgets:2055, 2094), repeated in `endCombo`'s guard.
+window name (widgets:2055, 2094), repeated in `endCombo`'s guard; and
+the host window name `"WindowOverViewport_%08X"` and the label
+`"DockSpace"` of `DockSpaceOverViewport` (imgui.cpp:21035-21036, 21046),
+repeated in `dockSpaceOverViewport`'s guard to compute the default ID.
 
 Written:
 

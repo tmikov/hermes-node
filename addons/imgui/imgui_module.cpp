@@ -246,7 +246,8 @@ NAPI_MODULE_INIT() {
       !bind::registerStyle(env, exports) ||
       !bind::registerPlots(env, exports) ||
       !bind::registerDrawList(env, exports) ||
-      !bind::registerClipper(env, exports))
+      !bind::registerClipper(env, exports) ||
+      !bind::registerDocking(env, exports))
     return nullptr;
   if (hnimgui::testHooksEnabled()) {
     napi_value hooks = hnimgui::createTestHooks(env);

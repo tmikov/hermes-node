@@ -102,6 +102,22 @@ const char *canTableSetupScrollFreeze();
 /// the scope comparison below.
 const char *canListClipper();
 
+/// DockSpace(), called by DockSpaceOverViewport() with the ImGuiID \p
+/// dockspaceId gives it (a zero argument is replaced by the dock space's
+/// default ID, computed as ImGui computes it), asserts plainly that the
+/// node is not already a dock space submitted this frame
+/// (`canDockSpaceOverViewport:twice`, imgui.cpp:20937-20939, unless
+/// DockNodeFlags_KeepAliveOnly is in \p flags) and that it is a root node
+/// (`canDockSpaceOverViewport:not-root`, imgui.cpp:20985). The second is
+/// refused whatever the flags and whether or not the node was updated this
+/// frame, which is stricter than ImGui: there DockSpace() returns early
+/// (imgui.cpp:20937-20950) and only marks the split node as a dock space
+/// (imgui.cpp:20940, 20943), which then asserts on the next submission of
+/// that ID. The host window's SkipItems, which would make ImGui take the
+/// keep-alive path too (imgui.cpp:20914-20915), is set only inside the
+/// call and is not read.
+const char *canDockSpaceOverViewport(unsigned dockspaceId, int flags);
+
 /// What listClipper() compares after each callback (design, "Exceptions:
 /// List clipper"): the current window, the depth of the window stack, and
 /// the current table. A table that does not scroll changes the current

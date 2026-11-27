@@ -123,6 +123,16 @@
 //                 one; and a child whose plain table was ended.
 //  CLIPPER_WRONG_WINDOW listClipper() in TABLE_WRONG_WINDOW's window, inside
 //                 the row: refused, not called, the callback never run.
+//  LOADINI_INFRAME loadIniSettingsFromMemory() inside a frame: refused,
+//                 not called, traced; the frame then draws.
+//  DOCKSPACE_TWICE dockSpaceOverViewport() a second time in a frame, with
+//                 the default ID (0) and with the ID the first call
+//                 returned: refused, not called; with
+//                 DockNodeFlags_KeepAliveOnly: accepted. In the next frame
+//                 the ID given explicitly first, then 0: refused.
+//  DOCKSPACE_NOT_ROOT a split dock space loaded from settings; one of its
+//                 nodes given to dockSpaceOverViewport() before the dock
+//                 space and after it: refused both times.
 //  DISCARD       newFrame(); begin('w'); newFrame(): no throw, `frame
 //                 discarded` traced, the frame that follows renders.
 //  GUARDS         every guard condition registered has refused at least
@@ -154,6 +164,9 @@
 //  canTableSetupColumn's all-disabled check off, or blind to queued
 //  reconcile requests: TABLE_DISABLED fails;
 //  canListClipper() returning nullptr always: CLIPPER_WRONG_WINDOW aborts;
+//  canDockSpaceOverViewport()'s twice or not-root condition off:
+//  DOCKSPACE_TWICE or DOCKSPACE_NOT_ROOT aborts;
+//  needNoFrame() not tracing its refusal: ONCE fails;
 //  the reset of g.BeginComboDepth removed from guard::beginFrame():
 //  COMBO_LEFT_OPEN fails;
 //  a guard condition registered and never refused: GUARDS fails
@@ -178,6 +191,17 @@ const harness = require('./fixtures/imgui/harness.js');
 
 const mode = process.argv[2];
 const capturePath = process.argv[3];
+
+// The dock space's default ID (test/ui-imgui-bind-docking.js says why it
+// is this), and a settings string splitting it into nodes 1 and 2.
+const DOCKSPACE_ID = 0x08BD597D;
+const SPLIT = [
+  '[Docking][Data]',
+  'DockSpace   ID=0x08BD597D Pos=0,0 Size=640,480 Split=X',
+  '  DockNode  ID=0x00000001 Parent=0x08BD597D SizeRef=320,480',
+  '  DockNode  ID=0x00000002 Parent=0x08BD597D SizeRef=318,480 CentralNode=1',
+  '',
+].join('\n');
 
 function fail(line) {
   console.log(line);
@@ -1006,6 +1030,61 @@ async function main() {
                     'CLIPPER_WRONG_WINDOW WRONG ' + drew + ' ' + called);
   }
 
+  // --- LOADINI_INFRAME -------------------------------------------------
+  {
+    let message;
+    const drew = await harness.frame(h, () => {
+      message = refused('loadIniSettingsFromMemory',
+                        () => imgui.loadIniSettingsFromMemory('')).message;
+    });
+    console.log(drew ? 'LOADINI_INFRAME ok' : 'LOADINI_INFRAME render=' + drew);
+    console.log('LOADINI_INFRAME message ' + message);
+  }
+
+  // --- DOCKSPACE_TWICE -------------------------------------------------
+  // DockSpace() asserts plainly against a second submission of one dock
+  // space in a frame (imgui.cpp:20937-20939) unless it is kept alive only.
+  // The second frame submits the ID explicitly first and then the
+  // default: refusing that needs the default ID, which the guard computes.
+  {
+    let first, accepted = 0;
+    const drew = await harness.frame(h, () => {
+      first = imgui.dockSpaceOverViewport();
+      refused('dockSpaceOverViewport', () => imgui.dockSpaceOverViewport());
+      refused('dockSpaceOverViewport',
+              () => imgui.dockSpaceOverViewport(first));
+      const before = calls('dockSpaceOverViewport');
+      imgui.dockSpaceOverViewport(0, imgui.DockNodeFlags_KeepAliveOnly);
+      accepted = calls('dockSpaceOverViewport') - before;
+    });
+    const drew2 = await harness.frame(h, () => {
+      imgui.dockSpaceOverViewport(DOCKSPACE_ID);
+      refused('dockSpaceOverViewport', () => imgui.dockSpaceOverViewport());
+    });
+    const ok = drew && drew2 && first === DOCKSPACE_ID && accepted === 1;
+    console.log(ok ? 'DOCKSPACE_TWICE ok' :
+                     'DOCKSPACE_TWICE WRONG ' + [drew, drew2, first, accepted]);
+  }
+
+  // --- DOCKSPACE_NOT_ROOT ----------------------------------------------
+  // The dock space split into two nodes, loaded between frames. Node 1
+  // submitted as a dock space before its root has been: DockSpace()
+  // asserts plainly that it is a root node (imgui.cpp:20985). After the
+  // root, ImGui would accept it and mark the split node as a dock space;
+  // the guard refuses that too (bind_guards.h).
+  {
+    imgui.loadIniSettingsFromMemory(SPLIT);
+    const drew = await harness.frame(h, () => {
+      refused('dockSpaceOverViewport', () => imgui.dockSpaceOverViewport(1));
+      imgui.dockSpaceOverViewport();
+      refused('dockSpaceOverViewport', () => imgui.dockSpaceOverViewport(1));
+    });
+    // An empty load clears every dock node again.
+    imgui.loadIniSettingsFromMemory('');
+    console.log(drew ? 'DOCKSPACE_NOT_ROOT ok' :
+                       'DOCKSPACE_NOT_ROOT render=' + drew);
+  }
+
   // --- DISCARD ---------------------------------------------------------
   {
     const drew = await harness.frame(h, () => {
@@ -1083,6 +1162,10 @@ async function main() {
 // CHECK-NEXT: {{^}}TABLE_REGION accepted imgui.end(): Missing EndTable(){{$}}
 // CHECK-NEXT: {{^}}TABLE_REGION accepted imgui.endListBox(): Missing EndTable(){{$}}
 // CHECK-NEXT: {{^}}CLIPPER_WRONG_WINDOW ok{{$}}
+// CHECK-NEXT: {{^}}LOADINI_INFRAME ok{{$}}
+// CHECK-NEXT: {{^}}LOADINI_INFRAME message imgui.loadIniSettingsFromMemory(): must be called outside a frame (before newFrame()){{$}}
+// CHECK-NEXT: {{^}}DOCKSPACE_TWICE ok{{$}}
+// CHECK-NEXT: {{^}}DOCKSPACE_NOT_ROOT ok{{$}}
 // CHECK-NEXT: {{^}}DISCARD ok{{$}}
 // CHECK-NEXT: {{^}}GUARDS ok{{$}}
 // CODE: EXITCODE 0
@@ -1164,6 +1247,12 @@ async function main() {
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing EndTable(){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing EndTable(){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: listClipper() inside a table row, in another window than the table's own (a window begun inside a cell is current){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: must be called outside a frame (before newFrame()){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: DockSpaceOverViewport() twice in a frame with the same ID{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: DockSpaceOverViewport() twice in a frame with the same ID{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: DockSpaceOverViewport() twice in a frame with the same ID{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: DockSpaceOverViewport() with the ID of a split node's child, not a dock space{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: DockSpaceOverViewport() with the ID of a split node's child, not a dock space{{$}}
 // The discarded frame's open window is reported, then the discard.
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing End(){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: frame discarded{{$}}

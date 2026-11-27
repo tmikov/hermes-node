@@ -321,6 +321,7 @@ bool registerPlots(napi_env env, napi_value exports);
 // `imgui.drawList` and its functions.
 bool registerDrawList(napi_env env, napi_value exports);
 bool registerClipper(napi_env env, napi_value exports);
+bool registerDocking(napi_env env, napi_value exports);
 
 } // namespace bind
 } // namespace hnimgui

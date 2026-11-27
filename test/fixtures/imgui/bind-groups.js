@@ -201,6 +201,11 @@ const groups = {
   Clipper: [
     'listClipper',
   ],
+  Docking: [
+    'dockSpaceOverViewport',
+    'loadIniSettingsFromMemory',
+    'saveIniSettingsToMemory',
+  ],
 };
 
 // The exported constants, per enum type, as the surface table's

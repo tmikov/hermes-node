@@ -225,7 +225,11 @@ bool Call::needContext() {
 bool Call::needNoFrame() {
   if (!frameOpen())
     return true;
-  throwUsage("must be called outside a frame (before newFrame())");
+  // Traced as a guard's refusal is: the binding, not ImGui, refuses it.
+  static const char kMsg[] =
+      "must be called outside a frame (before newFrame())";
+  trace("usage error: %s", kMsg);
+  throwUsage("%s", kMsg);
   return false;
 }
 

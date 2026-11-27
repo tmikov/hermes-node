@@ -16,7 +16,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-binding.md`
 | Task 5 | Trees, tabs, menus, popups and tooltips | done (GL) |
 | Task 6 | Tables | done (GL) |
 | Task 7 | Style, plots, draw list, list clipper | done (GL) |
-| Task 8 | Docking and settings | |
+| Task 8 | Docking and settings | done (GL) |
 | Task 9 | The application | |
 | Task 10 | Documentation and the full suite | |
 
@@ -246,6 +246,19 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 8 (widths) | `ui-imgui-bind-windows.js` | `setNextWindowSize`'s `size[1]` bound removed | `NOTHROW ERR_OUT_OF_RANGE` at `[100, 2147483648]`; test failed |
 | 8 (widths) | `ui-imgui-bind-windows.js` | `beginChild`'s two size bounds removed | `NOTHROW ERR_OUT_OF_RANGE`; test failed |
 | 8 (widths) | `ui-imgui-bind-input-text.js` | `inputTextMultiline`'s `size[1]` bound removed | `NOTHROW ERR_OUT_OF_RANGE`; test failed |
+| 8 | `ui-imgui-bind-docking.js`, `ui-imgui-bind-errors.js`, `ui-imgui-bind-args.js`, `imgui-bind-surface.js` | (RED) run against the width commit's build, with the tests and `bind-groups.js` written and no docking code | docking: `FAILED TypeError: undefined is not a function` at the first `saveIniSettingsToMemory()`; errors: `WRONGCODE undefined (want ERR_IMGUI_USAGE): undefined is not a function` after `CLIPPER_WRONG_WINDOW ok`; args: `FAILED TypeError: undefined is not a function` in EITHER; surface: `MISSING dockSpaceOverViewport loadIniSettingsFromMemory saveIniSettingsToMemory` |
+| 8 | `ui-imgui-bind-docking.js` | `ImGui::DockSpaceOverViewport()` removed, `enterImGui()` kept (an ImGui call removed) | `FIRST WRONG 0 ...` with both windows `docked: false`, then `TIMEOUT FIRST tiled`; `COVERAGE` not reached; test failed |
+| 8 | `ui-imgui-bind-docking.js` | `ImGui::LoadIniSettingsFromMemory()` removed, `enterImGui()` kept | `FIRST WRONG 146626941 ...` with both windows floating at 60,60, 32x35, then `TIMEOUT FIRST tiled`; test failed |
+| 8 | `ui-imgui-bind-docking.js` | `enterImGui()` removed from `saveIniSettingsToMemory` (coverage) | every case ok, then `UNCOVERED Docking saveIniSettingsToMemory`; test failed |
+| 8 | `ui-imgui-bind-docking.js` | `needNoFrame()` removed from `loadIniSettingsFromMemory` | `NOTHROW ERR_IMGUI_USAGE` in INFRAME; test failed |
+| 8 | `ui-imgui-bind-docking.js` | the returned ID replaced by the argument (`resultU32(id)`; the result, this group's write-back) | `FIRST WRONG 0 ...`, `STABLE WRONG 0,0,0 146626941`; test failed |
+| 8 | `ui-imgui-bind-docking.js` | the flags check of `dockSpaceOverViewport` replaced by a plain `int32` (an argument check removed) | REJECTED's `dockSpaceOverViewport(0, 1 << 10)` reached ImGui: `imgui.cpp:20919 ... Assertion (flags & ImGuiDockNodeFlags_DockSpace) == 0 failed`; test failed |
+| 8 | `ui-imgui-bind-docking.js` (NOWINDOW) | `needContext()` removed from `saveIniSettingsToMemory` | ASAN `SEGV ... imgui.cpp:16707:26 in ImGui::SaveIniSettingsToMemory` (no context); test failed |
+| 8 | `ui-imgui-bind-errors.js` | `canDockSpaceOverViewport`'s twice condition off | aborted in DOCKSPACE_TWICE: `imgui.cpp:20939 ... Assertion node->IsDockSpace() == false && "Cannot call DockSpace() twice a frame with the same ID" failed`; test failed |
+| 8 | `ui-imgui-bind-errors.js` | `canDockSpaceOverViewport`'s not-root condition off | aborted in DOCKSPACE_NOT_ROOT: `imgui.cpp:20985 ... Assertion node->IsRootNode() failed`; test failed |
+| 8 | `ui-imgui-bind-errors.js` | the guard's default ID computed from `"Dockspace"` instead of `"DockSpace"` | aborted in DOCKSPACE_TWICE's second frame (the explicit ID, then 0): `imgui.cpp:20939 ... twice a frame ...`; test failed |
+| 8 | `ui-imgui-bind-errors.js`, `ui-imgui-bind-docking.js` | `needNoFrame()`'s trace line removed | errors: the ONCE chain broke at the `must be called outside a frame` line; docking: the TRACE run's positive line missing; both failed |
+| 8 | by hand, `hermes-node-ui` on a scratch script | three malformed settings strings, loaded between frames: a self-parented node; a window `DockId` naming no node; a chain of 300 nodes, then saved | the first never returned (the run ended at its 60 s limit, status 124); the second aborted, `imgui.cpp:18618 ... DockContextBuildAddWindowsToNodes ... Assertion node != __null failed`; the third loaded, and the save aborted, `imgui.cpp:21927 ... Assertion depth < (1 << (sizeof(node_settings.Depth) << 3)) failed`. Loaded before the first frame, the first and third were pruned and did nothing ("Not covered" 3g) |
 
 ## Behaviours no test detects
 
@@ -319,6 +332,12 @@ automated test would notice losing. Each task appends its own.
   again, and the remaining `Step()`s end the clipper where `End()` would.
   The check stays: it is what the design requires, and an engine that did
   call would run the callback with an exception pending.
+- **Task 8: a settings string's size stays inside ImGui's `int`
+  arithmetic** (`Buf.resize((int)ini_size + 1)`, imgui.cpp:16622) only
+  because Hermes caps a string at 2^28 UTF-16 units
+  (hermes/include/hermes/VM/StringPrimitive.h:136), at most 805,306,368
+  bytes once encoded. The binding does not check it, and no test makes a
+  string that size; checked by reading.
 - **Task 7 (review): `listClipper` takes ImGui's usage errors after
   `Begin()` and after each `Step()`** (`bind_clipper.cpp`), so none is
   dropped by the callback's first binding call. None is reachable with an
@@ -1132,4 +1151,74 @@ automated test would notice losing. Each task appends its own.
   `graphSize[0]` was already bounded (Task 7). No sanitizer in the test
   builds reports float-to-int overflow, so the accepted cases show only
   that the call is made and draws, not that nothing downstream overflows.
+- **The Docking and settings section is bound** (`bind_docking.cpp`,
+  `registerDocking` in `bind_util.h`, `imgui_module.cpp`,
+  `addons/imgui/CMakeLists.txt`; the `Docking` group in `bind-groups.js`).
+  `dockSpaceOverViewport` reads the ID as `ImGuiID` (G3) and the flags
+  against `DockNodeFlags_` (G1, which keeps out the private `DockSpace`
+  and `CentralNode` bits). `loadIniSettingsFromMemory` passes the encoded
+  length and needs a context, then no frame; `saveIniSettingsToMemory`
+  returns ImGui's buffer as a string, inside or outside a frame.
+- **Two guards, `canDockSpaceOverViewport:twice` and `:not-root`**
+  (`bind_guards.cpp`; refused in `ui-imgui-bind-errors.js` DOCKSPACE_TWICE
+  and DOCKSPACE_NOT_ROOT, with their lines in the ONCE chain). Both look
+  the node up by the ID the call will use, and for a zero argument the
+  guard computes the default as ImGui does: `ImHashStr("DockSpace", 0,
+  ImHashStr("WindowOverViewport_11111111"))`, `0x08BD597D` (computed
+  first in Python from the CRC32c table at imgui.cpp:2569-2584 and then
+  read back as the return value; DOCKSPACE_TWICE's second frame fails
+  if the guard's computation is wrong, Mutations). `:not-root` is
+  stricter than ImGui where ImGui accepts the call and marks a split node
+  as a dock space; the surface entry says why. The new internal reads are
+  in the surface table's list.
+- **`needNoFrame()` now traces its refusal** (`usage error: must be called
+  outside a frame (before newFrame())`), as the design's errors test asks
+  for `loadIniSettingsFromMemory` inside a frame (LOADINI_INFRAME, and
+  INFRAME in the docking test). It had no caller before this task.
+- **Disagreements with the brief, from measurement.** Loaded before the
+  first frame, the two windows are docked in the first frame but do not
+  tile until the second: the split lays out only nodes visible in the
+  previous frame (imgui.cpp:20615-20618), and in the first frame the
+  central node's window reads back the whole display. FIRST and REDOCK
+  therefore assert `docked: true` in the first frame and wait for the
+  tiling with `harness.until`, rather than asserting it in a fixed frame.
+  The brief's "four out-of-frame functions" are tested as all ten
+  functions that work outside a frame and need a context (NOWINDOW), with
+  `dockSpaceOverViewport()` there too (ERR_IMGUI_NO_FRAME).
+- **How the docked layout string was produced (for Task 9's default
+  layout).** No window was docked by injected drags. Instead:
+  1. Write the string from the format the handlers parse
+     (`WindowSettingsHandler_ReadLine`, imgui.cpp:16807-16823;
+     `DockSettingsHandler_ReadLine`, imgui.cpp:21883-21922): one
+     `[Window][<name>]` section per window with `DockId=0x<node>,0`; then
+     `[Docking][Data]`, a line `DockSpace ID=0x08BD597D Pos=0,0
+     Size=<display w>,<h> Split=X` (or `Y`), and per child `  DockNode
+     ID=0x<node> Parent=0x08BD597D SizeRef=<w>,<h>`, one of them with
+     `CentralNode=1`. Node IDs are free (1, 2, ...); the dock space's must
+     be the one `dockSpaceOverViewport()` returns (0x08BD597D for the main
+     viewport, whatever the window size). Nested splits are a child line
+     with its own `Split=` and children indented under it, each naming
+     its parent.
+  2. Run a scratch script under `HERMES_NODE_UI_TEST_HOOKS=1 python3
+     utils/with-display.py 100 cmake-build-asan/bin/hermes-node-ui
+     <script>` that opens the window through
+     `test/fixtures/imgui/harness.js` (`harness.open()`, 640x480 here),
+     calls `imgui.loadIniSettingsFromMemory(<string>)` before the first
+     `newFrame()`, then runs a few frames of exactly what the program
+     draws (the dock space first, then each window by name), printing
+     each window's `getWindowPos()`/`getWindowSize()` and
+     `__test.state().windows`, and finally
+     `JSON.stringify(imgui.saveIniSettingsToMemory())`.
+  3. Check the frames: every window `docked: true`, the rectangles
+     tiling the dock space from the second frame. Paste the saved
+     string, less the `[Window][Debug##Default]` section (ImGui's
+     fallback window) and the `LastUsed=` lines (the date of the run).
+     ImGui adds each window's `Pos`/`Size`/`Collapsed`, the host window
+     `[Window][WindowOverViewport_11111111]`, `Window=0x1BBC0F80` (the
+     host's ID) on the `DockSpace` line and `Selected=` (the tab ID) on
+     each node; the hand-written form docks the same.
+  A main menu bar moves the viewport's work area down by its height, so
+  an application with one gets a different `Pos`/`Size` on the
+  `DockSpace` line; the round trip in step 2, run with the menu bar
+  drawn, gives the right ones.
 

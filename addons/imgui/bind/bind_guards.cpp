@@ -104,6 +104,8 @@ enum GuardId {
   kEndChildTableRegion,
   kEndListBoxTableRegion,
   kListClipperWrongWindow,
+  kDockSpaceTwice,
+  kDockSpaceNotRoot,
   kGuardCount
 };
 GuardCondition gGuards[kGuardCount] = {
@@ -141,6 +143,8 @@ GuardCondition gGuards[kGuardCount] = {
     {"canEndChild:table-region", 0},
     {"canEndListBox:table-region", 0},
     {"canListClipper:wrong-window", 0},
+    {"canDockSpaceOverViewport:twice", 0},
+    {"canDockSpaceOverViewport:not-root", 0},
 };
 
 /// The mask of tree depth \p depth in `DC.TreeHasStackDataDepthMask`: the
@@ -623,6 +627,39 @@ const char *canListClipper() {
       kListClipperWrongWindow,
       "listClipper() inside a table row, in another window than the table's "
       "own (a window begun inside a cell is current)");
+}
+
+const char *canDockSpaceOverViewport(unsigned dockspaceId, int flags) {
+  ImGuiContext &g = *GImGui;
+  // The ID DockSpaceOverViewport() gives a zero argument: GetID("DockSpace")
+  // (imgui.cpp:21045-21046) inside its host window, whose name is
+  // "WindowOverViewport_%08X" of the viewport's ID (imgui.cpp:21035-21036),
+  // which for a root window is the ID-stack seed (the window's ID,
+  // ImHashStr of its name, imgui.cpp:4852-4853).
+  ImGuiID id = dockspaceId;
+  if (id == 0) {
+    char label[32];
+    ImFormatString(
+        label,
+        IM_COUNTOF(label),
+        "WindowOverViewport_%08X",
+        ImGui::GetMainViewport()->ID);
+    id = ImHashStr("DockSpace", 0, ImHashStr(label));
+  }
+  ImGuiDockNode *node = ImGui::DockContextFindNodeByID(&g, id);
+  if (node == nullptr)
+    return nullptr;
+  if (node->ParentNode != nullptr)
+    return refuse(
+        kDockSpaceNotRoot,
+        "DockSpaceOverViewport() with the ID of a split node's child, not a "
+        "dock space");
+  if (node->LastFrameActive == g.FrameCount && node->IsDockSpace() &&
+      (flags & ImGuiDockNodeFlags_KeepAliveOnly) == 0)
+    return refuse(
+        kDockSpaceTwice,
+        "DockSpaceOverViewport() twice in a frame with the same ID");
+  return nullptr;
 }
 
 ScopeSnapshot snapshotScope() {
