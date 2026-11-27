@@ -20,7 +20,7 @@
 //            `NOSAMPLE <name>`, so each later task must add its own.
 //  ARGTYPE   a value of the wrong type, or a missing one: TypeError,
 //            ERR_INVALID_ARG_TYPE; the message names the function and the
-//            argument (checked on begin, and on the four functions that
+//            argument (checked on begin, and on the six functions that
 //            dispatch on an argument's type, whose message names both
 //            forms).
 //  REFARRAY  reference arrays that are not what they claim (Review Focus
@@ -141,6 +141,31 @@ const SAMPLES = {
   button: ['b'],
   checkbox: ['c', [false]],
   sliderFloat3: ['s', [0, 0, 0], 0, 1],
+  smallButton: ['b'],
+  invisibleButton: ['b', [10, 10]],
+  arrowButton: ['b', 0],
+  radioButton: ['r', true],
+  progressBar: [0.5],
+  bullet: [],
+  sliderFloat: ['s', [0], 0, 1],
+  sliderInt: ['s', [0], 0, 1],
+  sliderFloat2: ['s', [0, 0], 0, 1],
+  sliderFloat4: ['s', [0, 0, 0, 0], 0, 1],
+  dragFloat: ['d', [0]],
+  dragInt: ['d', [0]],
+  inputText: ['t', [''], 8],
+  inputTextMultiline: ['t', [''], 8],
+  inputTextWithHint: ['t', 'h', [''], 8],
+  inputFloat: ['f', [0]],
+  inputInt: ['i', [0]],
+  beginCombo: ['c', 'p'],
+  endCombo: [],
+  selectable: ['s'],
+  colorEdit3: ['c', [0, 0, 0]],
+  colorEdit4: ['c', [0, 0, 0, 0]],
+  colorButton: ['c', [0, 0, 0, 1]],
+  beginListBox: ['l'],
+  endListBox: [],
   getItemRectMin: [],
   getItemRectMax: [],
   pushStyleColor: [0, 0],
@@ -241,6 +266,25 @@ async function main() {
                               'ERR_INVALID_ARG_TYPE').message);
       dispatched.push(rejects('getID', () => imgui.getID(true),
                               'ERR_INVALID_ARG_TYPE').message);
+      dispatched.push(rejects('radioButton', () => imgui.radioButton('r', 1),
+                              'ERR_INVALID_ARG_TYPE').message);
+      dispatched.push(rejects('selectable', () => imgui.selectable('s', 1),
+                              'ERR_INVALID_ARG_TYPE').message);
+      // The dispatched forms' own arguments.
+      rejects('radioButton', () => imgui.radioButton('r', [0], 'x'),
+              'ERR_INVALID_ARG_TYPE');
+      rejects('radioButton', () => imgui.radioButton('r', [false], 1),
+              'ERR_INVALID_ARG_TYPE');
+      rejects('selectable', () => imgui.selectable('s', [1]),
+              'ERR_INVALID_ARG_TYPE');
+      rejects('inputText', () => imgui.inputText('t', [1], 8),
+              'ERR_INVALID_ARG_TYPE');
+      rejects('inputText', () => imgui.inputText('t', 'x', 8),
+              'ERR_INVALID_ARG_TYPE');
+      rejects('beginCombo', () => imgui.beginCombo('c', 1),
+              'ERR_INVALID_ARG_TYPE');
+      rejects('progressBar', () => imgui.progressBar(0.5, undefined, 1),
+              'ERR_INVALID_ARG_TYPE');
     });
     console.log('ARGTYPE ok');
     console.log('ARGTYPE message ' + message);
@@ -456,6 +500,8 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.pushStyleVar(): val must be a number or an array of 2 numbers{{$}}
 // CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.pushID(): strId must be a string, or intId a number{{$}}
 // CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.getID(): strId must be a string, or intId a number{{$}}
+// CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.radioButton(): active must be a boolean, or v an Array{{$}}
+// CHECK-NEXT: {{^}}ARGTYPE dispatch imgui.selectable(): selected must be a boolean, or pSelected an Array{{$}}
 // CHECK-NEXT: {{^}}REFARRAY ok{{$}}
 // CHECK-NEXT: {{^}}FLOAT ok{{$}}
 // CHECK-NEXT: {{^}}NUL ok{{$}}

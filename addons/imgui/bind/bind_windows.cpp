@@ -84,7 +84,9 @@ napi_value beginChild(napi_env env, napi_callback_info info) {
           "childFlags: ChildFlags_AlwaysAutoResize needs "
           "ChildFlags_AutoResizeX or ChildFlags_AutoResizeY");
   }
-  if (!c.needFrame())
+  // label-id: EndChild() submits the child as an item with the hash of
+  // strId (imgui.cpp:6993, 7034, 7046).
+  if (!c.needFrame() || !c.needLabelId("strId", strId))
     return nullptr;
   c.enterImGui();
   const bool shown =

@@ -34,6 +34,10 @@
 //                 clips (placed far below its scrolling parent's visible
 //                 area), whose beginChild() returned false (`SETUP child
 //                 clipped`, read back), then endChild(): accepted.
+//  GUARD_LABELID  button('') and beginChild('') at a window's root:
+//                 refused, not called (their item ID would be the window's
+//                 own, which ImGui asserts plainly); button('') inside
+//                 pushID('p'): accepted.
 //  DISCARD        newFrame(); begin('w'); newFrame(): no throw, `frame
 //                 discarded` traced, the frame that follows renders.
 //  GUARDS         every guard condition registered has refused at least
@@ -50,6 +54,8 @@
 //  canEndGroup() returning nullptr always: GUARD_GROUP aborts;
 //  canEndChild() requiring a true beginChild: GUARD_CHILD's accepted half
 //  fails;
+//  labelIdIsWindowId() returning false always: GUARD_LABELID aborts
+//  (ImGui's plain assertion, imgui.cpp:12319);
 //  a guard condition registered and never refused: GUARDS fails
 //  (`UNREFUSED <name>`);
 //  every usage error traced twice (throwUsage() tracing too): ONCE fails.
@@ -285,6 +291,28 @@ async function main() {
     console.log(accepted ? 'GUARD_CHILD ok' : 'GUARD_CHILD not accepted');
   }
 
+  // --- GUARD_LABELID ---------------------------------------------------
+  {
+    let message;
+    let accepted = false;
+    const drew = await harness.frame(h, () => {
+      imgui.begin('label id');
+      message = refused('button', () => imgui.button('')).message;
+      refused('beginChild', () => imgui.beginChild(''));
+      // The same label one ID-stack level down is not the window's ID.
+      const before = calls('button');
+      imgui.pushID('p');
+      imgui.button('');
+      imgui.popID();
+      accepted = calls('button') === before + 1;
+      imgui.end();
+    });
+    console.log(drew && accepted ? 'GUARD_LABELID ok' :
+                                   'GUARD_LABELID WRONG ' + drew + ' ' +
+                                       accepted);
+    console.log('GUARD_LABELID message ' + message);
+  }
+
   // --- DISCARD ---------------------------------------------------------
   {
     const drew = await harness.frame(h, () => {
@@ -314,6 +342,8 @@ async function main() {
 // CHECK-NEXT: {{^}}GUARD_GROUP recovered imgui.end(): Missing EndGroup(){{$}}
 // CHECK-NEXT: {{^}}SETUP child clipped{{$}}
 // CHECK-NEXT: {{^}}GUARD_CHILD ok{{$}}
+// CHECK-NEXT: {{^}}GUARD_LABELID ok{{$}}
+// CHECK-NEXT: {{^}}GUARD_LABELID message imgui.button(): label gives the item the window's own ID (an empty label, or one ending in '###', at the root of a window); use '##name' or pushID(){{$}}
 // CHECK-NEXT: {{^}}DISCARD ok{{$}}
 // CHECK-NEXT: {{^}}GUARDS ok{{$}}
 // CODE: EXITCODE 0
@@ -336,6 +366,8 @@ async function main() {
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: EndGroup() with no group open{{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: EndGroup() in another window than its BeginGroup(){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: EndChild() outside a child window{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: an item ID equal to the window's own ID{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: an item ID equal to the window's own ID{{$}}
 // The discarded frame's open window is reported, then the discard.
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing End(){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: frame discarded{{$}}

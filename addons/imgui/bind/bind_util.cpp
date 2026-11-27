@@ -202,6 +202,16 @@ bool Call::needNoFrame() {
   return false;
 }
 
+bool Call::needLabelId(const char *what, const std::string &label) {
+  if (!guard::labelIdIsWindowId(label.c_str()))
+    return true;
+  throwUsage(
+      "%s gives the item the window's own ID (an empty label, or one ending "
+      "in '###', at the root of a window); use '##name' or pushID()",
+      what);
+  return false;
+}
+
 // --- Throwing ----------------------------------------------------------------
 
 napi_value Call::throwUsage(const char *fmt, ...) {

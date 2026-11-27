@@ -31,6 +31,14 @@ void beginFrame();
 /// clears it. The pointer is valid until the next take.
 const char *takeUsageError();
 
+/// The label-id check (surface table, "Shared preconditions"): whether
+/// the ID \p label would get under the current ID stack equals the current
+/// window's own ID, which ItemAdd() asserts plainly against
+/// (imgui.cpp:12319). That happens for an empty label, or one ending in
+/// `###`, with nothing pushed. A true answer is counted as a refusal under
+/// `labelId:window-id` and traced as a usage error; the caller throws.
+bool labelIdIsWindowId(const char *label);
+
 // One per precondition of kind (b) in the surface table, named
 // can<Function>: returns nullptr when the call is safe, else the message
 // to throw. A refusal is counted under its condition's name and traced as

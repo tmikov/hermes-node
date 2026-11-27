@@ -12,7 +12,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-binding.md`
 | Task 1 | Binding core, the error model, and the Frame group | done (GL) |
 | Task 2 | Constants, and flag and enum checking | done (GL) |
 | Task 3 | Windows, Layout, IDs, Text, Item and input queries | done (GL) |
-| Task 4 | Widgets | |
+| Task 4 | Widgets | done (GL) |
 | Task 5 | Trees, tabs, menus, popups and tooltips | |
 | Task 6 | Tables | |
 | Task 7 | Style, plots, draw list, list clipper | |
@@ -102,6 +102,31 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 3 (review) | `ui-imgui-bind-layout.js` | `enterImGui()` removed from `labelText` (Text: coverage) | `UNCOVERED Text labelText`; test failed |
 | 3 (review) | `ui-imgui-bind-layout.js` | `enterImGui()` removed from `isItemActive` (Queries: coverage) | `UNCOVERED Queries isItemActive`; test failed |
 | 3 (review) | `ui-imgui-bind-layout.js` | `__test.setDoubleClickTime()`'s two assignments removed (informational) | PASS: the clicks fell within 0.30 s in that run; see the Task 3 note on DOUBLE |
+| 4 | the four new or extended tests | (RED) run against the Task 3 build, before any Task 4 binding code | `imgui-bind-surface.js`: `MISSING arrowButton beginCombo ... smallButton` (25 names); `ui-imgui-bind-args.js`: `WRONGCODE undefined (want ERR_IMGUI_NO_FRAME): undefined is not a function` (NOFRAME, the first new sample); `ui-imgui-bind-widgets.js` and `ui-imgui-bind-input-text.js`: `TypeError: undefined is not a function` at the first `smallButton` / `inputText` call; `ui-imgui-bind-errors.js`: GUARD_LABELID aborted on `imgui.cpp:12319 ... Assertion id != window->ID ... failed` (`button('')` reached ImGui) |
+| 4 | `ui-imgui-bind-widgets.js` | `ImGui::SmallButton()` replaced by `false`, `enterImGui()` kept | `BUTTONS WRONG smallButton {... "smallButton":{"count":0,...}}`; test failed |
+| 4 | `ui-imgui-bind-widgets.js` | `enterImGui()` removed from `bullet` | `UNCOVERED Widgets bullet`; test failed |
+| 4 | `ui-imgui-bind-widgets.js` | `radioButton(label, v, vButton)`'s write-back of `v` removed | `RADIO WRONG 1 1 0 1` (pressed once, `v[0]` still 0); test failed |
+| 4 | `ui-imgui-bind-widgets.js` | the `SliderFlags_WrapAround` check removed (`sliderFlags()`, every slider) | ImGui aborted: `imgui_widgets.cpp:3310 ... (flags & ImGuiSliderFlags_WrapAround) == 0 failed`; test failed |
+| 4 | `ui-imgui-bind-widgets.js` | `sliderFloat2..4` reading their flags as a drag's (WrapAround accepted; Task 1's owed case for `sliderFloat3`) | the same abort at `imgui_widgets.cpp:3310`; test failed |
+| 4 | `ui-imgui-bind-widgets.js` | the format check removed (`validFormat()` skipped in `Call::format`) | `NOTHROW ERR_INVALID_ARG_VALUE`: `sliderFloat('f', [0], 0, 1, '%s')` reached ImGui, which executed `%s` with a float argument and did not crash in that run (undefined behaviour; no ASAN report); test failed |
+| 4 | `ui-imgui-bind-widgets.js` | `sliderFloat2..4`'s format read with `string()` instead of `format()` (Task 1's owed case for `sliderFloat3`) | `NOTHROW ERR_INVALID_ARG_VALUE` (`sliderFloat2`, '%s'); test failed |
+| 4 | `ui-imgui-bind-widgets.js` | the `ColorEditFlags_Display*` exclusivity check removed | ImGui aborted: `imgui_widgets.cpp:5960 ... ImIsPowerOfTwo(flags & ImGuiColorEditFlags_DisplayMask_) failed`; test failed |
+| 4 | `ui-imgui-bind-widgets.js` | `beginCombo`'s `ComboFlags_NoPreview` check removed | ImGui aborted: `imgui_widgets.cpp:1959 ... failed`; test failed |
+| 4 | `ui-imgui-bind-widgets.js` | `arrowButton`'s `Dir_None` / `Dir_COUNT` check removed | ImGui aborted: `imgui_draw.cpp:7595 RenderArrow ... Assertion 0 failed`; test failed |
+| 4 | `ui-imgui-bind-widgets.js` | `selectable(label, p)`'s write-back removed | `SELREF WRONG false false 2`; test failed |
+| 4 | `ui-imgui-bind-widgets.js` | `progressBar`'s `size` replaced by the default | `PROGRESS WRONG [{"min":[28,47],"max":[612,66]},...]`; test failed |
+| 4 | `ui-imgui-bind-widgets.js` | `colorButton`'s colour passed with R and G swapped | `COLORBTN WRONG 1 0,255,0 ...`; test failed |
+| 4 | `ui-imgui-bind-input-text.js` | `inputText` writing back only when the widget returned true | `TIMEOUT typeText "x"` in ENTER (with `EnterReturnsTrue` the keystrokes never reach the string); test failed |
+| 4 | `ui-imgui-bind-input-text.js` | the buffer compared with the truncated string instead of the original (`original.resize(n)` in `refString`) | `TRUNCATE WRONG ["abcdef","aé","x","fits",0]` and `SURROGATE WRONG "a\ud800bc"`; test failed |
+| 4 | `ui-imgui-bind-input-text.js`, `ui-imgui-bind-errors.js` | `labelIdIsWindowId()` returning false always | both aborted in ImGui: `imgui.cpp:12319 ... Assertion id != window->ID ... failed` (Debug build); both failed |
+| 4 | `ui-imgui-bind-input-text.js` | `colorButton`'s `needLabelId()` removed (one function's application of the check) | the same abort at `imgui.cpp:12319` in STRINGS; test failed |
+| 4 | `ui-imgui-bind-errors.js` | `beginChild`'s `needLabelId()` removed | `NOTHROW ERR_IMGUI_USAGE` (BeginChild itself does not assert; the ItemAdd that would is in EndChild); test failed |
+| 4 | `ui-imgui-bind-errors.js` | GUARD_LABELID's two refusals not made (test edited) | `UNREFUSED labelId:window-id`; test failed |
+| 4 | `ui-imgui-bind-input-text.js` | the `InputTextFlags_Callback*` check removed | `NOTHROW ERR_OUT_OF_RANGE` (ImGui asserts only when the callback's event occurs, so nothing aborted in that frame); test failed |
+| 4 | `ui-imgui-bind-input-text.js` | the capacity's lower bound made 0 | `AddressSanitizer: SEGV on unknown address 0x000000000000` (a zero-byte buffer); test failed |
+| 4 | `ui-imgui-bind-input-text.js` | `inputTextMultiline`'s write-back removed | `TIMEOUT pressKey 257` in MULTILINE; test failed |
+| 4 | `ui-imgui-bind-input-text.js` | `ImGui::SetKeyboardFocusHere()` removed, `enterImGui()` kept (Task 3's owed text-field half) | `TIMEOUT FOCUS`; test failed |
+| 4 | `ui-imgui-bind-input-text.js` | `ImGui::IsItemDeactivatedAfterEdit()` replaced by `false` (Task 3's owed case) | `DEACTIVATE WRONG 0 0`; test failed |
 
 ## Behaviours no test detects
 
@@ -195,10 +220,9 @@ automated test would notice losing. Each task appends its own.
   - ~~`beginChild`'s three flag combinations -> `ERR_OUT_OF_RANGE`~~:
     tested in Task 3, `test/ui-imgui-bind-windows.js` REJECTED, with a
     mutation for each.
-  - `sliderFloat3`'s `SliderFlags_WrapAround` rejection and its `format`
-    check: `sliderFloat3()` in `addons/imgui/bind/bind_widgets.cpp`
-    (the format check itself is `Call::format()` / `validFormat()` in
-    `addons/imgui/bind/bind_util.cpp`).
+  - ~~`sliderFloat3`'s `SliderFlags_WrapAround` rejection and its `format`
+    check~~: tested in Task 4, `test/ui-imgui-bind-widgets.js` REJECTED and
+    FORMAT, with a mutation for each.
 - **`enterImGui()` drops a stale usage error** (one reported outside any
   binding call, already traced), so it is not blamed on the next call.
   Nothing in this task produces one; it is a defence.
@@ -430,10 +454,10 @@ automated test would notice losing. Each task appends its own.
   afterFirst=0 doubles=0`). With the hook's effect removed, the case still
   passed in the one run tried: the clicks were within 0.30 s. That is
   exactly the luck the hook removes, so no test can detect losing it.
-- **`beginChild`'s label-id guard (its `Label-id: yes`) is still Task 4's**,
-  as Task 1's notes rule (`labelIdIsWindowId` comes with Task 4's STRINGS
-  case and mutation); until then `beginChild('')` directly in a window
-  reaches ImGui's plain assertion.
+- ~~**`beginChild`'s label-id guard (its `Label-id: yes`) is still Task
+  4's**, as Task 1's notes rule; until then `beginChild('')` directly in a
+  window reaches ImGui's plain assertion.~~ Done in Task 4 (GUARD_LABELID
+  in `ui-imgui-bind-errors.js`, STRINGS in `ui-imgui-bind-input-text.js`).
 - **`isWindowHovered` and `isItemHovered` with flags outside their allowed
   masks** (kind (c), imgui.cpp:9225 and 5114) throw `ERR_IMGUI_USAGE`
   after the call; both tests' REJECTED pin the message and that the call
@@ -443,3 +467,74 @@ automated test would notice losing. Each task appends its own.
   (in two of three runs); it passed 5/5 alone and the third suite run was
   460/460. That is the open load-dependency issue in `dz/` for that test,
   not this task: nothing here touches the compositor.
+
+### Task 4
+
+- **The Widgets section is bound as its entries say**, in
+  `addons/imgui/bind/bind_widgets.cpp`, which Task 1 had created (the
+  brief's "Create" is out of date; `addons/imgui/CMakeLists.txt` needed no
+  change). No disagreement between the section and ImGui's source was
+  found; no entry was changed.
+- **The label-id check** is `guard::labelIdIsWindowId(label)`
+  (`bind_guards.cpp`): `ImGui::GetID(label) == g.CurrentWindow->ID`,
+  counted under the guard condition `labelId:window-id` and traced as
+  `usage error: an item ID equal to the window's own ID`. The binding
+  functions reach it through `Call::needLabelId(what, label)`
+  (`bind_util.h`), after `needFrame()`, whose message names the argument
+  (`label`, `strId`, `descId`). It is applied to every entry bound so far
+  that says `Label-id: yes`: the 19 in Widgets and `beginChild` (Windows).
+  No entry of Layout, IDs, Text or Queries has one. The four bound
+  entries the section exempts (`sliderFloat2..4`, `colorEdit3/4`) and
+  `progressBar` / `bullet` (item ID 0) do not run it. STRINGS gives `''`
+  to every one of the 20 and checks each is refused, uncalled.
+- **endCombo's and endListBox's state guards are not here.** Both are
+  bound, but `canEndCombo` and `canEndListBox` (their (b) preconditions)
+  are Task 5's in the plan ("Produces: ... guards ... `canEndListBox`,
+  `canEndCombo`, and the `BeginComboDepth` reset", with GUARD_LISTBOX and
+  GUARD_COMBO), and `canEndCombo` rests on the `BeginComboDepth` facts
+  Task 5 verifies first. Until then a misplaced `endListBox()` reaches
+  ImGui's plain assertion (widgets:8997) and a misplaced `endCombo()`
+  ImGui's recoverable one (widgets:2096) after it has decremented the
+  counter.
+- **The brief's "the Callback* bits are not exported"** is out of date:
+  Task 2 exports all six (`bind-groups.js`, `constantTypes`). FLAGS names
+  them and also pins their values against `1 << 18 .. 1 << 23`
+  (imgui.h:1366-1371).
+- **SURROGATE uses a truncation to force the write-back.** Hermes encodes
+  an unpaired surrogate as U+FFFD when the binding reads the string, so
+  the buffer equals the original string's encoding and, by the design's
+  rule, an untouched field writes nothing back. `'a\ud800bc'` at capacity 5
+  is cut after the replacement character, and comes back as `'a\ufffd'`.
+- **Choices made where the brief leaves the assertion open**, each the
+  strongest true one found:
+  - BUTTONS asserts "the frame of the release" as: exactly one frame
+    returned true, and `isMouseDown(0)` was false in it.
+  - SLIDERS drags each slider's last field (a hidden label, so the item
+    rectangle is the frames) from 4 units inside its right end to 60
+    beyond it: that element is exactly the maximum and the others are
+    unchanged, which also checks that all N elements are written back.
+  - DRAGS asserts `v[0] > 0` after a 40-unit drag, not a value: ImGui's
+    drag threshold and speed make the exact amount an implementation
+    detail.
+  - COLOREDIT starts from components of 0 and 1, which survive ImGui's
+    8-bit round trip exactly (ColorEdit4 rewrites every component when one
+    changes), so the untouched ones are compared exactly.
+  - COLORBTN moves the mouse away before the capture, so that the
+    tooltip does not cover the button; the 40x40 button's centre is exactly
+    (255, 0, 0).
+  - DEACTIVATE counts `isItemDeactivatedAfterEdit()`: 0 frames while the
+    field is edited, exactly 1 after a click on the window's background.
+  - FOCUS waits until `wantTextInput` is false with no focus request,
+    calls `setKeyboardFocusHere()` for one frame, then waits for it to be
+    true.
+  - STRINGS: `text()` of a 1 MiB string is an item wider than the window
+    (the renderer has `RendererHasVtxOffset`, so the reservation of 4 Mi
+    vertices does not overflow 16-bit indices).
+- **No assertion depends on time or a frame count**; nothing needed a new
+  test hook (no double click or key repeat is involved).
+- `ui-imgui-bind-args.js` gained a NOFRAME sample for every new function,
+  the dispatch messages of `radioButton` and `selectable` (both forms
+  named), and the argument types of the dispatched forms, `inputText`'s
+  buffer, `beginCombo`'s preview and `progressBar`'s overlay.
+- `test/ui-imgui-bind-layout.js`'s comments that pointed at Task 4 now
+  name the cases in `ui-imgui-bind-input-text.js`.

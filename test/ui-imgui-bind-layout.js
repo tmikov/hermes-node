@@ -63,7 +63,7 @@
 //  FOCUSHERE setKeyboardFocusHere() before a button in one window, while
 //            another has focus: the first window becomes the focused one.
 //            (The text-field half, where focus also activates the field,
-//            is Task 4's.)
+//            is test/ui-imgui-bind-input-text.js FOCUS.)
 //  DEFAULTFOCUS a new 300x200 window holding dummy([10, 600]), a button and
 //            setItemDefaultFocus(): the window scrolls to the button
 //            (getScrollY() > 0, waited for with harness.until).
@@ -75,7 +75,7 @@
 //            recoverable error: ERR_IMGUI_USAGE, the call counted.
 //  COVERAGE  every Layout, IDs, Text and Queries function has reached ImGui.
 //            isItemDeactivatedAfterEdit is only called here; its
-//            behaviour is Task 4's (see the progress file).
+//            behaviour is test/ui-imgui-bind-input-text.js DEACTIVATE.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
 //  ImGui::Indent() removed, enterImGui() kept: INDENT fails;
@@ -475,7 +475,7 @@ async function main() {
     q.hovered = imgui.isItemHovered();
     q.active = imgui.isItemActive() || q.active;
     q.clicked = imgui.isItemClicked() || q.clicked;
-    imgui.isItemDeactivatedAfterEdit(); // its behaviour is Task 4's
+    imgui.isItemDeactivatedAfterEdit(); // see ui-imgui-bind-input-text.js
     q.mouseDown = imgui.isMouseDown(LEFT);
     q.mouseDownSeen = q.mouseDown || q.mouseDownSeen;
     q.mouseClicked = imgui.isMouseClicked(LEFT) || q.mouseClicked;

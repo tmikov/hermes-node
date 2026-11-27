@@ -71,12 +71,14 @@ enum GuardId {
   kEndGroupNoGroup,
   kEndGroupWrongWindow,
   kEndChildNotChild,
+  kLabelIdWindowId,
   kGuardCount
 };
 GuardCondition gGuards[kGuardCount] = {
     {"canEndGroup:no-group", 0},
     {"canEndGroup:wrong-window", 0},
     {"canEndChild:not-child", 0},
+    {"labelId:window-id", 0},
 };
 
 /// Counts and traces a refusal; returns \p msg.
@@ -106,6 +108,22 @@ const char *takeUsageError() {
   gPendingError.clear();
   gHasPendingError = false;
   return gTakenError.c_str();
+}
+
+/// ImGui::GetID() is `window->GetID(label)` (imgui.cpp:10164-10168): the
+/// label hashed with the top of the current window's ID stack as seed,
+/// exactly what the widget computes before its ItemAdd(). The hash is the
+/// seed itself for "" and for a label ending in "###" (ImHashStr,
+/// imgui.cpp:2636-2658), and the seed is the window's ID when nothing has
+/// been pushed. Unlike ImGui's assertion, which a clipped item skips
+/// (imgui.cpp:12304-12307), this refuses whether or not the item would be
+/// visible.
+bool labelIdIsWindowId(const char *label) {
+  ImGuiContext &g = *GImGui;
+  if (ImGui::GetID(label) != g.CurrentWindow->ID)
+    return false;
+  refuse(kLabelIdWindowId, "an item ID equal to the window's own ID");
+  return true;
 }
 
 /// EndGroup() asserts plainly that a group is open (imgui.cpp:12719) and

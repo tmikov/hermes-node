@@ -177,6 +177,10 @@ class Call {
   bool needFrame(); // ERR_IMGUI_NO_FRAME
   bool needContext(); // creates it; ERR_IMGUI_NO_WINDOW with no window
   bool needNoFrame(); // ERR_IMGUI_USAGE inside a frame
+  // The label-id check (guard::labelIdIsWindowId), after needFrame():
+  // ERR_IMGUI_USAGE when \p label, the argument named \p what, would give
+  // the item the current window's own ID.
+  bool needLabelId(const char *what, const std::string &label);
 
   // Readers: return false after throwing. `what` is the parameter's name.
   bool boolean(size_t i, const char *what, bool *out);
