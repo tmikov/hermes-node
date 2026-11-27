@@ -144,6 +144,9 @@ sg_view gWhiteView = {};
 sg_pipeline gPipeline = {};
 int gPipelineFormat = -1;
 int gPipelineSamples = -1;
+/// The last format and sample count a pipeline could not be made for.
+int gFailedPipelineFormat = -1;
+int gFailedPipelineSamples = -1;
 /// The appended buffers and their sizes in bytes.
 sg_buffer gVertexBuffer = {};
 size_t gVertexBufferSize = 0;
@@ -246,8 +249,23 @@ bool ensureDeviceObjects() {
       sg_query_view_state(gWhiteView) == SG_RESOURCESTATE_VALID &&
       sg_query_buffer_state(gVertexBuffer) == SG_RESOURCESTATE_VALID &&
       sg_query_buffer_state(gIndexBuffer) == SG_RESOURCESTATE_VALID;
-  if (!gDeviceObjectsReady)
+  if (!gDeviceObjectsReady) {
+    // Nothing half-made stays alive: destroying an invalid or failed id is
+    // a no-op in Sokol, so each is destroyed whatever its state.
+    sg_destroy_buffer(gIndexBuffer);
+    sg_destroy_buffer(gVertexBuffer);
+    sg_destroy_view(gWhiteView);
+    sg_destroy_image(gWhiteImage);
+    sg_destroy_sampler(gSampler);
+    sg_destroy_shader(gShader);
+    gIndexBuffer = {};
+    gVertexBuffer = {};
+    gWhiteView = {};
+    gWhiteImage = {};
+    gSampler = {};
+    gShader = {};
     trace("device objects failed; nothing will be drawn");
+  }
   return gDeviceObjectsReady;
 }
 
@@ -258,6 +276,10 @@ bool ensurePipeline(const hnui_target &target) {
   if (gPipeline.id != SG_INVALID_ID && gPipelineFormat == target.color_format &&
       gPipelineSamples == target.sample_count)
     return true;
+  // A pair that failed once fails again: not retried, and traced once.
+  if (gFailedPipelineFormat == target.color_format &&
+      gFailedPipelineSamples == target.sample_count)
+    return false;
   if (gPipeline.id != SG_INVALID_ID)
     sg_destroy_pipeline(gPipeline);
 
@@ -290,6 +312,8 @@ bool ensurePipeline(const hnui_target &target) {
     gPipeline = {};
     gPipelineFormat = -1;
     gPipelineSamples = -1;
+    gFailedPipelineFormat = target.color_format;
+    gFailedPipelineSamples = target.sample_count;
     trace(
         "pipeline failed (format %d, samples %d)",
         target.color_format,

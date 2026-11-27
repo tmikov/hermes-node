@@ -15,14 +15,19 @@
 //  FILL          A full-window red fill: five samples red.
 //  CLIP          A full-window green fill under the clip rectangle
 //                (100,100)-(300,200): green inside, the clear colour
-//                outside, including one pixel past each corner. The y
-//                orientation is decided here: flipped, the rectangle lands
-//                at y 280..380.
+//                outside, including one pixel past each corner. This
+//                decides the scissor's y orientation: flipped, the
+//                rectangle lands at y 280..380. (The fill covers the window
+//                either way up, so the projection's is MANY's to decide.)
 //  MANY          19,200 4x4 quads (76,800 vertices) in one list: past
 //                16-bit indices, so ImGui splits the list and the later
 //                commands carry a vertex offset; past the initial buffer
 //                sizes, so both buffers grow. Quad centres have the colour
-//                (c + r) % 3 gives, and state() reads the totals back.
+//                (c + r) % 3 gives -- quad (159,119), past the split, only
+//                with the right base vertex -- and state() reads the totals
+//                back: more commands than FILL's, so the list was split.
+//                The pattern is asymmetric, so this also decides the
+//                projection's y orientation.
 //  TWOPAIRS      Two newFrame()/render() pairs in one callback, red then
 //                blue: the frame presented is blue.
 //  TWOCALLBACKS  Two callbacks in one tick, blue then red: red.
@@ -33,6 +38,8 @@
 //                then ImGui's reset callback, then a full-window green
 //                fill: green everywhere, so the reset re-applied the
 //                viewport.
+//  USERCALLBACK  The same without the reset: the fill lands in the
+//                top-left quarter only, so the user callback was called.
 //
 // Each capture names the publication after the previous one, so each also
 // proves the case before it advanced `h.published` by exactly one.
@@ -40,12 +47,16 @@
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-addon.md):
 //  (a) sg_update_buffer instead of sg_append_buffer: the two-pair cases
 //      produce a `[sokol-` line;
-//  (b) 0 as the base vertex: MANY fails;
+//  (b) 0 as the base vertex: MANY and MANYTWICE fail;
 //  (c) no scissor: CLIP fails;
-//  (d) the projection's y flipped: CLIP fails;
+//  (d) the projection's y flipped: MANY and MANYTWICE fail (CLIP does not);
+//  (d') the scissor's origin_top_left false: CLIP fails;
 //  (e) buffers starting at 1,000,000 vertices: the growth trace is missing;
-//  (f) the reset callback re-applying only the pipeline: CALLBACK fails at
-//      (600,440).
+//  (f) the reset callback re-applying only the pipeline: Sokol validation
+//      reports the missing uniforms, a `[sokol-` line;
+//  (f') the reset callback re-applying pipeline and uniforms but not the
+//      viewport: CALLBACK fails at (600,440);
+//  (g) a user callback not called: USERCALLBACK fails at (600,440).
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -110,6 +121,7 @@ async function main() {
   const out = (name) => capturePrefix + '.' + name + '.ppm';
 
   // --- FILL ------------------------------------------------------------
+  let fillCommands;
   {
     const image =
         await harness.capture(h, () => imgui.__test.scene('fill'), out('fill'));
@@ -120,6 +132,7 @@ async function main() {
       [631, 471, RED],
       [320, 240, RED],
     ]);
+    fillCommands = imgui.__test.state().commands;
   }
 
   // --- CLIP ------------------------------------------------------------
@@ -143,7 +156,8 @@ async function main() {
     report('MANY', image, s, MANY_QUADS.map(([c, r]) => manyQuad(c, r)));
     const st = imgui.__test.state();
     console.log(
-        'MANY vertices=' + st.vertices + ' split=' + (st.commands >= 2));
+        'MANY vertices=' + st.vertices +
+        ' split=' + (st.commands > fillCommands));
   }
 
   // --- TWOPAIRS --------------------------------------------------------
@@ -184,6 +198,16 @@ async function main() {
     ]);
   }
 
+  // --- USERCALLBACK ----------------------------------------------------
+  {
+    const image = await harness.capture(
+        h, () => imgui.__test.scene('callback', 1), out('usercallback'));
+    report('USERCALLBACK', image, s, [
+      [20, 20, GREEN],
+      [600, 440, harness.CLEAR],
+    ]);
+  }
+
   process.exit(0);
 }
 
@@ -200,6 +224,7 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}TWOCALLBACKS ok{{$}}
 // CHECK-NEXT: {{^}}MANYTWICE ok{{$}}
 // CHECK-NEXT: {{^}}CALLBACK ok{{$}}
+// CHECK-NEXT: {{^}}USERCALLBACK ok{{$}}
 // CODE: EXITCODE 0
 
 // GROWN-DAG: {{^}}[ui] imgui: vertex buffer grown to {{[0-9]+}} bytes{{$}}

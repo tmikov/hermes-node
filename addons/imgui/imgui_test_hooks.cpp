@@ -99,12 +99,15 @@ void quarterViewport(const ImDrawList *, const ImDrawCmd *) {
 
 /// `callback`: the quarter-viewport callback, then ImGui's reset callback,
 /// then a full-window green fill, which covers the whole window only if
-/// the reset re-applied the viewport.
-void sceneCallback() {
+/// the reset re-applied the viewport. With \p arg non-zero the reset is
+/// left out, so the fill lands in the top-left quarter only if the user
+/// callback was called.
+void sceneCallback(int arg) {
   ImDrawList *list = beginScene();
   list->AddCallback(quarterViewport, nullptr);
-  list->AddCallback(
-      ImGui::GetPlatformIO().DrawCallback_ResetRenderState, nullptr);
+  if (arg == 0)
+    list->AddCallback(
+        ImGui::GetPlatformIO().DrawCallback_ResetRenderState, nullptr);
   fillDisplay(list, IM_COL32(0, 255, 0, 255));
   endScene(list);
 }
@@ -158,7 +161,7 @@ napi_value scene(napi_env env, napi_callback_info info) {
     return nullptr;
   }
   if (std::strcmp(name, "callback") == 0) {
-    sceneCallback();
+    sceneCallback(arg);
     return nullptr;
   }
   const std::string message =

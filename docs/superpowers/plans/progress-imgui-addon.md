@@ -46,6 +46,7 @@ Each test must be shown able to fail: the change made, and what it did.
 | 5 | `test/ui-imgui-draw.js` | (f') the reset callback re-applies pipeline and uniforms, not the viewport | `CALLBACK WRONG 600,440=26,26,31 320,240=26,26,31`; restored |
 | 5 | `test/ui-imgui-draw.js` | the pipeline rebuilt on every draw | PIPELINE run failed on its `-NOT` line; restored |
 | 5 | `test/ui-imgui-draw.js` | the atlas's `created` trace printed twice | TEXTURE run failed on its `-NOT` line; restored (a first attempt printed a differently-shaped duplicate *before* the real line, which the positive line skipped and the `-NOT` could not see: a mutation must reproduce the real line) |
+| 5 | `test/ui-imgui-draw.js` | (g, review) the user-callback call in `drawList` deleted | before USERCALLBACK existed, CALLBACK stayed green (the reset re-applies the viewport anyway); with it: `USERCALLBACK WRONG 600,440=0,255,0`, test failed; restored |
 
 ## Notes
 
@@ -136,3 +137,9 @@ Each test must be shown able to fail: the change made, and what it did.
 - `harness.tick()` throws on an empty list, `ui-imgui-frame.js` compares
   the framebuffer scale as a float32, and `utils/format.sh` covers
   `addons/` (the tidy-up commit before this task's).
+- Review round 1: USERCALLBACK (the quarter-viewport callback with no
+  reset after it) is what proves a user callback is called; `split=` now
+  compares the command count with FILL's; a pipeline that fails for a
+  format and sample count is not retried for that pair; a partial
+  device-object failure destroys what was made. The `dynamic_update`
+  deprecation is a tracker issue (`dz list`).
