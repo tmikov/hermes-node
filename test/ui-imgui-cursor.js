@@ -36,14 +36,19 @@
 //  (d) TextInput mapped to ARROW: both of CURSOR 1's TRACE lines fail;
 //  the shape cache updated while hidden: HIDDENMOVE and SHOWN's TRACE fail.
 //
-// Ordering: the addon traces each decision before the hnui call, and the
-// host traces applying it on the platform thread, so every addon line
-// precedes its own host line. A later addon line comes from a later JS
-// frame, which the host's command drain precedes (a command pushed in one
-// frame is drained before the tick for the next is sent), or follows a
-// __waitPlatformFrames. The one pair in a single frame with no order
-// between them -- SHOWN's host `sapp_mouse_shown=1` and its addon shape
-// line -- is matched with TRACE-DAG.
+// Ordering. The addon traces each decision before the hnui call that
+// pushes the command, and the host traces applying it on the platform
+// thread, so an addon line always precedes its own command's host line.
+// The other direction is not free: a host `command` line is known to
+// precede a later addon line only when a platform-frame barrier
+// (barrier() below, ui.__waitPlatformFrames(2)) sits between the push and
+// that later frame. A later JS frame alone is not enough: onFrame drains
+// commands before it takes the frame and sends the next tick, so a command
+// pushed after one platform frame's drain can wait for the next frame's
+// while the next JS frame is already tracing. Every phase therefore ends
+// with a barrier. The one pair in a single frame with no order between
+// them -- SHOWN's host `sapp_mouse_shown=1` and its addon shape line -- is
+// matched with TRACE-DAG.
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -69,6 +74,15 @@ async function main() {
     harness.until(h, draw, predicate, label);
   const inject = (desc) => harness.inject(h, desc);
 
+  // Until two platform frames begun after this call have finished, so a
+  // command pushed before it has been applied and traced by the host.
+  function barrier(label) {
+    if (!ui.__waitPlatformFrames(2)) {
+      console.log('BARRIER timed out ' + label);
+      process.exit(1);
+    }
+  }
+
   async function moveTo(x, y, label) {
     inject({type: 'MOUSE_MOVE', mouseX: x, mouseY: y});
     await until((s) => Math.abs(s.mouseX - x) < 0.01 &&
@@ -83,32 +97,34 @@ async function main() {
   await moveTo(field[0], field[1], 'FIELD');
   await until((s) => s.cursor === 1, 'CURSOR 1');
   console.log('CURSOR ' + state().cursor);
+  barrier('CURSOR 1');
   await moveTo(OUTSIDE[0], OUTSIDE[1], 'OUTSIDE');
   await until((s) => s.cursor === 0, 'CURSOR 0');
   console.log('CURSOR ' + state().cursor);
+  barrier('CURSOR 0');
 
   // --- SOFTCURSOR / HARDCURSOR ------------------------------------------
   // The cursor is acted on in the render() of the frame that set the flag;
   // the platform-frame wait lets the host apply and trace the command
   // before the next phase, and before the exit.
   await harness.frame(h, () => imgui.__test.scene('widgets', 'softcursor'));
-  console.log('SOFTCURSOR cursor=' + state().cursor + ' platform=' +
-      ui.__waitPlatformFrames(2));
+  console.log('SOFTCURSOR cursor=' + state().cursor);
+  barrier('SOFTCURSOR');
   await harness.frame(h, () => imgui.__test.scene('widgets', 'hardcursor'));
-  console.log('HARDCURSOR cursor=' + state().cursor + ' platform=' +
-      ui.__waitPlatformFrames(2));
+  console.log('HARDCURSOR cursor=' + state().cursor);
+  barrier('HARDCURSOR');
 
   // --- HIDDENMOVE / SHOWN -----------------------------------------------
   await harness.frame(h, () => imgui.__test.scene('widgets', 'softcursor'));
-  ui.__waitPlatformFrames(2);
+  barrier('HIDDENMOVE softcursor');
   // The frame that reads the new position is the one whose hover asks for
   // TextInput, so moveTo's last frame has already had its chance to set it.
   await moveTo(field[0], field[1], 'HIDDENMOVE');
   await harness.frame(h, draw);
   console.log('HIDDENMOVE cursor=' + state().cursor);
   await harness.frame(h, () => imgui.__test.scene('widgets', 'hardcursor'));
-  console.log('SHOWN cursor=' + state().cursor + ' platform=' +
-      ui.__waitPlatformFrames(2));
+  console.log('SHOWN cursor=' + state().cursor);
+  barrier('SHOWN');
 
   process.exit(0);
 }
@@ -120,10 +136,10 @@ main().catch((e) => {
 
 // CHECK: {{^}}CURSOR 1{{$}}
 // CHECK-NEXT: {{^}}CURSOR 0{{$}}
-// CHECK-NEXT: {{^}}SOFTCURSOR cursor=0 platform=true{{$}}
-// CHECK-NEXT: {{^}}HARDCURSOR cursor=0 platform=true{{$}}
+// CHECK-NEXT: {{^}}SOFTCURSOR cursor=0{{$}}
+// CHECK-NEXT: {{^}}HARDCURSOR cursor=0{{$}}
 // CHECK-NEXT: {{^}}HIDDENMOVE cursor=0{{$}}
-// CHECK-NEXT: {{^}}SHOWN cursor=1 platform=true{{$}}
+// CHECK-NEXT: {{^}}SHOWN cursor=1{{$}}
 // CODE: EXITCODE 0
 
 // TRACE: {{^}}[ui] imgui: cursor 1 -> hnui 2{{$}}
