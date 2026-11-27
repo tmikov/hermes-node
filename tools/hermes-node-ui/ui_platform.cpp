@@ -181,6 +181,10 @@ void maybeCapture() {
       std::lock_guard<std::mutex> lock(gCaptureMutex);
       gCaptureState.finished = true;
       gCaptureState.matched = false;
+      // The publication that was on screen when the request gave up, so
+      // that a test can learn which publication its own last draw became
+      // without matching a capture of it (__captureFrame's contract).
+      gCaptureState.publicationId = observed.publicationId;
     }
     uiTrace(
         "capture: no match after %d presented frame(s); publication %llu "

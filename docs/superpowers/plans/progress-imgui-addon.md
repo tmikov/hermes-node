@@ -11,6 +11,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-addon-part-a.md`
 | Task 1 | Vendor Dear ImGui | done |
 | Task 2 | Extract loadNativeAddon() from process.dlopen | done |
 | Task 3 | Load a named addon; the addon skeleton | done |
+| Task 4 | The frame protocol, and a cleared target | in progress (Step 0 done) |
 
 ## Mutations
 
@@ -27,6 +28,7 @@ Each test must be shown able to fail: the change made, and what it did.
 | 3 | `test/imgui-symbols.js` | with a temporary `std::vector<std::string>` in the init: export list kept | PASS, 2 exports |
 | 3 | `test/imgui-symbols.js` | same `std::vector` probe, `--version-script` option dropped | `EXPORTS bad: 16 unexpected`, test failed; restored |
 | 3 | `test/imgui-symbols.js` | export list and the three visibility properties both dropped | `EXPORTS bad: 2562 unexpected (2506 ImGui)`, test failed; restored |
+| 4 | `test/ui-present.js` | give-up branch of `maybeCapture()` sets `publicationId` to 0 again | `REBLIT matched=false framesObserved=240 presenting=WRONG got=0 want=1`, test failed; restored |
 
 ## Notes
 
