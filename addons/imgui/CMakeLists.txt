@@ -16,6 +16,7 @@ add_library(hermes_node_imgui SHARED
   imgui_test_hooks.cpp
   bind/bind_util.cpp
   bind/bind_guards.cpp
+  bind/bind_constants.cpp
   bind/bind_frame.cpp
   bind/bind_windows.cpp
   bind/bind_layout.cpp

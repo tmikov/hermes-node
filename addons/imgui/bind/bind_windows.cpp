@@ -27,8 +27,7 @@ napi_value begin(napi_env env, napi_callback_info info) {
   if (!c.ok() || !c.string(0, "name", &name) ||
       !c.refBool(1, "pOpen", true, &pOpen))
     return nullptr;
-  // Task 2: EnumInfo
-  if (!c.isMissing(2) && !c.int32(2, "flags", &flags))
+  if (!c.isMissing(2) && !c.flags(2, "flags", kWindowFlags, &flags))
     return nullptr;
   // imgui.cpp:8003 asserts plainly on an empty name.
   if (name.empty())
@@ -65,9 +64,10 @@ napi_value beginChild(napi_env env, napi_callback_info info) {
   if (!c.ok() || !c.string(0, "strId", &strId) ||
       (!c.isMissing(1) && !c.vec2(1, "size", &size)))
     return nullptr;
-  // Task 2: EnumInfo
-  if ((!c.isMissing(2) && !c.int32(2, "childFlags", &childFlags)) ||
-      (!c.isMissing(3) && !c.int32(3, "windowFlags", &windowFlags)))
+  if ((!c.isMissing(2) &&
+       !c.flags(2, "childFlags", kChildFlags, &childFlags)) ||
+      (!c.isMissing(3) &&
+       !c.flags(3, "windowFlags", kWindowFlags, &windowFlags)))
     return nullptr;
   // BeginChildEx's plain assertions (imgui.cpp:6904, 6907, 6908).
   if (windowFlags & ImGuiWindowFlags_AlwaysAutoResize)
@@ -117,8 +117,7 @@ napi_value setNextWindowPos(napi_env env, napi_callback_info info) {
   ImVec2 pivot(0.0f, 0.0f);
   if (!c.ok() || !c.vec2(0, "pos", &pos))
     return nullptr;
-  // Task 2: EnumInfo
-  if ((!c.isMissing(1) && !c.int32(1, "cond", &cond)) ||
+  if ((!c.isMissing(1) && !c.enumValue(1, "cond", kCond, &cond)) ||
       (!c.isMissing(2) && !c.vec2(2, "pivot", &pivot)) || !c.needFrame())
     return nullptr;
   c.enterImGui();
@@ -135,8 +134,8 @@ napi_value setNextWindowSize(napi_env env, napi_callback_info info) {
   int cond = 0;
   if (!c.ok() || !c.vec2(0, "size", &size))
     return nullptr;
-  // Task 2: EnumInfo
-  if ((!c.isMissing(1) && !c.int32(1, "cond", &cond)) || !c.needFrame())
+  if ((!c.isMissing(1) && !c.enumValue(1, "cond", kCond, &cond)) ||
+      !c.needFrame())
     return nullptr;
   c.enterImGui();
   ImGui::SetNextWindowSize(size, cond);

@@ -43,7 +43,10 @@ enum class FormatKind { Float, Int };
 
 /// A flags or enum type: what may be passed for it. For a flags type
 /// (`isFlags`) no bit outside `validMask`; for an enum type one of
-/// `values[0 .. valueCount)`. Instances are defined with the constants.
+/// `values[0 .. valueCount)`. `name` is the JavaScript prefix of its
+/// constants (`"WindowFlags_"`), used in messages. Instances are defined
+/// with the constants, in bind_constants.cpp, from the same lists that are
+/// exported.
 struct EnumInfo {
   const char *name;
   bool isFlags;
@@ -51,6 +54,36 @@ struct EnumInfo {
   const int *values;
   int valueCount;
 };
+
+// One per enum type of the surface table's "Constants" section, named
+// after the type minus `ImGui` / `Im` and the trailing underscore.
+// ImGuiMouseButton has one too, for completeness: a mouse-button argument
+// is read with intIn(0, 4) instead (G1).
+extern const EnumInfo kWindowFlags;
+extern const EnumInfo kChildFlags;
+extern const EnumInfo kInputTextFlags;
+extern const EnumInfo kTreeNodeFlags;
+extern const EnumInfo kPopupFlags;
+extern const EnumInfo kSelectableFlags;
+extern const EnumInfo kComboFlags;
+extern const EnumInfo kTabBarFlags;
+extern const EnumInfo kTabItemFlags;
+extern const EnumInfo kFocusedFlags;
+extern const EnumInfo kHoveredFlags;
+extern const EnumInfo kDockNodeFlags;
+extern const EnumInfo kDir;
+extern const EnumInfo kKey;
+extern const EnumInfo kCol;
+extern const EnumInfo kStyleVar;
+extern const EnumInfo kButtonFlags;
+extern const EnumInfo kColorEditFlags;
+extern const EnumInfo kSliderFlags;
+extern const EnumInfo kMouseButton;
+extern const EnumInfo kCond;
+extern const EnumInfo kTableFlags;
+extern const EnumInfo kTableColumnFlags;
+extern const EnumInfo kTableRowFlags;
+extern const EnumInfo kDrawFlags;
 
 /// A one-element reference array of booleans (`bool*`).
 struct RefBool {
@@ -256,6 +289,9 @@ bool registerFunction(
     napi_value target,
     const char *name,
     napi_callback cb);
+
+/// Defines every exported enumerator, and FLT_MIN / FLT_MAX, on `exports`.
+bool registerConstants(napi_env env, napi_value exports);
 
 // One per group, each in its bind_<group>.cpp.
 bool registerFrame(napi_env env, napi_value exports);

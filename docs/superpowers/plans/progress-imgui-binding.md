@@ -10,7 +10,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-binding.md`
 | Task | Description | Status |
 |------|-------------|--------|
 | Task 1 | Binding core, the error model, and the Frame group | done (GL) |
-| Task 2 | Constants, and flag and enum checking | |
+| Task 2 | Constants, and flag and enum checking | done (GL) |
 | Task 3 | Windows, Layout, IDs, Text, Item and input queries | |
 | Task 4 | Widgets | |
 | Task 5 | Trees, tabs, menus, popups and tooltips | |
@@ -44,6 +44,14 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 1 | `ui-imgui-bind-errors.js` | `io.ConfigErrorRecoveryEnableDebugLog = false` removed from `setRecoveryFlags()` | PASS, as expected: no test can see it (see "Behaviours no test detects") |
 | 1 (review) | `ui-imgui-bind-errors.js` | `canEndChild()` requiring a true `beginChild` again, after GUARD_CHILD was changed to count only the frame whose `beginChild()` returned false and to catch the refusal | the assertion itself now fails: `SETUP child clipped`, then `GUARD_CHILD not accepted`; test failed |
 | 1 (review) | `ui-imgui-bind-errors.js` | every usage error traced twice (`throwUsage()` also tracing `usage error: <msg>`) | the ONCE run failed: `ONCE-NEXT: is not on the line after the previous match` at the second line, `Calling End() too many times!` appearing twice; test failed |
+| 2 | `ui-imgui-bind-constants.js`, `imgui-bind-surface.js` | (RED) run against Task 1's build, with the test and `bind-groups.js` written and no constants exported | constants: `COUNT WindowFlags 0 want 24` and one such line per type; surface: `MISSING WindowFlags_NoTitleBar ... FLT_MAX FLT_MIN` (every sample) |
+| 2 | `ui-imgui-bind-constants.js`, `imgui-bind-surface.js` | the `HNIMGUI_CONST(ImGuiCond_Appearing)` line deleted | constants: `COUNT Cond 4 want 5`, `WRONG Cond_Appearing=undefined want 8`; surface: `MISSING Cond_Appearing`; both failed |
+| 2 | `ui-imgui-bind-constants.js` | `HNIMGUI_CONST(ImGuiWindowFlags_ChildWindow)` (marked [Internal]) added to the window-flags list | `COUNT WindowFlags 25 want 24`, `EXCLUDED WindowFlags_ChildWindow`; test failed |
+| 2 | `ui-imgui-bind-constants.js` | the mask check removed from `Call::flags` (`if (false && bad != 0)`) | `NOTHROW ERR_OUT_OF_RANGE` at `begin('w', null, 1 << 30)`, after `CONSTANTS`, `FLT`, `HIGHBIT`; test failed |
+| 2 | `ui-imgui-bind-constants.js` | the value check removed from `Call::enumValue` (every value accepted) | `setNextWindowPos([0, 0], 3)` reached ImGui, which aborted: `imgui.cpp:9433 ... Assertion cond == 0 \|\| ImIsPowerOfTwo(cond) failed`; no `REJECT` line, test failed |
+| 2 | `ui-imgui-bind-constants.js` | `pushStyleColor`'s `Col_COUNT` refusal removed | `NOTHROW ERR_OUT_OF_RANGE` at `pushStyleColor(imgui.Col_COUNT, 0)`; test failed |
+| 2 | `ui-imgui-bind-constants.js` | `FLT_MIN` exported as `-FLT_MIN` | `WRONG FLT_MIN=-1.1754943508222875e-38 want 1.1754943508222875e-38`; test failed |
+| 2 | `imgui-bind-surface.js` | the `Cond` entry removed from `bind-groups.js`'s `constantTypes` | `EXTRA Cond_Always Cond_Appearing Cond_FirstUseEver Cond_None Cond_Once`; test failed |
 
 ## Behaviours no test detects
 
@@ -136,8 +144,6 @@ automated test would notice losing. Each task appends its own.
     check: `sliderFloat3()` in `addons/imgui/bind/bind_widgets.cpp`
     (the format check itself is `Call::format()` / `validFormat()` in
     `addons/imgui/bind/bind_util.cpp`).
-  - `Col_COUNT` and `StyleVar_COUNT` rejection: `pushStyleColor()` and
-    `pushStyleVar()` in `addons/imgui/bind/bind_style.cpp`.
 - **`enterImGui()` drops a stale usage error** (one reported outside any
   binding call, already traced), so it is not blamed on the next call.
   Nothing in this task produces one; it is a defence.
@@ -170,12 +176,11 @@ automated test would notice losing. Each task appends its own.
   "Behaviours no test detects"); `bind::bindCalls()` for the test hook. Every reader of the plan's interface is implemented, including
   those no pilot uses yet (`refInt`, `refString`, `floats`, `flags`,
   `enumValue`, `stringOrNull`): they are untested until their tasks.
-- **Until Task 2**, every flags and enum argument is read with `int32`
+- **Until Task 2**, every flags and enum argument was read with `int32`
   under a `// Task 2: EnumInfo` comment, except the two indices that index
   an array without a check: `pushStyleColor`'s and `pushStyleVar`'s `idx`
-  are read with `intIn(0, <type>_COUNT - 1)`, which is also their
-  "Rejected: `_COUNT`" line. So an out-of-range `cond` or slider flag still
-  reaches ImGui's plain assertions until Task 2.
+  were read with `intIn(0, <type>_COUNT - 1)`. Task 2 replaced all of
+  them (see its notes).
 - **Dispatched arguments name both forms** in their `TypeError`:
   `pushStyleColor`'s "col must be a number or an array of 4 numbers",
   `pushStyleVar`'s "val must be a number or an array of 2 numbers",
@@ -200,3 +205,61 @@ automated test would notice losing. Each task appends its own.
   (imgui.cpp:6069-6070); `docked` is `DockIsActive`.
 - No disagreement between the surface table and ImGui's source was found
   in the entries bound here.
+
+### Task 2
+
+- **The "Constants" table agrees with `imgui.h`**, checked by parsing every
+  one of the 25 enum blocks with the obsolete `#ifndef
+  IMGUI_DISABLE_OBSOLETE_FUNCTIONS` sections set aside: each type's compiled
+  count, excluded names and obsolete names are the table's, and the
+  exported counts sum to 581. No correction to the table was needed.
+- **`addons/imgui/bind/bind_constants.cpp`** holds one `constexpr Constant
+  k<Type>List[]` per type, one `HNIMGUI_CONST(<C++ enumerator>)` line per
+  constant, so no value is typed. The JS name is the C++ spelling minus
+  `ImGui` / `Im`. Each `EnumInfo` is computed from the same list:
+  `maskOf()` (the union of every value's bits) for a flags type,
+  `valuesOf()` for an enum type; so a constant added to or removed from a
+  list changes what is exported and what is accepted together. The lists
+  were generated from the header once and checked against the table; they
+  are maintained by hand from now on, like any source.
+- **Every flags or enum parameter bound so far** now goes through
+  `Call::flags` / `Call::enumValue`: `begin` (`kWindowFlags`), `beginChild`
+  (`kChildFlags`, `kWindowFlags`), `setNextWindowPos` and
+  `setNextWindowSize` (`kCond`), `sliderFloat3` (`kSliderFlags`),
+  `pushStyleColor` (`kCol`, then `Col_COUNT` refused by name) and
+  `pushStyleVar` (`kStyleVar`, then `StyleVar_COUNT`). The two indices
+  keep Task 1's behaviour: the accepted set is still 0 .. `_COUNT - 1`,
+  now as "an exported value that is not `_COUNT`".
+- **Messages** (`Call::flags`, `Call::enumValue`): `<arg> has bits set that
+  no <Prefix>_ constant has: 0x<bits>` and `<arg> must equal one of the
+  <Prefix>_ constants; got <n>`, where `EnumInfo::name` is the JavaScript
+  prefix (`"WindowFlags_"`). `ui-imgui-bind-constants.js` pins both and the
+  `_COUNT` one.
+- **No exported flags enumerator has bit 31** in this version (the highest
+  is `ColorEditFlags_InputHSV`, `1 << 29`), so the brief's "a negative value
+  produced by `|` with a high public bit is accepted where such a bit
+  exists" has no case to run. The test prints `HIGHBIT none` (computed from
+  the module's constants, so a future bit 31 changes the line and someone
+  has to write the accepting case), and checks the other half: a negative
+  value made with `|` passes the integer reader and is refused by the mask
+  (`... 0x80000000`).
+- **`bind-groups.js` carries per-type data, not 583 names**:
+  `constantTypes` (prefix -> count, kind, excluded names including the
+  obsolete ones) and `constantType(name)`, which maps a name to its type by
+  the text before the first `_` (`Mod_` counts under `Key`, the two float
+  limits under `FLT`). `constants` holds three hand-copied samples per type,
+  each with its `imgui.h` line, plus `FLT_MIN` / `FLT_MAX`. `all()` now
+  lists the groups' names only: `imgui-bind-surface.js` leaves every name
+  `constantType()` places out of its comparison (so an export of an unknown
+  prefix is still `EXTRA`) and reports an unexported sample as `MISSING`;
+  the per-type counts, excluded names and sample values moved from its
+  `CONSTANTS` line to `ui-imgui-bind-constants.js`. `ui-imgui-bind-args.js`
+  NOFRAME iterates `all()`, which is why the constants could not be in it.
+- **The `CONSTANTS` check needs a display** now, since it lives in a window
+  test (the brief's file list); `imgui-bind-surface.js` still checks,
+  without one, that every sample is exported and that nothing outside a
+  known type is.
+- `ImGuiMouseButton` has `kMouseButton` like every type, but a mouse-button
+  argument will be read with `intIn(0, 4)` (G1); no function bound so far
+  takes one.
+

@@ -232,6 +232,7 @@ NAPI_MODULE_INIT() {
   namespace bind = hnimgui::bind;
   if (!bind::registerFunction(env, exports, "newFrame", hnimgui::newFrame) ||
       !bind::registerFunction(env, exports, "render", hnimgui::render) ||
+      !bind::registerConstants(env, exports) ||
       !bind::registerFrame(env, exports) ||
       !bind::registerWindows(env, exports) ||
       !bind::registerLayout(env, exports) ||

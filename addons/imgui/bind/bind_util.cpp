@@ -403,7 +403,8 @@ bool Call::flags(size_t i, const char *what, const EnumInfo &type, int *out) {
   const unsigned bad =
       static_cast<unsigned>(v) & ~static_cast<unsigned>(type.validMask);
   if (bad != 0) {
-    throwRange("%s has bits that are not %s flags: 0x%x", what, type.name, bad);
+    throwRange(
+        "%s has bits set that no %s constant has: 0x%x", what, type.name, bad);
     return false;
   }
   *out = v;
@@ -424,7 +425,8 @@ bool Call::enumValue(
       return true;
     }
   }
-  throwRange("%s is not a %s value: %d", what, type.name, v);
+  throwRange(
+      "%s must equal one of the %s constants; got %d", what, type.name, v);
   return false;
 }
 

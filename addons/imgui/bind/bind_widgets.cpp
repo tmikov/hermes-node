@@ -64,8 +64,7 @@ napi_value sliderFloat3(napi_env env, napi_callback_info info) {
       !c.f32(3, "vMax", &vMax) ||
       (!c.isMissing(4) && !c.format(4, "format", FormatKind::Float, &format)))
     return nullptr;
-  // Task 2: EnumInfo
-  if (!c.isMissing(5) && !c.int32(5, "flags", &flags))
+  if (!c.isMissing(5) && !c.flags(5, "flags", kSliderFlags, &flags))
     return nullptr;
   // SliderBehavior's plain assertions (widgets:3310, 3358).
   if (flags & ImGuiSliderFlags_WrapAround)

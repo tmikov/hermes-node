@@ -22,10 +22,12 @@ namespace {
 napi_value pushStyleColor(napi_env env, napi_callback_info info) {
   Call c(env, info, "pushStyleColor");
   int idx = 0;
-  // Task 2: EnumInfo. Until then the range is the one Style.Colors[]
-  // indexing needs, Col_COUNT excluded (imgui.cpp:3801, 3812).
-  if (!c.ok() || !c.intIn(0, "idx", 0, ImGuiCol_COUNT - 1, &idx))
+  // An exported Col_ value, then not Col_COUNT, which would index past
+  // Style.Colors[] (imgui.cpp:3801, 3812).
+  if (!c.ok() || !c.enumValue(0, "idx", kCol, &idx))
     return nullptr;
+  if (idx == ImGuiCol_COUNT)
+    return c.throwRange("idx must not be Col_COUNT");
   if (c.isArray(1)) {
     ImVec4 col;
     if (!c.vec4(1, "col", &col) || !c.needFrame())
@@ -67,10 +69,12 @@ napi_value popStyleColor(napi_env env, napi_callback_info info) {
 napi_value pushStyleVar(napi_env env, napi_callback_info info) {
   Call c(env, info, "pushStyleVar");
   int idx = 0;
-  // Task 2: EnumInfo. Until then the range GetStyleVarInfo asserts
-  // (imgui.cpp:3891), StyleVar_COUNT excluded.
-  if (!c.ok() || !c.intIn(0, "idx", 0, ImGuiStyleVar_COUNT - 1, &idx))
+  // An exported StyleVar_ value, then not StyleVar_COUNT, which
+  // GetStyleVarInfo asserts against (imgui.cpp:3891).
+  if (!c.ok() || !c.enumValue(0, "idx", kStyleVar, &idx))
     return nullptr;
+  if (idx == ImGuiStyleVar_COUNT)
+    return c.throwRange("idx must not be StyleVar_COUNT");
   if (c.isArray(1)) {
     ImVec2 val;
     if (!c.vec2(1, "val", &val) || !c.needFrame())
