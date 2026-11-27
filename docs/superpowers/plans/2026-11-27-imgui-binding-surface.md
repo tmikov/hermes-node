@@ -1409,7 +1409,8 @@ All six pass a finished string and never let ImGui interpret `%`.
   and `_PickerHueWheel` (`ColorEdit4` forwards the picker bits,
   widgets:6096-6100, and `ColorPicker4` asserts plainly that exactly one
   is set when the picker opens, widgets:6237). The same three rules
-  apply to `colorEdit4` and `colorButton`.
+  apply to `colorEdit4`. They do not apply to `colorButton`, which opens
+  no picker and whose entry rejects nothing.
 - Preconditions (in `ColorEdit4`, plain, (a)):
   `ImIsPowerOfTwo(flags & ImGuiColorEditFlags_DisplayMask_)`
   (widgets:5960) and `ImIsPowerOfTwo(flags &
