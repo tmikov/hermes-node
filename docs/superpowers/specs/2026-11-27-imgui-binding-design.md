@@ -225,14 +225,16 @@ Part C carries the same list.
     without doing anything: the clipper belongs to a window of the open
     frame.
   - The callback must leave the window scope as it found it. When it
-    returns or throws, the binding compares ImGui's current window and
-    window-stack depth with those recorded at entry. If they match, the
+    returns or throws, the binding compares ImGui's current window,
+    window-stack depth and current table with those recorded at entry (a
+    table that does not scroll changes the current table without opening
+    a window). If they match, the
     loop continues, or after a throw the clipper is ended normally and the
     exception propagates. If they do not (the callback closed the owning
-    window, or left a child open), the clipper is **abandoned**: released
+    window or table, or left a child or a table open), the clipper is **abandoned**: released
     without another `Step()` and without moving any window's cursor (its
-    item count is cleared first, which is what makes `End()` skip the
-    seek), and `ERR_IMGUI_USAGE` is thrown, or the callback's own
+    `ItemsCount` is set to -1 first, which is what makes `End()` skip the
+    seek; zero would not), and `ERR_IMGUI_USAGE` is thrown, or the callback's own
     exception if it threw. Scopes the callback left open are then ImGui's
     ordinary end-of-frame errors.
   - A nested `listClipper` inside the callback is allowed and follows the
@@ -540,8 +542,9 @@ flag and docked flag of each ImGui window in the last ended frame.
   part A's scenes do. The `listClipper` test checks the ranges it is
   given, a nested clipper, and each rule above: `render()` and
   `newFrame()` from the callback, a callback that throws, one that closes
-  the owning window, one that leaves a child open (returning, and
-  throwing); after each, the next frame works.
+  the owning window, one that closes the owning table, one that leaves a
+  child open and one that leaves a non-scrolling table open (each
+  returning, and throwing); after each, the next frame works.
 - **`ui-imgui-app.js`**: the application in test mode: every panel's
   window is in `state().windows`, active and docked; a click on a fixture
   file (at the rectangle the application prints for it in test mode)
