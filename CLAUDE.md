@@ -1701,9 +1701,11 @@ holds the detail (surface, trace lines, test hooks, bumping ImGui), and
   every `render()` in a tick shares one host commit.
 - **Logical units throughout**: display size and framebuffer scale are
   read from `hnui_get_window_state` every frame; nothing is scaled by hand.
-- Tests are gated on the `ui-imgui` lit feature (the binary runs
-  `test/fixtures/imgui/probe.js`); `test/ui-imgui-feature.js` is its
-  forcing function. Window tests are `test/ui-imgui-*.js`, so the Sokol
+- `imgui-load.js`, `imgui-symbols.js` and the window tests are gated on
+  the `ui-imgui` lit feature (the binary runs
+  `test/fixtures/imgui/probe.js`); `imgui-pin.js` needs only `ui-enabled`,
+  `imgui-missing.js` and `ui-imgui-feature.js` only `ui`. The last is the
+  feature's forcing function. Window tests are `test/ui-imgui-*.js`, so the Sokol
   stderr rule covers them.
 - Verified on Linux/GL under Xvfb at scale 1 only. Metal and a 2x scale
   are unrun; see `dz list`.

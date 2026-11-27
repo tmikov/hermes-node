@@ -306,10 +306,13 @@ and `-demo.js`. Pixels are compared exactly at sample points of captured
 presented frames. Each test's header lists its cases and the mutations it
 was shown to fail under.
 
-They are gated on the lit feature `ui-imgui`, which `test/lit.cfg` sets
-when `hermes-node-ui` runs `test/fixtures/imgui/probe.js` successfully.
-`test/ui-imgui-feature.js` is its forcing function: it fails when `ui` is
-on and the addon does not load.
+`imgui-load.js`, `imgui-symbols.js` and every window test are gated on
+the lit feature `ui-imgui`, which `test/lit.cfg` sets when
+`hermes-node-ui` runs `test/fixtures/imgui/probe.js` successfully.
+`imgui-pin.js` requires only `ui-enabled`, and `imgui-missing.js` and
+`ui-imgui-feature.js` only `ui`. `test/ui-imgui-feature.js` is the
+feature's forcing function: it fails when `ui` is on and the addon does
+not load.
 
 ## Verified, and not
 

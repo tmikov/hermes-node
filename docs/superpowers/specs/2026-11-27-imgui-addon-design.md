@@ -257,7 +257,7 @@ platform, renderer and module surface are separate units.
   units and the wheel in Sokol's scroll units, so both go to ImGui
   unconverted.
 - Delta time comes from a monotonic clock read in `newFrame()`.
-- Cursor: after `Render()`, ImGui's requested cursor is mapped to
+- Cursor: after a `render()` that drew, ImGui's requested cursor is mapped to
   `hnui_set_cursor` / `hnui_show_cursor`, only when it changed.
 - Clipboard: set is `hnui_write_clipboard`; get is
   `hnui_read_clipboard_sync` with a 500 ms deadline, its result released
@@ -297,8 +297,10 @@ repository does not have.
   `sg_update_buffer`**, on buffers created with `usage.dynamic_update`. Sokol allows one update of a buffer per Sokol
   frame and any number of appends, and a Sokol frame here is a host
   commit, not an ImGui frame: two `render()` calls in one tick share
-  one. Each `render()` appends all its draw lists and draws with the
-  returned offsets. When an append would not fit, the buffer is replaced
+  one. Each `render()` appends one draw list and draws it with the
+  returned offsets before appending the next, because a growth replaces
+  the buffer and a list's offsets belong to the buffer it was appended
+  to. When an append would not fit, the buffer is replaced
   by a larger one (which has had no append in this frame) and the old
   one destroyed; draws already issued from the old one are unaffected.
 - **Textures follow ImGui's texture protocol**
@@ -316,9 +318,9 @@ repository does not have.
   sampler, the addon's, serves every texture. The exact status fields
   are read from the vendored tag.
 - `ImGuiBackendFlags_RendererHasVtxOffset` is set, with 16-bit indices:
-  a draw command's vertex offset becomes the draw's base vertex, or the
-  vertex buffer binding's offset, whichever this Sokol supports on both
-  backends.
+  a draw command's vertex offset becomes the draw's base vertex. A
+  backend without `draw_base_vertex` is refused with an unconditional
+  stderr line, and the renderer then draws nothing.
 - ImGui's reset-render-state draw callback
   (`platform_io.DrawCallback_ResetRenderState` at this version) is
   honoured by running the renderer's whole state setup again: pipeline,
@@ -409,7 +411,7 @@ succeeds in the built binary. It has a forcing-function test, red when
 
 | Test | Proves |
 |---|---|
-| load | The name resolves; `version` matches the pin; the context trace line; plain `hermes-node` refuses the name. `require.resolve()` of the name returns the specifier string and loads the addon (its init trace line appears once); two following `require()` calls return the identical object. |
+| load | The name resolves; `version` matches the pin; the init trace line; plain `hermes-node` refuses the name. `require.resolve()` of the name returns the specifier string and loads the addon (its init trace line appears once); two following `require()` calls return the identical object. |
 | missing file | A copy of the binary in an empty directory throws `MODULE_NOT_FOUND` naming the path, from `require()` and from `require.resolve()`, twice in one process. A file there that is not a loadable addon throws `ERR_DLOPEN_FAILED`. Needs no display. |
 | pixels | The flat-fill scene and the textured quad, captured from the presented frame, compared exactly at sample points. Per backend. |
 | many, clip | `many`: exact colours at sample points in the first, a middle and the last quad, and the buffer-growth trace. `clip`: the fill's colour inside the clip rectangle, the clear colour outside it. |
