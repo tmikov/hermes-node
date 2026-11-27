@@ -1405,7 +1405,11 @@ All six pass a finished string and never let ImGui interpret `%`.
 - Overload: only one. Nullable: none. Omitted: none.
 - Frame: open.
 - Rejected: more than one of `_DisplayRGB` / `_DisplayHSV` /
-  `_DisplayHex`; both `_InputRGB` and `_InputHSV`.
+  `_DisplayHex`; both `_InputRGB` and `_InputHSV`; both `_PickerHueBar`
+  and `_PickerHueWheel` (`ColorEdit4` forwards the picker bits,
+  widgets:6096-6100, and `ColorPicker4` asserts plainly that exactly one
+  is set when the picker opens, widgets:6237). The same three rules
+  apply to `colorEdit4` and `colorButton`.
 - Preconditions (in `ColorEdit4`, plain, (a)):
   `ImIsPowerOfTwo(flags & ImGuiColorEditFlags_DisplayMask_)`
   (widgets:5960) and `ImIsPowerOfTwo(flags &
@@ -1787,7 +1791,11 @@ there is a current table whose inner window is not the current window.
 - C++: `IMGUI_API bool TableSetColumnIndex(int column_n);`
   (`imgui.h:927`)
 - Overload: only one. Nullable: none. Omitted: none.
-- Frame: open. Rejected: none.
+- Frame: open. Rejected: `columnN < 0` (`ERR_OUT_OF_RANGE`). After
+  `TableNextRow()` the current column is -1 (tables:2092), so -1 skips
+  the `if (table->CurrentColumn != column_n)` block that holds ImGui's
+  range check and reaches `table->Columns[-1]` (tables:2295-2305). An
+  index at or above the column count stays ImGui's recoverable error.
 - Preconditions:
   - a table is current and a row is open: relied on without a check.
     `TableBeginCell()` (tables:2300) switches draw channels with
@@ -1796,9 +1804,9 @@ there is a current table whose inner window is not the current window.
     exist only once the layout has run, which the first row function
     does (tables:2064-2065). (b): `g.CurrentTable != NULL` and
     `g.CurrentTable->IsInsideRow`.
-  - (c) `column_n >= 0 && column_n < table->ColumnsCount`:
-    "TableSetColumnIndex() invalid column index!" (tables:2299), returns
-    false.
+  - (c) `column_n < table->ColumnsCount` (the binding has already
+    rejected a negative index): "TableSetColumnIndex() invalid column
+    index!" (tables:2299), returns false.
 - Notes: the guard is stricter than ImGui on purpose (ruling 12). With
   no current table ImGui itself returns false (tables:2292-2293); the
   binding throws `ERR_IMGUI_USAGE` instead, as it does with a table but
@@ -2874,6 +2882,21 @@ a C++ program.
    (widgets:10005). The ID is a CRC of the string seeded with the ID
    stack; a zero cannot be told from the argument, and is not something a
    caller reaches by mistake.
+
+3b. **Closing a scope ImGui opened internally, with another pair's
+   closer.** Some constructs open a group, an ID or a child of their own
+   (`BeginMenuBar` calls `BeginGroup()` and `PushID()`, widgets:9332-9333;
+   `BeginListBox` a group and a child). A guard checks that something of
+   the closer's kind is open, not who opened it. So `beginMenuBar();
+   endGroup();` passes `canEndGroup` (the menu bar's group belongs to the
+   current window, imgui.cpp:12719-12722) and removes the menu bar's
+   group; the window's `end()` then recovers the open menu bar by calling
+   `EndMenuBar()` itself (imgui.cpp:12038-12041), which reads the empty
+   group stack (widgets:9401). The binding's `canEndMenuBar` never runs,
+   because ImGui made the call. This is crash-capable and not prevented;
+   preventing it needs the binding to track which scopes its caller
+   opened, which is what part C should decide. ImGui's recovery is
+   therefore not sufficient for these sequences.
 
 Recorded here for completeness, although not assertions:
 

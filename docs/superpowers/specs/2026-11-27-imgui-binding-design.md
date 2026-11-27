@@ -40,7 +40,7 @@ exception is listed as one.
    convention", so application code reads like the C++ ImGui code it
    corresponds to, and ImGui's documentation applies.
 3. A mistake in JavaScript is a JavaScript error wherever the binding can
-   tell: a wrong argument type or count throws a `TypeError` before ImGui
+   tell: a wrong argument throws a `TypeError` or `RangeError` before ImGui
    is called; a call outside a frame throws `ERR_IMGUI_NO_FRAME`; a usage
    error ImGui itself detects and recovers from (unbalanced `begin`/`end`,
    `pushID`/`popID` and the like) throws `ERR_IMGUI_USAGE`.
@@ -343,10 +343,13 @@ conventions may not change.
 
 ## Errors
 
-- **Wrong arguments**: `TypeError` with `code` `ERR_INVALID_ARG_TYPE` (or
-  `ERR_OUT_OF_RANGE` for a number outside the C++ type, or a reference
-  array that is too short), naming the function and the argument. ImGui is
-  not called.
+- **Wrong arguments**, as Node classes them: a `TypeError` with `code`
+  `ERR_INVALID_ARG_TYPE` (wrong type or missing) or
+  `ERR_INVALID_ARG_VALUE` (a string with U+0000, a format string that
+  does not fit); a `RangeError` with `code` `ERR_OUT_OF_RANGE` (a number
+  outside its range, a flag bit or enum value that is not exported, a
+  reference array that is too short, a limit exceeded). The message names
+  the function and the argument. ImGui is not called.
 - **No frame**: the existing `ERR_IMGUI_NO_FRAME`.
 - **Re-entry**: `ERR_IMGUI_REENTRANT`, above.
 - **Usage errors ImGui recovers from.** ImGui v1.93 reports these through
@@ -408,9 +411,15 @@ conventions may not change.
     list (`state().windows`). All of it is behind helpers in one file
     (`bind_guards.cpp`) and named in the README's "Bumping
     ImGui" section: a bump re-audits that file against ImGui's source.
-  - A guard makes the call safe, not right: where ImGui's own check is
-    weaker than correct pairing (a second `endTabItem()` passes it), so is
-    the binding's.
+  - A guard checks that something of the closer's kind is open, as
+    ImGui's own assertion does, and no more. Where ImGui's check is weaker
+    than correct pairing (a second `endTabItem()` passes it), so is the
+    binding's. And it does not know who opened a scope: a closer applied
+    to a scope ImGui opened internally for another construct (`endGroup()`
+    straight after `beginMenuBar()`, which removes the menu bar's own
+    group) passes the guard and can crash later, when ImGui's recovery
+    closes the damaged construct itself. That is not prevented; it is
+    listed in the plan's "Not covered" section and the tracker.
 - **Not diagnosed, as in C++**: a `pushItemWidth` without its pop. It
   is not in ImGui's recovery and does not crash: ImGui clears that stack
   when the window next begins.
@@ -575,7 +584,12 @@ flag and docked flag of each ImGui window in the last ended frame.
   unreadable fixture entry produces `APP error`; the canvas shows the
   expected pixels at the fixed clock; Quit ends with status 0; and no
   usage error is traced.
-- The Mac round runs all of it on Metal at 2x, and a person looks at the
+- The Mac round runs all of it on Metal. The binding's own tests open
+  their windows at the harness's default, without `highDpi`, so they run
+  at scale 1 on both platforms: the binding works in logical units and
+  adds nothing scale-dependent to part A, whose `highdpi` test already
+  covers 2x. The application opens with `highDpi: true`, so its test runs
+  at 2x on the Mac and prints the scale it saw. A person looks at the
   application once on each platform (recorded as a hand check).
 
 ## Constraints
