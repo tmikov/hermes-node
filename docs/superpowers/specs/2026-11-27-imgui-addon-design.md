@@ -114,9 +114,14 @@ Everything is built only when `HERMES_NODE_ENABLE_UI` is on.
   included, and `LICENSE.txt`. Not vendored: `backends/`, `examples/`,
   `misc/`, `docs/`.
 - `THIRD_PARTY_LICENSES.md` gains ImGui (MIT).
-- ImGui is compiled **into the addon**, with hidden visibility, so its
-  symbols are the addon's own and a second addon carrying another ImGui
-  cannot collide with it. Configuration goes through a config header of
+- ImGui is compiled **into the addon**, with hidden visibility and an
+  explicit export list naming only the two functions `NAPI_MODULE_INIT()`
+  defines (`addons/imgui/exports.map` for ELF, `exports.darwin.txt` for
+  ld64), so its symbols are the addon's own and a second addon carrying
+  another ImGui cannot collide with it. The list is needed as well as the
+  visibility settings: libstdc++ gives namespace `std` default visibility,
+  so a `std::` template the addon instantiates would otherwise be
+  exported. Configuration goes through a config header of
   ours named by `IMGUI_USER_CONFIG`, never by editing `imconfig.h`.
 
 ## Loading by name
@@ -132,10 +137,9 @@ loads the addon file and returns that file's exports.
   `napi_register_module_v1` is the entry and a file that exists and will
   not load (a missing dependency, an unresolved symbol) is
   `ERR_DLOPEN_FAILED`, as there. `process.dlopen`'s own contract does not
-  change. Today
-  that code is a static N-API callback (`processDlopen`,
-  `lib/process/node_process.cpp`); its body is extracted into a C++
-  function both callers use. That refactor is a commit of its own.
+  change. The shared code is `loadNativeAddon()`
+  (`include/hermes/node-compat/process/node_process.h`), which
+  `process.dlopen` (`lib/process/node_process.cpp`) also calls.
 - An absent file is the one case classified **before** the shared loader
   is called: the resolver checks for the file itself and throws with
   `code = 'MODULE_NOT_FOUND'` and a message naming the full path tried.
@@ -161,19 +165,32 @@ must.
 Three functions and a string, and nothing else in A:
 
 ```js
+'use strict';
+
 const ui = require('hermes-node:ui');
 const imgui = require('hermes-node:imgui');
 
-const win = await ui.createWindow(
-    {title: 'ImGui', width: 1280, height: 800, highDpi: true});
-function frame() {
-  imgui.newFrame();
-  imgui.showDemoWindow();
-  imgui.render();
-  win.requestAnimationFrame(frame);
+async function main() {
+  await ui.createWindow(
+      {title: 'ImGui', width: 1280, height: 800, highDpi: true});
+  function frame() {
+    imgui.newFrame();
+    imgui.showDemoWindow();
+    imgui.render();
+    ui.requestAnimationFrame(frame);
+  }
+  ui.requestAnimationFrame(frame);
 }
-win.requestAnimationFrame(frame);
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
 ```
+
+This is `examples/imgui-demo/demo.js` without its header comment. `requestAnimationFrame` is
+exported by `hermes-node:ui` and installed as a global; the window object
+has none. A CommonJS module has no top-level `await`, hence `main()`.
 
 - `imgui.newFrame()` feeds ImGui the display size (from
   `hnui_get_window_state`) and the time step, and calls
@@ -314,6 +331,10 @@ repository does not have.
   view under its UI, which is B's or later.
 - Everything frame-scoped is produced and consumed inside the one frame
   callback, which is what `hnui_frame_target`'s contract requires.
+- The device objects (shader, sampler, a 1x1 white image for commands
+  without a texture, the two buffers) are created at the first `render()`
+  that draws, inside a frame callback, not when the context is created:
+  `newFrame()`, which creates the context, may run outside one.
 - The addon's GPU objects belong to the producing instance and survive a
   resize: a new surface generation changes the target, not them.
 - No teardown: `hnui` gives no notification and the process ends in
@@ -321,36 +342,55 @@ repository does not have.
   way out.
 
 **Tracing.** Under `HERMES_NODE_DEBUG_NATIVE=UI` the addon prints lines
-prefixed `imgui:`, each saying what was done or read back: context
-created (version, flags, font scale), each texture created, updated or
+prefixed `imgui:`, each saying what was done or read back: addon loaded
+and context created (version, docking), each texture created, replaced or
 destroyed with its size, pipeline created with format and sample count,
-buffers grown, cursor set, clipboard get and set outcomes by length (never
-contents), a discarded frame. Per-frame lines are not printed.
+buffers grown, cursor set, hidden or shown, clipboard get outcomes by
+status or length (never contents), a discarded frame. A cursor or
+clipboard-write line is printed before its `hnui_*` call, so that it
+precedes the host's trace of applying the command on the platform thread;
+since a line printed before the call cannot claim the call happened, the
+write is traced as `clipboard write requested, <n> bytes`, and the host's
+own read-back line is the evidence that it took effect. Per-frame lines are
+not printed. `addons/imgui/README.md` lists every line.
 
 ## Test hooks
 
 With `HERMES_NODE_UI_TEST_HOOKS` set, the module also exports `__test`,
 absent otherwise:
 
-- `__test.scene(name)`: called between `newFrame()` and `render()`, draws
-  a fixed native scene in place of the demo window. The scenes are what
-  the tests below need: a full-window flat fill through the background
-  draw list; a window at a fixed position holding one button and one text
-  field; a textured quad from a small generated texture; `many`, more
-  than 65,535 vertices of flat quads in one draw list tiling the window
-  in known colours, which forces buffer growth and non-zero vertex
-  offsets; `clip`, a fill under a clip rectangle smaller than itself; and
-  `glyphs`, text at one size, then, from a later frame on, also text at a
-  second size and with characters not used before, which forces an atlas
-  update after the first upload.
+- `__test.scene(name[, arg])`: called between `newFrame()` and
+  `render()`, draws a fixed native scene in place of the demo window. The
+  scenes are what the tests below need: `fill`, a full-window flat fill
+  through the background draw list; `widgets`, a window at a fixed
+  position holding one button and one text field (its string argument,
+  `softcursor` or `hardcursor`, sets or clears `io.MouseDrawCursor`);
+  `quad`, a textured quad from a small generated texture; `many`, more
+  than 65,535 vertices of flat quads in one draw list tiling the window in
+  known colours, which forces buffer growth and non-zero vertex offsets;
+  `clip`, a fill under a clip rectangle smaller than itself; `glyphs`,
+  text at one size, and with a non-zero argument also text at a second
+  size and with characters not used before, which forces an atlas update
+  after the first upload; `two`, a fill whose colour the argument picks,
+  for the two-render cases; `callback`, the user-callback and reset case;
+  `wheel`, which draws nothing and records `io.MouseWheel` inside the
+  frame, where ImGui still holds it; and `none`.
 - `__test.state()`: returns what ImGui holds, read back: display size and
-  framebuffer scale, mouse position, `WantCaptureMouse`,
-  `WantCaptureKeyboard`, `WantTextInput`, the mouse buttons ImGui holds
-  down (`io.MouseDown`, in ImGui's numbering), the scene's button click
-  count, a count of frames in which the scene saw a new press of the A
-  key (`IsKeyPressed` with repeat off), the text field's contents, the
-  last cursor ImGui requested, and the last frame's draw-list totals
-  (commands, vertices, indices, live textures). **Sampling point:** it
+  framebuffer scale (`displayWidth`, `displayHeight`, `scaleX`,
+  `scaleY`), mouse position (`mouseX`, `mouseY`), `wantCaptureMouse`,
+  `wantCaptureKeyboard`, `wantTextInput`, the mouse buttons ImGui holds
+  down (`mouseDown`, `io.MouseDown` in ImGui's numbering), the `widgets`
+  scene's button click count (`clicks`), a count of frames in which it saw
+  a new press of the A key (`keyAPresses`, `IsKeyPressed` with repeat
+  off), whether A is down (`keyADown`), the text field's contents
+  (`text`), the wheel it summed (`wheel`) and the button's and field's
+  rectangles; the `wheel` scene's last non-zero value (`lastWheel`); the
+  cursor shape the addon last set (`cursor`); the last drawing frame's
+  totals (`commands`, `vertices`, `indices`, `liveTextures`); the size and
+  generation of the target it drew into (`targetWidth`, `targetHeight`,
+  `targetGeneration`); the font atlas's texture id (`atlasTexId`, a Sokol
+  view id, which a re-created texture does not keep); and `frameOpen`.
+  **Sampling point:** it
   reports the state as of the last completed `newFrame()`/`render()`
   pair. ImGui spreads queued input over frames (its input trickle), so a
   test runs frames until the state it expects appears, bounded by a

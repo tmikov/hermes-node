@@ -3,8 +3,11 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the root directory of this source tree.
 
-// ImGui's own demo window, through the addon, in a 1280x800 window: the
-// program examples/imgui-demo/demo.js runs, under test. The demo window is
+// ImGui's own demo window, through the addon, in a 1280x800 window. The
+// frames make the same three calls examples/imgui-demo/demo.js makes
+// (newFrame(), showDemoWindow(), render()), driven through the harness; the
+// window is opened without highDpi and the example file itself is not
+// run. The demo window is
 // anti-aliased text and widgets, not a pure-colour scene, so nothing here
 // compares a pixel's colour inside it; the assertions are counts and an
 // exact clear colour outside it.

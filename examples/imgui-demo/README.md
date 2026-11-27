@@ -2,9 +2,15 @@
 
 Dear ImGui's own demo window (`ImGui::ShowDemoWindow()`), drawn from a
 JavaScript program by the `hermes-node:imgui` addon in a `hermes-node-ui`
-window: 1280x800, high-DPI, docking on. Every widget in it is live --
-mouse, keyboard, text input, the clipboard and the mouse cursor all go
-through the addon.
+window: 1280x800, opened with `highDpi: true`, docking on. Mouse, wheel,
+keyboard and text input, the clipboard and the mouse cursor all reach
+ImGui through the addon. The tests exercise each of those paths on the
+addon's own test scenes (`addons/imgui/README.md`); on the demo window
+itself they check that it draws and that a wheel event over it reaches
+ImGui.
+
+It has been run on Linux, GL backend, under Xvfb at framebuffer scale 1.
+macOS (Metal) and a 2x framebuffer scale have not been run yet.
 
 `demo.js` is the whole program: one frame callback that calls
 `imgui.newFrame()`, `imgui.showDemoWindow()` and `imgui.render()`, and
@@ -26,6 +32,6 @@ example has no npm dependencies, and so no `package.json`.
 ## Not a check
 
 This example has no `run.sh`, so `check-hermes-node-examples` does not run
-it; that target runs against a Release build, which has the UI off. The
-same three calls are exercised under test by `test/ui-imgui-demo.js`, part
-of the default lit suite in a build with the UI on.
+it. `test/ui-imgui-demo.js`, part of the default lit suite in a build with
+the UI on, makes the same three calls through the test harness, in a
+window opened without `highDpi`; it does not run this file.

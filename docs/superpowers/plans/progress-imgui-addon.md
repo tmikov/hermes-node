@@ -18,6 +18,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-addon-part-a.md`
 | Task 8 | Cursor and clipboard | done (GL; Metal unverified) |
 | Task 9 | Resize and HiDPI | done (GL at scale 1; the 2x case needs a Mac run) |
 | Task 10 | The demo window and the example | done (GL) |
+| Task 11 | Documentation and the full suite | done (Linux) |
 
 ## Mutations
 
@@ -302,3 +303,30 @@ Each test must be shown able to fail: the change made, and what it did.
 - No `package.json`: `run-examples.sh` runs only directories with a
   `run.sh` and skips those without `node_modules`, and this one has
   neither, so it stays out of `check-hermes-node-examples`.
+
+### Task 11
+
+- Documented in `addons/imgui/README.md` (surface, every trace line as
+  printed now, test hooks, bumping ImGui, what is unverified), a short
+  subsection of `CLAUDE.md`'s UI compositor section and an `addons/`
+  line in its Conventions. The spec's sample program is now
+  `examples/imgui-demo/demo.js`, and its export-list, device-object,
+  tracing and test-hook text follows what was built.
+- `utils/format.sh` already covers `addons/` (since the tidy-up before
+  Task 5), so `CLAUDE.md`'s "Before any commit" text needed no change.
+- Full runs on Linux, 2026-11-27, after the test-header edits of this
+  task (comments only):
+  - `cmake --build cmake-build-asan --target check-hermes-node`: JS 257
+    tests, 247 passed, 10 unsupported (`bundle-yargs.js`, the five
+    Metal-only and macOS-only window tests, `ui-display-busy.js`,
+    `ui-display-feature.js`, `ui-sokol-validation-ci.js`,
+    `ui-terminate.js`), 0 failed; unit 456 passed. Every `imgui-*.js`
+    and `ui-imgui-*.js` ran and passed.
+  - `cmake --build cmake-build-asan-noui --target check-hermes-node` (UI
+    off; its kit was re-cut by the run): unit 336 passed; JS 257 tests,
+    198 passed, 59 unsupported, 0 failed.
+  - `./utils/format.sh -f`: no change.
+- Tracker issues filed: the addon unverified on macOS/Metal
+  (01a21c59-bcb6), behaviours no test detects (01a21c59-bd05), and the
+  addon in no release (01a21c59-bd54). The build found no `hnui` gap, so
+  none is filed.

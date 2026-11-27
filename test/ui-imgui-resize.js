@@ -41,7 +41,8 @@
 //             any projection that maps the display onto at least the
 //             viewport, so this cannot see a stale projection; MANY800
 //             can.
-//  MANY800    the `many` scene (4x4 quads tiling 640x480) captured at the
+//  MANY800    the `many` scene (4-pixel quads, 160 by 120 of them, tiling
+//             the top-left 640x480 of the display) captured at the
 //             new size: quad centres have their colours, the last quad's
 //             at (638,478) included, and (700,300) and (400,550), outside
 //             the tiling, are the clear colour. A projection still over

@@ -1130,6 +1130,7 @@ its own build questions. With the conformance mode above, every `hnui_*`
 entry point has a caller in v1 -- but "has a caller" is not "is pleasant to
 build a real UI on". **The ergonomics of the C API stay unproven until an
 ImGui addon exists**, and that is the risk accepted by deferring it.
+The addon's own design is `docs/superpowers/specs/2026-11-27-imgui-addon-design.md`.
 
 ## Build and integration
 
@@ -1409,7 +1410,8 @@ and Intel Macs.
   a native renderer would be a separate piece of work, and is what an
   animated 2D program would need.
 - **No ImGui addon in v1.** The reference addon (`sokol_gl`, above) is what
-  ships; an ImGui one is the next round.
+  ships; an ImGui one is the next round, designed in
+  `docs/superpowers/specs/2026-11-27-imgui-addon-design.md`.
 - **No public API for addon resource churn outside frame callbacks.** A
   `hnui_maintenance_frame()` entry point was specified in full -- admission
   rule, asynchronous completion callback, suspension of blocking submissions

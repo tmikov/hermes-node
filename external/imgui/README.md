@@ -27,7 +27,7 @@ The core sources and headers at the repository root, and nothing else.
 | File | Why it is here |
 |---|---|
 | `imgui.cpp`, `imgui.h` | The core library and its public API. |
-| `imgui_internal.h` | Included by the core sources, and by the addon's platform half for the few internals it needs. |
+| `imgui_internal.h` | Included by the core sources. The addon does not include it. |
 | `imgui_draw.cpp` | Draw lists, fonts, the built-in font atlas. |
 | `imgui_tables.cpp` | Tables. |
 | `imgui_widgets.cpp` | The standard widgets. |
