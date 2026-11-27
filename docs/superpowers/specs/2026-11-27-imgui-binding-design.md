@@ -102,14 +102,16 @@ them.
 | C++ | JavaScript |
 |---|---|
 | `ImGui::BeginChild` | `imgui.beginChild`: the name with a lower-case first letter. |
-| Overloads | One function, dispatched on argument types, only where the types differ (`pushID(string)` / `pushID(number)`). Where they do not, a suffix (`treeNode(label)`, `treeNodeEx(label, flags)` as in C++). |
-| `const char*` | A string. `NULL`-able ones accept `undefined` or `null`. Encoded to UTF-8 per call. |
+| Overloads | One function, dispatched on argument types, only where the JavaScript types differ: `pushID(string)` / `pushID(number)`; `pushStyleColor(idx, number)` / `pushStyleColor(idx, vec4)`; `collapsingHeader(label, flags)` / `collapsingHeader(label, pVisible, flags)`, where an array or `null` in second place selects the latter. Where they do not differ, only the overload named in the metadata is bound. |
+| `const char*` | A string. `NULL`-able ones accept `undefined` or `null`. Encoded to UTF-8 per call. A string containing U+0000 is rejected (`ERR_INVALID_ARG_VALUE`): ImGui would read it only up to that character. |
 | `const char* fmt, ...` | A finished string. `%` is not interpreted (the binding calls the `Unformatted` variant or passes `"%s"`). |
 | `const char* text, const char* text_end` | One string; `text_end` is dropped. |
 | `const char* format` of a slider, drag or input | A string holding exactly one conversion that fits the value's type (`%.3f`, `%d`, `%5.1f ms`); anything else throws before ImGui is called, because ImGui executes the format. |
 | A pointer to an ImGui struct with no JavaScript form (`const ImGuiViewport*`, `const ImGuiWindowClass*`, `ImGuiStyle*`) | Omitted from the JavaScript signature and passed as `NULL`: `dockSpaceOverViewport(dockspaceId, flags)`, `styleColorsDark()`. |
-| `bool`, `int`, `float`, `double`, `ImGuiID`, `ImU32` | A boolean or a number. Integers are range-checked. |
-| An enum or flags type | A number. Every enumerator of every enum type that a bound function takes or returns is a constant on the module under its C++ name minus the `ImGui` or `Im` prefix: `imgui.WindowFlags_NoTitleBar`, `imgui.Col_Text`, `imgui.Key_Enter`, `imgui.DrawFlags_Closed`. |
+| `bool`, `int`, `float`, `double` | A boolean or a number. An `int` must be an integer in the signed 32-bit range. |
+| `ImGuiID`, `ImU32` | An integer from -2^31 to 2^32-1, taken modulo 2^32, so a colour assembled with JavaScript's bitwise operators (which give a signed result) is accepted. Returned values are 0 to 2^32-1. |
+| `FLT_MAX`, `-FLT_MIN` as meaningful values | `imgui.FLT_MAX` and `imgui.FLT_MIN`, numbers equal to the C `float` values (`-Number.MIN_VALUE` would convert to `-0.0f`). |
+| An enum or flags type | A number in the signed 32-bit range. For every enum type that a bound function takes or returns, each enumerator a caller may pass or compare with is a constant on the module under its C++ name minus the `ImGui` or `Im` prefix: `imgui.WindowFlags_NoTitleBar`, `imgui.Col_Text`, `imgui.Key_Enter`, `imgui.DrawFlags_Closed`. Enumerators the header marks internal or private, and the mask enumerators, are not exported. An argument with a bit (for flags) or a value (for an enum) that is not an exported enumerator of its type is rejected with `ERR_OUT_OF_RANGE`. |
 | `const ImVec2&`, `const ImVec4&`, or either by value | An array of 2 or 4 numbers (any array-like with numeric elements is not accepted: a real `Array`). |
 | Returns `ImVec2` / `ImVec4` | Returns a new array, or fills and returns the array passed as an extra argument. That argument comes after every C++ parameter, so defaults before it are passed as `undefined`: `imgui.getWindowPos(out)`, `imgui.getMouseDragDelta(0, undefined, out)`. |
 | `bool* p`, `int* p`, `float* p`, `float v[N]`, `int v[N]` | A reference array: an `Array` of at least N elements of the right type, read before the call and written after it. A `NULL`-able pointer accepts `undefined` or `null`. |
@@ -121,8 +123,10 @@ Every binding function checks its arguments before calling ImGui, and
 checks that a frame is open (between `newFrame()` and `render()`), except
 exactly these, which ImGui allows outside one: `styleColorsDark`,
 `styleColorsLight`, `loadIniSettingsFromMemory`,
-`saveIniSettingsToMemory`, and `version` (a property, no context). The
-four functions need the ImGui context, which part A creates at the first
+`saveIniSettingsToMemory`, `getTime` and the IO accessors (plain reads;
+`wantCaptureMouse` is documented for use outside a frame), and two that
+need no context at all: `colorConvertFloat4ToU32` and `version` (a
+property). The others need the ImGui context, which part A creates at the first
 `newFrame()` that finds a window; they create it the same way, and with
 no window they throw `ERR_IMGUI_NO_WINDOW`. Context creation is one
 function, and it configures error recovery and installs the error
@@ -159,14 +163,23 @@ reviews, and part C's generator reads the same columns.
   passed as `NULL` or zero: struct pointers with no JavaScript form,
   `text_end`, and the `callback` / `user_data` pair of the `inputText`
   family.
-- **Frame**: whether the function needs an open frame (all but the four
+- **Frame**: whether the function needs an open frame (all but those
   above) or must be outside one (`loadIniSettingsFromMemory`).
+- **Label is an ID**: whether a `label` parameter becomes the item's ID.
+  For those the binding checks that the ID would not equal the window's
+  own, which ImGui asserts plainly and which an empty label at the root
+  of a window produces (`imgui.button('')`).
 - **Preconditions**: the checks the binding makes before calling ImGui,
   beyond argument types; see "Errors".
-- **Rejected values**: flag bits and argument combinations refused before
-  ImGui is called. In this surface: the `InputTextFlags_Callback*` bits
-  (each needs a callback, and ImGui asserts or calls through NULL without
-  one).
+- **Rejected values**: beyond the general rule for flags and enums
+  above, the values and combinations refused before ImGui is called
+  because ImGui asserts on them plainly: the `InputTextFlags_Callback*`
+  bits (each needs a callback), and per function the combinations the
+  plan's table lists with their source lines.
+- **Limits**: caps the binding imposes where ImGui has none and a large
+  value is an unbounded allocation or a failed assertion later: a
+  polyline of at most 16383 points, a Bezier curve of at most 512
+  segments.
 
 ### Buffers
 
@@ -216,7 +229,10 @@ Part C carries the same list.
 - **List clipper.** `ImGuiListClipper` is a C++ object with a loop
   protocol, and one left open by a throw cannot be cleaned up later. It is
   bound as one function that owns the loop:
-  `imgui.listClipper(count, itemHeight, (start, end) => { ... })`. The
+  `imgui.listClipper(count, itemHeight, (start, end) => { ... })`.
+  `itemHeight` is required and positive: letting the clipper measure the
+  first item is not bound (inside a table it carries a plain assertion).
+  The
   callback is called synchronously, once per range `Step()` yields; its
   return value is ignored. The clipper lives on the native stack. Rules
   while a callback is running:
@@ -254,7 +270,7 @@ Part C carries the same list.
 - **Point lists.** `const ImVec2* points, int num_points`
   (`drawList.addPolyline`) is one flat sequence of numbers, `[x0, y0, x1,
   y1, ...]`, as an `Array` or a `Float32Array`; the count is its length
-  over two.
+  over two, and an odd length is rejected.
 - **`getColorU32`.** C++ has three overloads, two of which take a number
   first. An array argument selects the `ImVec4` one, a number the
   `ImGuiCol` one (`getColorU32(imgui.Col_Text, alphaMul)`); the `ImU32`
@@ -379,6 +395,13 @@ conventions may not change.
   false is valid; a `treeNodeEx` with `TreeNodeFlags_NoTreePushOnOpen`
   opens nothing to pop). The plan lists each function's conditions with
   the source lines they come from.
+  - `endCombo` is guarded this way too although ImGui's own check is
+    recoverable, because ImGui decrements a depth counter before that
+    check and never resets it; and `newFrame()` resets that counter to
+    zero, the binding's one **write** to ImGui's internal state, so that a
+    combo left open in one frame does not shift it for the rest of the
+    process. (The plan verifies both facts from the source before relying
+    on them.)
   - These reads need `imgui_internal.h`. The binding's whole use of the
     internal header is: the error callback, these reads, the window and
     stack-depth comparison of `listClipper`, and the test hook's window
