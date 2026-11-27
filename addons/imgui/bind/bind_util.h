@@ -305,6 +305,7 @@ bool registerText(napi_env env, napi_value exports);
 bool registerWidgets(napi_env env, napi_value exports);
 bool registerTreesTabs(napi_env env, napi_value exports);
 bool registerMenus(napi_env env, napi_value exports);
+bool registerTables(napi_env env, napi_value exports);
 bool registerPopups(napi_env env, napi_value exports);
 bool registerQueries(napi_env env, napi_value exports);
 bool registerStyle(napi_env env, napi_value exports);

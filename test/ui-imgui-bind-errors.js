@@ -76,6 +76,36 @@
 //  ENDMENU, ENDPOPUP, ENDTABBAR  endMenu(), endPopup() and endTabBar() with
 //                 nothing to end: ImGui's own recoverable checks, so
 //                 ERR_IMGUI_USAGE from the call, which did reach ImGui.
+//  TABLE_OUTSIDE_GUARDED tableNextRow() and tableSetColumnIndex(0) with no
+//                 table: refused, not called (ImGui dereferences the table
+//                 in the first; the second is refused by ruling 12).
+//  TABLE_OUTSIDE_FALSE tableNextColumn() with no table: false, as ImGui
+//                 returns, and called.
+//  TABLE_OUTSIDE_RECOVERED tableSetupColumn(), tableHeadersRow() and
+//                 tableSetupScrollFreeze() with no table: ImGui's own
+//                 recoverable checks, ERR_IMGUI_USAGE after the call.
+//  ENDTABLE       endTable() with no table: likewise.
+//  TABLE_NO_ROW   tableSetColumnIndex(0) in a table before any row: refused.
+//  TABLE_NEGATIVE tableSetColumnIndex(-1) straight after tableNextRow():
+//                 ERR_OUT_OF_RANGE, not called.
+//  TABLE_INDEX_HIGH tableSetColumnIndex(2) in a 2-column table: ImGui's
+//                 recoverable check, called; the row still takes index 1.
+//  TABLE_FREEZE_LATE tableSetupScrollFreeze() after the first row: refused.
+//  TABLE_WRONG_WINDOW a scrolling table's outer window appended to from
+//                 inside a cell (`SETUP wrong window` reads back, through
+//                 __test.tableScope(), that the table is current and that
+//                 its inner window is not the current one):
+//                 tableNextColumn() inside the row is accepted; once the
+//                 row is full, tableNextColumn(), tableNextRow(),
+//                 tableHeadersRow() and endTable() are each refused.
+//  TABLE_CURSOR   endTable() with the cursor moved before the first row:
+//                 refused; with it put back, accepted.
+//  TABLE_NAMES    tableSetupColumn() labels whose offsets in the table's
+//                 names buffer reach 32767 accepted, one past it refused,
+//                 an empty label accepted; the header row then draws.
+//  TABLE_REGION   endChild(), end() and endListBox() inside a scrolling
+//                 table's cell (its region, a child window, with a group
+//                 open in the outer window for endListBox): each refused.
 //  DISCARD       newFrame(); begin('w'); newFrame(): no throw, `frame
 //                 discarded` traced, the frame that follows renders.
 //  GUARDS         every guard condition registered has refused at least
@@ -99,6 +129,10 @@
 //  and canEndCombo
 //  returning nullptr always: its case aborts or fails (which, per guard,
 //  is recorded in the progress file);
+//  each of canTableRowCall, canTableSetColumnIndex,
+//  canTableSetupScrollFreeze, canEndTable, canTableSetupColumn, canEnd, and
+//  the table-region conditions of canEndChild and canEndListBox, returning
+//  nullptr always: its TABLE_* case aborts or fails;
 //  the reset of g.BeginComboDepth removed from guard::beginFrame():
 //  COMBO_LEFT_OPEN fails;
 //  a guard condition registered and never refused: GUARDS fails
@@ -652,6 +686,154 @@ async function main() {
     }
   }
 
+  // --- TABLE_OUTSIDE_* and ENDTABLE ------------------------------------
+  {
+    const recovered = {};
+    let nextColumn, endTable;
+    const drew = await harness.frame(h, () => {
+      beginAt('table outside');
+      refused('tableNextRow', () => imgui.tableNextRow());
+      refused('tableSetColumnIndex', () => imgui.tableSetColumnIndex(0));
+      nextColumn = accepted('tableNextColumn', () => imgui.tableNextColumn());
+      for (const [name, fn] of [
+               ['tableSetupColumn', () => imgui.tableSetupColumn('c')],
+               ['tableHeadersRow', () => imgui.tableHeadersRow()],
+               ['tableSetupScrollFreeze',
+                () => imgui.tableSetupScrollFreeze(0, 1)]])
+        recovered[name] = accepted(name, () => usage(fn)).message;
+      endTable =
+          accepted('endTable', () => usage(() => imgui.endTable())).message;
+      imgui.end();
+    });
+    console.log(drew ? 'TABLE_OUTSIDE_GUARDED ok' :
+                       'TABLE_OUTSIDE_GUARDED render=' + drew);
+    console.log(nextColumn === false ? 'TABLE_OUTSIDE_FALSE ok' :
+                                       'TABLE_OUTSIDE_FALSE ' + nextColumn);
+    console.log('TABLE_OUTSIDE_RECOVERED ok');
+    for (const name of Object.keys(recovered))
+      console.log('TABLE_OUTSIDE_RECOVERED message ' + recovered[name]);
+    console.log('ENDTABLE ok');
+    console.log('ENDTABLE message ' + endTable);
+  }
+
+  // --- TABLE_NO_ROW, TABLE_NEGATIVE, TABLE_INDEX_HIGH, TABLE_FREEZE_LATE -
+  {
+    let negative, high, after;
+    const drew = await harness.frame(h, () => {
+      beginAt('table rows');
+      imgui.beginTable('no row', 2);
+      refused('tableSetColumnIndex', () => imgui.tableSetColumnIndex(0));
+      imgui.tableNextRow();
+      imgui.endTable();
+      imgui.beginTable('negative', 2);
+      imgui.tableNextRow();
+      const before = calls('tableSetColumnIndex');
+      negative = harness.expectThrow(() => imgui.tableSetColumnIndex(-1),
+                                     'ERR_OUT_OF_RANGE').message;
+      if (calls('tableSetColumnIndex') !== before)
+        fail('CALLED tableSetColumnIndex: ' + negative);
+      high = accepted('tableSetColumnIndex',
+                      () => usage(() => imgui.tableSetColumnIndex(2))).message;
+      after = imgui.tableSetColumnIndex(1);
+      imgui.endTable();
+      imgui.beginTable('freeze', 1, imgui.TableFlags_ScrollY, [0, 100]);
+      imgui.tableNextRow();
+      refused('tableSetupScrollFreeze',
+              () => imgui.tableSetupScrollFreeze(0, 1));
+      imgui.endTable();
+      imgui.end();
+    });
+    console.log(drew ? 'TABLE_NO_ROW ok' : 'TABLE_NO_ROW render=' + drew);
+    console.log('TABLE_NEGATIVE ok');
+    console.log('TABLE_NEGATIVE message ' + negative);
+    console.log(after === true ? 'TABLE_INDEX_HIGH ok' :
+                                 'TABLE_INDEX_HIGH after ' + after);
+    console.log('TABLE_INDEX_HIGH message ' + high);
+    console.log('TABLE_FREEZE_LATE ok');
+  }
+
+  // --- TABLE_WRONG_WINDOW ----------------------------------------------
+  // A scrolling table's outer window names the table as its current one
+  // (BeginTableEx, imgui_tables.cpp:551), so appending to that window from
+  // inside a cell (a second begin() of its name) makes it current with the
+  // table current, while the table's inner window is the child.
+  {
+    let scope, moved;
+    const drew = await harness.frame(h, () => {
+      beginAt('wrong window');
+      imgui.beginTable('s', 2, imgui.TableFlags_ScrollY, [0, 100]);
+      imgui.tableNextRow();
+      imgui.tableNextColumn();
+      imgui.text('cell');
+      imgui.begin('wrong window');
+      scope = imgui.__test.tableScope();
+      // Inside the row nothing asserts on the window: accepted.
+      moved = accepted('tableNextColumn', () => imgui.tableNextColumn());
+      // The row is full, so this one would end it (TableEndRow).
+      refused('tableNextColumn', () => imgui.tableNextColumn());
+      refused('tableNextRow', () => imgui.tableNextRow());
+      refused('tableHeadersRow', () => imgui.tableHeadersRow());
+      refused('endTable', () => imgui.endTable());
+      imgui.end();
+      imgui.endTable();
+      imgui.end();
+    });
+    const setup = scope.table && scope.currentWindow === 'wrong window' &&
+        scope.innerWindow.startsWith('wrong window/s_');
+    if (!setup)
+      fail('SETUP wrong window ' + JSON.stringify(scope));
+    console.log('SETUP wrong window: table current, current window ' +
+                scope.currentWindow + ', inner window ' +
+                scope.innerWindow.replace(/_[0-9A-F]{8}$/, '_<id>'));
+    console.log(drew && moved === true ? 'TABLE_WRONG_WINDOW ok' :
+                                         'TABLE_WRONG_WINDOW WRONG ' + drew +
+                                             ' ' + moved);
+  }
+
+  // --- TABLE_CURSOR, TABLE_NAMES, TABLE_REGION -------------------------
+  {
+    const drew = await harness.frame(h, () => {
+      beginAt('table misc');
+      // EndTable() asserts plainly that the cursor is where the last row
+      // ended (imgui_tables.cpp:1493); before any row it is where the
+      // table began.
+      imgui.beginTable('cursor', 1);
+      const p = imgui.getCursorScreenPos();
+      imgui.setCursorScreenPos([p[0], p[1] + 10]);
+      refused('endTable', () => imgui.endTable());
+      imgui.setCursorScreenPos(p);
+      accepted('endTable', () => imgui.endTable());
+      // Each name is stored at an ImS16 offset into one buffer per table
+      // (imgui_tables.cpp:1746-1750): a first name of 32766 bytes puts the
+      // second at 32767, which fits, and the third at 32769, which does not.
+      imgui.beginTable('names', 4);
+      accepted('tableSetupColumn',
+               () => imgui.tableSetupColumn('x'.repeat(32766)));
+      accepted('tableSetupColumn', () => imgui.tableSetupColumn('b'));
+      refused('tableSetupColumn', () => imgui.tableSetupColumn('c'));
+      // A column without a name stores none.
+      accepted('tableSetupColumn', () => imgui.tableSetupColumn(''));
+      imgui.tableHeadersRow();
+      imgui.endTable();
+      // Ending the scrolling table's own region as a window: ImGui's
+      // recovery would end the table from inside End() and end the child
+      // twice.
+      imgui.beginGroup();
+      imgui.beginTable('region', 1, imgui.TableFlags_ScrollY, [0, 100]);
+      imgui.tableNextRow();
+      imgui.tableNextColumn();
+      refused('endChild', () => imgui.endChild());
+      refused('end', () => imgui.end());
+      refused('endListBox', () => imgui.endListBox());
+      imgui.endTable();
+      imgui.endGroup();
+      imgui.end();
+    });
+    console.log(drew ? 'TABLE_CURSOR ok' : 'TABLE_CURSOR render=' + drew);
+    console.log('TABLE_NAMES ok');
+    console.log('TABLE_REGION ok');
+  }
+
   // --- DISCARD ---------------------------------------------------------
   {
     const drew = await harness.frame(h, () => {
@@ -701,6 +883,25 @@ async function main() {
 // CHECK-NEXT: {{^}}ENDPOPUP message imgui.endPopup(): Calling EndPopup() in wrong window!{{$}}
 // CHECK-NEXT: {{^}}ENDTABBAR ok{{$}}
 // CHECK-NEXT: {{^}}ENDTABBAR message imgui.endTabBar(): Mismatched BeginTabBar()/EndTabBar()!{{$}}
+// CHECK-NEXT: {{^}}TABLE_OUTSIDE_GUARDED ok{{$}}
+// CHECK-NEXT: {{^}}TABLE_OUTSIDE_FALSE ok{{$}}
+// CHECK-NEXT: {{^}}TABLE_OUTSIDE_RECOVERED ok{{$}}
+// CHECK-NEXT: {{^}}TABLE_OUTSIDE_RECOVERED message imgui.tableSetupColumn(): Call should only be done while in BeginTable() scope!{{$}}
+// CHECK-NEXT: {{^}}TABLE_OUTSIDE_RECOVERED message imgui.tableHeadersRow(): Call should only be done while in BeginTable() scope!{{$}}
+// CHECK-NEXT: {{^}}TABLE_OUTSIDE_RECOVERED message imgui.tableSetupScrollFreeze(): Call should only be done while in BeginTable() scope!{{$}}
+// CHECK-NEXT: {{^}}ENDTABLE ok{{$}}
+// CHECK-NEXT: {{^}}ENDTABLE message imgui.endTable(): EndTable() call should only be done while in BeginTable() scope!{{$}}
+// CHECK-NEXT: {{^}}TABLE_NO_ROW ok{{$}}
+// CHECK-NEXT: {{^}}TABLE_NEGATIVE ok{{$}}
+// CHECK-NEXT: {{^}}TABLE_NEGATIVE message imgui.tableSetColumnIndex(): columnN must be an integer from 0 to 2147483647; got -1{{$}}
+// CHECK-NEXT: {{^}}TABLE_INDEX_HIGH ok{{$}}
+// CHECK-NEXT: {{^}}TABLE_INDEX_HIGH message imgui.tableSetColumnIndex(): TableSetColumnIndex() invalid column index!{{$}}
+// CHECK-NEXT: {{^}}TABLE_FREEZE_LATE ok{{$}}
+// CHECK-NEXT: {{^}}SETUP wrong window: table current, current window wrong window, inner window wrong window/s_<id>{{$}}
+// CHECK-NEXT: {{^}}TABLE_WRONG_WINDOW ok{{$}}
+// CHECK-NEXT: {{^}}TABLE_CURSOR ok{{$}}
+// CHECK-NEXT: {{^}}TABLE_NAMES ok{{$}}
+// CHECK-NEXT: {{^}}TABLE_REGION ok{{$}}
 // CHECK-NEXT: {{^}}DISCARD ok{{$}}
 // CHECK-NEXT: {{^}}GUARDS ok{{$}}
 // CODE: EXITCODE 0
@@ -752,6 +953,24 @@ async function main() {
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: Calling EndMenu() in wrong window!{{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: Calling EndPopup() in wrong window!{{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: Mismatched BeginTabBar()/EndTabBar()!{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: TableNextRow() outside a BeginTable() scope{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: TableSetColumnIndex() outside a BeginTable() scope{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Call should only be done while in BeginTable() scope!{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Call should only be done while in BeginTable() scope!{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: Call should only be done while in BeginTable() scope!{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndTable() call should only be done while in BeginTable() scope!{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: TableSetColumnIndex() before TableNextRow(){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: TableSetColumnIndex() invalid column index!{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: TableSetupScrollFreeze() after the table's first row{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: TableNextColumn() ending a row in another window than the table's own (a window begun inside a cell is current){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: TableNextRow() ending a row in another window than the table's own (a window begun inside a cell is current){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: TableHeadersRow() ending a row in another window than the table's own (a window begun inside a cell is current){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndTable() in another window than the table's own (a window begun inside a cell is current){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndTable() with the cursor moved before the table's first row{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: TableSetupColumn() with the table's column names already over 32767 bytes{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndChild() in a scrolling table's own region; call EndTable() first{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: End() in a scrolling table's own region; call EndTable() first{{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: EndListBox() in a scrolling table's own region; call EndTable() first{{$}}
 // The discarded frame's open window is reported, then the discard.
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing End(){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: frame discarded{{$}}

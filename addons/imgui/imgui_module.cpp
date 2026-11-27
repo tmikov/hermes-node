@@ -240,6 +240,7 @@ NAPI_MODULE_INIT() {
       !bind::registerWidgets(env, exports) ||
       !bind::registerTreesTabs(env, exports) ||
       !bind::registerMenus(env, exports) ||
+      !bind::registerTables(env, exports) ||
       !bind::registerPopups(env, exports) ||
       !bind::registerQueries(env, exports) ||
       !bind::registerStyle(env, exports))

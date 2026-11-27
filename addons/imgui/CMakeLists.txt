@@ -24,6 +24,7 @@ add_library(hermes_node_imgui SHARED
   bind/bind_widgets.cpp
   bind/bind_trees_tabs.cpp
   bind/bind_menus.cpp
+  bind/bind_tables.cpp
   bind/bind_popups.cpp
   bind/bind_queries.cpp
   bind/bind_style.cpp

@@ -351,7 +351,18 @@ there is no "Proposed addition" under any group.
     (imgui.cpp:9022-9023, message at imgui.cpp:11810) when
     `setCursorScreenPos` moved the cursor past the window's extent and no
     item followed.
-- Notes: none.
+  - the current window is not a scrolling table's own region, the child
+    window `BeginTable()` begins for `TableFlags_ScrollX`/`_ScrollY`
+    (tables:340, 432-433). `End()` runs the window recovery before popping
+    the window (imgui.cpp:9038-9039); it finds the table open in the
+    window and calls `EndTable()` (imgui.cpp:12019-12023), which ends the
+    child itself (tables:1612-1616), so the window is ended twice and the
+    clip rectangle stack is popped past empty (imgui.cpp:6296-6297,
+    imgui.h:2377, plain; measured). (b): `g.CurrentTable->InnerWindow ==
+    g.CurrentWindow` with `InnerWindow != OuterWindow` (`canEnd`, Task 6).
+- Notes: the same mistake at the end of the frame is recovered without
+  this: `ErrorRecoveryTryToRecoverState()` calls `EndTable()` rather than
+  `End()` for such a window (imgui.cpp:11990-11994).
 
 ### `beginChild`
 
@@ -391,13 +402,12 @@ there is no "Proposed addition" under any group.
 - Preconditions:
   - `child_window->Flags & ImGuiWindowFlags_ChildWindow` (imgui.cpp:7021,
     plain). (b): `g.CurrentWindow->Flags & ImGuiWindowFlags_ChildWindow`.
-  - It then calls `End()` (imgui.cpp:7025); see `end`.
-- Notes: the guard is ImGui's own condition, so it is as weak as ImGui's:
-  it also holds inside a `beginListBox` (a child, widgets:8989), inside a
-  scrolling table (whose inner window is a child; after such an
-  `endChild()` the current window is the table's outer window while
-  `g.CurrentTable` is still set, which is what `endTable`'s and
-  `tableNextRow`'s guards below test), and inside a sub-menu
+  - It then calls `End()` (imgui.cpp:7025); see `end`. Its last
+    condition, the current window not being a scrolling table's own
+    region, applies here too (b): `canEndChild:table-region` (Task 6).
+- Notes: the first guard is ImGui's own condition, so it is as weak as
+  ImGui's: it also holds inside a `beginListBox` (a child, widgets:8989)
+  and inside a sub-menu
   (`ImGuiWindowFlags_ChildWindow` is added at widgets:9534-9535; `End()`
   then reports "Must call EndPopup() and not End()!"). An `endChild()`
   after a `beginChild()` that returned false is valid and passes.
@@ -1525,6 +1535,10 @@ All six pass a finished string and never let ImGui interpret `%`.
     group belongs to that window (imgui.cpp:12722). (b): `g.GroupStack`,
     and the window below the current one on `g.CurrentWindowStack` (or
     `g.CurrentWindow->ParentWindow`).
+  - `EndChild()` ends the current window with `End()`, so `end`'s last
+    condition applies: not a scrolling table's own region, which is a
+    child window and so passes the first check (b):
+    `canEndListBox:table-region` (Task 6), tested before the group.
 - Notes: ImGui's first check is satisfied by any child window, so an
   `endListBox()` inside a plain `beginChild()` passes it and then fails
   the group check unless a group happens to be open in the parent; the
@@ -1693,9 +1707,22 @@ All six pass a finished string and never let ImGui interpret `%`.
 `g.CurrentTable` follows the current window: `SetCurrentWindow()` sets it
 from `window->DC.CurrentTableIdx` (imgui.cpp:4890), and `BeginTable()`
 sets that index on both the outer and the inner window (tables:551, 553).
-So inside a child window begun in a table cell there is no current table,
-and after an `endChild()` that closed a scrolling table's inner window
-there is a current table whose inner window is not the current window.
+So inside a child window begun in a table cell there is no current table
+(a window's first `Begin()` of the frame resets the index,
+imgui.cpp:8228). A current table whose inner window is not the current
+window is reached by appending to a scrolling table's outer window from
+inside a cell: a second `begin()` of the outer window's own name makes it
+current (imgui.cpp:8882), and its index names the table, whose inner
+window is the child (measured, `ui-imgui-bind-errors.js`
+TABLE_WRONG_WINDOW, which reads both facts back through
+`__test.tableScope()` first). An `endChild()` in a scrolling table's
+cell does not get there: it aborts inside `End()` (see `end`), and is
+refused. The wrong-window condition below is therefore kept, applied
+exactly where ImGui asserts it: in `EndTable()` always (tables:1476), and
+in `TableEndRow()` (tables:2126), that is, in a row function only when a
+row is open and the call ends it. In that state with no row open,
+`tableNextRow`, `tableNextColumn` and `tableHeadersRow` were each run
+unguarded and nothing asserted (measured).
 
 ### `beginTable`
 
@@ -1731,8 +1758,18 @@ there is a current table whose inner window is not the current window.
     while in BeginTable() scope!" (tables:1461).
   - `inner_window == g.CurrentWindow && inner_window->ID ==
     temp_data->WindowID` (tables:1476, plain). (b): `g.CurrentWindow ==
-    g.CurrentTable->InnerWindow`. It fails after an `endChild()` inside a
-    scrolling table (see `endChild`).
+    g.CurrentTable->InnerWindow` (`canTableRowCall:wrong-window`). The
+    second half holds by construction for a table that is begun
+    (`temp_data->WindowID` is set from the inner window, tables:470); see
+    "Not covered" for one that is not.
+  - `table->RowPosY2 == inner_window->DC.CursorPos.y` (tables:1493,
+    plain). With a row open `TableEndRow()` makes it true (tables:2141);
+    before the first row it is the table's top (tables:533) unless
+    `setCursorScreenPos` moved the cursor, which the skipped cell items do
+    not stop (measured: an abort). The layout `EndTable()` runs first
+    changes neither (tables:1468, 846-1378). (b): `g.CurrentTable->
+    IsInsideRow`, `RowPosY2` and `InnerWindow->DC.CursorPos.y`
+    (`canEndTable:cursor-moved`), after the wrong-window check.
   - (c) "Mismatching PushID/PopID!" (tables:1591) and "Too many
     PopItemWidth!" (tables:1592), both non-returning forms: the table is
     ended anyway.
@@ -1766,6 +1803,16 @@ there is a current table whose inner window is not the current window.
     policy is set explicitly in either Table or Column." (tables:1715).
     On the reconcile path (tables:1775) this one is raised later, from
     the layout that the first row function runs.
+  - a non-empty label is stored at `(ImS16)table->ColumnsNames.size()`
+    (tables:1747-1750; `NameOffset` is `ImS16`, internal:3262), and the
+    buffer is cleared only when the table begins (tables:632-633). Once
+    the names stored so far pass 32767 bytes the offset wraps, and
+    `TableGetColumnName()` indexes the buffer with it (tables:1909): a
+    negative one fails ImVector's plain range assertion (imgui.h:2369),
+    reached from `tableHeadersRow` (tables:3259, 3307; measured). (b):
+    `g.CurrentTable->ColumnsNames.size() <= 32767`, applied only when
+    ImGui gets as far as storing the name (the three (c) checks above
+    pass) (`canTableSetupColumn:name-offset`).
 - Notes: `userData` is an `ImGuiID`, a number 0..2^32-1; it is only
   copied into sort specs, which are a non-goal.
 
@@ -1781,7 +1828,8 @@ there is a current table whose inner window is not the current window.
     BeginTable() scope!" (tables:1857).
   - `table->IsLayoutLocked == false` (tables:1858, plain): it must come
     before the first row. (b): `g.CurrentTable->IsLayoutLocked`, when
-    `g.CurrentTable` is not NULL.
+    `g.CurrentTable` is not NULL (`canTableSetupScrollFreeze:
+    layout-locked`).
   - `columns >= 0 && columns < IMGUI_TABLE_MAX_COLUMNS` (tables:1859,
     plain). (a).
   - `rows >= 0 && rows < 128` (tables:1860, plain). (a).
@@ -1798,7 +1846,8 @@ there is a current table whose inner window is not the current window.
   - (c) `g.CurrentTable != NULL`: "Call should only be done while in
     BeginTable() scope!" (tables:3286).
   - It calls `TableNextRow()` (tables:3295), so `tableNextRow`'s second
-    condition applies. (b).
+    condition applies, when a row is open. (b): `canTableRowCall:
+    wrong-window`.
 - Notes: none.
 
 ### `tableNextRow`
@@ -1813,7 +1862,9 @@ there is a current table whose inner window is not the current window.
     (tables:2062-2064). (b): `g.CurrentTable`.
   - when a row is open, `TableEndRow()` asserts `window ==
     table->InnerWindow` (tables:2126, plain, called at tables:2067). (b):
-    `g.CurrentWindow == g.CurrentTable->InnerWindow`.
+    `g.CurrentWindow == g.CurrentTable->InnerWindow` when
+    `g.CurrentTable->IsInsideRow` (`canTableRowCall:wrong-window`; the
+    first condition is `canTableRowCall:no-table`).
 - Notes: this is the one table function that neither returns nor reports
   when there is no table.
 
@@ -1829,7 +1880,10 @@ there is a current table whose inner window is not the current window.
   - when it wraps to a new row it calls `TableNextRow()` (tables:2324),
     so `tableNextRow`'s second condition applies (tables:2126). (b):
     `g.CurrentWindow == g.CurrentTable->InnerWindow`, when
-    `g.CurrentTable` is not NULL.
+    `g.CurrentTable` is not NULL, a row is open and the row is full
+    (`IsInsideRow && CurrentColumn + 1 >= ColumnsCount`, tables:2316):
+    inside the row it ends a cell and begins the next on the inner
+    window (tables:2318-2320), which does not assert.
 - Notes: the design's "table row and column functions outside a table"
   is, for this function and `tableSetColumnIndex`, a `false` return in
   this version, not a crash.
@@ -1852,7 +1906,8 @@ there is a current table whose inner window is not the current window.
     asserts plainly `idx >= 0 && idx < _Count` (draw:3483); the channels
     exist only once the layout has run, which the first row function
     does (tables:2064-2065). (b): `g.CurrentTable != NULL` and
-    `g.CurrentTable->IsInsideRow`.
+    `g.CurrentTable->IsInsideRow` (`canTableSetColumnIndex:no-table`,
+    `:no-row`).
   - (c) `column_n < table->ColumnsCount` (the binding has already
     rejected a negative index): "TableSetColumnIndex() invalid column
     index!" (tables:2299), returns false.
@@ -2846,7 +2901,13 @@ message (design).
    `endGroup` for a group begun in another window (imgui.cpp:12722);
    `endListBox`'s inner `EndGroup()`; `treePop` with an unbalanced
    `pushID` inside the node (widgets:7410); and the empty ID of the
-   label-id guard (imgui.cpp:12319).
+   label-id guard (imgui.cpp:12319). Task 6 added, from walking the table
+   functions' paths: `endTable` with the cursor moved before the first
+   row (tables:1493); `tableSetupColumn` once the table's names pass
+   32767 bytes (tables:1747-1750, 1909; imgui.h:2369); and `end`,
+   `endChild` and `endListBox` in a scrolling table's own region, which
+   ImGui's window recovery ends twice (imgui.cpp:12019-12023,
+   tables:1612-1616, imgui.h:2377).
 9. **The design's "Rejected values" has one entry** (the
    `InputTextFlags_Callback*` bits). The audit found further plain
    assertions on flag values. Most are now unreachable under G1; the
@@ -2956,6 +3017,71 @@ a C++ program.
    opened, which is what part C should decide. ImGui's recovery is
    therefore not sufficient for these sequences.
 
+3c. **Table states a table call cannot leave safely** (Task 6, each
+   measured). Every table function relies on `g.CurrentTable` being the
+   innermost table begun: its `TempData` and `DrawSplitter` point into a
+   slot of `g.TablesTempData` (tables:362-368), which `EndTable()`
+   releases (tables:1669-1670) and a later `BeginTable()` reuses, or
+   reallocates when the stack grows (tables:362-363). Two sequences of
+   bound calls make another table current, both through a window
+   appended to (`SetCurrentWindow()`, imgui.cpp:8882, 4890), and both
+   abort or hang whatever follows, so a guard on the table calls would
+   not prevent it:
+   - **an ended scrolling table**: its inner child keeps the table's
+     index after `EndTable()` (only the outer window's is reset,
+     tables:1677), so `beginChild(id)` with the table's own `strId`, in
+     the same window and frame, re-enters that child (the same name,
+     imgui.cpp `BeginChildEx`'s `"%s/%s_%08X"`) with the ended table
+     current. `tableNextRow()` then aborts in `SetCurrentChannel()`
+     (draw:3483), `endTable()` in `TableMergeDrawChannels()`
+     (tables:2933), `endChild()` in `End()`'s recovery (imgui.h:2377),
+     and leaving it open aborts in the frame-end recovery (tables:2933).
+   - **a window holding an open table re-entered while a table begun
+     later is still open** (`begin('W1'); beginTable(..); ...;
+     begin('W2'); beginTable(..); ...; begin('W1')`): the first table is
+     current and not on top of the stack. The nested `end()` makes the
+     window recovery call `EndTable()` on it (imgui.cpp:12019-12023),
+     which aborted (tables:1493) or, with a third table open, left the
+     frame-end recovery looping until the run's time limit.
+   A guard would have to refuse the `begin()` / `beginChild()` that
+   enters such a window, which needs `FindWindowByName()` (internal:3654)
+   and, for `beginChild`, ImGui's child naming scheme (ruling 16).
+
+3d. **A table column layout ImGui cannot build** (Task 6, each measured
+   as an abort from the first row function). Both depend on state that
+   `TableUpdateLayout()` itself computes from settings and defaults
+   before asserting, so no read made before the call can predict them:
+   - every column disabled: `TableColumnFlags_Disabled` on each, or a
+     `TableFlags_Hideable` table with `TableColumnFlags_DefaultHide` on
+     each (`TableInitColumnDefaults`, tables:1697), asserts
+     `LeftMostEnabledColumn >= 0` (tables:1005);
+   - a `TableFlags_Sortable` table with 64 or more enabled columns
+     holding a sort order (`TableColumnFlags_DefaultSort` on each, or
+     sorted by the user with `SortMulti`) asserts `sort_order_count < 64`
+     in `TableSortSpecsSanitize()` (tables:3154), reached from the layout
+     (tables:1357-1358). Short of that, the same function shifts a
+     64-bit mask by the column index for every column (tables:3168),
+     undefined behaviour past column 63, whenever two or more columns
+     hold a sort order in a table of more than 64 columns.
+
+3e. **A tree node that keeps stack data left open in a scrolling table's
+   cell** (`treeNodeEx(label, TreeNodeFlags_DrawLinesFull)` or any flag
+   that makes it keep stack data, widgets:7097-7100). `endTable()`
+   reports "Mismatching PushID/PopID!" (tables:1591, recoverable, so the
+   call throws `ERR_IMGUI_USAGE`) and pops the node's ID in place of the
+   table's (tables:1595); the `EndChild()` that follows (tables:1615)
+   runs the window recovery, whose `TreePop()` asserts plainly that the
+   node's ID is the top of the ID stack (widgets:7410): an abort inside
+   the same `endTable()` call (measured). Refusing `endTable()` would not
+   help: the frame-end recovery ends the table before the tree node
+   (imgui.cpp:11990-11994, 12019-12023 before 12043-12047) and meets the
+   same assertion. This is item 3b's class (a scope left open across
+   another construct's closer). In a non-scrolling table the same
+   sequence was measured not to abort: `End()`'s `TreePop()` there runs
+   at a depth whose stack-data bit is clear, because the table had
+   raised the tree depth (tables:457), and the node's entry is left on
+   `g.TreeNodeStack`.
+
 Recorded here for completeness, although not assertions:
 
 4. Guards are ImGui's own conditions and are as weak as they are (the
@@ -2965,7 +3091,14 @@ Recorded here for completeness, although not assertions:
    then pops an ID that is not the tab's; `endTabBar()` passes in a child
    window of the tab bar's window; `endMainMenuBar()` passes inside any
    window's menu bar. Each leaves ImGui in a state its own recovery
-   handles.
+   handles. (`endChild()` in a scrolling table's own region was on this
+   list until Task 6, which measured it aborting and refuses it; a child
+   window begun inside a cell of such a table is an ordinary child.)
+   `treePop()` passes `canTreePop` in a cell of a non-scrolling table
+   with no tree node open, because `BeginTable()` raises the inner
+   window's tree depth (tables:457): `TreePop()` then pops the table's
+   own ID, and `endTable()` reports "Mismatching PushID/PopID!"; no abort
+   was measured.
 5. `ImDrawFlags` stroke-position field values `5 << 17` and `6 << 17`
    pass G1's bit test without being enumerators. No assertion was found
    for them.
@@ -2985,7 +3118,7 @@ Read:
 | `g.CurrentWindow->ID` | 2998 | the label-id guard (27 functions), `endGroup`, `endMenuBar` |
 | `g.CurrentWindow->Flags` | 2999 | `endChild`, `endListBox` (`ImGuiWindowFlags_ChildWindow`); `endTooltip` (`_Tooltip`); `beginMenuBar`, `endMenuBar` (`_MenuBar`) |
 | `g.CurrentWindow->SkipItems` | 3039 | `beginMenuBar`, `endMenuBar`, `endMainMenuBar`, `endTabItem`, `beginPopupContextItem` (ImGui returns before its assertions when it is set, so the guards do too) |
-| `g.CurrentWindow->Name` | 2997 | `endCombo` |
+| `g.CurrentWindow->Name` | 2997 | `endCombo`; the test hook `__test.tableScope()` (with the current table's inner window's) |
 | `g.CurrentWindow->IDStack` (`Size`, `back()`) | 3068 | `treePop` |
 | `g.CurrentWindow->DC.MenuBarAppending` | 2964 | `beginMenuBar`, `endMenuBar`, `endMainMenuBar` |
 | `g.CurrentWindow->DC.TreeDepth` | 2967 | `treePop` |
@@ -2994,10 +3127,15 @@ Read:
 | `g.GroupStack` (`Size`, `back().WindowID`) | 2636; `ImGuiGroupData::WindowID` 1273 | `endGroup`, `endMenuBar`, `endMainMenuBar`, `endListBox` |
 | `g.CurrentWindowStack` (`Size`; the `Window` of the entry below the top) | 2548 | `endListBox` (the parent window whose group `EndGroup()` will close); `listClipper` (stack depth, design) |
 | `g.BeginComboDepth` | 2808 | `endCombo` |
-| `g.CurrentTable` | 2764 | `tableNextRow`, `tableSetColumnIndex` (not NULL); `endTable`, `tableNextColumn`, `tableHeadersRow`, `tableSetupScrollFreeze` (guard applied when not NULL); `listClipper` |
-| `g.CurrentTable->InnerWindow` | 3415 | `endTable`, `tableNextRow`, `tableNextColumn`, `tableHeadersRow`, `listClipper` |
-| `g.CurrentTable->IsLayoutLocked` | 3452 | `tableSetupScrollFreeze` |
-| `g.CurrentTable->IsInsideRow` | 3453 | `tableSetColumnIndex`, `listClipper` |
+| `g.CurrentTable` | 2764 | `tableNextRow`, `tableSetColumnIndex` (not NULL); `endTable`, `tableNextColumn`, `tableHeadersRow`, `tableSetupScrollFreeze`, `tableSetupColumn`, `end`, `endChild`, `endListBox` (guard applied when not NULL); `listClipper`; `__test.tableScope()` |
+| `g.CurrentTable->InnerWindow` | 3415 | `endTable`, `tableNextRow`, `tableNextColumn`, `tableHeadersRow`, `end`, `endChild`, `endListBox`, `listClipper`; `__test.tableScope()` |
+| `g.CurrentTable->OuterWindow` | 3414 | `end`, `endChild`, `endListBox` (a scrolling table's region: the inner window differs from it) |
+| `g.CurrentTable->IsLayoutLocked` | 3452 | `tableSetupScrollFreeze`, `tableSetupColumn` |
+| `g.CurrentTable->IsInsideRow` | 3453 | `tableSetColumnIndex`, `tableNextRow`, `tableNextColumn`, `tableHeadersRow`, `endTable`, `listClipper` |
+| `g.CurrentTable->CurrentColumn`, `->ColumnsCount` | 3373, 3371 | `tableNextColumn` (whether it ends the row) |
+| `g.CurrentTable->DeclColumnsCount` | 3426 | `tableSetupColumn` |
+| `g.CurrentTable->ColumnsNames` (`size()`) | 3416 | `tableSetupColumn` |
+| `g.CurrentTable->RowPosY2`, `->InnerWindow->DC.CursorPos` | 3377, 2939 | `endTable` |
 | `g.CurrentTabBar` and `->LastTabItemIdx` | 2773, 3221 | `endTabItem` |
 | `g.LastItemData.ID` | 2624 | `beginPopupContextItem` (when `strId` is null) |
 | `g.Windows` | 2545 | the test hook `__test.state().windows` (design) |

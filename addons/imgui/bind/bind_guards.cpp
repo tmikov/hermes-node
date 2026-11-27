@@ -17,6 +17,7 @@
 
 #include <imgui_internal.h>
 
+#include <cstdint>
 #include <cstring>
 #include <string>
 
@@ -91,6 +92,16 @@ enum GuardId {
   kEndMainMenuBarWrongWindow,
   kEndTooltipNotTooltip,
   kBeginPopupContextItemNoId,
+  kTableRowCallNoTable,
+  kTableRowCallWrongWindow,
+  kTableSetColumnIndexNoTable,
+  kTableSetColumnIndexNoRow,
+  kTableSetupScrollFreezeLayoutLocked,
+  kEndTableCursorMoved,
+  kTableSetupColumnNameOffset,
+  kEndTableRegion,
+  kEndChildTableRegion,
+  kEndListBoxTableRegion,
   kGuardCount
 };
 GuardCondition gGuards[kGuardCount] = {
@@ -116,6 +127,16 @@ GuardCondition gGuards[kGuardCount] = {
     {"canEndMainMenuBar:wrong-window", 0},
     {"canEndTooltip:not-tooltip", 0},
     {"canBeginPopupContextItem:no-id", 0},
+    {"canTableRowCall:no-table", 0},
+    {"canTableRowCall:wrong-window", 0},
+    {"canTableSetColumnIndex:no-table", 0},
+    {"canTableSetColumnIndex:no-row", 0},
+    {"canTableSetupScrollFreeze:layout-locked", 0},
+    {"canEndTable:cursor-moved", 0},
+    {"canTableSetupColumn:name-offset", 0},
+    {"canEnd:table-region", 0},
+    {"canEndChild:table-region", 0},
+    {"canEndListBox:table-region", 0},
 };
 
 /// The mask of tree depth \p depth in `DC.TreeHasStackDataDepthMask`: the
@@ -150,6 +171,24 @@ const char *groupOpenIn(
   if (window == nullptr || g.GroupStack.back().WindowID != window->ID)
     return refuse(wrongWindow, wrongWindowMsg);
   return nullptr;
+}
+
+/// Whether the current window is the region of the current table, a table
+/// with ScrollX or ScrollY, whose inner window is a child of its own
+/// (tables:340, 432-433). End() of that window runs the window recovery
+/// before popping it (imgui.cpp:9038-9039), which finds the table open in
+/// the window and calls EndTable() (imgui.cpp:12019-12023); EndTable()
+/// ends the child itself (tables:1612-1616), so the window is ended twice:
+/// the clip rectangle stack is popped past empty (imgui.cpp:6296-6297,
+/// imgui.h:2377). ErrorRecoveryTryToRecoverState(), at the end of the
+/// frame, calls EndTable() instead of End() for that window
+/// (imgui.cpp:11990-11994), so only a closer called inside the region meets
+/// it.
+bool inTableRegion() {
+  ImGuiContext &g = *GImGui;
+  ImGuiTable *table = g.CurrentTable;
+  return table != nullptr && table->InnerWindow == g.CurrentWindow &&
+      table->InnerWindow != table->OuterWindow;
 }
 
 } // namespace
@@ -219,6 +258,22 @@ const char *canEndChild() {
   ImGuiContext &g = *GImGui;
   if ((g.CurrentWindow->Flags & ImGuiWindowFlags_ChildWindow) == 0)
     return refuse(kEndChildNotChild, "EndChild() outside a child window");
+  if (inTableRegion())
+    return refuse(
+        kEndChildTableRegion,
+        "EndChild() in a scrolling table's own region; call EndTable() "
+        "first");
+  return nullptr;
+}
+
+/// End() of a scrolling table's region ends it twice (inTableRegion()).
+/// Everything else End() meets is recoverable: too many calls, a popup or
+/// a child ended with End() (imgui.cpp:8990-9001).
+const char *canEnd() {
+  if (inTableRegion())
+    return refuse(
+        kEndTableRegion,
+        "End() in a scrolling table's own region; call EndTable() first");
   return nullptr;
 }
 
@@ -231,6 +286,11 @@ const char *canEndListBox() {
   ImGuiContext &g = *GImGui;
   if ((g.CurrentWindow->Flags & ImGuiWindowFlags_ChildWindow) == 0)
     return refuse(kEndListBoxNotChild, "EndListBox() outside a child window");
+  if (inTableRegion())
+    return refuse(
+        kEndListBoxTableRegion,
+        "EndListBox() in a scrolling table's own region; call EndTable() "
+        "first");
   const int n = g.CurrentWindowStack.Size;
   return groupOpenIn(
       n >= 2 ? g.CurrentWindowStack[n - 2].Window : nullptr,
@@ -381,6 +441,138 @@ const char *canBeginPopupContextItem(bool hasStrId) {
         "BeginPopupContextItem() with no strId after an item that has no "
         "ID");
   return nullptr;
+}
+
+/// Outside BeginTable() and EndTable(), the current table changes only
+/// with the current window, in SetCurrentWindow(), which takes it from the
+/// window's DC.CurrentTableIdx (imgui.cpp:4890). BeginTableEx() sets that index
+/// on both the outer and the inner window (tables:551-553), so for a scrolling
+/// table the outer window names a table whose inner window is the child: a
+/// window appended to inside a cell (`begin()` of the outer window's own name)
+/// is current with that table current. Each condition below is the one the call
+/// reaches, in the order ImGui reaches it.
+const char *canTableRowCall(TableRowCall call) {
+  ImGuiContext &g = *GImGui;
+  ImGuiTable *table = g.CurrentTable;
+  if (table == nullptr) {
+    if (call == TableRowCall::NextRow)
+      return refuse(
+          kTableRowCallNoTable, "TableNextRow() outside a BeginTable() scope");
+    return nullptr;
+  }
+  if (g.CurrentWindow == table->InnerWindow)
+    return nullptr;
+  bool endsRow = false;
+  const char *msg = nullptr;
+  switch (call) {
+    case TableRowCall::EndTable:
+      endsRow = true; // tables:1476, before the row is ended
+      msg =
+          "EndTable() in another window than the table's own (a window "
+          "begun inside a cell is current)";
+      break;
+    case TableRowCall::NextColumn:
+      // TableNextRow() only when the row is full (tables:2316-2325).
+      endsRow =
+          table->IsInsideRow && table->CurrentColumn + 1 >= table->ColumnsCount;
+      msg =
+          "TableNextColumn() ending a row in another window than the "
+          "table's own (a window begun inside a cell is current)";
+      break;
+    case TableRowCall::NextRow:
+      endsRow = table->IsInsideRow; // TableEndRow(), tables:2066-2067
+      msg =
+          "TableNextRow() ending a row in another window than the table's "
+          "own (a window begun inside a cell is current)";
+      break;
+    case TableRowCall::HeadersRow:
+      endsRow = table->IsInsideRow; // through TableNextRow(), tables:3295
+      msg =
+          "TableHeadersRow() ending a row in another window than the "
+          "table's own (a window begun inside a cell is current)";
+      break;
+  }
+  if (!endsRow)
+    return nullptr;
+  return refuse(kTableRowCallWrongWindow, msg);
+}
+
+/// TableSetColumnIndex() returns false with no table (tables:2292-2293);
+/// with one and no row open, TableBeginCell() would switch to a draw
+/// channel the layout has not created (tables:2374-2381, draw:3483).
+const char *canTableSetColumnIndex() {
+  ImGuiContext &g = *GImGui;
+  if (g.CurrentTable == nullptr)
+    return refuse(
+        kTableSetColumnIndexNoTable,
+        "TableSetColumnIndex() outside a BeginTable() scope");
+  if (!g.CurrentTable->IsInsideRow)
+    return refuse(
+        kTableSetColumnIndexNoRow,
+        "TableSetColumnIndex() before TableNextRow()");
+  return nullptr;
+}
+
+/// TableSetupScrollFreeze() reports a missing table recoverably
+/// (tables:1857), then asserts plainly that the layout is not locked
+/// (tables:1858), which the first row function locks (tables:1334).
+const char *canTableSetupScrollFreeze() {
+  ImGuiTable *table = GImGui->CurrentTable;
+  if (table != nullptr && table->IsLayoutLocked)
+    return refuse(
+        kTableSetupScrollFreezeLayoutLocked,
+        "TableSetupScrollFreeze() after the table's first row");
+  return nullptr;
+}
+
+/// EndTable() asserts plainly that the cursor is at the bottom of the last
+/// row (tables:1493), after ending a row that is open, which puts it there
+/// (tables:2141). With no row open, that is where BeginTable() left it, the
+/// top of the table (tables:533), unless setCursorScreenPos() moved it:
+/// before the first row the cell items are skipped, but the cursor is not.
+/// Neither value changes in the layout EndTable() runs first (tables:1468).
+/// Checked after canTableRowCall(), whose condition EndTable() asserts
+/// first (tables:1476).
+const char *canEndTable() {
+  ImGuiTable *table = GImGui->CurrentTable;
+  if (table == nullptr || table->IsInsideRow ||
+      table->RowPosY2 == table->InnerWindow->DC.CursorPos.y)
+    return nullptr;
+  return refuse(
+      kEndTableCursorMoved,
+      "EndTable() with the cursor moved before the table's first row");
+}
+
+/// TableSetupColumn() stores a non-empty label in the table's one names
+/// buffer, at the buffer's size cast to the column's ImS16 NameOffset
+/// (tables:1746-1750, internal:3262); the buffer is cleared when the table
+/// begins (tables:632-633). An offset that does not fit wraps, and a later
+/// TableGetColumnName() indexes the buffer with it (tables:1909), which
+/// ImVector's operator[] asserts plainly is in range (imgui.h:2369); the
+/// header row reads every name (tables:3259, 3307). Only when ImGui gets as
+/// far as storing the name: its three recoverable checks return first
+/// (tables:1739-1741).
+const char *canTableSetupColumn(bool hasLabel) {
+  ImGuiTable *table = GImGui->CurrentTable;
+  if (!hasLabel || table == nullptr ||
+      table->DeclColumnsCount >= table->ColumnsCount || table->IsLayoutLocked)
+    return nullptr;
+  if (table->ColumnsNames.size() <= INT16_MAX)
+    return nullptr;
+  return refuse(
+      kTableSetupColumnNameOffset,
+      "TableSetupColumn() with the table's column names already over 32767 "
+      "bytes");
+}
+
+TableScope tableScope() {
+  ImGuiContext &g = *GImGui;
+  TableScope s{g.CurrentTable != nullptr, "", ""};
+  if (g.CurrentWindow != nullptr)
+    s.currentWindow = g.CurrentWindow->Name;
+  if (g.CurrentTable != nullptr && g.CurrentTable->InnerWindow != nullptr)
+    s.innerWindow = g.CurrentTable->InnerWindow->Name;
+  return s;
 }
 
 std::vector<std::pair<std::string, int>> guardRefusals() {

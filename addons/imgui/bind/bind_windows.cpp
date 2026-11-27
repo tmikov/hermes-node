@@ -40,11 +40,14 @@ napi_value begin(napi_env env, napi_callback_info info) {
   return c.result(shown);
 }
 
-/// `end()`, imgui.h:452.
+/// `end()`, imgui.h:452. Refused in a scrolling table's own region
+/// (guard::canEnd); everything else ImGui reports recoverably.
 napi_value end(napi_env env, napi_callback_info info) {
   Call c(env, info, "end");
   if (!c.ok() || !c.needFrame())
     return nullptr;
+  if (const char *msg = guard::canEnd())
+    return c.throwUsage("%s", msg);
   c.enterImGui();
   ImGui::End();
   if (!c.leaveImGui())

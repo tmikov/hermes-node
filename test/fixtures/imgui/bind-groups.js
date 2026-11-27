@@ -132,6 +132,16 @@ const groups = {
     'endMenu',
     'menuItem',
   ],
+  Tables: [
+    'beginTable',
+    'endTable',
+    'tableSetupColumn',
+    'tableSetupScrollFreeze',
+    'tableHeadersRow',
+    'tableNextRow',
+    'tableNextColumn',
+    'tableSetColumnIndex',
+  ],
   Popups: [
     'openPopup',
     'beginPopup',

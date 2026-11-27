@@ -302,6 +302,8 @@ rectangle edges are exact.
 
 `__test.setTooltipDelay(stationary[, delayShort])` sets `style.HoverStationaryDelay` and `style.HoverDelayShort` (the second defaulting to the first), the two delays of the hover check `setItemTooltip()` makes, creating the context (`ERR_IMGUI_NO_WINDOW` without a window), and returns their previous values as `[stationary, delayShort]`, so `setTooltipDelay(...previous)` restores both. With 0 a tooltip test does not depend on how long its frames take.
 
+`__test.tableScope()`, inside a frame (`ERR_IMGUI_NO_FRAME` otherwise), returns `{table, currentWindow, innerWindow}`: whether ImGui has a current table, and the names of the current window and of that table's inner window (`""` without one), so a test of a table guard can show it reached the state the guard is about before relying on it.
+
 `__test.state()` returns, as of the last completed `newFrame()`/`render()`
 pair (except `frameOpen`, which is now): `frameOpen`, `displayWidth`,
 `displayHeight`, `scaleX`, `scaleY`; `targetGeneration`, `targetWidth`,

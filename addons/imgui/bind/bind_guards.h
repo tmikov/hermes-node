@@ -49,6 +49,7 @@ bool labelIdIsWindowId(const char *label);
 // ImGui returns before its own assertion (a window with SkipItems set, for
 // the closers that test it), so a guard never refuses a call ImGui accepts.
 const char *canEndGroup();
+const char *canEnd();
 const char *canEndChild();
 const char *canEndListBox();
 const char *canEndCombo();
@@ -61,6 +62,43 @@ const char *canEndTooltip();
 /// \p hasStrId: whether a strId was passed (with none, the popup takes the
 /// last item's ID).
 const char *canBeginPopupContextItem(bool hasStrId);
+
+/// The table functions that end a row (directly, or through TableNextRow()
+/// or EndTable()), each guarded by canTableRowCall().
+enum class TableRowCall { NextRow, NextColumn, HeadersRow, EndTable };
+/// TableNextRow() dereferences g.CurrentTable unchecked (tables:2062-2064);
+/// TableEndRow() asserts plainly that the current window is the table's
+/// inner window (tables:2126), and EndTable() asserts the same whether or
+/// not a row is open (tables:1476). \p call says which of those the call
+/// reaches: only TableNextRow() needs a table, the other three report a
+/// missing one themselves or return false.
+const char *canTableRowCall(TableRowCall call);
+/// TableSetColumnIndex() with a table but no row open switches to a draw
+/// channel that does not exist yet (tables:2300, 2374-2381; draw:3483).
+/// Stricter than ImGui with no table, where ImGui returns false: the
+/// binding refuses both (surface table, ruling 12).
+const char *canTableSetColumnIndex();
+/// TableSetupColumn() stores a non-empty label at an ImS16 offset into the
+/// table's names buffer (tables:1746-1750); one that does not fit is later
+/// read out of range (tables:1909, imgui.h:2369). \p hasLabel: a label
+/// that is neither null nor empty.
+const char *canTableSetupColumn(bool hasLabel);
+/// EndTable() asserts plainly that the cursor is at the bottom of the last
+/// row (tables:1493); with no row begun, it is wherever the caller moved it.
+/// Called after canTableRowCall(TableRowCall::EndTable).
+const char *canEndTable();
+/// TableSetupScrollFreeze() asserts plainly that the table's layout is not
+/// locked, that is, that no row was begun (tables:1858).
+const char *canTableSetupScrollFreeze();
+
+/// For __test.tableScope(): whether a table is current, and the names of
+/// the current window and of that table's inner window ("" without one).
+struct TableScope {
+  bool table;
+  std::string currentWindow;
+  std::string innerWindow;
+};
+TableScope tableScope();
 
 /// Every registered guard condition, `can<Function>:<condition>`, with how
 /// many times it has refused.

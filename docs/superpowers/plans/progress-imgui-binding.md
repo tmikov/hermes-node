@@ -14,7 +14,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-binding.md`
 | Task 3 | Windows, Layout, IDs, Text, Item and input queries | done (GL) |
 | Task 4 | Widgets | done (GL) |
 | Task 5 | Trees, tabs, menus, popups and tooltips | done (GL) |
-| Task 6 | Tables | |
+| Task 6 | Tables | done (GL) |
 | Task 7 | Style, plots, draw list, list clipper | |
 | Task 8 | Docking and settings | |
 | Task 9 | The application | |
@@ -168,6 +168,35 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 5 (review) | `ui-imgui-bind-menus.js` | `ImGui::EndMenu()` removed, `enterImGui()` kept | the menu stays current, so the next `endMainMenuBar()` throws `imgui.endMainMenuBar(): Calling EndMainMenuBar() not from a menu-bar!` (ImGui's own report of the missing closer) in the first frame with the menu open, before CLOSERS prints; test failed |
 | 5 (review) | `ui-imgui-bind-menus.js` | `ImGui::EndMainMenuBar()` removed, `enterImGui()` kept | the first frame's `render()` throws `imgui.render(): Missing End()` (the bar left open), before CLOSERS prints; test failed |
 | 5 (review) | `ui-imgui-bind-popups.js` | `__test.setTooltipDelay()` returning the new values instead of the previous ones | `TOOLTIPS WRONG saved:[0,0]`; test failed |
+| 6 | `ui-imgui-bind-tables.js`, `imgui-bind-surface.js` | (RED) run with the test and `bind-groups.js` written and no Task 6 code | surface: `MISSING beginTable endTable tableHeadersRow tableNextColumn tableNextRow tableSetColumnIndex tableSetupColumn tableSetupScrollFreeze`; tables: `TypeError: undefined is not a function` at the first `beginTable` |
+| 6 | `ui-imgui-bind-errors.js` | (RED) the TABLE_* cases written, the binding built with only the surface table's guards (`canTableRowCall`, `canTableSetColumnIndex`, `canTableSetupScrollFreeze`) | every case through TABLE_WRONG_WINDOW printed `ok`; TABLE_CURSOR aborted: `imgui_tables.cpp:1493 ... EndTable ... Assertion table->RowPosY2 == inner_window->DC.CursorPos.y failed` |
+| 6 | `ui-imgui-bind-errors.js` | (RED) with `canEndTable` added, before `canTableSetupColumn` | TABLE_NAMES: `NOTHROW ERR_IMGUI_USAGE` (the label past 32767 bytes accepted; the abort it leads to comes at the header row) |
+| 6 | `ui-imgui-bind-errors.js` | (RED) with `canTableSetupColumn` added, before the table-region conditions | TABLE_REGION aborted: `imgui.h:2377 ... ImVector<ImVec4>::back() ... Assertion Size > 0 failed` (`endChild()` reached ImGui) |
+| 6 | `ui-imgui-bind-tables.js` | `ImGui::TableHeadersRow()` removed, `enterImGui()` kept | `HEADERS WRONG header 83,20=55,182,64 ...` (no header row: the last item is the window's), then `TIMEOUT SCROLL body moved`; test failed |
+| 6 | `ui-imgui-bind-tables.js` | `enterImGui()` removed from `tableHeadersRow` | `UNCOVERED Tables tableHeadersRow`; test failed |
+| 6 | `ui-imgui-bind-tables.js` | `enterImGui()` removed from `tableSetupScrollFreeze` | `NOTCALLED tableSetupScrollFreeze` (REJECTED's accepted edge, before COVERAGE); test failed |
+| 6 | `ui-imgui-bind-tables.js` | `tableNextColumn` returning false always (no write-back exists in this group: no Tables function takes a reference array, so the return value stands in for one) | `NEXTCOLUMN WRONG {"results":[false,false,false,false],...}`; test failed |
+| 6 | `ui-imgui-bind-tables.js` | `beginTable`'s column-count check removed (read with `int32`) | ImGui aborted in REJECTED: `imgui_tables.cpp:329 ... Assertion columns_count > 0 && columns_count < 512 failed`; test failed |
+| 6 | `ui-imgui-bind-tables.js` | `beginTable`'s negative-`innerWidth`-with-`ScrollX` check removed | aborted: `imgui_tables.cpp:331 ... Assertion inner_width >= 0.0f failed`; test failed |
+| 6 | `ui-imgui-bind-tables.js` | `tableSetupColumn`'s status-flag check removed | aborted: `imgui_tables.cpp:1742 ... Illegal to pass StatusMask values ... failed`; test failed |
+| 6 | `ui-imgui-bind-tables.js` | `tableSetupColumn`'s `WidthStretch` with `WidthFixed` check removed | aborted: `imgui_tables.cpp:802 ... ImIsPowerOfTwo(flags & ImGuiTableColumnFlags_WidthMask_) failed`; test failed |
+| 6 | `ui-imgui-bind-tables.js` | `tableSetupScrollFreeze`'s `cols` check removed, then (separately) its `rows` check | aborted: `imgui_tables.cpp:1859 ... columns >= 0 && columns < 512`, and `imgui_tables.cpp:1860 ... rows >= 0 && rows < 128`; test failed both times |
+| 6 | `ui-imgui-bind-tables.js` | `tableSetupColumn` passing 0 for its width | `COLUMNS WRONG {"first":[33,46,59],"xs":[33,49,65]}`, `SETCOLUMN WRONG ...`; test failed |
+| 6 | `ui-imgui-bind-tables.js` | `ImGui::TableSetupScrollFreeze()` removed | `SCROLL WRONG {"header0":{"min":[28,28],...},"headerRect":{"min":[28,-37],...}}` (the header scrolled away); test failed |
+| 6 | `ui-imgui-bind-tables.js` | `tableSetColumnIndex` passing 0 for every index | `COLUMNS WRONG {"first":[33,33,33],...}`, `NEXTCOLUMN WRONG`, `SETCOLUMN WRONG`; test failed |
+| 6 | `ui-imgui-bind-tables.js` | `ImGui::EndTable()` removed, `enterImGui()` kept | `Error: imgui.end(): Missing EndTable()`, uncaught, in COLUMNS' first frame; test failed |
+| 6 | `ui-imgui-bind-tables.js` | `ImGui::TableNextRow()` removed, `enterImGui()` kept | `Error: imgui.tableSetColumnIndex(): TableSetColumnIndex() before TableNextRow()`, uncaught; test failed |
+| 6 | `ui-imgui-bind-errors.js` | `canTableRowCall()` returning nullptr always | `AddressSanitizer: SEGV on unknown address 0x000000000235` in TABLE_OUTSIDE_GUARDED (`tableNextRow()` with no table, the NULL dereference at tables:2064); test failed |
+| 6 | `ui-imgui-bind-errors.js` | only `canTableRowCall`'s wrong-window condition removed | aborted in TABLE_WRONG_WINDOW: `imgui_tables.cpp:2126 ... TableEndRow ... Assertion window == table->InnerWindow failed`; test failed |
+| 6 | `ui-imgui-bind-errors.js` | `canTableSetColumnIndex()` returning nullptr always | `NOTHROW ERR_IMGUI_USAGE` in TABLE_OUTSIDE_GUARDED (ImGui returns false with no table); test failed |
+| 6 | `ui-imgui-bind-errors.js` | only `canTableSetColumnIndex`'s no-row condition removed | aborted in TABLE_NO_ROW: `imgui_draw.cpp:3483 ... SetCurrentChannel ... Assertion idx >= 0 && idx < _Count failed`; test failed |
+| 6 | `ui-imgui-bind-errors.js` | `canTableSetupScrollFreeze()` never refusing | aborted in TABLE_FREEZE_LATE: `imgui_tables.cpp:1858 ... Assertion table->IsLayoutLocked == false ... failed`; test failed |
+| 6 | `ui-imgui-bind-errors.js` | `canEndTable()` never refusing | aborted in TABLE_CURSOR: `imgui_tables.cpp:1493 ... failed`; test failed |
+| 6 | `ui-imgui-bind-errors.js` | `canTableSetupColumn()` never refusing | `NOTHROW ERR_IMGUI_USAGE` in TABLE_NAMES; test failed. The abort the guard prevents was measured by hand (below): `imgui.h:2369 ... ImVector<char>::operator[] ... Assertion i >= 0 && i < Size failed`, from `tableHeadersRow()` |
+| 6 | `ui-imgui-bind-errors.js` | `canEnd()` never refusing | aborted in TABLE_REGION (`end()` after the refused `endChild()`): `imgui.h:2377 ... ImVector<ImVec4>::back() ... Size > 0 failed`; test failed |
+| 6 | `ui-imgui-bind-errors.js` | `canEndChild`'s table-region condition removed | the same abort, at TABLE_REGION's `endChild()`; test failed |
+| 6 | `ui-imgui-bind-errors.js` | `canEndListBox`'s table-region condition removed | the same abort, at TABLE_REGION's `endListBox()` (through its `EndChild()`); test failed |
+| 6 | `ui-imgui-bind-errors.js` | a guard condition `canTableDummy:never` registered and never refused | `UNREFUSED canTableDummy:never`; test failed |
 
 ## Behaviours no test detects
 
@@ -791,3 +820,93 @@ automated test would notice losing. Each task appends its own.
   that returned true, and `COVERAGE Widgets ok` counts only calls that
   reached ImGui (a refused call is not counted), with usage errors
   excluded from that test's trace.
+
+### Task 6
+
+- **The Tables section is bound** in `addons/imgui/bind/bind_tables.cpp`,
+  registered after Menus (`registerTables`, `bind_util.h`;
+  `imgui_module.cpp`; `addons/imgui/CMakeLists.txt`), and listed as the
+  `Tables` group in `bind-groups.js`. No Tables entry has a write-back:
+  none takes a reference array, so the "write-back removed" mutation the
+  Global Constraints ask for is replaced by `tableNextColumn`'s return
+  value, and said so in its row.
+- **Step 1b, the wrong-window condition: reachable, kept.** A window
+  appended to with `begin()` of its own name from inside a cell of a
+  scrolling table becomes current (imgui.cpp:8882) with the table current,
+  because `BeginTableEx()` set the table's index on the outer window as
+  well as on the inner one (imgui_tables.cpp:551-553) and
+  `SetCurrentWindow()` takes the current table from the window's index
+  (imgui.cpp:4890), while the table's inner window is the child. TABLE_WRONG_WINDOW
+  first prints `SETUP wrong window: table current, current window wrong
+  window, inner window wrong window/s_<id>` from the new test hook
+  `__test.tableScope()` (README), then shows the condition applied where
+  ImGui asserts it: `endTable()` always (tables:1476); `tableNextRow()`,
+  `tableHeadersRow()` and a `tableNextColumn()` that wraps only with a
+  row open (`TableEndRow()`, tables:2126). A `tableNextColumn()` inside
+  the row is accepted there. With no row open, the three row functions
+  were each run unguarded in that state by hand and nothing asserted, so
+  the guard does not refuse them (nothing stricter). Removing the
+  condition aborts at tables:2126 (Mutations). The surface table's
+  claim that an `endChild()` in a scrolling table leads to this state was
+  wrong: that `endChild()` aborts (next bullet).
+- **Guards beyond the surface table's, each found by walking the entry
+  paths and measured as an abort before it was added** (all in
+  `bind_guards.cpp`, each with its refusal in `ui-imgui-bind-errors.js`):
+  `canEndTable:cursor-moved` (tables:1493: `setCursorScreenPos()` before
+  the first row, which the skipped cell items do not prevent);
+  `canTableSetupColumn:name-offset` (labels are stored at an `ImS16`
+  offset into one buffer, tables:1747-1750; past 32767 bytes the offset
+  wraps and `tableHeadersRow()` indexes the buffer with it,
+  tables:1909, imgui.h:2369); and `canEnd:table-region`,
+  `canEndChild:table-region`, `canEndListBox:table-region`: `end()`,
+  `endChild()` or `endListBox()` in a scrolling table's own region make
+  `End()`'s window recovery call `EndTable()`, which ends the same child
+  again from inside that `End()` (imgui.cpp:9038-9039, 12019-12023;
+  tables:1612-1616), popping the clip rectangle stack past empty
+  (imgui.cpp:6296-6297, imgui.h:2377). `end` thereby gains its first
+  guard (`canEnd`, `bind_windows.cpp`), outside this task's group, because
+  the hazard is the table's; its surface entry, `endChild`'s and
+  `endListBox`'s say so. `endPopup`, `endMenu`, `endMainMenuBar`,
+  `endTooltip` and `endCombo` were checked for the same path: each
+  refuses or returns (recoverably) before ending a window that is not its
+  own kind, so none reaches it.
+- **`canTableRowCall` takes the call** (`guard::TableRowCall`:
+  `NextRow`, `NextColumn`, `HeadersRow`, `EndTable`), where the plan's
+  `bind_guards.h` sketch has no parameter: the four functions reach the
+  two conditions differently (only `TableNextRow()` dereferences a
+  missing table; only `EndTable()` asserts the window with no row open;
+  `TableNextColumn()` ends the row only when it is full), and the
+  messages name the function.
+- **Not covered, recorded in the surface table** (3c, 3d, 3e), each
+  measured as an abort or a hang with the binding as committed: a table
+  that is not the innermost one begun made current by re-entering a
+  window (an ended scrolling table's region through `beginChild()` with
+  its `strId`; a window holding an open table re-entered while a later
+  table is open), whose every exit aborts or hangs so that a guard on the
+  table calls could not help; every column disabled (tables:1005); a
+  sortable table with 64 or more sorted columns (tables:3154); a tree node
+  keeping stack data left open in a scrolling table's cell (widgets:7410,
+  from inside `endTable()`). Note 4 there gains the `treePop()` that
+  passes inside a non-scrolling table (the table raises the tree depth)
+  and loses the `endChild()` in a scrolling table, now refused.
+- **Choices where the brief leaves the assertion open:** COLUMNS asserts
+  that the two residuals (step minus width) are equal and positive; they
+  are 9 at scale 1 (`CellPadding.x` 4 on each side plus the 1-unit inner
+  border, CellSpacingX1), printed by hand, not asserted as a constant.
+  HEADERS samples the header row's middle line, 8 units from its edges,
+  at each column's centre (50 to 100 units from any text or border), and
+  the same x at the middle of the first body row; Header, HeaderHovered
+  and HeaderActive are pushed to the same blue as TableHeaderBg and
+  TableRowBg/Alt to the window's green, so a hover could not change the
+  answer. SCROLL waits on the first body item's `min[1]` moving up (the
+  wheel reaches the table's child through ImGui's hovered window), then
+  compares the header's rectangle exactly. REJECTED's accepted edges
+  (511 columns, `tableSetupScrollFreeze(511, 127)`, a null label, a
+  negative `innerWidth` without ScrollX) show the checks are not
+  stricter than ImGui's limits.
+- **No disagreement in the entries' "Rejected" lines** with the source;
+  the corrections to the Tables section are its introduction (the
+  wrong-window route), the conditions' scope (with a row open), and the
+  added guards above.
+- `ui-imgui-bind-args.js` gained a NOFRAME sample for each of the eight
+  functions (its `NOSAMPLE beginTable` was the first full-suite failure).

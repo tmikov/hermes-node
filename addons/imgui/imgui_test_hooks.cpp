@@ -628,6 +628,29 @@ napi_value setTooltipDelay(napi_env env, napi_callback_info info) {
   return result;
 }
 
+/// `tableScope()`: `{table, currentWindow, innerWindow}`, whether ImGui has
+/// a current table and the names of the current window and of that
+/// table's inner window ("" without one), for a test that must prove it
+/// reached a state before relying on it. Inside a frame only: throws
+/// ERR_IMGUI_NO_FRAME otherwise.
+napi_value tableScope(napi_env env, napi_callback_info) {
+  if (!frameOpen()) {
+    napi_throw_error(
+        env,
+        "ERR_IMGUI_NO_FRAME",
+        "imgui.__test.tableScope(): no frame is open");
+    return nullptr;
+  }
+  const guard::TableScope s = guard::tableScope();
+  napi_value result = nullptr;
+  if (napi_create_object(env, &result) != napi_ok ||
+      !setBool(env, result, "table", s.table) ||
+      !setString(env, result, "currentWindow", s.currentWindow.c_str()) ||
+      !setString(env, result, "innerWindow", s.innerWindow.c_str()))
+    return nullptr;
+  return result;
+}
+
 } // namespace
 
 napi_value createTestHooks(napi_env env) {
@@ -643,7 +666,8 @@ napi_value createTestHooks(napi_env env) {
       {"bindCalls", bindCalls},
       {"guards", guards},
       {"setDoubleClickTime", setDoubleClickTime},
-      {"setTooltipDelay", setTooltipDelay}};
+      {"setTooltipDelay", setTooltipDelay},
+      {"tableScope", tableScope}};
   for (const auto &f : functions) {
     napi_value fn = nullptr;
     if (napi_create_function(
