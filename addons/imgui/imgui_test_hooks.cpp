@@ -526,6 +526,49 @@ napi_value guards(napi_env env, napi_callback_info) {
   return countsObject(env, guard::guardRefusals());
 }
 
+/// `setDoubleClickTime(seconds)`: sets io.MouseDoubleClickTime and returns
+/// the previous value, so that a test of a double click does not depend on
+/// how long its frames take (ImGui measures the interval in its own time,
+/// which advances by io.DeltaTime from the real clock). It also sets
+/// io.MouseSingleClickDelay to `seconds + 0.2`, ImGui's default gap
+/// (0.30 / 0.50, imgui.cpp:1818-1820), since NewFrame asserts plainly that
+/// the delay is the larger (imgui.cpp:11854); restoring 0.3 restores both
+/// defaults. Creates the context as the binding functions do;
+/// ERR_IMGUI_NO_WINDOW without a window.
+napi_value setDoubleClickTime(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  napi_valuetype type = napi_undefined;
+  double seconds = 0;
+  if (argc < 1 || napi_typeof(env, argv[0], &type) != napi_ok ||
+      type != napi_number ||
+      napi_get_value_double(env, argv[0], &seconds) != napi_ok ||
+      !(seconds > 0 && seconds <= 1e6)) {
+    napi_throw_range_error(
+        env,
+        "ERR_OUT_OF_RANGE",
+        "imgui.__test.setDoubleClickTime(): seconds must be in (0, 1e6]");
+    return nullptr;
+  }
+  if (!ensureContext(env)) {
+    napi_throw_error(
+        env,
+        "ERR_IMGUI_NO_WINDOW",
+        "imgui.__test.setDoubleClickTime(): no window; call "
+        "ui.createWindow() first");
+    return nullptr;
+  }
+  ImGuiIO &io = ImGui::GetIO();
+  const double previous = io.MouseDoubleClickTime;
+  io.MouseDoubleClickTime = static_cast<float>(seconds);
+  io.MouseSingleClickDelay = static_cast<float>(seconds + 0.2);
+  napi_value result = nullptr;
+  if (napi_create_double(env, previous, &result) != napi_ok)
+    return nullptr;
+  return result;
+}
+
 } // namespace
 
 napi_value createTestHooks(napi_env env) {
@@ -539,7 +582,8 @@ napi_value createTestHooks(napi_env env) {
       {"scene", scene},
       {"state", state},
       {"bindCalls", bindCalls},
-      {"guards", guards}};
+      {"guards", guards},
+      {"setDoubleClickTime", setDoubleClickTime}};
   for (const auto &f : functions) {
     napi_value fn = nullptr;
     if (napi_create_function(

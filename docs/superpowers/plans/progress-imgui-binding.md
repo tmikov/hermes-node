@@ -73,7 +73,7 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 3 | `ui-imgui-bind-layout.js` | `ImGui::TextColored()` replaced by `TextUnformatted()` (Text: an ImGui call removed) | `GREEN WRONG 0 0`; test failed |
 | 3 | `ui-imgui-bind-layout.js` | `ImGui::IsKeyDown()` replaced by `false`, `enterImGui()` kept (Queries: an ImGui call removed) | `TIMEOUT KEY down`; test failed |
 | 3 | `ui-imgui-bind-layout.js` | `ImGui::SetKeyboardFocusHere()` removed | `FOCUSHERE WRONG before={"here":false,"other":true} after={"here":false,"other":true}`; test failed |
-| 3 | `ui-imgui-bind-layout.js` | `isMouseDoubleClicked` always false (ImGui call result discarded) | `DOUBLE WRONG never seen` after five attempts; test failed |
+| 3 | `ui-imgui-bind-layout.js` | `isMouseDoubleClicked` always false (ImGui call result discarded), against the first version of DOUBLE (retry loop) | `DOUBLE WRONG never seen` after five attempts; test failed |
 | 3 | `ui-imgui-bind-layout.js` | `getMouseDragDelta(..., out)` returning a new array (Queries: the out write-back) | `DRAG WRONG 40,30 ` (the value right, `out` left empty); test failed |
 | 3 | `ui-imgui-bind-layout.js` | the mouse-button range check removed (`kLastMouseButton` = `INT32_MAX`; Queries: an argument check) | aborted in REJECTED: `imgui.cpp:10766 ... IsMouseClicked ... Assertion button >= 0 && button < ... failed`; test failed |
 | 3 | `ui-imgui-bind-layout.js` | `readKey`'s named-key-or-single-modifier check removed, the enum check kept | aborted in REJECTED: `imgui.cpp:10286 ... GetKeyData ... Assertion IsNamedKey(key) ... failed`; test failed |
@@ -93,6 +93,15 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 3 | `ui-imgui-bind-layout.js` | `IsItemHovered()`'s result replaced by false | `HOVERED WRONG false false`; test failed |
 | 3 | `ui-imgui-bind-layout.js` | `IsItemClicked()`'s result replaced by false | `CLICK WRONG [true,false,true,true,false]`; test failed |
 | 3 | `ui-imgui-bind-layout.js` | `GetMousePos()` replaced by `(0, 0)` | `MOUSEPOS WRONG 0,0 0,0`; test failed |
+| 3 (review) | `ui-imgui-bind-layout.js` | `ImGui::SetItemDefaultFocus()` removed | `TIMEOUT DEFAULTFOCUS`; test failed |
+| 3 (review) | `ui-imgui-bind-layout.js` | `ImGui::TextWrapped()` removed | `TEXTS WRONG textWrapped:not-below textWrapped:one-line`; test failed |
+| 3 (review) | `ui-imgui-bind-layout.js` | `ImGui::BulletText()` removed | `TEXTS WRONG bulletText:not-below`; test failed |
+| 3 (review) | `ui-imgui-bind-layout.js` | `ImGui::LabelText()` removed | `TEXTS WRONG labelText:not-below`; test failed |
+| 3 (review) | `ui-imgui-bind-layout.js` | `ImGui::IsMouseDoubleClicked()` removed (`v = false`), against the hook-based DOUBLE | `DOUBLE WRONG afterFirst=0 doubles=0`; test failed |
+| 3 (review) | `ui-imgui-bind-layout.js` | `enterImGui()` removed from `popID` (IDs: coverage) | `UNCOVERED IDs popID`; test failed. (Removing it from one of `getID`'s two paths was tried first and PASSED: the other path still counts, so that mutation does not test coverage.) |
+| 3 (review) | `ui-imgui-bind-layout.js` | `enterImGui()` removed from `labelText` (Text: coverage) | `UNCOVERED Text labelText`; test failed |
+| 3 (review) | `ui-imgui-bind-layout.js` | `enterImGui()` removed from `isItemActive` (Queries: coverage) | `UNCOVERED Queries isItemActive`; test failed |
+| 3 (review) | `ui-imgui-bind-layout.js` | `__test.setDoubleClickTime()`'s two assignments removed (informational) | PASS: the clicks fell within 0.30 s in that run; see the Task 3 note on DOUBLE |
 
 ## Behaviours no test detects
 
@@ -124,6 +133,13 @@ automated test would notice losing. Each task appends its own.
   (`typeOf()` and `isArray()` do not go through it: a failure there reads
   as `undefined` / not an array, which then throws the ordinary
   `ERR_INVALID_ARG_TYPE`.)
+- **Task 3: `__test.setDoubleClickTime()` takes effect.** With its two
+  assignments removed, DOUBLE still passed in the one run tried, because
+  the two clicks happened to fall within ImGui's default 0.30 s. The hook
+  exists to remove that dependency on timing, so no test can see it lost.
+  It was checked by reading: the function writes
+  `io.MouseDoubleClickTime` and `io.MouseSingleClickDelay` and returns the
+  previous time.
 
 ## Notes
 
@@ -318,7 +334,9 @@ automated test would notice losing. Each task appends its own.
 - **No RED run was recorded.** The four bind files were extended before
   the two new tests were first run, so the first run was already green;
   each test's ability to fail is shown by the mutations instead (every
-  case of both tests has at least one that breaks it).
+  case of both tests has at least one that breaks it). The "(RED)" row of
+  the Mutations table records that absence and is not a mutation: Task 3
+  has 38 mutation rows, plus 9 from review.
 - **No disagreement between the surface table and ImGui's source** was
   found in these five sections; no entry was changed.
 - **Two keys of the argument rules, implemented once each**:
@@ -337,14 +355,17 @@ automated test would notice losing. Each task appends its own.
   a button never edits, so it is always false here) and the text-field
   half of `setKeyboardFocusHere` (activation of an inputable item). The
   button half is asserted here: FOCUSHERE.
-- **`setItemDefaultFocus` has no behavioural assertion, and none could be
-  written with this surface.** It applies only while its window is
-  appearing and ImGui has a navigation init request for it
-  (imgui.cpp:9716-9730), and its effect is the navigation id of the
-  window, which nothing bound reads (`IsItemFocused` is not bound) and
-  which is not drawn without keyboard navigation
-  (`ImGuiConfigFlags_NavEnableKeyboard` is not set by the addon). It is
-  called in FOCUSHERE so that its count is non-zero.
+- **`setItemDefaultFocus` is asserted by DEFAULTFOCUS** (corrected in
+  review; the first version of these notes said nothing bound could
+  observe it, which was wrong). A window submitted for the first time
+  appears and takes focus, and Begin() then calls `FocusWindow` and
+  `NavInitWindow(window, false)` (imgui.cpp:8799-8802), which sets
+  `g.NavInitRequest` (imgui.cpp:14688). That passes SetItemDefaultFocus's
+  early checks, and when the item lies outside the clip rectangle it calls
+  `ScrollToRectEx` (imgui.cpp:9716-9732). So a new 300x200 window holding
+  `dummy([10, 600])`, `button('t')` and `setItemDefaultFocus()` scrolls:
+  `getScrollY() > 0`, waited for with `harness.until`. With the ImGui call
+  removed it never scrolls (`TIMEOUT DEFAULTFOCUS`).
 - **The two windows tests follow the brief with these choices, each the
   strongest true assertion found:**
   - CLOSE locates the close button from `getWindowPos()`,
@@ -381,19 +402,34 @@ automated test would notice losing. Each task appends its own.
   - Beyond the brief: GROUP (`beginGroup`/`endGroup`'s item is the union
     of its two buttons), SPACING (`spacing`, `newLine`, `separator`,
     `separatorText` geometry), TEXTS (each text variant is a non-empty
-    item; `textDisabled('%d')` is as wide as `'xx'`, so no `%` is
-    interpreted), and `calcTextSize`'s `hideTextAfterDoubleHash` and
+    item starting at or below the previous one's bottom, since `rect()`
+    reads the last item and a variant that drew nothing would otherwise
+    be read as its predecessor; a long `textWrapped` is several lines and
+    narrower than the window; `bulletText` is wider than its text and
+    `labelText` wider than its value; `textDisabled('%d')` is as wide as
+    `'xx'`, so no `%` is interpreted), and `calcTextSize`'s `hideTextAfterDoubleHash` and
     `wrapWidth`.
-- **DOUBLE depends on ImGui's time, which is the frame clock.**
-  `isMouseDoubleClicked` is true only when two clicks fall within
-  `io.MouseDoubleClickTime` (0.30 s) of ImGui's own time, which advances by
-  `io.DeltaTime`, measured from the real clock (imgui_platform.cpp). The
-  four button events are injected together, so ImGui's input trickling
-  spreads them over four consecutive frames; and the case tries up to five
-  times, each attempt a fresh pair (a failed attempt means the gap
-  exceeded the double-click time, so the next one starts a new count). A
-  run whose frames all took over ~75 ms would still fail it. The
-  assertion is otherwise a read-back, like every other.
+- **DOUBLE does not depend on time: `__test.setDoubleClickTime()` exists
+  for it** (added in review, `addons/imgui/imgui_test_hooks.cpp`, test hooks
+  only). ImGui counts a click as a repeat only within
+  `io.MouseDoubleClickTime` (0.30 s) of the previous one, measured in its
+  own time, which advances by `io.DeltaTime` from the real clock
+  (imgui_platform.cpp), so a double click made through frames that each
+  wait on a read-back passes or fails with machine load. The first version
+  of the case injected four events at once and retried up to five times,
+  which still depended on elapsed time. The hook sets the time to 1000 s
+  for the case, and the default back afterwards. It also moves
+  `io.MouseSingleClickDelay` to `seconds + 0.2`, ImGui's default gap,
+  because NewFrame asserts plainly that the delay is the larger
+  (imgui.cpp:11854). The case then clicks once far from the button, so
+  that CLICK's earlier click does not count (a repeat must also be within
+  `MouseDoubleClickMaxDist`, imgui.cpp:11154-11163), and clicks the
+  button twice with `harness.clickAt`: no double through the first click,
+  exactly one frame with a double in the second. The mutation that matters
+  is on the binding (`isMouseDoubleClicked` always false: `DOUBLE WRONG
+  afterFirst=0 doubles=0`). With the hook's effect removed, the case still
+  passed in the one run tried: the clicks were within 0.30 s. That is
+  exactly the luck the hook removes, so no test can detect losing it.
 - **`beginChild`'s label-id guard (its `Label-id: yes`) is still Task 4's**,
   as Task 1's notes rule (`labelIdIsWindowId` comes with Task 4's STRINGS
   case and mutation); until then `beginChild('')` directly in a window

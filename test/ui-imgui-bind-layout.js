@@ -34,8 +34,11 @@
 //            alignTextToFramePadding() lowers the next text by half the
 //            difference between the frame height and the line height.
 //  TEXTS     text, textColored, textDisabled, textWrapped, bulletText and
-//            labelText each produce a non-empty item, and a '%' in the
-//            text is drawn as it is (same width as an 'x').
+//            labelText each produce a non-empty item starting at or below
+//            the previous one's bottom; a long textWrapped is several lines
+//            and narrower than the window; bulletText is wider than its
+//            text, labelText wider than its value; a '%' in the text is
+//            drawn as it is (same width as an 'x').
 //  GREEN     textColored([0, 1, 0, 1], ...) puts exactly (0, 255, 0) pixels
 //            inside its rectangle, found by scanning the captured rows;
 //            text() beside it puts none.
@@ -47,9 +50,10 @@
 //  CLICK     a click on the button: isItemClicked(), isMouseClicked(0) and
 //            isItemActive() were each true in some frame; isMouseDown(0)
 //            was true while held and is false after.
-//  DOUBLE    two clicks injected together: isMouseDoubleClicked(0) true in
-//            some frame (up to five attempts, since ImGui's double-click
-//            window is measured in its own time).
+//  DOUBLE    with the double-click time made unbounded
+//            (__test.setDoubleClickTime), two clicks: isMouseDoubleClicked(0)
+//            false through the first, true in exactly one frame of the
+//            second.
 //  MOUSEPOS  getMousePos() is the injected position (also into `out`).
 //  DRAG      a drag from the button by (40, 30): getMouseDragDelta() while
 //            held reads [40, 30] (also into `out`).
@@ -60,15 +64,18 @@
 //            another has focus: the first window becomes the focused one.
 //            (The text-field half, where focus also activates the field,
 //            is Task 4's.)
+//  DEFAULTFOCUS a new 300x200 window holding dummy([10, 600]), a button and
+//            setItemDefaultFocus(): the window scrolls to the button
+//            (getScrollY() > 0, waited for with harness.until).
 //  REJECTED  mouse buttons outside 0..4, the keys that are not keys
 //            (Key_None, Key_NamedKey_END, Key_NamedKey_COUNT) and a
 //            combined modifier, and setKeyboardFocusHere(-2):
 //            ERR_OUT_OF_RANGE, not called; button 4, Mod_Ctrl and offset -1
 //            accepted. isItemHovered with a window-only flag is ImGui's own
-//            recoverable error: ERR_IMGUI_USAGE.
+//            recoverable error: ERR_IMGUI_USAGE, the call counted.
 //  COVERAGE  every Layout, IDs, Text and Queries function has reached ImGui.
-//            setItemDefaultFocus and isItemDeactivatedAfterEdit are only
-//            called here (see the progress file).
+//            isItemDeactivatedAfterEdit is only called here; its
+//            behaviour is Task 4's (see the progress file).
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
 //  ImGui::Indent() removed, enterImGui() kept: INDENT fails;
@@ -322,16 +329,26 @@ async function main() {
 
   // --- TEXTS -----------------------------------------------------------
   {
+    // rect() reads the LAST item, so a variant that drew nothing would be
+    // read as the previous one's rectangle: each must start at or below
+    // the previous one's bottom, and each has a property of its own.
+    const order = ['text', 'textColored', 'textDisabled', 'textWrapped',
+                   'bulletText', 'labelText'];
     const rects = {};
-    let percent, plain;
+    const long = 'word '.repeat(200);
+    let percent, plain, line, bulletTextW, valueW;
     await inWindow(() => {
+      line = imgui.getTextLineHeight();
+      bulletTextW = imgui.calcTextSize('bullet')[0];
+      valueW = imgui.calcTextSize('value')[0];
       imgui.text('text');
       rects.text = rect();
       imgui.textColored([1, 0, 0, 1], 'colored');
       rects.textColored = rect();
       imgui.textDisabled('disabled');
       rects.textDisabled = rect();
-      imgui.textWrapped('wrapped');
+      // About 7000 units of text in a 600-unit window: several lines.
+      imgui.textWrapped(long);
       rects.textWrapped = rect();
       imgui.bulletText('bullet');
       rects.bulletText = rect();
@@ -343,14 +360,28 @@ async function main() {
       imgui.textDisabled('xx');
       plain = width(rect());
     });
-    const empty =
-        Object.keys(rects).filter((k) => !(width(rects[k]) > 0 &&
-                                           height(rects[k]) > 0));
+    const wrong = [];
+    order.forEach((k, i) => {
+      const r = rects[k];
+      if (!(width(r) > 0 && height(r) > 0))
+        wrong.push(k + ':empty');
+      if (i > 0 && !(r.min[1] >= rects[order[i - 1]].max[1]))
+        wrong.push(k + ':not-below');
+    });
+    if (!(height(rects.textWrapped) > line))
+      wrong.push('textWrapped:one-line');
+    if (!(width(rects.textWrapped) < 600))
+      wrong.push('textWrapped:unwrapped');
+    if (!(width(rects.bulletText) > bulletTextW))
+      wrong.push('bulletText:no-bullet');
+    if (!(width(rects.labelText) > valueW))
+      wrong.push('labelText:no-label');
+    if (percent !== plain)
+      wrong.push('percent:' + percent + '/' + plain);
     console.log(
-        empty.length === 0 && percent === plain ?
+        wrong.length === 0 ?
             'TEXTS ok' :
-            'TEXTS WRONG empty=' + empty + ' percent=' + percent + '/' +
-                plain);
+            'TEXTS WRONG ' + wrong.join(' ') + ' ' + JSON.stringify(rects));
   }
 
   // --- GREEN -----------------------------------------------------------
@@ -495,18 +526,32 @@ async function main() {
 
   // --- DOUBLE ----------------------------------------------------------
   {
-    const at = {mouseX: buttonAt[0], mouseY: buttonAt[1]};
+    // ImGui counts two clicks as a double click only within
+    // io.MouseDoubleClickTime of its own time, which advances with the real
+    // clock; the hook makes that window effectively unbounded, so the case
+    // does not depend on how long the frames take.
+    const previous = imgui.__test.setDoubleClickTime(1000);
     q.double = false;
-    for (let attempt = 0; attempt < 5 && !q.double; ++attempt) {
-      // ImGui gives each change of a button's state its own frame
-      // (io.ConfigInputTrickleEventQueue), so these are four frames.
-      for (const type of ['MOUSE_DOWN', 'MOUSE_UP', 'MOUSE_DOWN', 'MOUSE_UP'])
-        harness.inject(h, Object.assign({type, button: LEFT}, at));
-      for (let i = 0; i < 60 && !q.double; ++i)
-        await h.run(draw);
-      await harness.until(h, draw, (s) => !s.mouseDown[LEFT], 'DOUBLE up');
-    }
-    console.log(q.double ? 'DOUBLE ok' : 'DOUBLE WRONG never seen');
+    let doubles = 0;
+    const counting = () => {
+      draw();
+      if (q.double)
+        ++doubles;
+      q.double = false;
+    };
+    // A click far from the button first: ImGui counts a click as a
+    // repeat only within MouseDoubleClickMaxDist of the last one
+    // (imgui.cpp:11154-11163), so CLICK's earlier click on the button,
+    // well inside the widened time, does not make the next one a double.
+    await harness.clickAt(h, counting, OUTSIDE);
+    await harness.clickAt(h, counting, buttonAt);
+    const afterFirst = doubles;
+    await harness.clickAt(h, counting, buttonAt);
+    imgui.__test.setDoubleClickTime(previous);
+    console.log(
+        afterFirst === 0 && doubles === 1 ?
+            'DOUBLE ok' :
+            'DOUBLE WRONG afterFirst=' + afterFirst + ' doubles=' + doubles);
   }
 
   // --- MOUSEPOS --------------------------------------------------------
@@ -554,7 +599,6 @@ async function main() {
       if (focusHere)
         imgui.setKeyboardFocusHere();
       imgui.button('target');
-      imgui.setItemDefaultFocus(); // no observable effect; see the progress file
       imgui.end();
       imgui.setNextWindowPos([340, 50]);
       imgui.setNextWindowSize([200, 150]);
@@ -576,6 +620,29 @@ async function main() {
         ok ? 'FOCUSHERE ok' :
              'FOCUSHERE WRONG before=' + JSON.stringify(before) + ' after=' +
                  JSON.stringify(after));
+  }
+
+  // --- DEFAULTFOCUS ----------------------------------------------------
+  {
+    // A window submitted for the first time appears and takes focus, and
+    // Begin() then asks navigation to initialise it (FocusWindow, then
+    // NavInitWindow, imgui.cpp:8799-8802, which sets g.NavInitRequest,
+    // imgui.cpp:14688). setItemDefaultFocus() on an item below the visible
+    // area answers that request and scrolls the item into view
+    // (imgui.cpp:9716-9732).
+    let scrollY = -1;
+    const drawDefault = () => {
+      imgui.setNextWindowPos([40, 50]);
+      imgui.setNextWindowSize([300, 200]);
+      imgui.begin('default focus');
+      scrollY = imgui.getScrollY();
+      imgui.dummy([10, 600]);
+      imgui.button('t');
+      imgui.setItemDefaultFocus();
+      imgui.end();
+    };
+    await harness.until(h, drawDefault, () => scrollY > 0, 'DEFAULTFOCUS');
+    console.log('DEFAULTFOCUS ok');
   }
 
   // --- REJECTED --------------------------------------------------------
@@ -612,9 +679,12 @@ async function main() {
       if (after !== before + 4)
         fail('REJECTED edges not accepted: ' + (after - before));
       // ImGui's own check (imgui.cpp:5114): the call is made, then thrown.
+      const hoveredBefore = calls('isItemHovered');
       usage = harness.expectThrow(
           () => imgui.isItemHovered(imgui.HoveredFlags_ChildWindows),
           'ERR_IMGUI_USAGE').message;
+      if (calls('isItemHovered') !== hoveredBefore + 1)
+        fail('REJECTED isItemHovered not called');
     });
     console.log('REJECTED ok');
     console.log('REJECTED usage ' + usage);
@@ -649,6 +719,7 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}DRAG ok{{$}}
 // CHECK-NEXT: {{^}}KEY ok{{$}}
 // CHECK-NEXT: {{^}}FOCUSHERE ok{{$}}
+// CHECK-NEXT: {{^}}DEFAULTFOCUS ok{{$}}
 // CHECK-NEXT: {{^}}REJECTED ok{{$}}
 // CHECK-NEXT: {{^}}REJECTED usage imgui.isItemHovered(): Invalid flags for IsItemHovered()!{{$}}
 // CHECK-NEXT: {{^}}COVERAGE Layout ok{{$}}

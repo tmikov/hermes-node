@@ -298,6 +298,8 @@ rectangle edges are exact.
 | `wheel` | Nothing; records `io.MouseWheel` when it is non-zero, inside the frame (ImGui clears it when the frame ends). |
 | `widgets` | A window `T` at (50,50), 300x200, holding a 100x30 button `B` and a text field; counts clicks, presses of A, and the wheel. `softcursor` sets `io.MouseDrawCursor`, `hardcursor` clears it, and the setting stays for later frames. |
 
+`__test.setDoubleClickTime(seconds)` sets `io.MouseDoubleClickTime` (and `io.MouseSingleClickDelay` to `seconds + 0.2`, which ImGui requires to be larger), creating the context (`ERR_IMGUI_NO_WINDOW` without a window), and returns the previous value, so a double-click test does not depend on how long its frames take.
+
 `__test.state()` returns, as of the last completed `newFrame()`/`render()`
 pair (except `frameOpen`, which is now): `frameOpen`, `displayWidth`,
 `displayHeight`, `scaleX`, `scaleY`; `targetGeneration`, `targetWidth`,
