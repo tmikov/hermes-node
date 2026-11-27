@@ -205,15 +205,13 @@ ImVec4 lastItemRect() {
 
 /// `widgets`: a window "T" at (50,50), 300x200, holding a 100x30 button "B"
 /// that counts its clicks and a text field. Each frame also counts presses
-/// of A (not repeats), reads whether A is down and adds up the wheel. With
-/// \p arg `softcursor` it first sets io.MouseDrawCursor, so ImGui draws the
-/// cursor itself; with `hardcursor` it clears it. The flag stays as set for
-/// later frames.
-void sceneWidgets(const char *arg) {
-  if (std::strcmp(arg, "softcursor") == 0)
-    ImGui::GetIO().MouseDrawCursor = true;
-  else if (std::strcmp(arg, "hardcursor") == 0)
-    ImGui::GetIO().MouseDrawCursor = false;
+/// of A (not repeats), reads whether A is down and adds up the wheel.
+/// \p drawCursor, when given, is first stored in io.MouseDrawCursor (ImGui
+/// draws the cursor itself when it is set); it stays as set for later
+/// frames.
+void sceneWidgets(const bool *drawCursor) {
+  if (drawCursor != nullptr)
+    ImGui::GetIO().MouseDrawCursor = *drawCursor;
   ImGui::SetNextWindowPos(ImVec2(50.0f, 50.0f), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(300.0f, 200.0f), ImGuiCond_Always);
   ImGui::Begin(
@@ -235,8 +233,9 @@ void sceneWidgets(const char *arg) {
 /// `scene(name[, arg])`: draws immediately into the frame that is open, so
 /// it is called between newFrame() and render(); with no frame open it
 /// throws the no-frame error, as showDemoWindow() does. `arg` is optional:
-/// an integer for the scenes that take one (default 0), or one of the
-/// strings `widgets` takes.
+/// an integer for the scenes that take one (default 0), or, for `widgets`
+/// only, `softcursor` or `hardcursor`, which set or clear
+/// io.MouseDrawCursor. Any other string is refused.
 napi_value scene(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2] = {nullptr, nullptr};
@@ -277,6 +276,19 @@ napi_value scene(napi_env env, napi_callback_info info) {
     napi_throw_type_error(env, nullptr, message.c_str());
     return nullptr;
   }
+  // The one place the strings are read; '' is refused like any other.
+  bool drawCursor = false;
+  if (argType == napi_string) {
+    if (std::strcmp(textArg, "softcursor") == 0) {
+      drawCursor = true;
+    } else if (std::strcmp(textArg, "hardcursor") != 0) {
+      const std::string message =
+          std::string("imgui.__test.scene('widgets'): unknown argument '") +
+          textArg + "'";
+      napi_throw_error(env, "ERR_INVALID_ARG_VALUE", message.c_str());
+      return nullptr;
+    }
+  }
   if (!frameOpen())
     return throwNoFrame(env, "__test.scene");
 
@@ -311,15 +323,7 @@ napi_value scene(napi_env env, napi_callback_info info) {
     return nullptr;
   }
   if (std::strcmp(name, "widgets") == 0) {
-    if (textArg[0] != '\0' && std::strcmp(textArg, "softcursor") != 0 &&
-        std::strcmp(textArg, "hardcursor") != 0) {
-      const std::string message =
-          std::string("imgui.__test.scene('widgets'): unknown argument '") +
-          textArg + "'";
-      napi_throw_error(env, "ERR_INVALID_ARG_VALUE", message.c_str());
-      return nullptr;
-    }
-    sceneWidgets(textArg);
+    sceneWidgets(argType == napi_string ? &drawCursor : nullptr);
     return nullptr;
   }
   const std::string message =

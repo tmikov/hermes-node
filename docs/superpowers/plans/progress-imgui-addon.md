@@ -70,6 +70,7 @@ Each test must be shown able to fail: the change made, and what it did.
 | 8 | `test/ui-imgui-cursor.js` | (d) TextInput mapped to `ARROW` | TRACE failed on `imgui: cursor 1 -> hnui 2`; the trace held `cursor 1 -> hnui 1` and no `command cursor 2` line at all, so the second line fails too; restored |
 | 8 | `test/ui-imgui-clipboard.js` | (e) `HNUI_EVENT_PASTE` also inserted into the field | test PASSES, `PASTE text=hellohello` (twice, not three times): the chords are injected below Sokol, which produces its paste event only from a real key, so no `HNUI_EVENT_PASTE` arrives; this test cannot see that double insertion; restored |
 | 8 | `test/ui-imgui-cursor.js` | (extra) one cache: visibility acted on only when the shape also changed | TRACE failed on `imgui: cursor hidden` (the pointer does not move in SOFTCURSOR); restored |
+| 8 | `test/ui-imgui-cursor.js` | (review) the shape cache updated while hidden | `HIDDENMOVE cursor=1`, test failed; TRACE alone also fails, on SHOWN's `imgui: cursor 1 -> hnui 2` (nothing set after the cursor is shown again); restored |
 
 ## Notes
 
@@ -218,6 +219,15 @@ Each test must be shown able to fail: the change made, and what it did.
 - The cursor's shape cache starts at `ImGuiMouseCursor_None`, so the first
   frame sets ARROW once: the host starts at Sokol's DEFAULT, not ARROW.
   `state().cursor` is that cache (the shape last set), -1 before any frame.
+- Every cursor and clipboard trace is printed **before** its `hnui_*`
+  call, so it precedes the host's trace of applying the command on the
+  platform thread. Traced after the call, the host's line could print
+  first under load. A line printed before the call cannot claim the call
+  happened, so the write is traced as `clipboard write requested, <n>
+  bytes`; the host's read-back line is the proof that it took effect.
+- No test sends a real Ctrl+V, so a double paste (the chord and
+  `HNUI_EVENT_PASTE` both handled) would go unnoticed: tracker issue
+  01a21c37-6c02.
 - The listener traces `event rejected: size <n>` once, the first time
   `hnui_size_ok` fails, instead of dropping silently. No test reaches it:
   the host built with this tree never sends a short event.

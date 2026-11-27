@@ -38,8 +38,12 @@
 //  CUTPASTE    ...and a paste puts the cut text back.
 //
 // The trace is read for what was done and read back: the addon's
-// `clipboard set` / `clipboard get` lines (lengths only, never the text),
-// and the host's per-backend read-back of each write.
+// `clipboard write requested` / `clipboard get` lines (lengths only, never
+// the text), and the host's per-backend read-back of each write. The
+// addon traces a write before making it, so its line precedes the host's
+// by program order. Stdout alone passes with no backend clipboard at all,
+// since ImGui falls back to an in-process buffer of its own when no
+// backend sets the functions: the TRACE run is what proves the backend.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-addon.md):
 //  (a) get returns "" on failure, untraced: TRACE fails on the status line;
@@ -184,12 +188,12 @@ main().catch((e) => {
 
 // TRACE-gl: {{^}}[ui] clipboard read: no owner{{$}}
 // TRACE: {{^}}[ui] imgui: clipboard get: status 4{{$}}
-// TRACE: {{^}}[ui] imgui: clipboard set, 5 bytes{{$}}
+// TRACE: {{^}}[ui] imgui: clipboard write requested, 5 bytes{{$}}
 // TRACE-gl: {{^}}[ui] command clipboard: owns_selection=1 bytes=5{{$}}
 // TRACE-metal: {{^}}[ui] command clipboard: pasteboard_bytes=5 bytes=5{{$}}
 // TRACE-gl: {{^}}[ui] clipboard read: own selection{{$}}
 // TRACE: {{^}}[ui] imgui: clipboard get: ok, 5 bytes{{$}}
-// TRACE: {{^}}[ui] imgui: clipboard set, 10 bytes{{$}}
+// TRACE: {{^}}[ui] imgui: clipboard write requested, 10 bytes{{$}}
 // TRACE-gl: {{^}}[ui] command clipboard: owns_selection=1 bytes=10{{$}}
 // TRACE-metal: {{^}}[ui] command clipboard: pasteboard_bytes=10 bytes=10{{$}}
 // TRACE: {{^}}[ui] imgui: clipboard get: ok, 10 bytes{{$}}

@@ -377,8 +377,10 @@ void onEvent(hnui_window *, void *, const hnui_event *event) {
 
 /// ImGui's Platform_SetClipboardTextFn: copy and cut.
 void setClipboardText(ImGuiContext *, const char *text) {
+  // Traced first: the host applies the write on the platform thread and
+  // traces its own read-back, which must not be able to come first.
+  trace("clipboard write requested, %zu bytes", std::strlen(text));
   hnui_write_clipboard(gWindow, text);
-  trace("clipboard set, %zu bytes", std::strlen(text));
 }
 
 /// ImGui's Platform_GetClipboardTextFn: paste. ImGui reads the result
@@ -487,16 +489,18 @@ void platformAfterRender(hnui_window *w) {
   // ImGui draws the cursor itself under MouseDrawCursor, so the system's
   // is hidden then, whatever the shape.
   const bool hidden = c == ImGuiMouseCursor_None || io.MouseDrawCursor;
+  // Each trace precedes its call, so it is ordered before the host's
+  // trace of applying the command on the platform thread.
   if (hidden != gCursorHidden) {
+    trace("cursor %s", hidden ? "hidden" : "shown");
     hnui_show_cursor(w, !hidden);
     gCursorHidden = hidden;
-    trace("cursor %s", hidden ? "hidden" : "shown");
   }
   if (!hidden && c != gCursorShape) {
     const hnui_cursor hc = translateCursor(c);
+    trace("cursor %d -> hnui %d", c, static_cast<int>(hc));
     hnui_set_cursor(w, hc);
     gCursorShape = c;
-    trace("cursor %d -> hnui %d", c, static_cast<int>(hc));
   }
 }
 
