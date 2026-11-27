@@ -152,6 +152,14 @@ void uiTestHooksAbandonCapture() {
 ///
 /// \return a Promise for
 ///   `{matched, framesObserved, publicationId, width, height, path}`.
+///   `publicationId` is the matched publication's id when `matched`, and
+///   when the request gave up it is the id of the publication that was
+///   presenting at the last frame observed (0 if nothing had ever been
+///   presented). The second half is how a test learns the id its own
+///   last draw received without capturing it: draw, let the frame be
+///   taken, then issue a request that cannot match (`publicationId` 0)
+///   with a small `giveUpAfterFrames` (test/fixtures/imgui/harness.js,
+///   `resync`).
 napi_value captureFrame(napi_env env, napi_callback_info info) {
   if (!uiTestHooksEnabled()) {
     napi_throw_error(

@@ -19,7 +19,8 @@ Node.js API compatibility layer for Hermes. Ports Node's native bindings to Node
 - `external/hermes-parser-native/` is a temporary vendored copy of the Hermes native parser addon, not a submodule-style unmodified dep; it has its own README covering provenance, re-sync steps, and when to delete it
 - Vendored Node JS (will be modified): `libjs-node/`
 - Our JS: `libjs/`
-- Examples: `examples/` — each subdirectory has its own `package.json` + `package-lock.json`; `node_modules/` is gitignored (users run `npm install`). `examples/ditz2/` is the exception on two counts: its subject is a **submodule** (`examples/ditz2/ditz2`) rather than an npm dependency, because ditz2 is not published to npm, and it needs a build step of its own (`build-cjs.sh`) because it is TypeScript **and ESM**, which this runtime cannot load. Its `package.json` therefore pins ditz2's three runtime dependencies plus TypeScript, and the transpile lands in `examples/ditz2/dist-cjs/` rather than inside the submodule, so the submodule checkout stays clean. Delete that script when the ESM loader lands.
+- Product addons: `addons/<name>/`, a native `.node` addon built by the main CMake, with its own `CMakeLists.txt` and README (today only `addons/imgui/`)
+- Examples: `examples/` — each subdirectory that uses npm packages has its own `package.json` + `package-lock.json` (`examples/http-server/` and `examples/imgui-demo/` use none and have neither); `node_modules/` is gitignored (users run `npm install`). `examples/ditz2/` is the exception on two counts: its subject is a **submodule** (`examples/ditz2/ditz2`) rather than an npm dependency, because ditz2 is not published to npm, and it needs a build step of its own (`build-cjs.sh`) because it is TypeScript **and ESM**, which this runtime cannot load. Its `package.json` therefore pins ditz2's three runtime dependencies plus TypeScript, and the transpile lands in `examples/ditz2/dist-cjs/` rather than inside the submodule, so the submodule checkout stays clean. Delete that script when the ESM loader lands.
 - Build: CMake + Ninja
 - Tests: GTest (`unittests/`), lit (`test/`)
 - Test target: `check-hermes-node`
@@ -1238,6 +1239,7 @@ error. Everything Metal was measured on one Apple-silicon Mac.
   | `display` | A window opened here would be drawn. | Linux: starting a real Xvfb through the wrapper the tests use. macOS: the console session from `ioreg` (`utils/macos_console_session.py`: unlocked, on console, display not reported asleep), then running the binary on `test/fixtures/hnui-demo/display_probe.js` and requiring a drawable (`utils/display_probe.py`). |
   | `display-expected` | This machine promised a display, so `display` being off is a defect. | Linux CI, or `HERMES_NODE_UI_EXPECT_DISPLAY=1` in the ambient environment. Not macOS CI. |
   | `sokol-validation` | The drawing thread's `sokol_gfx` was compiled with its validation layer (a Debug build), which the one test that provokes a real validation failure needs. | The second `--version` line. |
+  | `ui-imgui` | The addon loads by name (`require('hermes-node:imgui')`) in this binary. | Running `hermes-node-ui` on `test/fixtures/imgui/probe.js`. Forcing function: `test/ui-imgui-feature.js`. |
   | `ci` | Not about the UI: it narrows canaries to machines that promised what they check. | `CI` or `GITHUB_ACTIONS` in the environment. |
 
   `%ui-backend` is `gl` or `metal` (`none` only when lit could not read
@@ -1674,6 +1676,40 @@ error. Everything Metal was measured on one Apple-silicon Mac.
   Thread Checker) never loads under `caffeinate`, which strips those
   variables.
 - Known defects and limitations live in `dz/`, not here — `dz list`.
+
+### Dear ImGui addon (`hermes-node:imgui`)
+
+`addons/imgui/` builds `hermes-node-imgui.node`; `addons/imgui/README.md`
+holds the detail (surface, trace lines, test hooks, bumping ImGui), and
+`docs/superpowers/specs/2026-11-27-imgui-addon-design.md` the design.
+
+- **Loaded by name, never linked in.** `hermes-node-ui` registers the
+  embedder module `hermes-node:imgui` (`tools/hermes-node-ui/
+  named_addons.cpp`), which loads the `.node` file from the executable's
+  own directory, realpath'd, through `loadNativeAddon` (the
+  `process.dlopen` path). An absent file is `MODULE_NOT_FOUND` naming the
+  path. Kept out of the binary so that it can reach the host only through
+  the public API.
+- **Public API only**: `hnui.h`/`hnui_abi.h`, `node_api.h`, `sokol_gfx.h`
+  declarations, ImGui. A missing capability is an `hnui` gap, fixed there.
+  An explicit export list keeps ImGui's symbols (and libstdc++'s
+  default-visibility `std::` instantiations) out of its export table.
+- **`render()` takes the frame target, `newFrame()` does not**: taking it
+  tells the host the tick drew, so a throw between the two presents
+  nothing.
+- **Buffers are appended to and textures replaced, never updated**:
+  `sg_update_buffer` and `sg_update_image` are once per Sokol frame, and
+  every `render()` in a tick shares one host commit.
+- **Logical units throughout**: display size and framebuffer scale are
+  read from `hnui_get_window_state` every frame; nothing is scaled by hand.
+- `imgui-load.js`, `imgui-symbols.js` and the window tests are gated on
+  the `ui-imgui` lit feature (the binary runs
+  `test/fixtures/imgui/probe.js`); `imgui-pin.js` needs only `ui-enabled`,
+  `imgui-missing.js` and `ui-imgui-feature.js` only `ui`. The last is the
+  feature's forcing function. Window tests are `test/ui-imgui-*.js`, so the Sokol
+  stderr rule covers them.
+- Run on Linux/GL under Xvfb at scale 1 and on one Apple-silicon Mac,
+  Metal at 2x (2026-11-27). What no test reaches is in `dz list`.
 
 ## Test Infrastructure
 

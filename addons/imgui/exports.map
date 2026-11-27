@@ -1,0 +1,18 @@
+/* Copyright (c) Tzvetan Mikov.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ *
+ * The addon's whole ELF export set: the two functions NAPI_MODULE_INIT()
+ * defines. Everything else is local, including the std:: template
+ * instantiations libstdc++'s default-visibility namespace would otherwise
+ * export despite -fvisibility=hidden. Keep in step with exports.darwin.txt;
+ * test/imgui-symbols.js checks the result.
+ */
+{
+  global:
+    napi_register_module_v1;
+    node_api_module_get_api_version_v1;
+  local:
+    *;
+};

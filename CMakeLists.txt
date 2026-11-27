@@ -127,6 +127,7 @@ if(HERMES_NODE_ENABLE_UI)
   # plausibly" is the argument, and keeping the target out of the graph
   # entirely is the fact.
   add_subdirectory(external/sokol)
+  add_subdirectory(external/imgui)
   add_subdirectory(lib/compositor)
   # The GPU half: GL on Linux and other non-Apple Unix, Metal on macOS. It
   # refuses to configure on any other platform, so hermesNodeCompositorGpu
@@ -142,6 +143,9 @@ add_subdirectory(tools/hermes-node)
 # option produces neither the library nor this binary.
 if(HERMES_NODE_ENABLE_UI)
   add_subdirectory(tools/hermes-node-ui)
+  # The Dear ImGui addon, which hermes-node-ui loads by name from its own
+  # directory as `hermes-node:imgui` (tools/hermes-node-ui/named_addons.cpp).
+  add_subdirectory(addons/imgui)
 endif()
 
 # Unit tests
@@ -337,6 +341,12 @@ set(HERMES_NODE_JS_TEST_DEPENDS hermes hermes-node hello_addon hermes-node-kit)
 # than failing for its stated reason.
 if(HERMES_NODE_ENABLE_UI)
   list(APPEND HERMES_NODE_JS_TEST_DEPENDS hermes-node-ui)
+  # The ImGui addon, found by the binary at run time rather than linked, so
+  # nothing else makes the suite wait for it. test/lit.cfg decides
+  # `ui-imgui` by loading it, and test/imgui-symbols.js reads its exports.
+  list(APPEND HERMES_NODE_JS_TEST_DEPENDS hermes_node_imgui)
+  list(APPEND HERMES_NODE_LIT_PARAMS
+    hermes_node_imgui=$<TARGET_FILE:hermes_node_imgui>)
 endif()
 # The reference addon, and the lit param naming it. Appended conditionally
 # because the target only exists where a GPU backend was built -- unlike

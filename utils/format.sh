@@ -4,7 +4,7 @@ IFS=$'\n'
 set -f
 
 # Directories to format - modify this list to change which directories are processed
-FORMAT_DIRS=(lib tools include unittests)
+FORMAT_DIRS=(lib tools include unittests addons)
 
 all=0
 force=0

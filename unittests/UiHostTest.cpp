@@ -20,6 +20,7 @@
 // branch is to _exit() rather than join, which EXPECT_EXIT observes
 // directly without this test process itself ever blocking on a join.
 
+#include "named_addons.h"
 #include "ui_host.h"
 
 #include <hermes/node-compat/runtime/hermes_node_runtime.h>
@@ -187,3 +188,15 @@ TEST(
       ::testing::ExitedWithCode(1),
       "no window support");
 }
+
+TEST(NamedAddonsTest, AddonPathIsBesideTheExecutable) {
+  EXPECT_EQ(
+      pathBesideExecutable("/opt/app/bin/hermes-node-ui", "x.node"),
+      "/opt/app/bin/x.node");
+  // An executable directly in the root keeps the root, with no doubled
+  // separator.
+  EXPECT_EQ(pathBesideExecutable("/hermes-node-ui", "x.node"), "/x.node");
+  EXPECT_EQ(pathBesideExecutable("hermes-node-ui", "x.node"), "./x.node");
+}
+// Mutation: answer "" when the separator is at position 0, which is what
+// the empty directory substr(0, 0) gave did before. Fails on the root case.

@@ -317,9 +317,18 @@ async function main() {
     // frames.
     const reblit =
         await capture(2, capturePath + '.reblit', REBLIT_FRAME_BUDGET);
+    // A request that gave up reports the publication that was presenting
+    // when it did, which must be the one step 1 matched: nothing has drawn
+    // since. test/fixtures/imgui/harness.js relies on this to learn the id
+    // of its own last draw without capturing it.
     console.log(
         'REBLIT matched=' + reblit.matched +
-        ' framesObserved=' + reblit.framesObserved);
+        ' framesObserved=' + reblit.framesObserved +
+        ' presenting=' +
+        (reblit.publicationId === first.publicationId ?
+             'same' :
+             'WRONG got=' + reblit.publicationId +
+                 ' want=' + first.publicationId));
 
     // --- 3. And the id is not merely inert. ----------------------
     //
@@ -411,8 +420,11 @@ main().catch((e) => {
 // generation, both sizes and DPI scale -- and was refused, because its
 // publication id was the one already shown rather than the one asked for.
 // Remove `publicationId` from CaptureRequest's comparison and this line
-// reads `matched=true framesObserved=1`.
-// POLL-NEXT: REBLIT matched=false framesObserved=240
+// reads `matched=true framesObserved=1`. `presenting=same` is the give-up
+// result's publication id, the one step 1 matched: make the give-up branch
+// of maybeCapture() leave it 0 and this reads `presenting=WRONG got=0
+// want=1`.
+// POLL-NEXT: REBLIT matched=false framesObserved=240 presenting=same{{$}}
 // POLL-NEXT: RESUMED matched=true publicationId=2
 //
 // **The slot-recycling assertion.** Publication 4 is the first that needs
@@ -493,7 +505,7 @@ main().catch((e) => {
 // PROBE: FIRST matched=true publicationId=1
 // PROBE-NEXT: SIZE true
 // PROBE: PATTERN ok
-// PROBE-NEXT: REBLIT matched=false framesObserved=240
+// PROBE-NEXT: REBLIT matched=false framesObserved=240 presenting=same{{$}}
 // PROBE-NEXT: RESUMED matched=true publicationId=2
 // PROBE-NEXT: RECYCLED matched=true publicationId=4
 // PROBE-NEXT: DONE
