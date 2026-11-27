@@ -127,6 +127,19 @@ void runBeforeExitListenersHook(napi_env env, ExitReason reason);
 /// Calls ProcessExitHooks::beforeRuntimeCleanup if one is set; else nothing.
 void runBeforeRuntimeCleanupHook(napi_env env, int exitCode);
 
+/// dlopen()s `filename`, finds its N-API init (napi_register_module_v1,
+/// else the last napi_module_register()ed module) and calls it with
+/// `exports`. On success stores the init's result (which may be
+/// `exports` itself or a replacement; never null) in `*result` and
+/// returns true. On failure returns false with a JS exception pending:
+/// ERR_DLOPEN_FAILED with process.dlopen's existing messages, or
+/// whatever the init threw.
+bool loadNativeAddon(
+    napi_env env,
+    const char *filename,
+    napi_value exports,
+    napi_value *result);
+
 } // namespace node_compat
 } // namespace hermes
 

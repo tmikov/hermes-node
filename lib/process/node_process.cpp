@@ -873,6 +873,59 @@ static napi_value processTitleSetter(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
+bool loadNativeAddon(
+    napi_env env,
+    const char *filename,
+    napi_value exports,
+    napi_value *result) {
+  // Open the shared library.
+  void *handle = dlopen(filename, RTLD_NOW | RTLD_LOCAL);
+  if (!handle) {
+    const char *err = dlerror();
+    std::string msg = "Cannot open ";
+    msg += filename;
+    msg += ": ";
+    msg += (err ? err : "unknown error");
+    napi_throw_error(env, "ERR_DLOPEN_FAILED", msg.c_str());
+    return false;
+  }
+
+  // Look up the modern NAPI entry point.
+  using InitFunc = napi_value (*)(napi_env, napi_value);
+  auto initFunc =
+      reinterpret_cast<InitFunc>(dlsym(handle, "napi_register_module_v1"));
+
+  // Fall back to deprecated napi_module_register() path.
+  if (!initFunc) {
+    const napi_module *mod = hermes_napi_get_last_registered_module();
+    if (mod && mod->nm_register_func) {
+      initFunc = mod->nm_register_func;
+    }
+  }
+
+  if (!initFunc) {
+    dlclose(handle);
+    std::string msg = "Module ";
+    msg += filename;
+    msg += " has no 'napi_register_module_v1' export and no registered module";
+    napi_throw_error(env, "ERR_DLOPEN_FAILED", msg.c_str());
+    return false;
+  }
+
+  // Call the addon's init function with module.exports.
+  napi_value initResult = initFunc(env, exports);
+
+  // Check for pending exception from init.
+  bool hasPending = false;
+  napi_is_exception_pending(env, &hasPending);
+  if (hasPending) {
+    return false;
+  }
+
+  *result = initResult != nullptr ? initResult : exports;
+  return true;
+}
+
 /// process.dlopen(module, filename[, flags])
 /// Loads a native NAPI addon (.node file) via dlopen and calls its init
 /// function with module.exports.
@@ -911,52 +964,12 @@ static napi_value processDlopen(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
-  // Open the shared library.
-  void *handle = dlopen(filename, RTLD_NOW | RTLD_LOCAL);
-  if (!handle) {
-    const char *err = dlerror();
-    std::string msg = "Cannot open ";
-    msg += filename;
-    msg += ": ";
-    msg += (err ? err : "unknown error");
-    napi_throw_error(env, "ERR_DLOPEN_FAILED", msg.c_str());
+  napi_value initResult;
+  if (!loadNativeAddon(env, filename, exports, &initResult))
     return nullptr;
-  }
-
-  // Look up the modern NAPI entry point.
-  using InitFunc = napi_value (*)(napi_env, napi_value);
-  auto initFunc =
-      reinterpret_cast<InitFunc>(dlsym(handle, "napi_register_module_v1"));
-
-  // Fall back to deprecated napi_module_register() path.
-  if (!initFunc) {
-    const napi_module *mod = hermes_napi_get_last_registered_module();
-    if (mod && mod->nm_register_func) {
-      initFunc = mod->nm_register_func;
-    }
-  }
-
-  if (!initFunc) {
-    dlclose(handle);
-    std::string msg = "Module ";
-    msg += filename;
-    msg += " has no 'napi_register_module_v1' export and no registered module";
-    napi_throw_error(env, "ERR_DLOPEN_FAILED", msg.c_str());
-    return nullptr;
-  }
-
-  // Call the addon's init function with module.exports.
-  napi_value initResult = initFunc(env, exports);
-
-  // Check for pending exception from init.
-  bool hasPending = false;
-  napi_is_exception_pending(env, &hasPending);
-  if (hasPending) {
-    return nullptr;
-  }
 
   // If the init function returned a different object, update module.exports.
-  if (initResult != nullptr && initResult != exports) {
+  if (initResult != exports) {
     napi_set_named_property(env, moduleObj, "exports", initResult);
   }
 
