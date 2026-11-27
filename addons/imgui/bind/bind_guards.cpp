@@ -628,14 +628,21 @@ const char *canListClipper() {
 ScopeSnapshot snapshotScope() {
   ImGuiContext &g = *GImGui;
   return ScopeSnapshot{
-      g.CurrentWindow, g.CurrentWindowStack.Size, g.CurrentTable};
+      g.CurrentWindow,
+      g.CurrentWindow->BeginCount,
+      g.CurrentWindowStack.Size,
+      g.CurrentTable,
+      g.CurrentTable != nullptr ? g.CurrentTable->InstanceCurrent : -1};
 }
 
 bool sameScope(const ScopeSnapshot &s) {
   ImGuiContext &g = *GImGui;
   return g.CurrentWindow == s.window &&
+      g.CurrentWindow->BeginCount == s.windowBeginCount &&
       g.CurrentWindowStack.Size == s.windowStackSize &&
-      g.CurrentTable == s.table;
+      g.CurrentTable == s.table &&
+      (g.CurrentTable == nullptr ||
+       g.CurrentTable->InstanceCurrent == s.tableInstance);
 }
 
 TableScope tableScope() {

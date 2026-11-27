@@ -304,6 +304,8 @@ rectangle edges are exact.
 
 `__test.tableScope()`, inside a frame (`ERR_IMGUI_NO_FRAME` otherwise), returns `{table, currentWindow, innerWindow}`: whether ImGui has a current table, and the names of the current window and of that table's inner window (`""` without one), so a test of a table guard can show it reached the state the guard is about before relying on it.
 
+`__test.detachArrayBuffer(buffer)` detaches an `ArrayBuffer` with `napi_detach_arraybuffer`, so that a test can pass the binding a `Float32Array` whose buffer is gone (this runtime has no `ArrayBuffer.prototype.transfer` or `structuredClone`, and `hermes-node-ui` takes no VM options); the binding then throws `ERR_INVALID_ARG_VALUE`.
+
 `__test.state()` returns, as of the last completed `newFrame()`/`render()`
 pair (except `frameOpen`, which is now): `frameOpen`, `displayWidth`,
 `displayHeight`, `scaleX`, `scaleY`; `targetGeneration`, `targetWidth`,

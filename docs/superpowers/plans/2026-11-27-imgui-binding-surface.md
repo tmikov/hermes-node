@@ -2388,19 +2388,38 @@ and open a row (`ui-imgui-bind-errors.js` TABLE_WRONG_NOROW).
 - Omitted: `values_count` (the array's length) and `stride` (passed as
   `sizeof(float)`) (design, "Exceptions: Plots").
 - Frame: open. Rejected: `valuesOffset` outside 0 .. length - 1 (0 for
-  an empty array) (design, "Buffers").
+  an empty array) (design, "Buffers"); more than 4096 values
+  (`ERR_OUT_OF_RANGE`, checked on the length before any value is read or
+  copied); a `graphSize[0]` of 2^31 or more (`ERR_OUT_OF_RANGE`); a
+  detached `Float32Array` (`ERR_INVALID_ARG_VALUE`: Hermes reports its old
+  length with no data, `hermes/API/napi/hermes_napi_typedarray.cpp:221-232`).
 - Label-id: yes.
 - Preconditions (in `PlotEx`):
+  - `IM_ASSERT(v1_idx >= 0 && v1_idx < values_count)` (widgets:9150) is
+    NOT implied by ImGui's own values once many columns are drawn:
+    `res_w = min((int)frame_size.x, values_count)` (widgets:9116) steps
+    accumulate `t0 += 1.0f / res_w` in float, and `(int)(t0 * item_count +
+    0.5f)` reaches `values_count`. Running that arithmetic for every
+    `res_w` and count (with and without a fused multiply-add) gives the
+    first failure at a histogram of 5921 values in a frame at least 5921
+    wide (lines: 10123), and none for any count up to 4096, whatever the
+    width, since `res_w` is at most the count. (a): at most 4096 values.
+    This replaces the earlier `INT_MAX / 2`, which only kept the index sum
+    below inside `int`.
+  - `(int)frame_size.x` (widgets:9116) is undefined at 2^31 or more. (a)
+    for a positive `graphSize[0]`, which is the width (`CalcItemSize`,
+    imgui.cpp:12609-12625). A zero or negative one takes the item width,
+    whose own conversion in `CalcItemWidth` (`IM_TRUNC`, imgui.cpp:12601)
+    has the same limit and is not bounded by `setNextItemWidth` /
+    `pushItemWidth` yet: QUESTION, reported with Task 7's review fixes.
   - `values_offset >= 0`: relied on without a check; the element read is
     `(index + values_offset) % values_count` (widgets:9126-9127, 9138,
     9151), which is negative for a negative offset. (a).
   - the sum `index + values_offset + 1` must not overflow `int`
-    (widgets:9151): implied by the design's offset rule once the length
-    is at most `INT_MAX / 2`. (a): the binding limits the length.
-  - `IM_ASSERT(v_idx >= 0 && v_idx < values_count)` (widgets:9124) and
-    `IM_ASSERT(v1_idx >= 0 && v1_idx < values_count)` (widgets:9150) are
-    computed from ImGui's own values and hold for any count at or above
-    the minimum tested at widgets:9114.
+    (widgets:9151): implied by the design's offset rule and the 4096-value
+    limit above.
+  - `IM_ASSERT(v_idx >= 0 && v_idx < values_count)` (widgets:9124) is
+    computed from a clamped `t` (at most 0.999) and holds.
   - label-id (`ItemAdd(total_bb, id, &frame_bb, ...)`, widgets:9086).
 - Notes: `scale_min` / `scale_max` use `FLT_MAX` as "compute from the
   data" (widgets:9092); the value is `imgui.FLT_MAX` (G4).
@@ -2568,7 +2587,9 @@ only bound functions that can emit an unbounded primitive are
 - Omitted: `num_points` (the sequence's length over two) (design,
   "Exceptions: Point lists").
 - Frame: open. Rejected (`ERR_OUT_OF_RANGE`): a sequence of odd length;
-  more than 16383 points (a length above 32766).
+  more than 16383 points (a length above 32766), checked on the length
+  before any element is read or copied. A detached `Float32Array`:
+  `ERR_INVALID_ARG_VALUE` (as the plots').
 - Preconditions:
   - the vertex limit described at the top of this section: the
     reservation is `points_count * max_verts_per_point` plus 2 for a
@@ -2614,16 +2635,25 @@ only bound functions that can emit an unbounded primitive are
   none.
 - Frame: open. Inside the callback `newFrame()` and `render()` throw
   `ERR_IMGUI_USAGE` (design).
-- Rejected: a `count` outside 0 .. `INT_MAX - 1`; an `itemHeight` that is
-  not greater than 0 (NaN included).
+- Rejected: a `count` outside 0 .. `INT_MAX - 1`; an `itemHeight` below 1
+  (NaN included); a list taller than 2^30 units (`count * itemHeight`).
 - Preconditions:
   - `items_count` is not validated by `Begin()` (imgui.cpp:3486-3512).
     (a): `count` is 0 .. `INT_MAX - 1`. `INT_MAX` is ImGui's sentinel for
     "unknown count" (imgui.h:3082), which makes `End()` skip the final
     seek (imgui.cpp:3521) and would need `SeekCursorForItem`; it is not
     accepted.
-  - `itemHeight > 0`. (a). C++'s default -1 means "measure the first
-    item" (imgui.h:3083); that mode is not bound. With a positive height
+  - `itemHeight >= 1`. (a). C++'s default -1 means "measure the first
+    item" (imgui.h:3083); that mode is not bound. The lower bound of 1
+    keeps `Step()`'s `(int)((range - cursor) / ItemsHeight)`
+    (imgui.cpp:3692-3693) inside `int`: the distance is at most the list's
+    height plus the window's.
+  - `count * itemHeight <= 2^30`. (a). `End()` seeks the cursor to
+    `StartPosY + count * ItemsHeight` (imgui.cpp:3549-3556), and the
+    window's content size is then `ImTrunc64` of that distance
+    (imgui.cpp:7250), undefined at 2^63 or for an infinity; 2^30 keeps
+    that and the quotient above (2^30 plus a window below 2^30 units)
+    defined. With a positive height
     the measuring branch (imgui.cpp:3602-3627) is never entered, so its
     recoverable error ("ImGuiListClipper: Failed to calculate item
     height! ...", imgui.cpp:3620) and its plain assertion that, in a
@@ -2637,7 +2667,11 @@ only bound functions that can emit an unbounded primitive are
     when `g.CurrentTable` is not NULL and its `IsInsideRow` is set,
     `g.CurrentWindow == g.CurrentTable->InnerWindow`, tested before
     `Begin()`. The design's comparison of window, window-stack depth and
-    table after each callback covers the later calls.
+    table after each callback covers the later calls. The window and the
+    table are also compared by their begin counts (`window->BeginCount`,
+    imgui.cpp:8892; `table->InstanceCurrent`, tables:376, 391), so that one
+    ended and begun again with the same identity inside the callback is a
+    different scope.
   - abandoning: `End()` seeks only when `ItemsCount >= 0 && ItemsCount <
     INT_MAX && DisplayStart >= 0` (imgui.cpp:3521-3522), so setting
     `ItemsCount = -1` skips it, as the design says; the destructor calls
@@ -3153,6 +3187,8 @@ Read:
 | `g.CurrentWindow->DC.TreeHasStackDataDepthMask` | 2968 | `treePop` |
 | `g.TreeNodeStack` (`back().ID`) | 2639 | `treePop` |
 | `g.GroupStack` (`Size`, `back().WindowID`) | 2636; `ImGuiGroupData::WindowID` 1273 | `endGroup`, `endMenuBar`, `endMainMenuBar`, `endListBox` |
+| `g.CurrentWindow->BeginCount` | 3048 | `listClipper` (scope comparison) |
+| `g.CurrentTable->InstanceCurrent` | 3374 | `listClipper` (scope comparison) |
 | `g.CurrentWindowStack` (`Size`; the `Window` of the entry below the top) | 2548 | `endListBox` (the parent window whose group `EndGroup()` will close); `listClipper` (stack depth, design) |
 | `g.BeginComboDepth` | 2808 | `endCombo` |
 | `g.CurrentTable` | 2764 | `tableNextRow`, `tableSetColumnIndex` (not NULL); `endTable`, `tableNextColumn`, `tableHeadersRow`, `tableSetupScrollFreeze`, `tableSetupColumn`, `end`, `endChild`, `endListBox` (guard applied when not NULL); `listClipper`; `__test.tableScope()` |

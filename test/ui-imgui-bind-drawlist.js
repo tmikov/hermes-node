@@ -47,9 +47,13 @@
 //            exactly the given colour (found by scanning the box), and none
 //            outside the box is.
 //  LIMITS    addPolyline with 16384 points (an Array and a Float32Array of
-//            32768) or an odd-length sequence, addBezierCubic with
+//            32768), an Array of length 2^32 - 1 or a sparse one of length
+//            1e9 (refused on the length, before any element is read), or an
+//            odd-length sequence, addBezierCubic with
 //            numSegments 513 or -1, addRect with a flag outside
-//            ImDrawFlags (bit 0): ERR_OUT_OF_RANGE, not called. Accepted,
+//            ImDrawFlags (bit 0): ERR_OUT_OF_RANGE, not called. A detached
+//            Float32Array (__test.detachArrayBuffer):
+//            ERR_INVALID_ARG_VALUE, not called. Accepted,
 //            called, and the frame then renders: a closed 16383-point
 //            polyline (65534 vertices, the most one primitive may reserve)
 //            and a Bezier curve of 512 segments.
@@ -308,6 +312,19 @@ async function main() {
       rejects('drawList.addPolyline',
               () => dl.addPolyline(new Float32Array(32768), RED_U32, 1),
               'ERR_OUT_OF_RANGE');
+      // Refused on the length alone, before an element is read or anything
+      // allocated for them.
+      const sparse = [];
+      sparse.length = 1e9;
+      for (const points of [new Array(2 ** 32 - 1), sparse])
+        messages.push(rejects('drawList.addPolyline',
+                              () => dl.addPolyline(points, RED_U32, 1),
+                              'ERR_OUT_OF_RANGE').message);
+      const detached = new Float32Array(4);
+      imgui.__test.detachArrayBuffer(detached.buffer);
+      messages.push(rejects('drawList.addPolyline',
+                            () => dl.addPolyline(detached, RED_U32, 1),
+                            'ERR_INVALID_ARG_VALUE').message);
       messages.push(rejects('drawList.addPolyline',
                             () => dl.addPolyline([0, 0, 1], RED_U32, 1),
                             'ERR_OUT_OF_RANGE').message);
@@ -350,7 +367,10 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}POLYLINE ok{{$}}
 // CHECK-NEXT: {{^}}TEXT ok{{$}}
 // CHECK-NEXT: {{^}}LIMITS ok{{$}}
-// CHECK-NEXT: {{^}}LIMITS message imgui.drawList.addPolyline(): points must hold at most 16383 points (32766 numbers); got 32768 numbers{{$}}
+// CHECK-NEXT: {{^}}LIMITS message imgui.drawList.addPolyline(): points must hold at most 32766 numbers; got 32768{{$}}
+// CHECK-NEXT: {{^}}LIMITS message imgui.drawList.addPolyline(): points must hold at most 32766 numbers; got 4294967295{{$}}
+// CHECK-NEXT: {{^}}LIMITS message imgui.drawList.addPolyline(): points must hold at most 32766 numbers; got 1000000000{{$}}
+// CHECK-NEXT: {{^}}LIMITS message imgui.drawList.addPolyline(): points is a detached Float32Array{{$}}
 // CHECK-NEXT: {{^}}LIMITS message imgui.drawList.addPolyline(): points must hold an even count of numbers (x, y pairs); got 3{{$}}
 // CHECK-NEXT: {{^}}LIMITS message imgui.drawList.addBezierCubic(): numSegments must be an integer from 0 to 512; got 513{{$}}
 // CHECK-NEXT: {{^}}LIMITS message imgui.drawList.addBezierCubic(): numSegments must be an integer from 0 to 512; got -1{{$}}

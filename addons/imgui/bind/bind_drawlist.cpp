@@ -194,17 +194,11 @@ napi_value addPolyline(napi_env env, napi_callback_info info) {
   if (!c.ok() || !c.u32(1, "col", &col) || !c.f32(2, "thickness", &thickness) ||
       (!c.isMissing(3) && !c.flags(3, "flags", kDrawFlags, &flags)) ||
       // Last: a Float32Array's data is borrowed from here to the call.
-      !c.floats(0, "points", &points))
+      !c.floats(0, "points", kMaxPolylinePoints * 2, &points))
     return nullptr;
   if (points.count % 2 != 0)
     return c.throwRange(
         "points must hold an even count of numbers (x, y pairs); got %zu",
-        points.count);
-  if (points.count / 2 > kMaxPolylinePoints)
-    return c.throwRange(
-        "points must hold at most %zu points (%zu numbers); got %zu numbers",
-        kMaxPolylinePoints,
-        kMaxPolylinePoints * 2,
         points.count);
   if (!c.needFrame())
     return nullptr;

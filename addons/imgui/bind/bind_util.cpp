@@ -653,11 +653,18 @@ bool Call::refString(
   return true;
 }
 
-bool Call::floats(size_t i, const char *what, FloatSpan *out) {
+bool Call::floats(size_t i, const char *what, size_t maxCount, FloatSpan *out) {
   if (isArray(i)) {
     uint32_t length = 0;
     if (!napiOk(napi_get_array_length(env_, arg(i), &length), "reading", what))
       return false;
+    // Before anything is sized by the length or any element is read: an
+    // Array's length can be 2^32 - 1 with no element present.
+    if (length > maxCount) {
+      throwRange(
+          "%s must hold at most %zu numbers; got %u", what, maxCount, length);
+      return false;
+    }
     out->copy.resize(length);
     for (uint32_t k = 0; k < length; ++k) {
       napi_value e = nullptr;
@@ -686,6 +693,18 @@ bool Call::floats(size_t i, const char *what, FloatSpan *out) {
   if (!isTyped || type != napi_float32_array) {
     throwType(
         "ERR_INVALID_ARG_TYPE", "%s must be an Array or a Float32Array", what);
+    return false;
+  }
+  // Hermes keeps a typed array's length when its buffer is detached and
+  // answers a null data pointer for it
+  // (hermes/API/napi/hermes_napi_typedarray.cpp:221-232).
+  if (data == nullptr && length > 0) {
+    throwType("ERR_INVALID_ARG_VALUE", "%s is a detached Float32Array", what);
+    return false;
+  }
+  if (length > maxCount) {
+    throwRange(
+        "%s must hold at most %zu numbers; got %zu", what, maxCount, length);
     return false;
   }
   // Borrowed: nothing that can run JavaScript may happen between here and

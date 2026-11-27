@@ -222,6 +222,18 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 7 | `ui-imgui-bind-clipper.js` | `enterImGui()` removed from `listClipper` | `NOTCALLED listClipper` (REJECTED's count-0 call); test failed |
 | 7 | `ui-imgui-bind-clipper.js` | `itemHeight`'s check removed | `WRONGCODE ERR_IMGUI_USAGE (want ERR_OUT_OF_RANGE): ... ImGuiListClipper: Failed to calculate item height! ...` (0 reaches ImGui's measuring mode); test failed |
 | 7 | `ui-imgui-bind-clipper.js` | the pending-exception check removed (Step() called again after a throw) | PASS: not detected (see "Behaviours no test detects") |
+| 7 (review) | `ui-imgui-bind-plots.js` | the detached-Float32Array check removed from `Call::floats` | ASAN `SEGV on unknown address 0x000000000000 ... bind_util.cpp:719 in Call::floats` (the finite-check loop reading the null data); test failed |
+| 7 (review) | `ui-imgui-bind-plots.js` | the Float32Array length cap removed from `Call::floats` | `NOTHROW ERR_OUT_OF_RANGE` (4097 values); test failed |
+| 7 (review) | `ui-imgui-bind-drawlist.js` | the Array length cap removed from `Call::floats` | `NOTHROW ERR_OUT_OF_RANGE` at the first over-long Array (16384 points read and drawn) |
+| 7 (review) | `ui-imgui-bind-drawlist.js` | the Array length cap moved after the copy and the element reads (the shape before the fix) | `new Array(2 ** 32 - 1)`: a 16 GiB vector value-initialised, then `WRONGCODE ERR_INVALID_ARG_TYPE (want ERR_OUT_OF_RANGE): ... points[0] must be a number` (the hole read before the cap); the run finished inside its time limit; test failed |
+| 7 (review) | `ui-imgui-bind-plots.js` | `graphSize[0]`'s 2^31 check removed | the process hung in the REJECTED frame (the `plotLines` with a 3e9-wide frame) until `with-display.py`'s limit: exit 124; test failed |
+| 7 (review) | by hand, `hermes-node-ui` on a scratch script | the plot cap raised to 100000, then `plotHistogram` of 4096 and of 5921 zeros in a frame of that width | 4096: survived; 5921: `imgui_widgets.cpp:9150 ... Assertion v1_idx >= 0 && v1_idx < values_count failed`, as the float simulation predicted |
+| 7 (review) | `ui-imgui-bind-clipper.js` | `BeginCount` dropped from the scope comparison | `SCOPE_REBEGINWINDOW-ret WRONG {"error":null,...,"after":[28,1747]...}` and `-throw WRONG` (the clipper seeked the reopened window); test failed |
+| 7 (review) | `ui-imgui-bind-clipper.js` | `InstanceCurrent` dropped from the scope comparison | `SCOPE_REBEGINTABLE-ret WRONG {"error":null,...}`, `-throw WRONG`; test failed |
+| 7 (review) | `ui-imgui-bind-clipper.js` | the itemHeight floor back to `> 0` | `NOTHROW ERR_OUT_OF_RANGE` (0.5); test failed |
+| 7 (review) | `ui-imgui-bind-clipper.js` | the 2^30 list-height check removed | `NOTHROW ERR_OUT_OF_RANGE`; test failed |
+| 7 (review) | `ui-imgui-bind-clipper.js` | the abandon trace written twice | the ABANDON run counts 24 lines, wants 12; test failed |
+| 7 (review) | `ui-imgui-bind-clipper.js` | the pending-exception check removed, with FROZEN's second range present | PASS: still not detected (Hermes refuses the call, below) |
 | 7 | `ui-imgui-bind-errors.js` | `canListClipper()` never refusing | aborted in CLIPPER_WRONG_WINDOW: `imgui_tables.cpp:2126: ... TableEndRow ... Assertion window == table->InnerWindow failed`; test failed |
 | 6 (review) | `ui-imgui-bind-errors.js` | (before the fix) `beginTable('s', 1, ScrollY, [0, 100]); tableNextRow(); tableNextColumn(); beginTable('n', 1);` then `endChild()`, `end()` or `endListBox()` (the last with a group open outside), run by hand | each aborted: `imgui.h:2377 ... ImVector<ImVec4>::back() ... Assertion Size > 0 failed` |
 | 6 (review) | `ui-imgui-bind-errors.js` | `inTableRegion()` reverted to the top table only (the walk stops after the first plain table) | aborted in TABLE_REGION's nested case: `imgui.h:2377 ... Size > 0 failed`; test failed |
@@ -290,15 +302,21 @@ automated test would notice losing. Each task appends its own.
   no test can tell the two apart; checked by reading.
 - **Task 7: `listClipper` never steps a clipper again after the callback
   threw.** With the pending-exception check removed, the loop calls
-  `Step()` once more with the exception pending; every clipper the tests
-  can build has one range, so that `Step()` only seeks to the end and
-  returns false, which is what the normal `End()` does, and the exception
-  still propagates. Seeing it would need a clipper with a second range
-  (a navigation or focused-item range, imgui.cpp:3647-3659), which no
-  bound function produces deterministically. Checked by reading.
-- **Task 7: the 2^30-value bound on a plot's values** (`kMaxPlotValues`,
-  `bind_plots.cpp`, the surface table's offset-overflow precondition) is
-  not tested: an Array or Float32Array of that length is 4 GiB or more.
+  `Step()` again with the exception pending. A clipper with a second range
+  exists and is tested (FROZEN: a scrolled table with a frozen header row,
+  imgui.cpp:3571-3578, imgui_tables.cpp:1866), and the mutation still
+  passes: Hermes's `napi_call_function` begins with `NAPI_PREAMBLE`, which
+  returns `napi_pending_exception` without calling while an exception is
+  pending (hermes/API/napi/hermes_napi_function.cpp:272,
+  hermes/API/napi/hermes_napi_impl.h:597-604), so the callback is not run
+  again, and the remaining `Step()`s end the clipper where `End()` would.
+  The check stays: it is what the design requires, and an engine that did
+  call would run the callback with an exception pending.
+- **Task 7 (review): `listClipper` takes ImGui's usage errors after
+  `Begin()` and after each `Step()`** (`bind_clipper.cpp`), so none is
+  dropped by the callback's first binding call. None is reachable with an
+  itemHeight of at least 1 (the one recoverable check is in the measuring
+  branch, imgui.cpp:3620), so no test reaches the two lines.
 
 ## Notes
 
@@ -1016,6 +1034,31 @@ automated test would notice losing. Each task appends its own.
   skipped there and called in EITHER (`styleColorsDark()`,
   `colorConvertFloat4ToU32()`); ARGTYPE gains `getColorU32`'s dispatch
   message and the Float32Array-or-Array and callback type checks.
+- **Review fixes (Task 7).** `Call::floats` takes a maximum count, checked
+  on the length of an Array or a Float32Array before anything is allocated
+  or read, and refuses a detached Float32Array (Hermes reports its old
+  length with null data, hermes_napi_typedarray.cpp:221-232) with
+  `ERR_INVALID_ARG_VALUE`; the detached array comes from a new test hook,
+  `__test.detachArrayBuffer()` (README), since this runtime has no
+  `ArrayBuffer.prototype.transfer` or `structuredClone`, and
+  `hermes-node-ui` takes neither `--vm=` nor `HERMES_NODE_VM_OPTIONS`
+  (both tried: `unknown option '--vm=-Xhermes-internal-test-methods'`, and
+  `HermesInternal.detachArrayBuffer` undefined with the variable set,
+  where plain `hermes-node` defines it). The plot cap is 4096 values, not
+  2^30: PlotEx's own float arithmetic breaks its plain assertion at
+  widgets:9150 from 5921 values in a frame as wide (surface entry, and the
+  by-hand row in Mutations); `graphSize[0]` is bounded below 2^31 for
+  PlotEx's `(int)` of the width. `listClipper` requires itemHeight >= 1
+  and count * itemHeight <= 2^30 (bind_clipper.cpp and the surface entry
+  give the source lines), compares the window's `BeginCount` and the
+  table's `InstanceCurrent` too (SCOPE_REBEGINWINDOW, SCOPE_REBEGINTABLE),
+  and takes usage errors after `Begin()` and each `Step()`. The clipper
+  test counts the abandon trace lines (ABANDON).
+- **Found, not fixed (outside Task 7's groups):** `setNextItemWidth` and
+  `pushItemWidth` accept any float, and ImGui's `CalcItemWidth` converts
+  the item width with `IM_TRUNC` (`(int)`, imgui.cpp:12601), undefined at
+  2^31 or more, for every widget sized by it (a plot with `graphSize[0]`
+  0 included). Reported to the controller.
 - Task 1's list of checks still needing test cases had no Style entry
   left (`Col_COUNT` / `StyleVar_COUNT` were Task 2's); `getColorU32`'s own
   `Col_COUNT` refusal is GETCOLOR's.

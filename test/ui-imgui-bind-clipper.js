@@ -38,7 +38,11 @@
 //            (SCOPE_ENDCHILD), leaves a beginChild open
 //            (SCOPE_OPENCHILD), is inside a table and calls endTable()
 //            (SCOPE_ENDTABLE), leaves a non-scrolling beginTable open
-//            (SCOPE_OPENTABLE). The clipper is abandoned (traced): the
+//            (SCOPE_OPENTABLE), ends the clipper's window and begins it
+//            again (SCOPE_REBEGINWINDOW), ends the clipper's table and
+//            begins one with the same ID (SCOPE_REBEGINTABLE); the last two
+//            are told apart only by the window's BeginCount and the
+//            table's InstanceCurrent. The clipper is abandoned (traced): the
 //            returning callback's call throws ERR_IMGUI_USAGE, the throwing
 //            one's its own error; either way the callback ran once, the
 //            cursor of the window current after the callback is where the
@@ -46,9 +50,17 @@
 //            imgui.cpp:3521-3522), and after each the next frame draws (its
 //            render() returns true) and a clipper in it gets its ranges
 //            from 0.
-//  REJECTED  itemHeight 0, -1 and NaN, count -1 and 2147483647 (INT_MAX,
-//            ImGui's "unknown count"): ERR_OUT_OF_RANGE, not called. count
-//            0 is accepted and calls the callback never.
+//  FROZEN    a scrolled table with a frozen header row gives the clipper a
+//            first range [0, 1] and at least one more; a callback throwing
+//            on that first range is called once and its error propagates.
+//  REJECTED  itemHeight 0, -1, NaN and 0.5 (at least 1: Step() converts
+//            distance / itemHeight to int, imgui.cpp:3692-3693), count -1
+//            and 2147483647 (INT_MAX, ImGui's "unknown count"), and a list
+//            taller than 2^30 units (count * itemHeight; End()'s seek and
+//            the content size's ImTrunc64, imgui.cpp:3549-3556, 7250):
+//            ERR_OUT_OF_RANGE, not called. count 0 is accepted and calls
+//            the callback never; a list of exactly 2^30 units is accepted
+//            and calls it.
 //  COVERAGE  every Clipper function has reached ImGui.
 //
 // The guard listClipper runs before Begin() (canListClipper:wrong-window)
@@ -66,8 +78,11 @@
 //  itemHeight's check removed: REJECTED fails;
 //  the callback given (start, start): RANGES fails.
 // The pending-exception check removed (Step() called again after a throw)
-// is not detected: with one range that Step() only ends the clipper
-// (progress-imgui-binding.md, "Behaviours no test detects").
+// is not detected, FROZEN's second range included: Hermes's
+// napi_call_function refuses to call while an exception is pending
+// (NAPI_PREAMBLE, hermes/API/napi/hermes_napi_impl.h:597-604), so the
+// callback is not run again, and the remaining Step()s end where End()
+// would (progress-imgui-binding.md, "Behaviours no test detects").
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -75,6 +90,7 @@
 // RUN: %with-display 300 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 HERMES_NODE_DEBUG_NATIVE=UI %hermes-node-ui %s > %t.out 2> %t.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=CODE %s
 // RUN: %FileCheck %s < %t.out
 // RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=TRACE %s < %t.err
+// RUN: grep -c -F 'imgui: listClipper: abandoned, the callback changed the window scope' %t.err | %FileCheck --check-prefix=ABANDON %s
 
 'use strict';
 
@@ -339,6 +355,23 @@ async function main() {
      () => {}],
     ['SCOPE_OPENTABLE', () => imgui.beginChild('c', [0, 200]),
      () => imgui.beginTable('inner', 1), () => imgui.endChild()],
+    // The same window and table again, ended and begun with the same
+    // identity: only their begin counts tell them apart.
+    ['SCOPE_REBEGINWINDOW', () => {},
+     () => {
+       imgui.end();
+       imgui.begin('scope', null, imgui.WindowFlags_NoSavedSettings);
+     },
+     () => {}],
+    ['SCOPE_REBEGINTABLE', () => imgui.beginTable('t', 1),
+     (s) => {
+       imgui.tableNextRow();
+       imgui.tableNextColumn();
+       imgui.text('row ' + s);
+       imgui.endTable();
+       imgui.beginTable('t', 1);
+     },
+     () => imgui.endTable()],
   ];
   const abandonMessages = [];
   for (const [label, setup, change, teardown] of scopeCases) {
@@ -372,12 +405,68 @@ async function main() {
   if (abandonMessages.length !== 0)
     console.log('SCOPE message ' + abandonMessages[0]);
 
+  // --- FROZEN ----------------------------------------------------------
+  // A scrolled table with a frozen header row: the clipper's first range
+  // is that row alone (imgui.cpp:3571-3578, the table not yet unfrozen,
+  // imgui_tables.cpp:1866, which freezes rows only once the table has
+  // scrolled), so there is a second range. A callback throwing on the
+  // first: called once, its error propagates, and the table goes on.
+  {
+    const run = async (throwing, scroll = false) => {
+      const ranges = [];
+      let error = null;
+      const drew = await h.run(() => windowAt('frozen', () => {
+        imgui.beginTable('f', 1, imgui.TableFlags_ScrollY, [0, 150]);
+        imgui.tableSetupScrollFreeze(0, 1);
+        try {
+          imgui.listClipper(100, height, (s, e) => {
+            ranges.push([s, e]);
+            if (throwing)
+              throw new Error('frozen');
+            for (let i = s; i < e; ++i) {
+              imgui.tableNextRow();
+              imgui.tableNextColumn();
+              imgui.text('r ' + i);
+            }
+          });
+        } catch (e) {
+          error = e;
+        }
+        if (scroll)
+          imgui.setScrollHereY(1);
+        imgui.endTable();
+      }));
+      return {ranges, error, drew};
+    };
+    await run(false, true);
+    let plain = null;
+    // The scroll applies on a later frame; at most 600 of them, as
+    // harness.until bounds its waits.
+    for (let i = 0; i < 600; ++i) {
+      plain = await run(false);
+      if (plain.ranges.length >= 2)
+        break;
+    }
+    const thrown = await run(true);
+    const ok = plain.error === null && plain.ranges.length >= 2 &&
+        plain.ranges[0][0] === 0 && plain.ranges[0][1] === 1 &&
+        thrown.error !== null && thrown.error.message === 'frozen' &&
+        JSON.stringify(thrown.ranges) === '[[0,1]]' && thrown.drew === true &&
+        plain.drew === true;
+    console.log(ok ? 'FROZEN ok' :
+                     'FROZEN WRONG ' + JSON.stringify({
+                       plain: plain.ranges,
+                       thrown: thrown.ranges,
+                       error: thrown.error && thrown.error.message,
+                     }));
+  }
+
   // --- REJECTED --------------------------------------------------------
   {
     const messages = [];
-    let zeroCalled = 0;
+    let zeroCalled = 0, edgeCalled = 0;
     await h.run(() => windowAt('rejected', () => {
-      for (const ih of [0, -1, NaN])
+      for (const ih of [0, -1, NaN, 0.5])
         messages.push(rejects('listClipper',
                               () => imgui.listClipper(10, ih, () => {}),
                               'ERR_OUT_OF_RANGE').message);
@@ -385,6 +474,14 @@ async function main() {
         messages.push(rejects('listClipper',
                               () => imgui.listClipper(n, height, () => {}),
                               'ERR_OUT_OF_RANGE').message);
+      // The list's height, count * itemHeight, at most 2^30.
+      for (const [n, ih] of [[1073741825, 1], [10, 268435456]])
+        messages.push(rejects('listClipper',
+                              () => imgui.listClipper(n, ih, () => {}),
+                              'ERR_OUT_OF_RANGE').message);
+      imgui.beginChild('edge', [0, 100]);
+      imgui.listClipper(536870912, 2, () => ++edgeCalled);
+      imgui.endChild();
       const before = calls('listClipper');
       imgui.listClipper(0, height, () => ++zeroCalled);
       if (calls('listClipper') !== before + 1)
@@ -392,6 +489,8 @@ async function main() {
     }));
     if (zeroCalled !== 0)
       fail('REJECTED count 0 called the callback ' + zeroCalled);
+    if (edgeCalled === 0)
+      fail('REJECTED the 2^30-unit list never called its callback');
     console.log('REJECTED ok');
     for (const m of messages)
       console.log('REJECTED message ' + m);
@@ -419,17 +518,26 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}SCOPE_ENDTABLE-throw ok{{$}}
 // CHECK-NEXT: {{^}}SCOPE_OPENTABLE-ret ok{{$}}
 // CHECK-NEXT: {{^}}SCOPE_OPENTABLE-throw ok{{$}}
+// CHECK-NEXT: {{^}}SCOPE_REBEGINWINDOW-ret ok{{$}}
+// CHECK-NEXT: {{^}}SCOPE_REBEGINWINDOW-throw ok{{$}}
+// CHECK-NEXT: {{^}}SCOPE_REBEGINTABLE-ret ok{{$}}
+// CHECK-NEXT: {{^}}SCOPE_REBEGINTABLE-throw ok{{$}}
 // CHECK-NEXT: {{^}}SCOPE message imgui.listClipper(): the callback changed the window scope (it closed the clipper's window or table, or left one open); the clipper was abandoned{{$}}
+// CHECK-NEXT: {{^}}FROZEN ok{{$}}
 // CHECK-NEXT: {{^}}REJECTED ok{{$}}
-// CHECK-NEXT: {{^}}REJECTED message imgui.listClipper(): itemHeight must be greater than 0; got 0{{$}}
-// CHECK-NEXT: {{^}}REJECTED message imgui.listClipper(): itemHeight must be greater than 0; got -1{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.listClipper(): itemHeight must be at least 1; got 0{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.listClipper(): itemHeight must be at least 1; got -1{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.listClipper(): itemHeight must be a finite number{{.*}}{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.listClipper(): itemHeight must be at least 1; got 0.5{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.listClipper(): count must be an integer from 0 to 2147483646; got -1{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.listClipper(): count must be an integer from 0 to 2147483646; got 2147483647{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.listClipper(): count * itemHeight must be at most 1073741824; got 1.07374e+09{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.listClipper(): count * itemHeight must be at most 1073741824; got 2.68435e+09{{$}}
 // CHECK-NEXT: {{^}}COVERAGE Clipper ok{{$}}
 // CODE: EXITCODE 0
 
-// Each SCOPE_* case abandons its clipper once per run, eight in all; the
-// trace says so for each.
+// Each SCOPE_* case abandons its clipper once per run, twelve in all, and
+// the trace says so once for each: ABANDON counts the lines, so a missing
+// or a doubled one fails.
 // TRACE: {{^}}[ui] imgui: context created
-// TRACE: {{^}}[ui] imgui: listClipper: abandoned, the callback changed the window scope{{$}}
+// ABANDON: {{^}}12{{$}}

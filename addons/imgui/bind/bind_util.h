@@ -203,8 +203,10 @@ class Call {
   bool
   refFloat(size_t i, const char *what, int n, bool nullable, RefFloat *out);
   bool refString(size_t i, const char *what, size_t capacity, RefString *out);
-  // Array (copied) or Float32Array (borrowed); call LAST.
-  bool floats(size_t i, const char *what, FloatSpan *out);
+  // Array (copied) or Float32Array (borrowed); call LAST. At most
+  // \p maxCount numbers, checked before anything is allocated or read
+  // (ERR_OUT_OF_RANGE); a detached Float32Array is ERR_INVALID_ARG_VALUE.
+  bool floats(size_t i, const char *what, size_t maxCount, FloatSpan *out);
   // The optional output array of a vector getter: absent, or an Array.
   bool outArray(size_t i, const char *what);
 

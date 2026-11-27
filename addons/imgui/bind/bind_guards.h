@@ -106,10 +106,19 @@ const char *canListClipper();
 /// List clipper"): the current window, the depth of the window stack, and
 /// the current table. A table that does not scroll changes the current
 /// table without opening a window, so the table is compared too.
+/// The window and the table are also compared by how many times they were
+/// begun, so that one ended and begun again with the same identity inside
+/// the callback (end() then begin() of the clipper's window; endTable()
+/// then beginTable() with the same ID) is not taken for the same scope:
+/// the window's BeginCount, raised by every Begin() of it in a frame
+/// (imgui.cpp:8892), and the table's InstanceCurrent, raised by every
+/// BeginTable() of it in a frame (imgui_tables.cpp:376, 391).
 struct ScopeSnapshot {
   const void *window;
+  int windowBeginCount;
   int windowStackSize;
   const void *table;
+  int tableInstance;
 };
 ScopeSnapshot snapshotScope();
 bool sameScope(const ScopeSnapshot &s);

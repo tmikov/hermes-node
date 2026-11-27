@@ -96,7 +96,7 @@ class Call {
   bool refInt(size_t i, const char *what, int n, bool nullable, RefInt *out);
   bool refFloat(size_t i, const char *what, int n, bool nullable, RefFloat *out);
   bool refString(size_t i, const char *what, size_t capacity, RefString *out);
-  bool floats(size_t i, const char *what, FloatSpan *out);     // Array (copied) or Float32Array (borrowed); call LAST
+  bool floats(size_t i, const char *what, size_t maxCount, FloatSpan *out);  // Array (copied) or Float32Array (borrowed); call LAST
 
   // After the arguments are read: counts the call, then the caller calls ImGui.
   void enterImGui();

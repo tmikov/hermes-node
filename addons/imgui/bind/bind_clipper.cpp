@@ -25,6 +25,23 @@ namespace bind {
 
 namespace {
 
+/// The smallest itemHeight. Step() converts the distance from the cursor
+/// to each edge of the clip rectangle, divided by the height, to int
+/// (`(int)(... / ItemsHeight)`, imgui.cpp:3692-3693); the distance is at
+/// most the list's height plus the window's, so with a height of at least
+/// 1 the quotient is at most the item count plus the window's height in
+/// units, inside `int` under the next bound for any window below 2^30
+/// units tall.
+constexpr float kMinItemHeight = 1.0f;
+/// The largest count * itemHeight, the list's height. End() seeks the
+/// cursor to StartPosY + count * itemHeight (imgui.cpp:3549-3556, in
+/// double, stored as float), and the window's content size is then
+/// ImTrunc64 of that distance (imgui.cpp:7250), undefined at 2^63 or for
+/// an infinity; 2^30 keeps both that and the quotient above (2^30 plus a
+/// window below 2^30 units) defined, and is far above any list a window
+/// shows (a million items of 17 units is 2^24).
+constexpr double kMaxListHeight = 1073741824.0;
+
 /// `listClipper(count, itemHeight, callback)`: Begin(count, itemHeight),
 /// then the callback once per range Step() yields, `callback(start, end)`,
 /// its return value ignored.
@@ -48,10 +65,14 @@ napi_value listClipper(napi_env env, napi_callback_info info) {
     return nullptr;
   // A height of 0 or less asks ImGui to measure the first item
   // (imgui.h:3083), which is not bound; f32 has already refused NaN.
-  if (!(itemHeight > 0.0f))
+  if (!(itemHeight >= kMinItemHeight))
     return c.throwRange(
-        "itemHeight must be greater than 0; got %g",
+        "itemHeight must be at least 1; got %g",
         static_cast<double>(itemHeight));
+  if (static_cast<double>(count) * itemHeight > kMaxListHeight)
+    return c.throwRange(
+        "count * itemHeight must be at most 1073741824; got %g",
+        static_cast<double>(count) * itemHeight);
   if (c.typeOf(2) != napi_function)
     return c.throwType("ERR_INVALID_ARG_TYPE", "callback must be a function");
   if (!c.needFrame())
@@ -64,7 +85,19 @@ napi_value listClipper(napi_env env, napi_callback_info info) {
   c.enterImGui();
   ImGuiListClipper clipper;
   clipper.Begin(count, itemHeight);
+  // A usage error Begin() or Step() reported would otherwise be dropped by
+  // the next binding call's enterImGui(). None is known to be reachable
+  // with a positive itemHeight (the measuring branch, which has the one
+  // recoverable check, imgui.cpp:3620, is not entered); this keeps it so.
+  if (!c.leaveImGui()) {
+    clipper.End();
+    return nullptr;
+  }
   while (clipper.Step()) {
+    if (!c.leaveImGui()) {
+      clipper.End();
+      return nullptr;
+    }
     napi_value args[2] = {nullptr, nullptr};
     if (!c.napiOk(
             napi_create_int32(env, clipper.DisplayStart, &args[0]),

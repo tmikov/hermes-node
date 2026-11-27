@@ -30,8 +30,16 @@
 //  REJECTED  valuesOffset 4 on 4 values, -1, 1.5, and 1 on an empty array;
 //            a NaN value in an Array and in a Float32Array; an empty label
 //            at the window's root (label-id): refused, not called
-//            (ERR_OUT_OF_RANGE, the last ERR_IMGUI_USAGE). valuesOffset 3
-//            on 4 values and an overlay text are accepted.
+//            (ERR_OUT_OF_RANGE, the last ERR_IMGUI_USAGE). For both plots:
+//            an Array of length 2^32 - 1, a sparse Array of length 1e9, and
+//            4097 values as an Array and a Float32Array (the cap is 4096,
+//            bind_plots.cpp's kMaxPlotValues): ERR_OUT_OF_RANGE, refused
+//            before any element is read; a detached Float32Array (made with
+//            __test.detachArrayBuffer): ERR_INVALID_ARG_VALUE. graphSize[0]
+//            3e9 (PlotEx's (int) of the width): ERR_OUT_OF_RANGE.
+//            valuesOffset 3 on 4 values, an overlay text, and 4096 values
+//            in a frame 4096 wide (the widest the cap allows) are
+//            accepted.
 //  COVERAGE  every Plots function has reached ImGui.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
@@ -256,6 +264,30 @@ async function main() {
                   'ERR_OUT_OF_RANGE').message);
       messages.push(rejects('plotLines', () => imgui.plotLines('', [0, 1]),
                             'ERR_IMGUI_USAGE').message);
+      // Too many values, refused before any is read or anything is
+      // allocated for them: an Array of length 2^32 - 1, a sparse one, and
+      // one past the 4096-value cap in both forms.
+      const sparse = [];
+      sparse.length = 1e9;
+      for (const name of ['plotLines', 'plotHistogram']) {
+        for (const values of [new Array(2 ** 32 - 1), sparse,
+                              new Array(4097).fill(0), new Float32Array(4097)])
+          messages.push(rejects(name, () => imgui[name]('p', values),
+                                'ERR_OUT_OF_RANGE').message);
+        // A Float32Array whose buffer was detached keeps its length and has
+        // no data (hermes_napi_typedarray.cpp:221-232).
+        const detached = new Float32Array(4);
+        imgui.__test.detachArrayBuffer(detached.buffer);
+        messages.push(rejects(name, () => imgui[name]('p', detached),
+                              'ERR_INVALID_ARG_VALUE').message);
+      }
+      messages.push(
+          rejects('plotLines',
+                  () => imgui.plotLines('p', [0, 1], 0, null, 0, 1, [3e9, 10]),
+                  'ERR_OUT_OF_RANGE').message);
+      accepted('plotHistogram',
+               () => imgui.plotHistogram('cap', new Float32Array(4096), 0, null,
+                                         0, 1, [4096, 20]));
       accepted('plotLines', () => imgui.plotLines('ok3', [0, 1, 0, 1], 3));
       accepted('plotHistogram',
                () => imgui.plotHistogram('ov', [0, 1], 0, 'overlay'));
@@ -288,6 +320,17 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}REJECTED message imgui.plotHistogram(): values[1] must be a finite number{{.*}}{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.plotHistogram(): values[1] must be a finite number{{.*}}{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.plotLines(): label gives the item the window's own ID{{.*}}{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.plotLines(): values must hold at most 4096 numbers; got 4294967295{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.plotLines(): values must hold at most 4096 numbers; got 1000000000{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.plotLines(): values must hold at most 4096 numbers; got 4097{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.plotLines(): values must hold at most 4096 numbers; got 4097{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.plotLines(): values is a detached Float32Array{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.plotHistogram(): values must hold at most 4096 numbers; got 4294967295{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.plotHistogram(): values must hold at most 4096 numbers; got 1000000000{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.plotHistogram(): values must hold at most 4096 numbers; got 4097{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.plotHistogram(): values must hold at most 4096 numbers; got 4097{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.plotHistogram(): values is a detached Float32Array{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.plotLines(): graphSize[0] must be less than 2147483648; got 3e+09{{$}}
 // CHECK-NEXT: {{^}}COVERAGE Plots ok{{$}}
 // CODE: EXITCODE 0
 

@@ -651,6 +651,37 @@ napi_value tableScope(napi_env env, napi_callback_info) {
   return result;
 }
 
+/// `detachArrayBuffer(buffer)`: detaches \p buffer with
+/// napi_detach_arraybuffer, so that a test can hand the binding a typed
+/// array whose buffer is gone. This runtime has no other way to detach one
+/// from JavaScript (no ArrayBuffer.prototype.transfer, no structuredClone,
+/// and hermes-node-ui does not take the VM option that would expose
+/// HermesInternal.detachArrayBuffer).
+napi_value detachArrayBuffer(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  bool isBuffer = false;
+  if (argc < 1 || napi_is_arraybuffer(env, argv[0], &isBuffer) != napi_ok ||
+      !isBuffer) {
+    napi_throw_type_error(
+        env,
+        "ERR_INVALID_ARG_TYPE",
+        "imgui.__test.detachArrayBuffer(): buffer must be an ArrayBuffer");
+    return nullptr;
+  }
+  if (napi_detach_arraybuffer(env, argv[0]) != napi_ok) {
+    napi_throw_error(
+        env,
+        nullptr,
+        "imgui.__test.detachArrayBuffer(): napi_detach_arraybuffer failed");
+    return nullptr;
+  }
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
 } // namespace
 
 napi_value createTestHooks(napi_env env) {
@@ -667,7 +698,8 @@ napi_value createTestHooks(napi_env env) {
       {"guards", guards},
       {"setDoubleClickTime", setDoubleClickTime},
       {"setTooltipDelay", setTooltipDelay},
-      {"tableScope", tableScope}};
+      {"tableScope", tableScope},
+      {"detachArrayBuffer", detachArrayBuffer}};
   for (const auto &f : functions) {
     napi_value fn = nullptr;
     if (napi_create_function(

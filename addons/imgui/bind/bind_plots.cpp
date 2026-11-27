@@ -19,11 +19,28 @@ namespace bind {
 
 namespace {
 
-/// The most values a plot takes. PlotEx reads value
-/// `(index + values_offset + 1) % values_count` (imgui_widgets.cpp:9151),
-/// with `index` and `values_offset` each below the count, so the sum stays
-/// within `int` only while the count is at most INT_MAX / 2.
-constexpr size_t kMaxPlotValues = INT_MAX / 2;
+/// The most values a plot takes. PlotEx steps over `res_w =
+/// min((int)frame_size.x, values_count)` columns (minus one for lines),
+/// accumulating `t0 += 1.0f / res_w` in float, and for each takes
+/// `v1_idx = (int)(t0 * item_count + 0.5f)`, then asserts plainly that
+/// `v1_idx < values_count` (imgui_widgets.cpp:9133-9151). The float error
+/// of t0 grows with res_w, and the index reaches values_count once res_w is
+/// large: the first failing case, computed by running that arithmetic for
+/// every res_w and count, is a histogram of 5921 values in a frame at
+/// least 5921 wide (10123 for lines), with or without a fused multiply-add.
+/// res_w is at most the count, and every (res_w, count) with count <= 4096
+/// was run and holds, so 4096 values keep the assertion true for any frame
+/// width. The other arithmetic, `index + values_offset + 1` (9151), stays
+/// far inside `int` at that size.
+constexpr size_t kMaxPlotValues = 4096;
+/// PlotEx converts the frame's width to int (`(int)frame_size.x`,
+/// imgui_widgets.cpp:9116), undefined at 2^31 or more. A positive
+/// graphSize.x is that width (CalcItemSize, imgui.cpp:12609-12625). A zero
+/// or negative one comes from the item width, whose own conversion in
+/// CalcItemWidth (IM_TRUNC, imgui.cpp:12601) has the same limit and is
+/// setNextItemWidth()'s and pushItemWidth()'s to bound, not this
+/// function's.
+constexpr float kMaxGraphWidth = 2147483648.0f;
 
 enum class PlotKind { Lines, Histogram };
 
@@ -45,13 +62,13 @@ napi_value plot(napi_env env, napi_callback_info info, PlotKind kind) {
       (!c.isMissing(5) && !c.f32(5, "scaleMax", &scaleMax)) ||
       (!c.isMissing(6) && !c.vec2(6, "graphSize", &graphSize)) ||
       // Last: a Float32Array's data is borrowed from here to the call.
-      !c.floats(1, "values", &values))
+      !c.floats(1, "values", kMaxPlotValues, &values))
     return nullptr;
-  if (values.count > kMaxPlotValues)
+  if (!(graphSize.x < kMaxGraphWidth))
     return c.throwRange(
-        "values must hold at most %zu numbers; got %zu",
-        kMaxPlotValues,
-        values.count);
+        "graphSize[0] must be less than 2147483648; got %g",
+        static_cast<double>(graphSize.x));
+
   // PlotEx reads `(i + values_offset) % values_count` without a check on
   // the offset (imgui_widgets.cpp:9126-9127, 9138, 9151), so it must be a
   // valid index (design, "Buffers").
@@ -66,6 +83,7 @@ napi_value plot(napi_env env, napi_callback_info info, PlotKind kind) {
         offset);
   if (!c.needFrame() || !c.needLabelId("label", label))
     return nullptr;
+
   const char *overlayText = noOverlay ? nullptr : overlay.c_str();
   const int count = static_cast<int>(values.count);
   c.enterImGui();
