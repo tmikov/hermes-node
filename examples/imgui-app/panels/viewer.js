@@ -14,8 +14,11 @@
 //
 // This module requires neither hermes-node:ui nor hermes-node:imgui: it
 // reaches ImGui only through the `ctx` draw() is given, and the
-// filesystem only through the `fs` it was created with (`open`, and on the
-// handle `stat`, `read` and `close`). test/imgui-app-viewer.js loads it
+// filesystem only through the `fs` it was created with (`stat` and `open`,
+// and on the handle `stat`, `read` and `close`). Only a regular file is
+// opened: anything else (a FIFO, a device, a socket, a directory, or a
+// symbolic link to one) is the error NOT_A_REGULAR_FILE, decided by a stat
+// of the path first. test/imgui-app-viewer.js loads it
 // under plain hermes-node.
 
 'use strict';
@@ -112,7 +115,40 @@ function toHexRows(bytes) {
  * to grows after the stat. Once CAP bytes are in, one more read of one
  * byte at position CAP says whether there is more.
  */
+/** What a stat says `path` is, for a message, when it is not a file. */
+function kindOf(stat) {
+  if (stat.isFIFO())
+    return 'a FIFO';
+  if (stat.isCharacterDevice())
+    return 'a character device';
+  if (stat.isSocket())
+    return 'a socket';
+  if (stat.isBlockDevice())
+    return 'a block device';
+  if (stat.isDirectory())
+    return 'a directory';
+  return 'not a regular file';
+}
+
+/**
+ * Rejects unless `path` is a regular file, by a stat of the path, which
+ * follows a symbolic link and cannot block. Only then is it opened: open()
+ * of a FIFO with no writer, or a read of a terminal, would block a libuv
+ * threadpool thread for good, and four of those (the pool's default size)
+ * stop every later listing and read. A path replaced by a FIFO between
+ * the stat and the open is not caught.
+ */
+async function checkRegular(fs, path) {
+  const stat = await fs.stat(path);
+  if (stat.isFile())
+    return;
+  const e = new Error('not a regular file: ' + kindOf(stat));
+  e.code = 'NOT_A_REGULAR_FILE';
+  throw e;
+}
+
 async function readCapped(fs, path) {
+  await checkRegular(fs, path);
   const fh = await fs.open(path, 'r');
   try {
     const stat = await fh.stat();

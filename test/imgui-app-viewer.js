@@ -34,7 +34,7 @@
 //  CLOSE_ON_ERROR a read() that rejects with EIO, and separately a stat()
 //                that rejects with EIO: status 'error', code EIO, close()
 //                still called once, each.
-//  SUPERSEDE     a fake fs whose open() promises the test settles by hand:
+//  SUPERSEDE     a fake fs whose stat() promises the test settles by hand:
 //                load('first'), load('second'); the second's chain settled
 //                first, then the first's: state is 'second' with its
 //                content. Then the first's settled first: still 'second'.
@@ -50,6 +50,15 @@
 //                one 1 MiB line: text, 1 line, cut for display at
 //                LINE_LIMIT characters with the marker.
 //  MISSING       a path that does not exist: 'error', ENOENT.
+//  NOT_REGULAR   a fake fs whose stat() says FIFO, character device,
+//                socket, block device or directory: 'error',
+//                NOT_A_REGULAR_FILE, the message naming the kind, logged;
+//                and no open() is ever issued (the recording fake's
+//                method list is exactly `fs.stat`). Its stat() rejecting
+//                with EACCES: 'error', EACCES, no open(). A regular file
+//                through the same fake: stat(), then open(), read and
+//                close. And the real /dev/null, a character device every
+//                machine has: refused the same way.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
 //  the viewer using readFile: CAP fails on the recorded method;
@@ -66,7 +75,9 @@
 //  (no truncation probe); the probe kept but also requiring stat.size
 //  past the cap: GROWING fails;
 //  the lead-byte test widened back to 0xC0..0xFF: CLASSIFY fails on the
-//  0xF8 file.
+//  0xF8 file;
+//  the regular-file check removed (open() whatever stat() says):
+//  NOT_REGULAR fails on the recorded open.
 //
 // RUN: rm -rf %t && mkdir -p %t && %hermes-node %s %S/fixtures/imgui/app-tree %t | %FileCheck %s
 // CHECK: CAP ok
@@ -77,6 +88,7 @@
 // CHECK-NEXT: SUPERSEDE ok
 // CHECK-NEXT: CLASSIFY ok
 // CHECK-NEXT: MISSING ok
+// CHECK-NEXT: NOT_REGULAR ok
 // CHECK-NEXT: PASS
 
 'use strict';
@@ -276,7 +288,8 @@ async function caseGrowing() {
     },
     close: async () => {},
   };
-  const {viewer} = newViewer({open: async () => handle});
+  const {viewer} = newViewer(
+      {stat: async () => regularStat(0), open: async () => handle});
   await viewer.load('growing');
   const s = viewer.state;
   if (s.status !== 'text' || s.truncated !== true)
@@ -299,18 +312,43 @@ async function caseCloseOnError() {
   console.log('CLOSE_ON_ERROR ok');
 }
 
+/** What a fake stat() of a regular file of `size` bytes answers. */
+function regularStat(size) {
+  return fakeStat('file', size);
+}
+
 /**
- * A fake fs.promises over in-memory files whose open() returns a promise
- * the test settles: `release(path)` resolves the pending open of `path`.
+ * A fake Stats of type `type` ('file', 'fifo', 'char', 'socket', 'block'
+ * or 'dir'): the is*() methods the viewer may ask, and a size.
+ */
+function fakeStat(type, size = 0) {
+  return {
+    size,
+    isFile: () => type === 'file',
+    isFIFO: () => type === 'fifo',
+    isCharacterDevice: () => type === 'char',
+    isSocket: () => type === 'socket',
+    isBlockDevice: () => type === 'block',
+    isDirectory: () => type === 'dir',
+    isSymbolicLink: () => false,
+  };
+}
+
+/**
+ * A fake fs.promises over in-memory files whose stat() returns a promise
+ * the test settles: `release(path)` resolves the pending stat of `path`.
  */
 function handSettledFs(files) {
   const pending = new Map();
+  // The chain's first call, stat(), is the one settled by hand (the viewer
+  // calls open() only after it).
   const fake = {
-    open(p) {
+    stat(p) {
       return new Promise((resolve) => {
-        pending.set(p, () => resolve(memoryHandle(Buffer.from(files[p]))));
+        pending.set(p, () => resolve(regularStat(files[p].length)));
       });
     },
+    open: async (p) => memoryHandle(Buffer.from(files[p])),
   };
   function memoryHandle(bytes) {
     return {
@@ -444,6 +482,94 @@ async function caseMissing() {
   console.log('MISSING ok');
 }
 
+async function caseNotRegular() {
+  const wrong = [];
+  /**
+   * A fake fs whose stat() answers `statOf()` (or rejects with its
+   * `error`), recording every call; open() serves `bytes`.
+   */
+  function fakeFs(statOf, bytes = Buffer.alloc(0)) {
+    const rec = [];
+    const fake = {
+      stat: async (p) => {
+        rec.push('fs.stat');
+        const st = statOf(p);
+        if (st.error) {
+          const e = new Error(st.error + ': injected stat failure');
+          e.code = st.error;
+          throw e;
+        }
+        return st;
+      },
+      open: async () => {
+        rec.push('fs.open');
+        return {
+          stat: async () => regularStat(bytes.length),
+          read: async (buffer, offset, length, position) => {
+            rec.push('handle.read');
+            const n = Math.max(0, Math.min(length, bytes.length - position));
+            bytes.copy(buffer, offset, position, position + n);
+            return {bytesRead: n, buffer};
+          },
+          close: async () => {
+            rec.push('handle.close');
+          },
+        };
+      },
+    };
+    return {fake, rec};
+  }
+  const kinds = {fifo: 'a FIFO', char: 'a character device',
+                 socket: 'a socket', block: 'a block device',
+                 dir: 'a directory'};
+  for (const type of Object.keys(kinds)) {
+    const {fake, rec} = fakeFs(() => fakeStat(type));
+    const {viewer, logged} = newViewer(fake);
+    await viewer.load('special-' + type);
+    const s = viewer.state;
+    if (s.status !== 'error' || s.code !== 'NOT_A_REGULAR_FILE' ||
+        !String(s.message).includes(kinds[type]) ||
+        rec.join(',') !== 'fs.stat' ||
+        !logged.some((l) => l.includes('NOT_A_REGULAR_FILE')))
+      wrong.push(type + '=' + JSON.stringify(
+          {status: s.status, code: s.code, message: s.message, rec, logged}));
+  }
+  {
+    const {fake, rec} = fakeFs(() => ({error: 'EACCES'}));
+    const {viewer} = newViewer(fake);
+    await viewer.load('unstatable');
+    const s = viewer.state;
+    if (s.status !== 'error' || s.code !== 'EACCES' ||
+        rec.join(',') !== 'fs.stat')
+      wrong.push('stat-rejects=' + JSON.stringify(
+          {status: s.status, code: s.code, rec}));
+  }
+  {
+    const bytes = Buffer.from('regular\n');
+    const {fake, rec} = fakeFs(() => regularStat(bytes.length), bytes);
+    const {viewer} = newViewer(fake);
+    await viewer.load('regular');
+    const s = viewer.state;
+    if (s.status !== 'text' || s.lines.join() !== 'regular' ||
+        rec[0] !== 'fs.stat' || rec[1] !== 'fs.open' ||
+        rec[rec.length - 1] !== 'handle.close')
+      wrong.push('regular=' + JSON.stringify(
+          {status: s.status, lines: s.lines, rec}));
+  }
+  {
+    const {viewer} = newViewer(fs.promises);
+    await viewer.load('/dev/null');
+    const s = viewer.state;
+    if (s.status !== 'error' || s.code !== 'NOT_A_REGULAR_FILE' ||
+        !String(s.message).includes('a character device'))
+      wrong.push('/dev/null=' + JSON.stringify(
+          {status: s.status, code: s.code, message: s.message}));
+  }
+  if (wrong.length !== 0)
+    fail('NOT_REGULAR WRONG ' + wrong.join(' '));
+  console.log('NOT_REGULAR ok');
+}
+
 async function main() {
   checkNoWindowModules();
   await caseCap();
@@ -454,6 +580,7 @@ async function main() {
   await caseSupersede();
   await caseClassify();
   await caseMissing();
+  await caseNotRegular();
   checkNoWindowModules();
   console.log('PASS');
 }

@@ -306,6 +306,10 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | final review | `ui-imgui-bind-widgets.js` (FORMATLEN) | the 30-byte limit removed, with FORMATLEN's float candidates now long by `0` flags (`'%' + 25 zeros + '1.1f'`) rather than by a 27-digit precision, which the new digit cap refuses first | `FORMAT ok`, then the 31-byte float format accepted and dragged: `imgui_widgets.cpp:3714: ImParseFormatSanitizeForPrinting ... Assertion ... < fmt_out_size failed`, `EXITCODE 134`; test failed. So FORMATLEN still shows the float half of the 30-byte limit |
 | final review | `ui-imgui-bind-layout.js` (REJECTED) | (RED, and the mutation: the bound back at `INT32_MAX`, which is the code before the fix) `setKeyboardFocusHere(2147483647)` | `NOTHROW ERR_OUT_OF_RANGE`, test failed |
 | final review | `ui-imgui-bind-args.js`, `ui-imgui-bind-layout.js` | call counting gated the wrong way round (`if (!testHooksEnabled())`) | args: `UNCOVERED Frame newFrame render showDemoWindow ...`; layout: `REJECTED edges not accepted: 0`; both `EXITCODE 1`, both failed |
+| final review | `imgui-app-viewer.js` | (RED) NOT_REGULAR written, the viewer unchanged | `NOT_REGULAR WRONG fifo={"status":"text","rec":["fs.open","handle.read","handle.close"],...}` and the same for char, socket, block and dir: an open() issued for each; test failed |
+| final review | `imgui-app-viewer.js` | the regular-file check removed (the stat kept, its answer ignored) | `NOT_REGULAR WRONG fifo={"status":"text","rec":["fs.stat","fs.open","handle.read","handle.close"],...}`; test failed. (Removing the stat call as well fails SUPERSEDE first, whose hand-settled step is now the stat.) |
+| final review | `ui-imgui-app.js` (SPECIAL) | (RED) run against the unfixed `files.js` and `viewer.js` | `SPECIAL WRONG the FIFO listed as {"kind":"file"}`; test failed |
+| final review | `ui-imgui-app.js` (SPECIAL) | the unfixed `viewer.js` alone (the tree's labelling kept) | `TIMEOUT idle SPECIAL link` after the link to the FIFO was clicked: the open() blocked a threadpool thread and app.idle() never resolved; the run ended in 34 s, bounded by the test's own wait, not a hang; test failed |
 
 ## Behaviours no test detects
 
@@ -350,7 +354,9 @@ automated test would notice losing. Each task appends its own.
   bound. The hook exists to remove that dependency on frame time, so no
   test can see it lost; it was checked by reading (it writes
   `style.HoverStationaryDelay` and `style.HoverDelayShort` and returns
-  the previous `HoverDelayShort`).
+  the previous values of both, `[stationary, delayShort]`; corrected in
+  the final review, this note first said it returned the previous
+  `HoverDelayShort` alone).
 - **Task 4 (review): `Call::write(RefString)` measures the buffer with
   `strnlen` bounded by its capacity**, not `strlen`. The buffer is always
   terminated (the binding terminates it and ImGui never writes its last
@@ -1691,3 +1697,46 @@ the code and ImGui's source before it was changed.
   happens. A run without the hooks has no way to count calls, and the
   harness needs the hooks too; the saving, if any, is in runs nobody here
   measures.
+- **F3, the viewer opening anything** (Important). Confirmed: `kindOf`
+  in `panels/files.js` made every non-directory, non-link entry a 'file',
+  and `readCapped` opened with no type check. Measured with the unfixed
+  viewer in the window test: a click on a link to a FIFO left
+  `app.idle()` unresolved (`TIMEOUT idle SPECIAL link`). Now the viewer
+  stats the path (through the injected `fs`, following a link) before
+  opening, and anything but a regular file is the error
+  `NOT_A_REGULAR_FILE`, its message naming the kind ("not a regular file:
+  a FIFO"), logged, and an `APP error` line when driven; a dangling link
+  is the stat's own ENOENT. The tree labels a FIFO, socket or device from
+  its Dirent (`pipe (fifo)`, kind 'special') and does not offer it; an
+  entry whose Dirent reports no type stays a 'file', since the viewer's
+  stat refuses it anyway, so a filesystem without `d_type` keeps its
+  files clickable. **Choices**: the code is the application's own name,
+  not an errno, so it cannot be mistaken for one; a path replaced by a
+  FIFO between the stat and the open is not caught (opening with
+  `O_NONBLOCK` and checking the handle's stat would close that, at the
+  cost of an `fs` interface beyond the one the finding prescribes).
+  `imgui-app-viewer.js` NOT_REGULAR (a fake fs for FIFO, character and
+  block devices, socket and directory: no open() recorded; a rejecting
+  stat; a regular file still opened; the real `/dev/null`); the fakes of
+  GROWING and SUPERSEDE gained a `stat`, and SUPERSEDE's hand-settled
+  step moved from open() to stat(), the chain's first call now.
+  `ui-imgui-app.js` SPECIAL, with a real FIFO from `mkfifo` (via
+  `child_process.spawnSync`; `SKIP fifo` without one); the root now lists
+  11 entries.
+- **F10, the Files listing is read once** (Minor). The application
+  README and the `files.js` header now say so: collapsing and expanding
+  does not re-read; Open Folder starts over.
+- **Observed, not changed**: `imgui-app-viewer.js` run by hand under
+  `cmake-build-asan/bin/hermes-node` spends minutes of CPU in CLASSIFY
+  (timed out at 150 s), where under lit the whole test takes about 20 s;
+  the unmodified test from before this fix behaves the same, so it is
+  not this change. Not investigated.
+- **F9, documentation.** The README said "Four rows ... cannot be
+  reached" and listed three, counting the draw list's two flag rows as
+  one, and also named `endCombo` under "Raised by a call", which its guard
+  makes unreachable: the list now names the two draw-list rows and
+  `endCombo` is only in the unreachable list. The Task 5 note on
+  `__test.setTooltipDelay()` now says it returns both previous delays.
+- Each commit of this round ran `./utils/format.sh -f` and then
+  `cmake --build cmake-build-asan --target check-hermes-node`, green
+  (JS 271 passed, 10 unsupported; unit 460) before it was made.

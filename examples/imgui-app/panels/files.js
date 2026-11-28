@@ -9,10 +9,13 @@
 // draws the state it finds, and the continuation stores the result. A
 // click on a file asks the viewer to load it.
 //
-// A node is {name, path, kind, children, more, open}: kind 'dir', 'file'
-// or 'link'; children null (not requested), 'loading', an array of nodes,
-// or {error}; `more` the entries past ENTRY_LIMIT; `open` whether a
-// directory is expanded. Symbolic links are shown and never followed into.
+// A node is {name, path, kind, special, children, more, open}: kind 'dir',
+// 'file', 'link' or 'special' (a FIFO, socket or device, `special` saying
+// which, labelled and never opened); children null (not requested),
+// 'loading', an array of nodes, or {error}; `more` the entries past
+// ENTRY_LIMIT; `open` whether a directory is expanded. Symbolic links are
+// shown and never followed into. A directory is read once: collapsing and
+// expanding it shows the same listing (Open Folder starts over).
 //
 // The visible tree is flattened into one array of rows, rebuilt only when
 // a directory opens, closes or finishes loading, and drawn through the
@@ -33,14 +36,46 @@ let selected = null;
 /** The flattened visible tree, or null when it must be rebuilt. */
 let rows = null;
 
-function makeNode(name, nodePath, kind) {
-  return {name, path: nodePath, kind, children: null, more: 0, open: false};
+function makeNode(name, nodePath, kind, special = null) {
+  return {name, path: nodePath, kind, special, children: null, more: 0,
+          open: false};
 }
 
+/**
+ * What a directory entry is shown as: 'link', 'dir', 'special' (a FIFO, a
+ * socket or a device, which is labelled and not offered to the viewer), or
+ * 'file'. An entry of a type the Dirent does not report is a 'file': the
+ * viewer stats it before opening it, and refuses anything that is not a
+ * regular file.
+ */
 function kindOf(dirent) {
   if (dirent.isSymbolicLink())
     return 'link';
-  return dirent.isDirectory() ? 'dir' : 'file';
+  if (dirent.isDirectory())
+    return 'dir';
+  return specialOf(dirent) === null ? 'file' : 'special';
+}
+
+/** 'fifo', 'socket', 'char device', 'block device', or null. */
+function specialOf(dirent) {
+  if (dirent.isFIFO())
+    return 'fifo';
+  if (dirent.isSocket())
+    return 'socket';
+  if (dirent.isCharacterDevice())
+    return 'char device';
+  if (dirent.isBlockDevice())
+    return 'block device';
+  return null;
+}
+
+/** A file row's label: the name, and what it is unless a regular file. */
+function fileLabel(node) {
+  if (node.kind === 'link')
+    return node.name + ' (link)';
+  if (node.kind === 'special')
+    return node.name + ' (' + node.special + ')';
+  return node.name;
 }
 
 /** Directories first, then by name (code unit order, as `ls` in C). */
@@ -81,7 +116,8 @@ function requestChildren(ctx, node) {
   state.track(state.fs.readdir(node.path, {withFileTypes: true}).then(
       (dirents) => {
         const all = dirents.map(
-            (d) => makeNode(d.name, path.join(node.path, d.name), kindOf(d)));
+            (d) => makeNode(d.name, path.join(node.path, d.name), kindOf(d),
+                specialOf(d)));
         all.sort(compareNodes);
         node.children = all.slice(0, ENTRY_LIMIT);
         node.more = all.length - node.children.length;
@@ -170,9 +206,10 @@ function drawNodeRow(ctx, node, isRoot) {
         imgui.TreeNodeFlags_NoTreePushOnOpen |
         imgui.TreeNodeFlags_SpanAvailWidth |
         (selected === node.path ? imgui.TreeNodeFlags_Selected : 0);
-    const row = treeRow(ctx, node.path,
-        node.kind === 'link' ? node.name + ' (link)' : node.name, flags, true);
-    if (row.clicked)
+    // A FIFO, socket or device is not offered: opening one can block.
+    const offered = node.kind !== 'special';
+    const row = treeRow(ctx, node.path, fileLabel(node), flags, offered);
+    if (offered && row.clicked)
       openFile(ctx, node);
   }
   imgui.popID();

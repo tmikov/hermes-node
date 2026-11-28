@@ -47,7 +47,11 @@ install: no npm dependencies, and so no `package.json`.
   is listed with `fs.promises.readdir` the first time it is opened, and
   shows "loading" until the promise settles. Directories first, then by
   name; at most 5000 entries per directory, then a "... N more" row.
-  Symbolic links are shown and not followed into. A directory that cannot
+  A directory is listed once and not read again: collapsing and expanding
+  it shows the same listing, and only File > Open Folder starts over.
+  Symbolic links are shown and not followed into. A FIFO, a socket or a
+  device is labelled as such (`pipe (fifo)`) and a click on it opens
+  nothing. A directory that cannot
   be read shows its error code in the tree and in the log. The visible
   tree is one flat list of rows, rebuilt only when a directory opens,
   closes or finishes loading, and drawn through the list clipper, so a
@@ -66,7 +70,11 @@ install: no npm dependencies, and so no `package.json`.
   cut, with a marker), anything else as a hex dump, both drawn through
   the list clipper so a long file costs only its visible lines. A file
   longer than 1 MiB says so, and a character the cut split is dropped
-  rather than shown as a replacement character. Above it, the file's
+  rather than shown as a replacement character. Only a regular file is
+  opened, decided by `fs.promises.stat` of the path first (which follows
+  a symbolic link): anything else, such as a link to a FIFO, is shown as
+  "not a regular file", since opening a FIFO with no writer or reading a
+  terminal would hold a threadpool thread for good. Above it, the file's
   `stat` fields. A request superseded by a newer one stores nothing.
 - **Widgets** (`panels/widgets.js`). A gallery in tabs: Basic (buttons,
   checkbox, radio buttons, sliders, drags, text and number inputs, a

@@ -451,7 +451,7 @@ has each site's line):
 - **Raised by a call:** `end` ("Calling End() too many times!"; on a popup
   "Must call EndPopup() and not End()!", on a child "Must call EndChild()
   and not End()!", both of which end the window anyway); `endPopup`,
-  `endMenu`, `endCombo` (in the wrong window); `endMainMenuBar` (not from a
+  `endMenu` (in the wrong window); `endMainMenuBar` (not from a
   menu bar); `endTabBar` (mismatched); `beginTabItem` and `endTabItem`
   (outside a tab bar); `endTable` (outside a table; "Mismatching
   PushID/PopID!", "Too many PopItemWidth!"); `tableSetupColumn` (outside a
@@ -464,9 +464,10 @@ has each site's line):
   table call ending a cell after `setCursorScreenPos` moved the cursor past
   the window's or parent's boundary without an item after it. Four rows
   the audit found cannot be reached through the binding because a check
-  of its own comes first: `endCombo` (its guard), the draw list's flag
-  check (G1 rejects the bits) and the clipper's item-height failure (the
-  measuring mode is not bound).
+  of its own comes first: `endCombo` (its guard makes the same
+  comparison first), the draw list's two flag checks (G1 rejects the
+  bits) and the clipper's item-height failure (the measuring mode is not
+  bound).
 - **Raised when a window ends**, by `end()` and by everything that ends a
   window internally (`endChild`, `endPopup`, `endTooltip`,
   `endMainMenuBar`, `endListBox`, `endMenu`, `endCombo`, and `endTable` of a

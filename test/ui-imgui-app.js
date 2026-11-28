@@ -17,8 +17,9 @@
 // the test adds `gone.txt` (removed after it was listed), `locked/` (mode
 // 000; as root, which can read it anyway, the case prints `SKIP locked`),
 // `big/` (5001 files, one over the Files panel's 5000-entry cap),
-// `small/` (50 files) and `odd/` (file names ImGui would not show as they
-// are, and `plain.txt`).
+// `small/` (50 files), `odd/` (file names ImGui would not show as they
+// are, and `plain.txt`) and `special/` (a FIFO, a link to it and
+// `plain.txt`).
 //
 // Two runs, selected by the first argument.
 //
@@ -39,6 +40,14 @@
 //             <path> ENOENT`), locked/ (`APP error <path> EACCES`): each
 //             prints its line and the next frame draws. (The size and
 //             encoding edges are test/imgui-app-viewer.js's.)
+//  SPECIAL    special/ opened (`APP dir`): its FIFO `pipe` (made with
+//             mkfifo; `SKIP fifo` without one) is listed as kind
+//             'special', a click on its row loads nothing; a click on
+//             `pipe-link`, a symbolic link to it, is refused by the
+//             viewer's stat (`APP error <path> NOT_A_REGULAR_FILE`)
+//             without the open() that would block; plain.txt beside them
+//             then opens. Each wait is bounded (app.idle() for 600
+//             frames), so the unfixed viewer fails as TIMEOUT, not a hang.
 //  NAMES      odd/ opened: `hash##tag.txt` and `line<LF>break.txt` (each
 //             `SKIP name <json>` instead if the file system refused it)
 //             are drawn as one-line rows, their rectangles the height of
@@ -125,7 +134,7 @@
 // CODE: EXITCODE 0
 //
 // CHECK: SCALE {{[0-9.]+$}}
-// CHECK: APP dir [[TREE]] entries=10
+// CHECK: APP dir [[TREE]] entries=11
 // CHECK: PANELS ok
 // CHECK: APP opened [[TREE]]/a.txt 12 lines=3
 // CHECK: OPEN ok
@@ -139,6 +148,10 @@
 // CHECK: EDGES gone.txt ok
 // CHECK: {{^(APP error .*/locked EACCES|SKIP locked)$}}
 // CHECK: EDGES locked ok
+// CHECK: APP dir [[TREE]]/special entries={{[23]}}
+// CHECK: {{^(APP error .*/special/pipe-link NOT_A_REGULAR_FILE|SKIP fifo .*)$}}
+// CHECK: APP opened [[TREE]]/special/plain.txt 6 lines=1
+// CHECK: SPECIAL ok
 // CHECK: NAMES ok
 // CHECK: COLLAPSE ok
 // CHECK: APP dir [[TREE]]/big entries=5001
@@ -302,6 +315,16 @@ async function main() {
     }
   }
   const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  // SPECIAL: a FIFO with no writer, a link to it, and a plain file.
+  const special = path.join(tree, 'special');
+  fs.mkdirSync(special);
+  fs.writeFileSync(path.join(special, 'plain.txt'), 'plain\n');
+  const fifo = path.join(special, 'pipe');
+  const fifoLink = path.join(special, 'pipe-link');
+  const made = require('child_process').spawnSync('mkfifo', [fifo]);
+  const haveFifo = made.status === 0 && fs.statSync(fifo).isFIFO();
+  if (haveFifo)
+    fs.symlinkSync('pipe', fifoLink);
 
   const app = await createApp({root: tree, clock: 'fixed', driven: true});
   const h = await harness.adopt(app);
@@ -427,6 +450,49 @@ async function main() {
     if (isRoot)
       console.log('SKIP locked');
     await edge('locked', () => null);
+  }
+
+  // --- SPECIAL ----------------------------------------------------------
+  {
+    const viewer = app.panels.viewer;
+    await clickRow(special);
+    await settle('SPECIAL');
+    const plain = path.join(special, 'plain.txt');
+    await waitRect(plain);
+    if (!haveFifo)
+      console.log('SKIP fifo ' + (made.error ? made.error.code : made.status));
+    if (haveFifo) {
+      const node = app.panels.files.root.children
+                       .find((n) => n.path === special).children
+                       .find((n) => n.path === fifo);
+      if (node === undefined || node.kind !== 'special' ||
+          node.special !== 'fifo')
+        fail('SPECIAL WRONG the FIFO listed as ' +
+            JSON.stringify(node && {kind: node.kind, special: node.special}));
+      // Not offered: a click on its row loads nothing.
+      const before = viewer.state.path;
+      await clickRow(fifo);
+      await settle('SPECIAL fifo');
+      if (viewer.state.path !== before)
+        fail('SPECIAL WRONG the FIFO row opened ' + viewer.state.path);
+      // A link to it is offered, and the viewer refuses it by its stat.
+      await clickRow(fifoLink);
+      await settle('SPECIAL link');
+      if (viewer.state.path !== fifoLink ||
+          viewer.state.code !== 'NOT_A_REGULAR_FILE')
+        fail('SPECIAL WRONG ' + JSON.stringify(
+            {path: viewer.state.path, status: viewer.state.status,
+             code: viewer.state.code}));
+    }
+    // And the viewer still opens files.
+    await clickRow(plain);
+    await settle('SPECIAL plain');
+    if (viewer.state.path !== plain || viewer.state.status !== 'text')
+      fail('SPECIAL WRONG plain.txt ' + JSON.stringify(
+          {path: viewer.state.path, status: viewer.state.status}));
+    await clickRow(special);
+    await h.run();
+    console.log('SPECIAL ok');
   }
 
   // --- NAMES ------------------------------------------------------------
