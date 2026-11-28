@@ -305,6 +305,7 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | final review | `ui-imgui-bind-widgets.js` (FORMAT) | only the precision's digit check removed (the width's kept) | `NOTHROW ERR_INVALID_ARG_VALUE`, `EXITCODE 1`; test failed. The line does not name the format; the first case, `'%100f'`, is a width and still refused, so the failure is at a precision case (`'%.100f'` is next) |
 | final review | `ui-imgui-bind-widgets.js` (FORMATLEN) | the 30-byte limit removed, with FORMATLEN's float candidates now long by `0` flags (`'%' + 25 zeros + '1.1f'`) rather than by a 27-digit precision, which the new digit cap refuses first | `FORMAT ok`, then the 31-byte float format accepted and dragged: `imgui_widgets.cpp:3714: ImParseFormatSanitizeForPrinting ... Assertion ... < fmt_out_size failed`, `EXITCODE 134`; test failed. So FORMATLEN still shows the float half of the 30-byte limit |
 | final review | `ui-imgui-bind-layout.js` (REJECTED) | (RED, and the mutation: the bound back at `INT32_MAX`, which is the code before the fix) `setKeyboardFocusHere(2147483647)` | `NOTHROW ERR_OUT_OF_RANGE`, test failed |
+| final review | `ui-imgui-bind-args.js`, `ui-imgui-bind-layout.js` | call counting gated the wrong way round (`if (!testHooksEnabled())`) | args: `UNCOVERED Frame newFrame render showDemoWindow ...`; layout: `REJECTED edges not accepted: 0`; both `EXITCODE 1`, both failed |
 
 ## Behaviours no test detects
 
@@ -1659,3 +1660,34 @@ the code and ImGui's source before it was changed.
   `SurfaceTableTest.DisplacementRacesCompletionUnderLoad`, tracker issue
   01a0d7d4-b666, a wall-clock throughput floor that fails under load: 6/6
   passing alone, and the whole suite passed when rerun.)
+- **F7, call counting under the test hooks only** (Minor). Confirmed:
+  `++gCallCounts[name_]` (a `std::string` built from the name and a
+  `std::map` lookup) ran on every binding call. It is now gated on
+  `testHooksEnabled()`, which reads the environment once; it stays
+  immediately before the ImGui call. Nothing observable changes with the
+  hooks on, so there is no RED; the coverage tests pass, and the gate
+  inverted (counting only without the hooks) fails them: Mutations.
+  **The measurement was re-run** (2026-11-28, the same machine, Intel(R)
+  Xeon(R) E-2288G CPU @ 3.70GHz, Xvfb, scale 1; `test/fixtures/imgui/
+  app-measure.js` by hand under `utils/with-display.py 300`, exactly as
+  Task 9's review notes ran it, `cmake-build-noasan` rebuilt first, two
+  runs each, nothing else building or running lit). The earlier numbers
+  are the Task 9 review's table above; this build also has F1-F6's
+  changes, `restoreRecoveryFlags()` in every `enterImGui()` among them.
+
+  | Build | State | JS time per frame, mean: before / after | max: before / after | calls per frame: before / after |
+  |---|---|---|---|---|
+  | `cmake-build-asan` | default | 12.454, 12.552 / 12.935, 12.919 ms | 207.2, 225.1 / 213.6, 214.6 ms | 250.1 / 250.1 |
+  | `cmake-build-asan` | big | 23.358, 24.058 / 24.442, 23.812 ms | 429.6, 463.3 / 425.9, 421.6 ms | 402.1 / 402.1 |
+  | `cmake-build-noasan` | default | 1.173, 1.383 / 1.182, 1.178 ms | 2.01, 2.10 / 2.22, 1.92 ms | 250.0 / 250.0 |
+  | `cmake-build-noasan` | big | 1.534, 1.528 / 1.262, 1.562 ms | 2.63, 2.20 / 2.45, 2.77 ms | 402.0 / 402.0 |
+
+  Plainly: the call counts did not change. Release times are within the
+  spread of the earlier runs. The ASAN default mean is about 0.4 ms (3%)
+  higher in both runs, and the ASAN big mean within the earlier spread;
+  the cause of the ASAN difference was not measured. **This measurement
+  cannot show F7's change**: the script reads `__test.bindCalls()`, so it
+  runs with `HERMES_NODE_UI_TEST_HOOKS=1`, under which the counting still
+  happens. A run without the hooks has no way to count calls, and the
+  harness needs the hooks too; the saving, if any, is in runs nobody here
+  measures.

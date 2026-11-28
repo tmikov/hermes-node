@@ -31,7 +31,7 @@ namespace {
 bool gInsideCall = false;
 /// How many CallbackScopes are alive.
 int gCallbackDepth = 0;
-/// name -> times it called ImGui.
+/// name -> times it called ImGui; counted only under the test hooks.
 std::map<std::string, int> gCallCounts;
 
 std::string vformat(const char *fmt, va_list args) {
@@ -789,7 +789,11 @@ void Call::enterImGui() {
   // The last ImGui call may have turned asserts or ImGui's own error output
   // back on (bind_guards.h says which does).
   guard::restoreRecoveryFlags();
-  ++gCallCounts[name_];
+  // Only __test.bindCalls() reads the counts, and it exists only under the
+  // test hooks; without them a string and a map lookup per call buy
+  // nothing. testHooksEnabled() reads the environment once.
+  if (testHooksEnabled())
+    ++gCallCounts[name_];
 }
 
 bool Call::leaveImGui() {

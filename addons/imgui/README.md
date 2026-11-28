@@ -748,7 +748,8 @@ rectangle edges are exact.
 name to how many times it has called ImGui; a function that never has is
 absent. The count is taken immediately before the ImGui call
 (`Call::enterImGui()`) and nowhere else, so a rejected call does not
-count. Draw-list functions are named `drawList.<name>`. This is what the
+count; and only under the test hooks, its one reader, so an ordinary run
+does no counting. Draw-list functions are named `drawList.<name>`. This is what the
 coverage rule reads.
 
 `__test.guards()` returns an object mapping every guard condition
@@ -840,11 +841,14 @@ and a Release build; the Mac round has not been run yet (tracker
 01a21f89-a889). The application's
 JavaScript time per frame, measured driven with all six panels open
 (`test/fixtures/imgui/app-measure.js`, 600 frames after 10, an Intel Xeon
-E-2288G, 2026-11-28): about 12.5 ms in the ASAN build and 1.2 to 1.4 ms
-in Release, at 250 binding calls a frame; with a directory of 5000
-entries open in the Files panel, 402 calls, about 23.5 ms and 1.5 ms. The
-progress file has both runs of each, the maxima, and what the occasional
-slow ASAN frame looks like.
+E-2288G, 2026-11-28, re-run the same day after the final review's
+fixes): about 12.9 ms in the ASAN build and 1.2 ms in Release, at 250
+binding calls a frame; with a directory of 5000 entries open in the Files
+panel, 402 calls, about 24 ms and 1.3 to 1.6 ms. The script needs the
+test hooks, so these include the per-call counting that
+`__test.bindCalls()` reads and that a run without the hooks does not do.
+The progress file has both runs of each, before and after, the maxima,
+and what the occasional slow ASAN frame looks like.
 
 Not run:
 

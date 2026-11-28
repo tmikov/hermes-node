@@ -219,8 +219,8 @@ class Call {
   // ERR_OUT_OF_RANGE unless -2^31 <= \p v < 2^31.
   bool inIntRange(float v, const char *what);
 
-  // After the arguments are read: counts the call, then the caller calls
-  // ImGui.
+  // After the arguments are read: counts the call (under the test hooks
+  // only, the counts' one reader), then the caller calls ImGui.
   void enterImGui();
   // After the ImGui call: throws ERR_IMGUI_USAGE if ImGui reported an
   // error during it (returns false then, and nothing is written back).
@@ -295,7 +295,8 @@ class CallbackScope {
 /// ERR_IMGUI_USAGE then.
 bool insideCallback();
 
-/// name -> times that binding function called ImGui, for __test.bindCalls().
+/// name -> times that binding function called ImGui, for __test.bindCalls();
+/// empty without the test hooks, which are what counting is gated on.
 std::vector<std::pair<std::string, int>> bindCalls();
 
 /// Defines `name` on `target` as a function calling `cb`.
