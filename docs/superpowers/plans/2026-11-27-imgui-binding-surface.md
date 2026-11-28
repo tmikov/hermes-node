@@ -2524,6 +2524,33 @@ and open a row (`ui-imgui-bind-errors.js` TABLE_WRONG_NOROW).
 - Preconditions:
   - `idx >= 0 && idx < ImGuiStyleVar_COUNT` (imgui.cpp:3891, plain, in
     `GetStyleVarInfo`). (a).
+  - (a) FramePadding.y at most `floor((32767 - font size) / 2)` and
+    ItemInnerSpacing.x at least -2^14 (Codex's round 2, D3;
+    `framePaddingYLimit()` in `bind/bind_style.cpp`): the colour picker's
+    hue wheel is six arcs of an explicit, unclamped `max(4, (int)(sv / 2)
+    / 12)` segments (widgets:6488), its square sv up to 11 frame heights
+    plus twice the spacing (6098, 6248), and each arc one primitive that
+    reserves 4 vertices per point (draw:1040-1052), which `PrimReserve`
+    does not split (draw:768-775): 4 (N + 1) <= 65536 for the renderer's
+    16-bit indices (it sets `RendererHasVtxOffset`, so ImGui moves the
+    vertex offset between primitives; imgui_renderer.cpp:320-321, 577).
+    Every primitive a style length scales, with what bounds its vertex
+    count (the sweep of round 2):
+
+    | Style length | Primitive | Where | Bounded by |
+    |---|---|---|---|
+    | every rounding (window, child, popup, frame, scrollbar, grab, image, tab, tree line, menu item, selectable, drop target) | a rounded rectangle's corner arcs | draw:1843-1862 (`PathArcToFast`, at most 48 samples a circle, 1531-1560), 2229-2340, 2476-2486 | ImGui (the sample table; an automatic count is clamped to 512, internal:924-925) |
+    | FramePadding.y (the frame height) | the radio button's circle | widgets:1405-1417 | ImGui (automatic count, at most 512) |
+    | FramePadding.y, ItemInnerSpacing.x | the colour picker's hue wheel | widgets:6488-6495 | this domain |
+    | FramePadding.y (the picker's size) | the wheel's two cursors, the SV cursor | widgets:6508-6512, 6549-6553 | ImGui (automatic count) |
+    | font size (not settable) | a bullet | draw:7601-7605 | a fixed count |
+    | every border size, separator size, tree line size | lines and rectangles | widgets:1662-1700, 7320-7369; draw:2342-2490 | a fixed point count (a rounded one as above) |
+    | FramePadding.y (a swatch's frame height) | a colour swatch's checkerboard | draw:7743-7780 | many primitives, each a fixed count |
+    | everything else | rectangles, lines and text | | a fixed count per primitive |
+
+    A frame height of 2^15 or more is refused for the picker alone; text
+    is the one primitive whose count grows with its argument (a visible
+    line's glyphs), and no style length scales it.
   - (a) the value's domain, above: `ScrollbarSize >= 0` is a plain
     assertion (widgets:989, Codex's C1, reproduced as an abort); `Alpha`
     in 0..1 is asserted by `RenderColorRectWithAlphaCheckerboard()`

@@ -343,6 +343,7 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | codex (write-back) | `ui-imgui-bind-widgets.js` (DRAGDOMAIN) | the automatic speed not capped (vSpeed 0 passed through) | `DRAGDOMAIN WRONG capped {"v":[0],"want":53644500,...}`: the accumulator overflowed int (INT_MIN on x86-64) and ImGui's own wrap test clamped to the lower bound; test failed |
 | codex r2 | `ui-imgui-bind-widgets.js` (SAVEDHUE) | (RED, and the mutation) `guard::sanitizeColorEditState()` not called | `SAVEDHUE WRONG large {"saved":{"held":true,"hue":10000000000,"saturation":0},"after":{"held":true,"hue":10000000000,...}}`: ImGui kept and restored the typed hue (and converted it at widgets:5980, silently on x86-64); test failed |
 | codex r2 | `ui-imgui-bind-widgets.js` (COLORDOMAIN) | (RED, and the mutation) `colorButton`'s domain check removed | `NOTHROW ERR_OUT_OF_RANGE` after `REJECTED ok` (Codex's `[-0.1, FLT_MAX, 0, 1]` with InputHSV accepted); test failed |
+| codex r2 | `ui-imgui-bind-style.js` (PICKER) | (RED, and the mutation) `framePaddingYLimit()` returning the length limit | `NOTHROW ERR_OUT_OF_RANGE` (FramePadding [4, Y + 1] accepted); test failed. By hand before the fix, Codex's padding [4, 100000] with the picker open drew 1106303 vertices, arcs of about 91,700 segments each, each one primitive past 16-bit indices (no abort: Render()'s check sees only the last offset, draw:3554) |
 
 ## Behaviours no test detects
 
@@ -1940,4 +1941,16 @@ Codex's text: `.superpowers/sdd/2026-11-27-imgui-binding/codex-code-r2.md`.
   (one helper). The other float-colour arguments were re-derived: they
   meet only finite factors and saturating packing, so they overflow to
   infinity at worst, never NaN.
+- **D3 (picker tessellation)** reproduced by hand: Codex's
+  [4, 100000] with the hue-wheel picker open drew 1106303 vertices, arcs
+  of about 91,700 segments, each one unsplit primitive past 16-bit
+  indices; no abort (Render()'s plain check at draw:3554 sees only the
+  vertex count after the last offset move), so wrapped indices and the
+  work were the observable harm. The renderer uses 16-bit indices and
+  sets `RendererHasVtxOffset`. Fixed by FramePadding.y <=
+  floor((32767 - font size) / 2) and ItemInnerSpacing.x >= -2^14, derived
+  from the wheel's explicit segment count; the font size is read, and is
+  not settable through the binding. The sweep of every primitive a style
+  length scales is the table in the surface entry of `pushStyleVar`;
+  nothing else needed a bound. PICKER draws the open picker at the bound.
 

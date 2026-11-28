@@ -11,6 +11,7 @@
 
 #include "imgui_addon.h"
 
+#include <cmath>
 #include <string>
 
 namespace hnimgui {
@@ -33,6 +34,10 @@ enum class VarDomain {
   MinSize,
   /// Any float: no bound function reads it.
   Any,
+  /// FramePadding: a length, and its y at most framePaddingYLimit().
+  FramePadding,
+  /// ItemInnerSpacing: a length, and its x at least -kMaxPickerSpacing.
+  ItemInnerSpacing,
 };
 
 struct VarInfo {
@@ -78,6 +83,8 @@ struct VarInfo {
 ///   FrameBorderSize halved, 991), and is otherwise part of a sum (surface
 ///   table, "Not covered" 3f). A negative one is accepted: no
 ///   assertion or undefined operation was found for it.
+/// - FramePadding and ItemInnerSpacing: lengths, and the frame height and
+///   picker width bounds of framePaddingYLimit() (round 2, D3).
 /// - Any: TableAngledHeadersAngle and TableAngledHeadersTextAlign, read only
 ///   by TableAngledHeadersRow() (imgui_tables.cpp:3498, 3551), which is not
 ///   bound.
@@ -85,11 +92,9 @@ VarInfo styleVarInfo(int idx) {
   static_assert(ImGuiStyleVar_COUNT == 45, "re-audit the style variables");
   using D = VarDomain;
   switch (idx) {
-#define HNIMGUI_VAR(name, count, domain)  \
-  case ImGuiStyleVar_##name:              \
-    return VarInfo {                      \
-      "StyleVar_" #name, count, D::domain \
-    };
+#define HNIMGUI_VAR(name, count, domain) \
+  case ImGuiStyleVar_##name:             \
+    return VarInfo{"StyleVar_" #name, count, D::domain};
     HNIMGUI_VAR(Alpha, 1, Unit)
     HNIMGUI_VAR(DisabledAlpha, 1, Unit)
     HNIMGUI_VAR(WindowPadding, 2, Length)
@@ -101,11 +106,11 @@ VarInfo styleVarInfo(int idx) {
     HNIMGUI_VAR(ChildBorderSize, 1, NonNegative)
     HNIMGUI_VAR(PopupRounding, 1, Length)
     HNIMGUI_VAR(PopupBorderSize, 1, NonNegative)
-    HNIMGUI_VAR(FramePadding, 2, Length)
+    HNIMGUI_VAR(FramePadding, 2, FramePadding)
     HNIMGUI_VAR(FrameRounding, 1, Length)
     HNIMGUI_VAR(FrameBorderSize, 1, NonNegative)
     HNIMGUI_VAR(ItemSpacing, 2, Length)
-    HNIMGUI_VAR(ItemInnerSpacing, 2, Length)
+    HNIMGUI_VAR(ItemInnerSpacing, 2, ItemInnerSpacing)
     HNIMGUI_VAR(IndentSpacing, 1, Length)
     HNIMGUI_VAR(CellPadding, 2, Length)
     HNIMGUI_VAR(ScrollbarSize, 1, NonNegative)
@@ -141,9 +146,45 @@ VarInfo styleVarInfo(int idx) {
   }
 }
 
-/// Checks one component \p v of a value for \p var, named \p what.
-bool varValueOk(Call &c, const VarInfo &var, float v, const char *what) {
+/// The most units ItemInnerSpacing.x may take away from the colour picker's
+/// width (below): 2^14.
+constexpr float kMaxPickerSpacing = 16384.0f;
+
+/// The largest FramePadding.y: the bound that keeps the colour picker's hue
+/// wheel within 16-bit indices (Codex's code review, round 2, D3). The
+/// picker a colour editor opens is 12 frame heights wide
+/// (SetNextItemWidth(square_sz * 12), imgui_widgets.cpp:6098), its square
+/// `sv_picker_size = max(sq, width - k * (sq + ItemInnerSpacing.x))`, k 1
+/// or 2 (6248), and its wheel six arcs of `max(4, (int)(sv / 2) / 12)`
+/// segments each (6488), an explicit count ImGui does not clamp. Each arc
+/// is stroked as one primitive (6494-6495) of 4 vertices per point, `(n -
+/// 2) * 4 + 8` for an open line of n points (imgui_draw.cpp:1040-1052), and
+/// PrimReserve() moves the vertex offset before a primitive but never
+/// splits one (imgui_draw.cpp:768-775; the renderer draws with 16-bit
+/// indices and sets RendererHasVtxOffset, imgui_renderer.cpp:320-321,
+/// 577): an arc of N segments needs 4 (N + 1) <= 65536, N <= 16383, so
+/// `(int)(sv / 2) <= 196607`, sv < 393216. With ItemInnerSpacing.x >=
+/// -2^14, sv <= 11 sq + 2^15, so the frame height sq = font size + 2 *
+/// FramePadding.y must stay below 2^15. The font size is the default
+/// font's, which no bound function changes (no font, font-scale or window
+/// font-scale function is bound), and it is read here rather than assumed.
+/// A FramePadding.y below the font size's negative half makes the frame
+/// height negative, which only shrinks the picker. Every other primitive a
+/// style length scales is clamped by ImGui (the surface table, "Not
+/// covered" 3f, the tessellation table).
+float framePaddingYLimit() {
+  return std::floor((32767.0f - ImGui::GetFontSize()) / 2.0f);
+}
+
+/// Checks component \p k of a value \p v for \p var, named \p what.
+bool varValueOk(Call &c, const VarInfo &var, int k, float v, const char *what) {
   switch (var.domain) {
+    case VarDomain::FramePadding:
+      return c.length(v, what, false) &&
+          (k != 1 || c.inRange(v, what, -lengthLimit(), framePaddingYLimit()));
+    case VarDomain::ItemInnerSpacing:
+      return c.length(v, what, false) &&
+          (k != 0 || c.inRange(v, what, -kMaxPickerSpacing, lengthLimit()));
     case VarDomain::Unit:
       return c.inRange(v, what, 0.0f, 1.0f);
     case VarDomain::Length:
@@ -253,8 +294,8 @@ napi_value pushStyleVar(napi_env env, napi_callback_info info) {
     if (var.count == 2) {
       const std::string x = std::string("val[0] for ") + var.name;
       const std::string y = std::string("val[1] for ") + var.name;
-      if (!varValueOk(c, var, val.x, x.c_str()) ||
-          !varValueOk(c, var, val.y, y.c_str()))
+      if (!varValueOk(c, var, 0, val.x, x.c_str()) ||
+          !varValueOk(c, var, 1, val.y, y.c_str()))
         return nullptr;
     }
     c.enterImGui();
@@ -267,7 +308,7 @@ napi_value pushStyleVar(napi_env env, napi_callback_info info) {
     float val = 0.0f;
     if (!c.f32(1, "val", &val) || !c.needFrame())
       return nullptr;
-    if (var.count == 1 && !varValueOk(c, var, val, what.c_str()))
+    if (var.count == 1 && !varValueOk(c, var, 0, val, what.c_str()))
       return nullptr;
     c.enterImGui();
     ImGui::PushStyleVar(idx, val);

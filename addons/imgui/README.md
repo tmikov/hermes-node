@@ -597,7 +597,11 @@ the format rule and throws a `TypeError` with `ERR_INVALID_ARG_VALUE`:
   limit; `ScrollbarSize`, `ScrollbarPadding` and the window, child, popup
   and frame border sizes from 0 to the length limit (a negative
   scrollbar size is a plain assertion in ImGui, and the others can reach
-  one); every other length within the length limit either way
+  one); FramePadding's y at most `floor((32767 - font size) / 2)` (16377
+  with the default font) and ItemInnerSpacing's x at least -2^14, which
+  keep each arc of the colour picker's hue wheel, a primitive ImGui does
+  not split, within 16-bit indices; every other length within the length
+  limit either way
   (`styleVarInfo()` in `bind/bind_style.cpp` lists each variable's
   source lines);
 - `colorEdit3`, `colorEdit4` and `colorButton`, each component (alpha

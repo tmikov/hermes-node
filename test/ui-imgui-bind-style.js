@@ -59,9 +59,20 @@
 //            a window drawn with each in force: ScrollbarSize 0 in Codex's
 //            sequence, Alpha 0 and 1, ButtonTextAlign [1, 1],
 //            WindowMinSize [1, 1], WindowBorderSize 0, FramePadding
-//            [-1048576, 1048576], WindowRounding -1048576, and
+//            [-1048576, 1000] (its y has PICKER's tighter bound), WindowRounding -1048576, and
 //            TableAngledHeadersAngle 1e30, which no bound function reads.
 //            The wrong overload is still ImGui's own error (MISMATCH).
+//  PICKER    the colour picker's hue wheel at the accepted FramePadding
+//            (Codex's round 2, D3; framePaddingYLimit() in
+//            bind/bind_style.cpp): a colorEdit3 with
+//            ColorEditFlags_PickerHueWheel | _NoInputs, its picker opened by
+//            a click on its swatch, then drawn with FramePadding [4, Y] for
+//            the largest accepted Y, floor((32767 - font size) / 2), and
+//            ItemInnerSpacing [-16384, 4], the smallest accepted x: the
+//            frame renders, no usage error, each arc reserves at most 65536
+//            vertices, and the renderer's last frame (__test.state()) holds
+//            at least the two vertices per point the six arcs draw. FramePadding [4, Y + 1] and
+//            ItemInnerSpacing [-16385, 4] are refused, not called.
 //  COVERAGE  every Style function has reached ImGui.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
@@ -76,7 +87,9 @@
 //  not-negative half of Call::length() removed, the Unit domain checked
 //  as a length, or the MinSize domain checked as a length: VARS fails,
 //  each at the first refusal it reopens (ScrollbarSize -1, which is
-//  Codex's sequence; Alpha -0.5; WindowMinSize [0.5, 10]).
+//  Codex's sequence; Alpha -0.5; WindowMinSize [0.5, 10]);
+//  (codex r2) framePaddingYLimit() returning the length limit: PICKER fails
+//  (the refusal at Y + 1, and the accepted value would overflow an arc).
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -330,7 +343,7 @@ async function main() {
                                  ['Alpha', 1], ['ButtonTextAlign', [1, 1]],
                                  ['WindowMinSize', [1, 1]],
                                  ['WindowBorderSize', 0],
-                                 ['FramePadding', [-L, L]],
+                                 ['FramePadding', [-L, 1000]],
                                  ['WindowRounding', -L],
                                  ['TableAngledHeadersAngle', 1e30]]) {
         const before = calls('pushStyleVar');
@@ -348,6 +361,62 @@ async function main() {
     console.log(drew === true ? 'VARS ok' : 'VARS render=' + drew);
     for (const m of messages)
       console.log('VARS message ' + m);
+  }
+
+  // --- PICKER ----------------------------------------------------------
+  {
+    const c = [0.2, 0.4, 0.6];
+    let pad = null, r = null, lineHeight = 0;
+    const draw = () => {
+      lineHeight = imgui.getTextLineHeight();
+      windowAt('picker', [20, 20], [300, 200], () => {
+        if (pad !== null) {
+          imgui.pushStyleVar(imgui.StyleVar_FramePadding, pad);
+          imgui.pushStyleVar(imgui.StyleVar_ItemInnerSpacing, [-16384, 4]);
+        }
+        imgui.colorEdit3('##wheel', c, imgui.ColorEditFlags_PickerHueWheel |
+                         imgui.ColorEditFlags_NoInputs);
+        r = harness.rect(imgui);
+        if (pad !== null)
+          imgui.popStyleVar(2);
+      });
+    };
+    await h.run(draw);
+    await h.run(draw);
+    await harness.clickAt(h, draw, harness.center(r));
+    const Y = Math.floor((32767 - lineHeight) / 2);
+    const messages = [];
+    let drew = await h.run(() => {
+      draw();
+      messages.push(rejects('pushStyleVar',
+                            () => imgui.pushStyleVar(imgui.StyleVar_FramePadding,
+                                                     [4, Y + 1]),
+                            'ERR_OUT_OF_RANGE').message);
+      messages.push(rejects('pushStyleVar',
+                            () => imgui.pushStyleVar(imgui.StyleVar_ItemInnerSpacing,
+                                                     [-16385, 4]),
+                            'ERR_OUT_OF_RANGE').message);
+    });
+    pad = [4, Y];
+    for (let i = 0; i < 3 && drew === true; ++i)
+      drew = await h.run(draw);
+    // The square is 12 frame heights less one frame height and the spacing
+    // (one bar, colorEdit3 has no alpha), the wheel's outer radius half of
+    // it, and each of its six arcs max(4, (int)r / 12) segments. An arc
+    // reserves 4 vertices per point, the bound's quantity, and uses at
+    // least 2 (a mitred join), which is what the renderer's count shows.
+    const sq = lineHeight + 2 * Y;
+    const sv = 12 * sq - (sq - 16384);
+    const segments = Math.max(4, Math.floor(Math.floor(sv / 2) / 12));
+    const arc = 4 * (segments + 1);
+    const vertices = imgui.__test.state().vertices;
+    const ok = drew === true && arc <= 65536 &&
+        vertices >= 6 * 2 * (segments + 1);
+    console.log(ok ? 'PICKER ok' :
+                     'PICKER WRONG ' + JSON.stringify({drew, Y, arc, vertices}));
+    console.log('PICKER arc ' + arc + ' vertices, limit Y ' + Y);
+    for (const m of messages)
+      console.log('PICKER message ' + m);
   }
 
   harness.checkGroupCoverage(h, 'Style');
@@ -384,6 +453,10 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val[0] for StyleVar_FramePadding must be from -1048576 to 1048576 (2^20 pixels at pixel density 1); got 1048577{{$}}
 // CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val for StyleVar_WindowRounding must be from -1048576 to 1048576 (2^20 pixels at pixel density 1); got -1048577{{$}}
 // CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val for StyleVar_TabMinWidthBase must be from -1048576 to 1048576 (2^20 pixels at pixel density 1); got 1048577{{$}}
+// CHECK-NEXT: {{^}}PICKER ok{{$}}
+// CHECK-NEXT: {{^}}PICKER arc {{[0-9]+}} vertices, limit Y {{[0-9]+}}{{$}}
+// CHECK-NEXT: {{^}}PICKER message imgui.pushStyleVar(): val[1] for StyleVar_FramePadding must be from {{.*}} to {{[0-9]+}}; got {{[0-9]+}}{{$}}
+// CHECK-NEXT: {{^}}PICKER message imgui.pushStyleVar(): val[0] for StyleVar_ItemInnerSpacing must be from -16384 to 1048576; got -16385{{$}}
 // CHECK-NEXT: {{^}}COVERAGE Style ok{{$}}
 // CODE: EXITCODE 0
 
