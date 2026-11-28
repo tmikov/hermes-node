@@ -124,6 +124,14 @@
 //            switched to _Uint8 and dragged 5 more (the component's drag
 //            changes from float to integer under the same ID): every call
 //            accepted, red ends inside 0 .. 1 and above 0.2.
+//  COLORFOREIGN a foreign float drag handed to a colour component (Codex's
+//            round 5, G1): pushID('editor'); dragFloat('##X', [1e30], 1e10);
+//            popID() (the same ID as colorEdit3('editor')'s red drag),
+//            held and moved 50 units, then, still held, replaced by
+//            colorEdit3('editor', [0.2, 0.2, 0.2], ColorEditFlags_Uint8)
+//            and moved 10 more: red is exactly 61/255 (51 + 10; the binding
+//            reset the carried 5e11, traced). The same for colorEdit4's
+//            alpha ("##W"), [0.2, 0.2, 0.2, 0.5]: alpha is 138/255.
 //  DRAGDOMAIN dragInt's domain (dragIntDomainOk() in bind/bind_widgets.cpp:
 //            a drag adds the mouse delta times the speed to the value in
 //            int, and the platform half clamps mouse coordinates to
@@ -1101,6 +1109,43 @@ async function main() {
                      JSON.stringify({afterFloat, c, threw}));
   }
 
+  // --- COLORFOREIGN ----------------------------------------------------
+  {
+    const run = async (four) => {
+      const large = [1e30];
+      const color = four ? [0.2, 0.2, 0.2, 0.5] : [0.2, 0.2, 0.2];
+      let colorMode = false, threw = null;
+      const out = {r: null};
+      const draw = inWindow(() => {
+        try {
+          if (!colorMode) {
+            imgui.pushID('editor');
+            imgui.dragFloat(four ? '##W' : '##X', large, 1e10);
+            out.r = rect();
+            imgui.popID();
+          } else if (four) {
+            imgui.colorEdit4('editor', color, imgui.ColorEditFlags_Uint8);
+          } else {
+            imgui.colorEdit3('editor', color, imgui.ColorEditFlags_Uint8);
+          }
+        } catch (e) {
+          threw = e.message;
+        }
+      });
+      await heldDrag(draw, out, [50, 10], () => {
+        colorMode = true;
+      });
+      return {color, threw};
+    };
+    const three = await run(false);
+    const four = await run(true);
+    const ok = three.threw === null && four.threw === null &&
+        three.color[0] === Math.fround(61 / 255) &&
+        four.color[3] === Math.fround(138 / 255);
+    console.log(ok ? 'COLORFOREIGN ok' : 'COLORFOREIGN WRONG ' +
+                     JSON.stringify({three, four}));
+  }
+
   // --- DRAGDOMAIN ------------------------------------------------------
   {
     const messages = [];
@@ -1269,6 +1314,7 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}SHAREDACCUM ok{{$}}
 // CHECK-NEXT: {{^}}LOGDRAG ok{{$}}
 // CHECK-NEXT: {{^}}COLORMODE ok{{$}}
+// CHECK-NEXT: {{^}}COLORFOREIGN ok{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got 1e+10{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got 819.5{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got -820{{$}}
@@ -1289,3 +1335,5 @@ main().catch((e) => {
 // TRACE: {{^}}[ui] imgui: colorEdit: saved hue 1e+10, saturation 0 outside 0..1, forgotten{{$}}
 // TRANSITION: the float drag's accumulator reset before the integer drag.
 // TRACE: {{^}}[ui] imgui: drag: accumulator {{.*}} reset to 0 before the active integer drag{{$}}
+// COLORFOREIGN: the carried accumulator reset before the colour component.
+// TRACE: {{^}}[ui] imgui: drag: accumulator {{.*}} reset to 0 before the active colour component's integer drag{{$}}

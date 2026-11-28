@@ -225,15 +225,32 @@ void sanitizeColorEditState();
 ///   it fails both tests and reaches the conversion. Reset only when not
 ///   finite.
 /// No type memory is needed: each rule is the consuming path's own
-/// requirement, and each is inert for that path's own remainders. The
-/// colour editors need none: their component drags (DragFloat or DragInt
-/// under PushID(label), "##X".."##W", 5997, 6027, 6032) are fed only by
-/// themselves, and both leave below 1 within the colour domain: the
-/// integer one as above, the float one because a component of at most
-/// 2^23 has a float spacing of at most 1 and is rounded to three decimals
-/// (2636), so its remainder is at most half a spacing plus 0.0005.
+/// requirement, and each is inert for that path's own remainders.
 void beforeFloatDrag(unsigned id);
 void beforeIntDrag(unsigned id, bool logarithmic);
+/// The same rules before a colour editor (Codex's code review, round 5,
+/// G1), for the one of its component drags that is active, if any. Their
+/// IDs can be reproduced by the caller (pushID(label), then a drag named
+/// "##X"), so a foreign float drag's remainder can be handed to one of
+/// them under a held mouse, like a dragInt's. The editor's drags, all
+/// under PushID(label) (imgui_widgets.cpp:5936): its own components,
+/// "##X", "##Y", "##Z" and, with alpha, "##W" (5997), each a DragFloat
+/// with ColorEditFlags_Float and a linear DragInt otherwise (6024-6033;
+/// no colour flag selects a logarithmic drag, `drag_flags` being
+/// ColorMarkers or None, 6011), present only in the RGB and HSV displays
+/// without NoInputs (5989; the hex display is an InputText, 6047); and,
+/// with its picker open, the picker's own "##rgb" and "##hsv" editors'
+/// components (6425, 6433), under the picker's popup window (BeginPopup
+/// ("picker"), 6086; "##Popup_%08x" of that ID, imgui.cpp:13437, a window
+/// whose ID stack starts with ImHashStr of its name, 4852-4853), then
+/// PushID("##picker") (6220) and the nested editor's PushID(label). The
+/// data type is \p flags' Uint8 / Float, else io.ConfigColorEditFlags',
+/// for all of them (the picker forwards the data-type bits, 6096, 6422);
+/// the display likewise, which the options menu can change only with a
+/// left click a held left drag excludes. Computed with ImGui's own hashing
+/// (ImHashStr, the same as window->GetID) from the ID stack as it stands,
+/// pushing nothing. When g.ActiveId is not one of them, nothing is written.
+void beforeColorEdit(const char *label, int flags);
 /// For __test.colorEditState(): whether a saved state is held, and its
 /// hue and saturation.
 struct ColorEditState {

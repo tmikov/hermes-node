@@ -1016,8 +1016,12 @@ What the binding takes from `imgui_internal.h`, all of it in
   path leaves itself, so a float drag's remainder carried to an integer
   drag of the same ID under a held mouse is not converted to `int`; and
   before the active logarithmic `dragInt` when it is not finite, that
-  path taking any finite remainder (`guard::beforeIntDrag()`). An
-  inactive widget, and the colour editors, never write it. Outside that header,
+  path taking any finite remainder (`guard::beforeIntDrag()`); and before
+  a colour editor whose component drag is the active item (its own
+  "##X".."##W", or its picker's, computed from the ID stack), by the same
+  rule for that component's path (`guard::beforeColorEdit()`): a caller
+  can reproduce those IDs with `pushID(label)` and a drag named "##X".
+  An inactive widget never writes it. Outside that header,
   `bind/bind_clipper.cpp` writes `ImGuiListClipper::ItemsCount`, declared
   in `imgui.h` but commented "[Internal]", to -1 when it abandons a
   clipper; and the four `io.ConfigErrorRecovery*` fields above are public

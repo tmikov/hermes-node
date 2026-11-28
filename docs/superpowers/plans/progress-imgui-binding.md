@@ -349,6 +349,7 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | codex r3 | `ui-imgui-bind-widgets.js` (TRANSITION) | (RED, and the mutation) `guard::resetDragAccumulatorForInt()` not called | `TRANSITION WRONG {"integer":[-1073741823],"floating":[1.0000000150474662e+30],...}`: the 5e11 accumulator converted to int (INT_MIN on x86-64, undefined) and the write-back clamped it; test failed |
 | codex r4 | `ui-imgui-bind-widgets.js` (SHAREDACCUM, LOGDRAG) | (RED, and the mutation) the round-3 rule restored: reset unless below 1 before every dragInt, without the active-ID condition or the logarithmic case | `SHAREDACCUM WRONG {"alone":{"f":16777234},"beside":{"f":16777224}}` (the unrelated dragInt discarded the float drag's remainder every frame) and `LOGDRAG WRONG {"afterRight":100,"v":[1]}` (the legitimate remainder discarded, so the move back dropped to 1); test failed |
 | codex r4 | `ui-imgui-bind-widgets.js` (TRANSITION) | `guard::beforeIntDrag()` not called | `TRANSITION WRONG {"integer":[-1073741823],...}`; test failed |
+| codex r5 | `ui-imgui-bind-widgets.js` (COLORFOREIGN) | (RED, and the mutation) `guard::beforeColorEdit()` not called | `COLORFOREIGN WRONG {"three":{"color":[1,0.2,0.2]},"four":{"color":[0.2,0.2,0.2,1]}}`: the carried 5e11 converted to int (INT_MIN, undefined) and ImGui's overflow test then clamped the component to 255; test failed |
 
 ## Behaviours no test detects
 
@@ -2014,4 +2015,18 @@ Codex's text: `.superpowers/sdd/2026-11-27-imgui-binding/codex-code-r2.md`.
   editors write nothing: their component IDs are theirs alone and both of
   their drag types leave below 1 within the colour domain; COLORMODE
   switches Float to Uint8 under a held drag.
+
+### Codex code review, round 5
+
+- **G1** verified (widgets:5936, 5997, 6032; 2648, 2700-2727, 2631) and
+  reproduced by COLORFOREIGN with the check removed: a foreign
+  `pushID('editor'); dragFloat('##X')` handed its 5e11 remainder to
+  colorEdit3's red drag, which became 255 (and colorEdit4's alpha 1).
+  My round-4 claim that the components are "fed only by themselves" was
+  wrong: their IDs are reproducible. Fixed by `beforeColorEdit()`, which
+  computes every ID the editor's drags use (its components, and its
+  picker's nested editors') with ImHashStr from the ID stack as it
+  stands, pushing nothing, and applies the per-path rule only when
+  `g.ActiveId` is one of them. The sweep for the same shape elsewhere is
+  in 3l: nothing else runs a drag internally.
 

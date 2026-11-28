@@ -758,6 +758,50 @@ void beforeIntDrag(unsigned id, bool logarithmic) {
                     : "before the active integer drag");
 }
 
+void beforeColorEdit(const char *label, int flags) {
+  ImGuiContext &g = *GImGui;
+  if (g.ActiveId == 0)
+    return;
+  const ImGuiIO &io = g.IO;
+  if ((flags & ImGuiColorEditFlags_DataTypeMask_) == 0)
+    flags |= io.ConfigColorEditFlags & ImGuiColorEditFlags_DataTypeMask_;
+  int display = flags & ImGuiColorEditFlags_DisplayMask_;
+  if (display == 0)
+    display = io.ConfigColorEditFlags & ImGuiColorEditFlags_DisplayMask_;
+  if (flags & ImGuiColorEditFlags_NoInputs)
+    display = ImGuiColorEditFlags_DisplayRGB; // and no drags (below)
+  const bool topDrags = (flags & ImGuiColorEditFlags_NoInputs) == 0 &&
+      (display &
+       (ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_DisplayHSV)) != 0;
+  const int components = (flags & ImGuiColorEditFlags_NoAlpha) ? 3 : 4;
+  static const char *const kNames[4] = {"##X", "##Y", "##Z", "##W"};
+  // The editor's own ID-stack seed: PushID(label) pushes window->GetID(
+  // label) (imgui.cpp:10164-10168).
+  const ImGuiID editor = g.CurrentWindow->GetID(label);
+  bool active = false;
+  const auto check = [&](ImGuiID seed) {
+    for (int n = 0; n < components; ++n)
+      active = active || ImHashStr(kNames[n], 0, seed) == g.ActiveId;
+  };
+  if (topDrags)
+    check(editor);
+  // The picker's nested editors, whose IDs exist whether or not it is open.
+  char popup[20];
+  ImFormatString(
+      popup, IM_COUNTOF(popup), "##Popup_%08x", ImHashStr("picker", 0, editor));
+  const ImGuiID picker = ImHashStr("##picker", 0, ImHashStr(popup));
+  check(ImHashStr("##rgb", 0, picker));
+  check(ImHashStr("##hsv", 0, picker));
+  if (!active)
+    return;
+  const float a = g.DragCurrentAccum;
+  const bool isFloat = (flags & ImGuiColorEditFlags_Float) != 0;
+  if (isFloat ? !std::isfinite(a) : !(std::fabs(a) < 1.0f))
+    resetDragAccumulator(
+        isFloat ? "before the active colour component's float drag"
+                : "before the active colour component's integer drag");
+}
+
 ColorEditState colorEditState() {
   ImGuiContext *g = ImGui::GetCurrentContext();
   if (g == nullptr)
