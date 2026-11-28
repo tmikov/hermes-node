@@ -143,9 +143,10 @@ napi_value setItemDefaultFocus(napi_env env, napi_callback_info info) {
 napi_value setKeyboardFocusHere(napi_env env, napi_callback_info info) {
   Call c(env, info, "setKeyboardFocusHere");
   int offset = 0;
-  // imgui.cpp:9687 asserts plainly `offset >= -1`.
+  // imgui.cpp:9687 asserts plainly `offset >= -1`; and imgui.cpp:9712
+  // stores `offset + 1` in an int, which overflows for INT32_MAX.
   if (!c.ok() ||
-      (!c.isMissing(0) && !c.intIn(0, "offset", -1, INT32_MAX, &offset)) ||
+      (!c.isMissing(0) && !c.intIn(0, "offset", -1, INT32_MAX - 1, &offset)) ||
       !c.needFrame())
     return nullptr;
   c.enterImGui();

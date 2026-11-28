@@ -298,6 +298,13 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | final review | `ui-imgui-bind-errors.js` | (RED) CLIPPER_WRONG_NOROW written, the guard unchanged | `NOTHROW ERR_IMGUI_USAGE` after `CLIPPER_WRONG_WINDOW ok`, `EXITCODE 1`; test failed. By hand on the same build, the finding's sequence: `endTable()` threw `EndTable() with the cursor moved before the table's first row`, and the frame-end recovery then aborted at `imgui_tables.cpp:1493` (`table->RowPosY2 == inner_window->DC.CursorPos.y`), exit 134 |
 | final review | `ui-imgui-bind-errors.js` | the `IsInsideRow` term put back into `canListClipper()` | `NOTHROW ERR_IMGUI_USAGE` in CLIPPER_WRONG_NOROW; test failed |
 | final review | `ui-imgui-bind-errors.js` | `canListClipper()` returning nullptr always | CLIPPER_WRONG_WINDOW aborted: `imgui_tables.cpp:2126: TableEndRow ... Assertion window == table->InnerWindow failed`, `EXITCODE 134`; test failed |
+| final review | `ui-imgui-bind-tables.js` | (RED) REJECTED's outerSize / innerWidth cases written, no bound yet | `NOTHROW ERR_OUT_OF_RANGE` after `SCROLL ok` (`beginTable('r', 2, ScrollX, [2147483648, 100], 0)` accepted), `EXITCODE 1`; test failed |
+| final review | `ui-imgui-bind-tables.js` | `beginTable`'s `innerWidth` bound alone removed (the two `outerSize` bounds kept) | `NOTHROW ERR_OUT_OF_RANGE` at the innerWidth case, `EXITCODE 1`; test failed |
+| final review | `ui-imgui-bind-widgets.js` (FORMAT) | (RED) the width / precision cases written, the validator unchanged | `NOTHROW ERR_INVALID_ARG_VALUE` after `TEXTFIELDS ok` (`'%100f'` accepted); test failed |
+| final review | `ui-imgui-bind-widgets.js` (FORMAT) | `formatProblem()` never returning `FieldTooWide` | `NOTHROW ERR_INVALID_ARG_VALUE`, `EXITCODE 1`; test failed |
+| final review | `ui-imgui-bind-widgets.js` (FORMAT) | only the precision's digit check removed (the width's kept) | `NOTHROW ERR_INVALID_ARG_VALUE`, `EXITCODE 1`; test failed. The line does not name the format; the first case, `'%100f'`, is a width and still refused, so the failure is at a precision case (`'%.100f'` is next) |
+| final review | `ui-imgui-bind-widgets.js` (FORMATLEN) | the 30-byte limit removed, with FORMATLEN's float candidates now long by `0` flags (`'%' + 25 zeros + '1.1f'`) rather than by a 27-digit precision, which the new digit cap refuses first | `FORMAT ok`, then the 31-byte float format accepted and dragged: `imgui_widgets.cpp:3714: ImParseFormatSanitizeForPrinting ... Assertion ... < fmt_out_size failed`, `EXITCODE 134`; test failed. So FORMATLEN still shows the float half of the 30-byte limit |
+| final review | `ui-imgui-bind-layout.js` (REJECTED) | (RED, and the mutation: the bound back at `INT32_MAX`, which is the code before the fix) `setKeyboardFocusHere(2147483647)` | `NOTHROW ERR_OUT_OF_RANGE`, test failed |
 
 ## Behaviours no test detects
 
@@ -1618,3 +1625,37 @@ the code and ImGui's source before it was changed.
   says "inside a table row", and the `bind_guards.h` comment no longer says
   the later seeks are covered by the scope comparison (they are covered
   because a state that passes the guard is not one the clipper changes).
+- **F4, `beginTable`'s sizes** (Minor). Confirmed: `ImTrunc(CalcItemSize(
+  outer_size, ...))` (tables:342), and `inner_width` with ScrollX reaches
+  `SetNextWindowContentSize`'s `ImTrunc` (tables:419-422,
+  imgui.cpp:9469). Both `outerSize` components and `innerWidth` are now
+  bounded below 2^31 with `Call::belowIntLimit`. `innerWidth` is bounded
+  whether or not ScrollX is set (without it the value is stored and not
+  used; the stricter rule is the simpler one to state). The cursor plus the
+  outer size (tables:343) is a sum and stays unbounded, as for the other
+  sized items. A ScrollX table 2147483520 wide with that inner width is
+  drawn without an assertion (REJECTED's accepted edge).
+- **F5, a format's width and precision** (Minor). Confirmed by reading:
+  the validator skipped any number of digits. Now each is at most two
+  digits, which is ImGui's own ceiling on a precision
+  (`ImParseFormatPrecision` falls back to its default above 99,
+  widgets:3772); it also keeps that function's `ImAtoi<int>` from the
+  signed overflow ten digits would cause (`'%.99999999999f'` fits in 30
+  bytes). A `0` right after `%` is a flag, so `'%099d'` is width 99.
+  FORMATLEN's float candidates had their length from a 27-digit
+  precision, which the cap now refuses before the length check; they are
+  now long by repeated `0` flags, and the length mutation was re-run to
+  show they still exercise the 30-byte copy. The reviewer's "seconds a
+  call" was not re-measured here.
+- **F6, `setKeyboardFocusHere`'s offset** (Minor). Confirmed:
+  `g.NavTabbingCounter = offset + 1` (imgui.cpp:9712); the counter is only
+  decremented elsewhere (imgui.cpp:14496), so `INT32_MAX - 1` is the bound.
+- **F8, the clipper's height bound** (Minor). Confirmed: `Step()`'s
+  quotient (imgui.cpp:3692-3693) has the cursor in it, and the cursor is
+  unbounded. The `kMinItemHeight` comment and the surface entry now say
+  the bound holds only for a cursor the layout placed; 3f lists the
+  clipper among the sums, with the two `beginTable` rows.
+  (The first suite run before this commit failed one unit test,
+  `SurfaceTableTest.DisplacementRacesCompletionUnderLoad`, tracker issue
+  01a0d7d4-b666, a wall-clock throughput floor that fails under load: 6/6
+  passing alone, and the whole suite passed when rerun.)

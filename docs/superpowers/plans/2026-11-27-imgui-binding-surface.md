@@ -146,6 +146,16 @@ applied" at the end lists them.
   `RoundScalarWithFormatT` (widgets:2521-2522), `data_buf[32]` in
   `TempInputScalar` (widgets:3826-3828). A long decoration is truncated on
   screen, never overflowed.
+  The width and the precision are each at most **two digits** (at most
+  99; a `0` after `%` is a flag, so leading zeros are not width digits),
+  else `ERR_INVALID_ARG_VALUE` (added in the final review). Within the 30
+  bytes either could be nine digits or more, and each reaches `vsnprintf`
+  every frame, which produces the whole padded text before truncating it
+  to the buffer: `%.999999999f` costs seconds a call (measured by the
+  reviewer on glibc). Two digits is ImGui's own bound on a precision:
+  `ImParseFormatPrecision` ignores one over 99 (widgets:3772), and reads
+  it with `ImAtoi<int>` (widgets:3746-3755, 3771), which overflows a signed
+  `int` from ten digits; it skips the width unread (widgets:3766-3767).
 
 ## Shared preconditions
 
@@ -1854,9 +1864,20 @@ and open a row (`ui-imgui-bind-errors.js` TABLE_WRONG_NOROW).
 - Overload: only one. Nullable: none. Omitted: none.
 - Frame: open.
 - Rejected: `columns` outside 1..511; a negative (or NaN) `innerWidth`
-  with `ImGuiTableFlags_ScrollX`.
+  with `ImGuiTableFlags_ScrollX`; an `outerSize` component or an
+  `innerWidth` of 2^31 or more.
 - Preconditions (in `BeginTableEx`, plain, after the `SkipItems` return
   at tables:325-326):
+  - a positive `outer_size` component is the table's size as it is
+    (`CalcItemSize`, imgui.cpp:12615-12623) and is converted to `int`
+    (`ImTrunc`, tables:342); `inner_width` with `ImGuiTableFlags_ScrollX`
+    becomes the inner window's content width (tables:419-422), converted
+    by `SetNextWindowContentSize` (imgui.cpp:9469). (a): each below 2^31
+    (`Call::belowIntLimit`, the bound `beginChild` has); `innerWidth`
+    whether or not ScrollX is set, although without it the value is not
+    used. A negative `outerSize` component is relative to the available
+    space (`max(4, avail + size)`) and not bounded. Added in the final
+    review ("Not covered" 3f).
   - `columns_count > 0 && columns_count < IMGUI_TABLE_MAX_COLUMNS`
     (tables:329; the limit is 512, internal:3235). (a).
   - with `ImGuiTableFlags_ScrollX`, `inner_width >= 0.0f` (tables:331).
@@ -2253,8 +2274,13 @@ and open a row (`ui-imgui-bind-errors.js` TABLE_WRONG_NOROW).
 - C++: `IMGUI_API void SetKeyboardFocusHere(int offset = 0);`
   (`imgui.h:1046`)
 - Overload: only one. Nullable: none. Omitted: none.
-- Frame: open. Rejected: an `offset` below -1.
-- Preconditions: `offset >= -1` (imgui.cpp:9687, plain). (a).
+- Frame: open. Rejected: an `offset` below -1 or above 2147483646.
+- Preconditions: `offset >= -1` (imgui.cpp:9687, plain). (a). And
+  `offset + 1` is stored in an `int` (`g.NavTabbingCounter`,
+  imgui.cpp:9712), a signed overflow for 2147483647. (a): `offset <=
+  INT32_MAX - 1` (added in the final review; the counter is only
+  decremented afterwards, imgui.cpp:14496, so nothing else bounds it
+  tighter).
 - Notes: none.
 
 ### `isKeyPressed`
@@ -2753,8 +2779,11 @@ only bound functions that can emit an unbounded primitive are
   - `itemHeight >= 1`. (a). C++'s default -1 means "measure the first
     item" (imgui.h:3083); that mode is not bound. The lower bound of 1
     keeps `Step()`'s `(int)((range - cursor) / ItemsHeight)`
-    (imgui.cpp:3692-3693) inside `int`: the distance is at most the list's
-    height plus the window's.
+    (imgui.cpp:3692-3693) inside `int` while the cursor is where the
+    window's layout put it: the distance is then at most the list's height
+    plus the window's. A cursor moved by `setCursorScreenPos()` is
+    unbounded, and so is the quotient then ("Not covered" 3f; corrected in
+    the final review, which found this said without the condition).
   - `count * itemHeight <= 2^30`. (a). `End()` seeks the cursor to
     `StartPosY + count * ItemsHeight` (imgui.cpp:3549-3556), and the
     window's content size is then `ImTrunc64` of that distance
@@ -3284,6 +3313,10 @@ a C++ program.
    - `colorButton`'s half-alpha preview rounds the midpoint of its
      rectangle (`IM_ROUND`, widgets:6631), and its checkerboard truncates
      each cell's edges (imgui_draw.cpp:7760, 7769).
+   - the list clipper's `Step()` converts the distance from the cursor to
+     each edge of the clip rectangle, over `itemHeight`, to `int`
+     (imgui.cpp:3692-3693): bounded by `itemHeight >= 1` and the list's
+     height only while the cursor is where the window's layout put it.
 
    | Argument | Converted | Where | Bounded |
    |---|---|---|---|
@@ -3295,6 +3328,9 @@ a C++ program.
    | `setNextWindowPos` `pos` | as it is (zero pivot, both signs) | imgui.cpp:8155-8169, 9311 | yes, -2^31 .. < 2^31 |
    | `setNextWindowPos` with a pivot | sum | imgui.cpp:8426 | no |
    | `plotLines`/`plotHistogram` `graphSize[0]` | as it is (positive) | widgets:9116 | yes, < 2^31 (Task 7) |
+   | `beginTable` `outerSize` | as it is (positive), then as a sum | tables:342; 343 | yes, < 2^31 (the final review; the sum not) |
+   | `beginTable` `innerWidth` | as it is, with `TableFlags_ScrollX` | tables:419-422, imgui.cpp:9469 | yes, < 2^31 (the final review) |
+   | `listClipper` `itemHeight` | sum (the cursor's distance to the clip rectangle, over it) | imgui.cpp:3692-3693 | no (`itemHeight >= 1` bounds it only for an unmoved cursor) |
    | `setCursorScreenPos` `pos` | sum (stored, imgui.cpp:12464; converted in `ItemSize` and text drawing) | imgui.cpp:12406-12407 | no |
    | `dummy` `size` | sum (`ItemSize`) | widgets:1627 | no |
    | `sameLine` `offsetFromStartX`, `spacing` | sum (cursor, imgui.cpp:12440, 12447) | imgui.cpp:12406-12407 | no |

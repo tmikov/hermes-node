@@ -24,7 +24,14 @@ constexpr int kMaxColumns = 512;
 constexpr int kMaxFrozenRows = 128;
 
 /// `beginTable(strId, columns, flags = 0, outerSize = [0, 0], innerWidth =
-/// 0)`, imgui.h:923.
+/// 0)`, imgui.h:923. Each component of `outerSize` is bounded below 2^31: a
+/// positive one is the table's size as it is (CalcItemSize,
+/// imgui.cpp:12615-12623), converted to int by ImTrunc (tables:342); a
+/// negative one becomes max(4, avail + size) and is not bounded. So is
+/// `innerWidth`, which with TableFlags_ScrollX becomes the inner window's
+/// content width (tables:419-422) and is converted by
+/// SetNextWindowContentSize (imgui.cpp:9469); without ScrollX it is not
+/// used, and is bounded anyway.
 napi_value beginTable(napi_env env, napi_callback_info info) {
   Call c(env, info, "beginTable");
   std::string strId;
@@ -36,7 +43,10 @@ napi_value beginTable(napi_env env, napi_callback_info info) {
       !c.intIn(1, "columns", 1, kMaxColumns - 1, &columns) ||
       (!c.isMissing(2) && !c.flags(2, "flags", kTableFlags, &flags)) ||
       (!c.isMissing(3) && !c.vec2(3, "outerSize", &outerSize)) ||
-      (!c.isMissing(4) && !c.f32(4, "innerWidth", &innerWidth)))
+      (!c.isMissing(4) && !c.f32(4, "innerWidth", &innerWidth)) ||
+      !c.belowIntLimit(outerSize.x, "outerSize[0]") ||
+      !c.belowIntLimit(outerSize.y, "outerSize[1]") ||
+      !c.belowIntLimit(innerWidth, "innerWidth"))
     return nullptr;
   // BeginTableEx's plain assertion (tables:330-331).
   if ((flags & ImGuiTableFlags_ScrollX) && !(innerWidth >= 0.0f))

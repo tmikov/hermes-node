@@ -50,7 +50,11 @@
 //            sliderFloat2..4), '%f' and '%s' on an int, and the adversarial
 //            spellings ('%ld', '%hhd', '%ls', '%n', '%*d', '%5$d', '%.*f',
 //            '%lf', '%Lf') on both: ERR_INVALID_ARG_VALUE, not called.
-//            '%%%.1f', '%i' and '%04x' are accepted.
+//            '%%%.1f', '%i' and '%04x' are accepted. A width or a
+//            precision of three digits or more ('%100f', '%.100f',
+//            '%.999999999f', ..., and the int forms):
+//            ERR_INVALID_ARG_VALUE, not called; '%99.99f' and '%099.99d'
+//            accepted.
 //  FORMATLEN a 30-byte conversion is accepted by sliderFloat and dragInt
 //            and then driven through ImGui's 32-byte copy of it (a drag to
 //            the maximum; a Ctrl+click, 7 and Enter); one byte longer is
@@ -503,7 +507,7 @@ async function main() {
 
   // --- FORMAT ----------------------------------------------------------
   {
-    let r, drew, accepted = 0;
+    let r, drew, accepted = 0, widthMessage;
     await h.run(inWindow(() => {
       const before = calls('sliderFloat');
       imgui.sliderFloat('##units', [0.5], 0, 1, '%.1f units');
@@ -531,18 +535,38 @@ async function main() {
         rejects('sliderInt', () => imgui.sliderInt('i', [0], 0, 1, fmt), value);
         rejects('dragInt', () => imgui.dragInt('i', [0], 1, 0, 0, fmt), value);
       }
+      // A width or a precision of more than two digits (over 99, where
+      // ImParseFormatPrecision gives up on a precision too,
+      // imgui_widgets.cpp:3772): each is handed to vsnprintf every frame.
+      for (const fmt of ['%100f', '%.100f', '%.999999999f', '%999999999f',
+                         '%.99999999999f']) {
+        rejects('sliderFloat',
+                () => imgui.sliderFloat('f', [0], 0, 1, fmt), value);
+        rejects('dragFloat',
+                () => imgui.dragFloat('f', [0], 1, 0, 0, fmt), value);
+      }
+      for (const fmt of ['%100d', '%.100d', '%999999999d']) {
+        rejects('sliderInt', () => imgui.sliderInt('i', [0], 0, 1, fmt), value);
+        rejects('dragInt', () => imgui.dragInt('i', [0], 1, 0, 0, fmt), value);
+      }
+      widthMessage = rejects('sliderFloat',
+          () => imgui.sliderFloat('f', [0], 0, 1, '%100f'), value).message;
       // Accepted: a literal percent before the conversion (ImGui's
       // ImParseFormatFindStart skips '%%' the same way), and '%i'.
       const acceptedBefore = calls('sliderFloat') + calls('sliderInt');
       imgui.sliderFloat('pct', [0.5], 0, 1, '%%%.1f');
       imgui.sliderInt('i conv', [1], 0, 2, '%i');
       imgui.sliderInt('x conv', [1], 0, 2, '%04x');
+      // The largest width and precision: two digits each.
+      imgui.sliderFloat('wide f', [0.5], 0, 1, '%99.99f');
+      imgui.sliderInt('wide i', [1], 0, 2, '%099.99d');
       accepted = calls('sliderFloat') + calls('sliderInt') - acceptedBefore;
     }));
-    const ok = drew && width(r) > 0 && accepted === 3;
+    const ok = drew && width(r) > 0 && accepted === 5;
     console.log(ok ? 'FORMAT ok' :
                      'FORMAT WRONG ' + drew + ' ' + accepted + ' ' +
                          JSON.stringify(r));
+    console.log('FORMAT message ' + widthMessage);
   }
 
   // --- FORMATLEN -------------------------------------------------------
@@ -553,10 +577,12 @@ async function main() {
     // entry of an int drag (DataTypeApplyFromText): 30 bytes is the most it
     // takes. Each candidate is drawn; one that is accepted is then driven
     // through that copy, so a limit that is too generous aborts here.
-    const float30 = '%.' + '0'.repeat(26) + '1f';
+    // The length comes from repeated '0' flags, since a width or a
+    // precision is at most two digits (FORMAT).
+    const float30 = '%' + '0'.repeat(25) + '1.1f';
     const int30 = '%' + '0'.repeat(27) + '1d';
     const results = [];
-    for (const [kind, fmt] of [['float', float30], ['float', '%.' + '0'.repeat(27) + '1f'],
+    for (const [kind, fmt] of [['float', float30], ['float', '%' + '0'.repeat(26) + '1.1f'],
                                ['int', int30], ['int', int30.slice(0, -1) + '1d']]) {
       const name = kind === 'float' ? 'sliderFloat' : 'dragInt';
       const v = [0];
@@ -718,6 +744,7 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}LBSIZE message imgui.beginListBox(): size[1] must be less than 2147483648; got 2.14748e+09{{$}}
 // CHECK-NEXT: {{^}}TEXTFIELDS ok{{$}}
 // CHECK-NEXT: {{^}}FORMAT ok{{$}}
+// CHECK-NEXT: {{^}}FORMAT message imgui.sliderFloat(): format: a width or a precision must be at most 2 digits (at most 99); got '%100f'{{$}}
 // CHECK-NEXT: {{^}}FORMATLEN ok{{$}}
 // CHECK-NEXT: {{^}}REJECTED ok{{$}}
 // CHECK-NEXT: {{^}}COVERAGE Widgets ok{{$}}

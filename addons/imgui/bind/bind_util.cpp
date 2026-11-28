@@ -86,15 +86,28 @@ bool isIntConversion(char c) {
 /// (3826-3828). Those truncate the text and cannot overflow.
 constexpr size_t kMaxFormatSpec = 30;
 
-enum class FormatProblem { None, Wrong, TooLong };
+/// The most digits a width or a precision may have, so at most 99. Both
+/// reach vsnprintf every frame the widget is drawn, which produces the
+/// whole padded or zero-extended text before truncating it to the buffer,
+/// so a width or precision of 999999999 costs seconds a call (measured on
+/// glibc by the final review). ImGui's own reading of a precision,
+/// ImParseFormatPrecision, ignores one over 99 (imgui_widgets.cpp:3772),
+/// and reads it with ImAtoi<int> (3746-3755, 3771), which overflows from
+/// ten digits; it does not read the width (3766-3767 skip it).
+constexpr size_t kMaxFormatFieldDigits = 2;
+
+enum class FormatProblem { None, Wrong, TooLong, FieldTooWide };
 
 /// Why \p fmt is not accepted for \p kind (None when it is): exactly
 /// one printf conversion that fits \p kind, with flags, a width and a
-/// precision allowed, no `*`, no `$`, no length modifier, at most
-/// kMaxFormatSpec bytes long. `%%` is a literal and does not count, as in
-/// ImGui's own ImParseFormatFindStart (imgui_widgets.cpp:3659-3669).
+/// precision of at most kMaxFormatFieldDigits digits each allowed, no `*`,
+/// no `$`, no length modifier, at most kMaxFormatSpec bytes long. `%%` is a
+/// literal and does not count, as in ImGui's own ImParseFormatFindStart
+/// (imgui_widgets.cpp:3659-3669). A `0` after `%` is a flag, so leading
+/// zeros are not width digits.
 FormatProblem formatProblem(const std::string &fmt, FormatKind kind) {
   int conversions = 0;
+  bool fieldTooWide = false;
   for (size_t i = 0; i < fmt.size(); ++i) {
     if (fmt[i] != '%')
       continue;
@@ -104,12 +117,18 @@ FormatProblem formatProblem(const std::string &fmt, FormatKind kind) {
       continue;
     while (i < fmt.size() && std::strchr("-+ #0", fmt[i]) != nullptr)
       ++i;
+    size_t digits = i;
     while (i < fmt.size() && fmt[i] >= '0' && fmt[i] <= '9')
       ++i;
+    if (i - digits > kMaxFormatFieldDigits)
+      fieldTooWide = true;
     if (i < fmt.size() && fmt[i] == '.') {
       ++i;
+      digits = i;
       while (i < fmt.size() && fmt[i] >= '0' && fmt[i] <= '9')
         ++i;
+      if (i - digits > kMaxFormatFieldDigits)
+        fieldTooWide = true;
     }
     if (i >= fmt.size())
       return FormatProblem::Wrong;
@@ -120,7 +139,9 @@ FormatProblem formatProblem(const std::string &fmt, FormatKind kind) {
       return FormatProblem::TooLong;
     ++conversions;
   }
-  return conversions == 1 ? FormatProblem::None : FormatProblem::Wrong;
+  if (conversions != 1)
+    return FormatProblem::Wrong;
+  return fieldTooWide ? FormatProblem::FieldTooWide : FormatProblem::None;
 }
 
 } // namespace
@@ -449,6 +470,16 @@ bool Call::format(
         "'%%' to its conversion character; got '%s'",
         what,
         kMaxFormatSpec,
+        out->c_str());
+    return false;
+  }
+  if (problem == FormatProblem::FieldTooWide) {
+    throwType(
+        "ERR_INVALID_ARG_VALUE",
+        "%s: a width or a precision must be at most %zu digits (at most "
+        "99); got '%s'",
+        what,
+        kMaxFormatFieldDigits,
         out->c_str());
     return false;
   }

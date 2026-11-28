@@ -204,7 +204,7 @@ The rules, as `bind/bind_util.cpp` reads and writes them:
 | `const char*` | A string, encoded to UTF-8 per call. A string containing U+0000 is `ERR_INVALID_ARG_VALUE` (ImGui would read it only up to that character). A nullable one also accepts `undefined` or `null`, which pass `NULL`. |
 | `const char* fmt, ...` | A finished string: `%` is not interpreted (the binding calls the `Unformatted` variant or passes `"%s"`). |
 | `const char* text, const char* text_end` | One string; `text_end` is dropped. |
-| `const char* format` of a slider, drag or input | A string with exactly one printf conversion of the value's kind (`f F e E g G a A` for a float, `d i u x X o` for an int), with flags, a width and a precision and nothing else (no `*`, `$`, length modifier or `%n`; `%%` is a literal). The conversion, from `%` to its conversion character, is at most 30 bytes. Otherwise `ERR_INVALID_ARG_VALUE`. |
+| `const char* format` of a slider, drag or input | A string with exactly one printf conversion of the value's kind (`f F e E g G a A` for a float, `d i u x X o` for an int), with flags, a width and a precision and nothing else (no `*`, `$`, length modifier or `%n`; `%%` is a literal). The conversion, from `%` to its conversion character, is at most 30 bytes, and its width and precision at most two digits each. Otherwise `ERR_INVALID_ARG_VALUE`. |
 | `const ImVec2&`, `const ImVec4&`, or by value | A real `Array` (not a typed array or other array-like) of at least 2 or 4 elements, each a `float`; elements past the 2nd or 4th are ignored. |
 | Returns `ImVec2` / `ImVec4` | A new `Array`, or the `Array` passed as the extra last argument, elements 0..1 or 0..3 filled, and that array returned. The extra argument comes after every C++ parameter, so defaults before it are passed as `undefined`: `imgui.getWindowPos(out)`, `imgui.getMouseDragDelta(0, undefined, out)`. It is checked before ImGui is called. |
 | `bool* p`, `int* p`, `float* p`, `float v[N]`, `int v[N]` | A reference array: an `Array` of at least N elements (1 for a plain pointer) of the element's type as above, read before the call and written back after it, in parameter order. A nullable one accepts `undefined` or `null`, which pass `NULL` and are not written. |
@@ -545,7 +545,10 @@ imposes one, and the error's message names it. Every limit below throws a
 the format rule and throws a `TypeError` with `ERR_INVALID_ARG_VALUE`:
 
 - a format's conversion, at most 30 bytes (ImGui copies it into 32-byte
-  buffers behind a plain assertion): `ERR_INVALID_ARG_VALUE`;
+  buffers behind a plain assertion), and its width and precision at most
+  two digits each, so at most 99 (both reach `vsnprintf` every frame,
+  where `%.999999999f` takes seconds, and ImGui itself ignores a
+  precision over 99): `ERR_INVALID_ARG_VALUE`;
 - plots, at most 4096 values (above that ImGui's own index arithmetic can
   reach its plain assertion), and `graphSize[0]` below 2^31;
 - `drawList.addPolyline`, at most 16383 points, and `addBezierCubic`, at
@@ -560,8 +563,11 @@ the format rule and throws a `TypeError` with `ERR_INVALID_ARG_VALUE`:
   magnitude);
 - `setNextWindowPos`'s position, from -2^31 to below 2^31 on each
   component;
-- `beginTable`, 1 to 511 columns; `tableSetupScrollFreeze`, 0 to 511
-  columns and 0 to 127 rows;
+- `beginTable`, 1 to 511 columns, and `outerSize` (a positive
+  component) and `innerWidth` below 2^31; `tableSetupScrollFreeze`, 0 to
+  511 columns and 0 to 127 rows;
+- `setKeyboardFocusHere`'s offset, -1 to 2147483646 (ImGui stores
+  `offset + 1` in an `int`);
 - a mouse button, 0 to 4;
 - `sliderFloat` and `sliderFloat2`..`4`: `vMin >= -FLT_MAX/2` and
   `vMax <= FLT_MAX/2`; `sliderInt`: `vMin >= INT_MIN/2` and

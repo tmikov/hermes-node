@@ -73,9 +73,9 @@
 //            (getScrollY() > 0, waited for with harness.until).
 //  REJECTED  mouse buttons outside 0..4, the keys that are not keys
 //            (Key_None, Key_NamedKey_END, Key_NamedKey_COUNT) and a
-//            combined modifier, and setKeyboardFocusHere(-2):
-//            ERR_OUT_OF_RANGE, not called; button 4, Mod_Ctrl and offset -1
-//            accepted. isItemHovered with a window-only flag is ImGui's own
+//            combined modifier, and setKeyboardFocusHere(-2) and
+//            (2147483647): ERR_OUT_OF_RANGE, not called; button 4,
+//            Mod_Ctrl and offsets -1 and 2147483646 accepted. isItemHovered with a window-only flag is ImGui's own
 //            recoverable error: ERR_IMGUI_USAGE, the call counted.
 //  COVERAGE  every Layout, IDs, Text and Queries function has reached ImGui.
 //            isItemDeactivatedAfterEdit is only called here; its
@@ -708,18 +708,22 @@ async function main() {
         rejects('isKeyPressed', () => imgui.isKeyPressed(k), range);
         rejects('isKeyDown', () => imgui.isKeyDown(k), range);
       }
-      rejects('setKeyboardFocusHere', () => imgui.setKeyboardFocusHere(-2),
-              range);
+      // -2 asserts plainly (imgui.cpp:9687); 2^31 - 1 overflows
+      // `offset + 1` (imgui.cpp:9712).
+      for (const offset of [-2, 2147483647])
+        rejects('setKeyboardFocusHere',
+                () => imgui.setKeyboardFocusHere(offset), range);
       // Accepted: the edges of each range.
       const before = calls('isMouseDown') + calls('isKeyDown') +
           calls('isKeyPressed') + calls('setKeyboardFocusHere');
       imgui.isMouseDown(4);
       imgui.isKeyDown(imgui.Mod_Ctrl);
       imgui.isKeyPressed(imgui.Key_NamedKey_BEGIN);
+      imgui.setKeyboardFocusHere(2147483646);
       imgui.setKeyboardFocusHere(-1);
       const after = calls('isMouseDown') + calls('isKeyDown') +
           calls('isKeyPressed') + calls('setKeyboardFocusHere');
-      if (after !== before + 4)
+      if (after !== before + 5)
         fail('REJECTED edges not accepted: ' + (after - before));
       // ImGui's own check (imgui.cpp:5114): the call is made, then thrown.
       const hoveredBefore = calls('isItemHovered');

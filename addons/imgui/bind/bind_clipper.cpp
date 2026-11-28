@@ -27,11 +27,15 @@ namespace {
 
 /// The smallest itemHeight. Step() converts the distance from the cursor
 /// to each edge of the clip rectangle, divided by the height, to int
-/// (`(int)(... / ItemsHeight)`, imgui.cpp:3692-3693); the distance is at
-/// most the list's height plus the window's, so with a height of at least
-/// 1 the quotient is at most the item count plus the window's height in
-/// units, inside `int` under the next bound for any window below 2^30
-/// units tall.
+/// (`(int)(... / ItemsHeight)`, imgui.cpp:3692-3693). While the cursor is
+/// where the window's own layout put it, the distance is at most the
+/// list's height plus the window's, so with a height of at least 1 the
+/// quotient is inside `int` under the next bound for any window below
+/// 2^30 units tall. The cursor is not bounded, though: setCursorScreenPos()
+/// can put it anywhere before the call, and then the distance, and the
+/// quotient, are as large as the cursor is far from the clip rectangle
+/// (the surface table's "Not covered" 3f, which lists it with the other
+/// sums no argument bound can keep in range).
 constexpr float kMinItemHeight = 1.0f;
 /// The largest count * itemHeight, the list's height. End() seeks the
 /// cursor to StartPosY + count * itemHeight (imgui.cpp:3549-3556, in

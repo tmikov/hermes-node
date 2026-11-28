@@ -42,10 +42,12 @@
 //              and a negative innerWidth; tableSetupColumn with any of the
 //              four status flags, or WidthStretch | WidthFixed;
 //              tableSetupScrollFreeze with cols -1 or 512, or rows -1 or
-//              128: ERR_OUT_OF_RANGE, ImGui not called. beginTable with 511
-//              columns, a negative innerWidth without ScrollX, a null
-//              column label and tableSetupScrollFreeze(511, 127) are
-//              accepted.
+//              128; beginTable with an outerSize component or an
+//              innerWidth of 2^31: ERR_OUT_OF_RANGE, ImGui not called.
+//              beginTable with 511 columns, a negative innerWidth without
+//              ScrollX, a ScrollX table of the largest float below 2^31
+//              for its width and its innerWidth, a null column label and
+//              tableSetupScrollFreeze(511, 127) are accepted.
 //  COVERAGE    every Tables function has reached ImGui.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
@@ -55,6 +57,7 @@
 //  tableNextColumn() returning false always (its result not written back):
 //  NEXTCOLUMN fails;
 //  beginTable's column-count check removed: REJECTED fails (ImGui aborts);
+//  beginTable's outerSize or innerWidth bound removed: REJECTED fails;
 //  tableSetupColumn passing 0 for its width: COLUMNS fails;
 //  ImGui::TableSetupScrollFreeze() removed: SCROLL fails.
 //
@@ -298,6 +301,23 @@ async function main() {
                   () => imgui.beginTable('r', 2, imgui.TableFlags_ScrollX,
                                          [0, 100], -1),
                   'ERR_OUT_OF_RANGE').message);
+      // ImGui converts a positive outer size to int as it is (ImTrunc,
+      // tables:342), and innerWidth with ScrollX (SetNextWindowContentSize,
+      // imgui.cpp:9469, from tables:419-422).
+      for (const [size, inner] of [[[2147483648, 100], 0],
+                                   [[0, 2147483648], 0],
+                                   [[0, 100], 2147483648]])
+        messages.push(
+            rejects('beginTable',
+                    () => imgui.beginTable('r', 2, imgui.TableFlags_ScrollX,
+                                           size, inner),
+                    'ERR_OUT_OF_RANGE').message);
+      if (accepted('beginTable',
+                   () => imgui.beginTable('wide', 1, imgui.TableFlags_ScrollX,
+                                          [2147483520, 100], 2147483520))) {
+        imgui.tableNextRow();
+        imgui.endTable();
+      }
       if (accepted('beginTable', () => imgui.beginTable('max', 511))) {
         imgui.tableNextRow();
         imgui.endTable();
@@ -357,6 +377,9 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}REJECTED message imgui.beginTable(): columns must be an integer{{.*}}{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.beginTable(): columns must be an integer from 1 to 511; got 512{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.beginTable(): innerWidth must not be negative with TableFlags_ScrollX; got -1{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.beginTable(): outerSize[0] must be less than 2147483648; got 2.14748e+09{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.beginTable(): outerSize[1] must be less than 2147483648; got 2.14748e+09{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.beginTable(): innerWidth must be less than 2147483648; got 2.14748e+09{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.tableSetupColumn(): flags must not hold TableColumnFlags_IsEnabled, _IsVisible, _IsSorted or _IsHovered{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.tableSetupColumn(): flags must not hold TableColumnFlags_IsEnabled, _IsVisible, _IsSorted or _IsHovered{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.tableSetupColumn(): flags must not hold TableColumnFlags_IsEnabled, _IsVisible, _IsSorted or _IsHovered{{$}}

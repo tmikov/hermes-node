@@ -106,7 +106,7 @@ them.
 | `const char*` | A string. `NULL`-able ones accept `undefined` or `null`. Encoded to UTF-8 per call. A string containing U+0000 is rejected (`ERR_INVALID_ARG_VALUE`): ImGui would read it only up to that character. |
 | `const char* fmt, ...` | A finished string. `%` is not interpreted (the binding calls the `Unformatted` variant or passes `"%s"`). |
 | `const char* text, const char* text_end` | One string; `text_end` is dropped. |
-| `const char* format` of a slider, drag or input | A string holding exactly one conversion that fits the value's type (`%.3f`, `%d`, `%5.1f ms`); anything else throws before ImGui is called, because ImGui executes the format. The conversion, from `%` to its conversion character, is at most 30 bytes: ImGui copies it into 32-byte buffers behind a plain assertion. |
+| `const char* format` of a slider, drag or input | A string holding exactly one conversion that fits the value's type (`%.3f`, `%d`, `%5.1f ms`); anything else throws before ImGui is called, because ImGui executes the format. The conversion, from `%` to its conversion character, is at most 30 bytes: ImGui copies it into 32-byte buffers behind a plain assertion. Its width and precision are at most two digits each (added by the final review: either reaches `vsnprintf` every frame). |
 | A pointer to an ImGui struct with no JavaScript form (`const ImGuiViewport*`, `const ImGuiWindowClass*`, `ImGuiStyle*`) | Omitted from the JavaScript signature and passed as `NULL`: `dockSpaceOverViewport(dockspaceId, flags)`, `styleColorsDark()`. |
 | `bool`, `int`, `float`, `double` | A boolean or a number. An `int` must be an integer in the signed 32-bit range. A `float` must be finite and within the range of a C `float`, wherever it appears (a scalar, a vector component, a reference-array element, a plot value): `NaN` and the infinities are rejected, since ImGui's layout arithmetic has no defined result for them. |
 | `ImGuiID`, `ImU32` | An integer from -2^31 to 2^32-1, taken modulo 2^32, so a colour assembled with JavaScript's bitwise operators (which give a signed result) is accepted. Returned values are 0 to 2^32-1. |
@@ -641,9 +641,12 @@ read against the code to find out.
    `itemHeight >= 1`, `count <= INT_MAX - 1` and `count * itemHeight <=
    2^30`; item widths and the sizes of windows, children, list boxes and
    multi-line fields are below 2^31; `setNextWindowPos` is within the
-   `int` range; a table has 1 to 511 columns and freezes at most 511
-   columns and 127 rows; slider bounds are within half the type's range;
-   `setScrollHereY`'s ratio is 0 to 1; a mouse button is 0 to 4.
+   `int` range; a table has 1 to 511 columns, an outer size and inner
+   width below 2^31, and freezes at most 511 columns and 127 rows; slider
+   bounds are within half the type's range; `setScrollHereY`'s ratio is 0
+   to 1; a mouse button is 0 to 4; `setKeyboardFocusHere`'s offset is
+   below 2^31 - 1; a format's width and precision are at most two digits
+   each (the last three added by the final review).
 6. **The clipper's scope comparison** also includes the window's begin
    count and the table's instance, so a window or table closed and
    reopened inside the callback is detected.
