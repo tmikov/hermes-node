@@ -111,10 +111,12 @@ struct RefInt {
 };
 
 /// A reference array of `n` floats (`float*`, `float v[N]`), n <= 4.
+/// `original` holds the values read, for write()'s NaN rule.
 struct RefFloat {
   napi_value array = nullptr;
   int n = 0;
   float values[4] = {0, 0, 0, 0};
+  float original[4] = {0, 0, 0, 0};
   bool isNull() const {
     return array == nullptr;
   }
@@ -232,7 +234,8 @@ class Call {
   // error during it (returns false then, and nothing is written back).
   bool leaveImGui();
   // Writers, used only after leaveImGui() returned true. A null reference
-  // is skipped.
+  // is skipped. A float is written finite (the surface table's G6): an
+  // infinity as +-FLT_MAX, a NaN as the element's value before the call.
   bool write(RefBool &r);
   bool write(RefInt &r);
   bool write(RefFloat &r);

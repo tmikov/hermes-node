@@ -742,6 +742,7 @@ bool Call::refFloat(
     if (!element(array, static_cast<uint32_t>(k), &e) ||
         !f32Value(e, name.c_str(), &out->values[k]))
       return false;
+    out->original[k] = out->values[k];
   }
   return true;
 }
@@ -900,6 +901,18 @@ bool Call::write(RefInt &r) {
 bool Call::write(RefFloat &r) {
   if (r.array == nullptr)
     return true;
+  // G6 for floats: ImGui's float arithmetic can overflow (inputFloat's
+  // step, imgui_widgets.cpp:2367; a drag's accumulator, 2631) or give NaN
+  // (text typed as "nan"), and f32() refuses both at the next call. Every
+  // float-writing function accepts any finite value, so +-FLT_MAX and the
+  // previous value are inside its own domain too (the colour editors clamp
+  // to theirs before writing).
+  for (int k = 0; k < r.n; ++k) {
+    if (std::isnan(r.values[k]))
+      r.values[k] = r.original[k];
+    else if (std::isinf(r.values[k]))
+      r.values[k] = r.values[k] > 0 ? FLT_MAX : -FLT_MAX;
+  }
   for (int k = 0; k < r.n; ++k) {
     napi_value v = nullptr;
     if (!napiOk(

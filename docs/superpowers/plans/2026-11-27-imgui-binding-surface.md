@@ -163,14 +163,28 @@ applied" at the end lists them.
   leads to a refusal, and only a value the program passes is refused.
   Where ImGui can write past the domain the value stops at the bound. It
   applies to `dragInt` (+-(2^30 - 1)) and `colorEdit3`/`colorEdit4` (the
-  input mode's component domain); every other writing function's
-  write-back lies in its accepted set already (sliders and drags with no
-  value domain, `inputInt`, `inputFloat`, checkboxes, text). ImGui's
+  input mode's component domain), and to every float written back (Codex's
+  round 2, D4): a float is written finite, an infinity as +-FLT_MAX and a
+  NaN as the element's value before the call (the call still returns what
+  ImGui returned), in `Call::write()`, so every float-writing function
+  gets it (`sliderFloat*`, `dragFloat`, `inputFloat`, the colour editors
+  after their own clamp). Each of those accepts any finite value, so the
+  result is inside its own domain too. ImGui's float arithmetic does
+  overflow: `inputFloat`'s step is a plain addition (widgets:2367), a
+  drag adds its accumulator (2631). The other writing functions' results
+  are in their accepted sets already (`inputInt`'s step saturates,
+  `sliderInt`'s value comes from its range, checkboxes, text). ImGui's
   retained state cannot carry a clamped-away value forward: a drag keeps
   only its accumulator's fraction (widgets:2648) and re-reads the value
   every frame (2612); a number field's text entry re-parses its own buffer
-  (2416); a colour editor converts its array afresh (widgets:5971), its
-  saved hue being reused only while the colour matches (5891-5920).
+  (2416); a colour editor converts its array afresh (widgets:5971), and
+  its saved hue is brought into its domain before each call
+  (`sanitizeColorEditState()`). One retained value can re-produce an
+  overflow: a float drag that overflowed leaves an infinite or NaN
+  accumulator (`accum -= inf - v`, widgets:2648), which the next step
+  would add to the written-back FLT_MAX, flipping it to -FLT_MAX; the
+  binding resets a non-finite accumulator to 0 before each `dragFloat`
+  (`resetNonFiniteDragAccumulator()`), so the value stays at FLT_MAX.
 
 ## Shared preconditions
 
@@ -3709,6 +3723,7 @@ Written:
 | State | Declared | Written by | Why |
 |---|---|---|---|
 | `g.ErrorCallback`, `g.ErrorCallbackUserData` | 2876, 2877 | context creation | the design's error callback |
+| `g.DragCurrentAccum` | 2824 | `dragFloat`, set to 0 before ImGui is called when it is not finite (`guard::resetNonFiniteDragAccumulator()`) | Codex's round 2, D4: a drag that overflowed leaves it infinite or NaN (widgets:2648), and the next step adds it to the value (2631); activation sets it to 0 too (2598-2602) |
 | `g.ColorEditSavedID` (read with `ColorEditSavedHue`, `ColorEditSavedSat`, 2810-2812) | 2810 | `colorEdit3`, `colorEdit4`, set to 0 before ImGui is called when the saved hue or saturation is outside 0 .. 1 or not finite (`guard::sanitizeColorEditState()`) | Codex's round 2, D1: ImGui restores the saved hue and saturation while the colour matches (widgets:5902-5917, 5978) and converts them to int (5980); 0 is the "nothing saved" value ImGui starts with (imgui.cpp:4550) |
 | `g.BeginComboDepth` | 2808 | `newFrame()`, set to 0 before `ImGui::NewFrame()` | ruling 19: nothing in ImGui restores the counter after a combo left open (see `endCombo`); zero is always correct at the start of a frame |
 | `ImGuiListClipper::ItemsCount` | imgui.h:3074, commented "[Internal]" | `listClipper`, set to -1 when abandoning | the design's abandon rule (imgui.cpp:3521) |

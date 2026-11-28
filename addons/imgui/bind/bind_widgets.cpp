@@ -575,6 +575,7 @@ napi_value dragFloat(napi_env env, napi_callback_info info) {
       !sliderFlags(c, 6, false, &flags) || !c.needFrame() ||
       !c.needLabelId("label", label))
     return nullptr;
+  guard::resetNonFiniteDragAccumulator();
   c.enterImGui();
   const bool changed = ImGui::DragFloat(
       label.c_str(), v.ptr(), vSpeed, vMin, vMax, format.c_str(), flags);

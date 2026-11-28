@@ -629,7 +629,10 @@ the format rule and throws a `TypeError` with `ERR_INVALID_ARG_VALUE`:
 
 **A value written back is clamped to the function's accepted domain**, so
 what the widget produced is always a value the next call accepts: only a
-value the program passes is ever refused. Where the domain is narrower
+value the program passes is ever refused. A float written back is finite:
+an infinity ImGui's arithmetic produced (`inputFloat`'s "+" at
+`FLT_MAX`, an overflowing drag) is written as +-`FLT_MAX`, and a NaN
+leaves the element's previous value. Where the domain is narrower
 than what ImGui can write, the value stops at the bound: a `dragInt`
 dragged or typed past +-(2^30 - 1) holds the bound, and a colour editor's
 component dragged below 0 in HDR mode (or a saturation past what the RGB
@@ -1003,7 +1006,10 @@ What the binding takes from `imgui_internal.h`, all of it in
   saved hue or saturation (`g.ColorEditSavedHue`, `ColorEditSavedSat`,
   read for it) is outside 0 .. 1 or not finite, so ImGui forgets a hue
   typed past the domain instead of restoring it and converting it to
-  `int` (`guard::sanitizeColorEditState()`). Outside that header,
+  `int` (`guard::sanitizeColorEditState()`); and `g.DragCurrentAccum`,
+  set to 0 before a `dragFloat` when it is not finite, so a drag that
+  overflowed to `FLT_MAX` stays there instead of flipping to `-FLT_MAX`
+  (`guard::resetNonFiniteDragAccumulator()`). Outside that header,
   `bind/bind_clipper.cpp` writes `ImGuiListClipper::ItemsCount`, declared
   in `imgui.h` but commented "[Internal]", to -1 when it abandons a
   clipper; and the four `io.ConfigErrorRecovery*` fields above are public

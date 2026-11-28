@@ -85,6 +85,15 @@
 //            not 3j's overflowing text): ImGui saves it, and the next call
 //            forgets it before ImGui could restore it (held false, traced);
 //            the colour stays [0, 0, 0] and every call is accepted.
+//  FLOATWB   a float written back is finite (G6, round 2, D4): inputFloat
+//            of [FLT_MAX] with step FLT_MAX, its "+" clicked twice: ImGui
+//            adds to infinity, the array holds FLT_MAX after each, and
+//            every call is accepted; a dragFloat of [0] at speed 3e36
+//            moved right three times by 100 units (each move adds 3e38):
+//            it overflows on the second move and holds FLT_MAX, and on the
+//            third (where ImGui's accumulator, left at -inf by the
+//            overflow, would make it -inf, the binding resets it) still
+//            FLT_MAX, every call accepted.
 //  DRAGDOMAIN dragInt's domain (dragIntDomainOk() in bind/bind_widgets.cpp:
 //            a drag adds the mouse delta times the speed to the value in
 //            int, and the platform half clamps mouse coordinates to
@@ -859,6 +868,66 @@ async function main() {
                                      'SAVEDHUE WRONG ' + wrong.join(' '));
   }
 
+  // --- FLOATWB ---------------------------------------------------------
+  {
+    const M = imgui.FLT_MAX;
+    const wrong = [];
+    {
+      const v = [M];
+      let r = null, threw = null;
+      const draw = inWindow(() => {
+        try {
+          imgui.inputFloat('##wb', v, M);
+        } catch (e) {
+          threw = e.message;
+        }
+        r = rect();
+      });
+      await settle(draw);
+      const plus = [Math.floor(r.max[0]) - 4, Math.floor((r.min[1] + r.max[1]) / 2)];
+      const seen = [];
+      for (let n = 0; n < 2; ++n) {
+        await harness.clickAt(h, draw, plus);
+        await h.run(draw);
+        seen.push(v[0]);
+      }
+      if (!(seen[0] === M && seen[1] === M && threw === null))
+        wrong.push('inputFloat ' + JSON.stringify({seen, threw}));
+    }
+    {
+      const v = [0];
+      let r = null, threw = null;
+      const draw = inWindow(() => {
+        try {
+          imgui.dragFloat('##wbd', v, 3e36);
+        } catch (e) {
+          threw = e.message;
+        }
+        r = rect();
+      });
+      await settle(draw);
+      const at = [Math.floor(r.min[0]) + 8, Math.floor((r.min[1] + r.max[1]) / 2)];
+      await harness.moveTo(h, draw, at);
+      harness.inject(h, {type: 'MOUSE_DOWN', button: LEFT, mouseX: at[0],
+                         mouseY: at[1]});
+      await harness.until(h, draw, (s) => s.mouseDown[LEFT], 'FLOATWB down');
+      const seen = [];
+      for (let n = 1; n <= 3; ++n) {
+        await harness.moveTo(h, draw, [at[0] + 100 * n, at[1]]);
+        await h.run(draw);
+        seen.push(v[0]);
+      }
+      harness.inject(h, {type: 'MOUSE_UP', button: LEFT, mouseX: at[0] + 300,
+                         mouseY: at[1]});
+      await harness.until(h, draw, (s) => !s.mouseDown[LEFT], 'FLOATWB up');
+      await h.run(draw);
+      if (!(seen[1] === M && seen[2] === M && v[0] === M && threw === null))
+        wrong.push('dragFloat ' + JSON.stringify({seen, v, threw}));
+    }
+    console.log(wrong.length === 0 ? 'FLOATWB ok' :
+                                     'FLOATWB WRONG ' + wrong.join(' '));
+  }
+
   // --- DRAGDOMAIN ------------------------------------------------------
   {
     const messages = [];
@@ -1022,6 +1091,7 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit4(): col[3] must be from -2048 to 2048; got -2048.5{{$}}
 // CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorButton(): col[1] must be from -2048 to 2048; got 3.40282347e+38{{$}}
 // CHECK-NEXT: {{^}}SAVEDHUE ok{{$}}
+// CHECK-NEXT: {{^}}FLOATWB ok{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got 1e+10{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got 819.5{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got -820{{$}}

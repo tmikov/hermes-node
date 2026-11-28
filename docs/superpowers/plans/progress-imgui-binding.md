@@ -344,6 +344,8 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | codex r2 | `ui-imgui-bind-widgets.js` (SAVEDHUE) | (RED, and the mutation) `guard::sanitizeColorEditState()` not called | `SAVEDHUE WRONG large {"saved":{"held":true,"hue":10000000000,"saturation":0},"after":{"held":true,"hue":10000000000,...}}`: ImGui kept and restored the typed hue (and converted it at widgets:5980, silently on x86-64); test failed |
 | codex r2 | `ui-imgui-bind-widgets.js` (COLORDOMAIN) | (RED, and the mutation) `colorButton`'s domain check removed | `NOTHROW ERR_OUT_OF_RANGE` after `REJECTED ok` (Codex's `[-0.1, FLT_MAX, 0, 1]` with InputHSV accepted); test failed |
 | codex r2 | `ui-imgui-bind-style.js` (PICKER) | (RED, and the mutation) `framePaddingYLimit()` returning the length limit | `NOTHROW ERR_OUT_OF_RANGE` (FramePadding [4, Y + 1] accepted); test failed. By hand before the fix, Codex's padding [4, 100000] with the picker open drew 1106303 vertices, arcs of about 91,700 segments each, each one primitive past 16-bit indices (no abort: Render()'s check sees only the last offset, draw:3554) |
+| codex r2 | `ui-imgui-bind-widgets.js` (FLOATWB) | (RED, and the mutation) `Call::write()`'s infinity rule removed | `FLOATWB WRONG inputFloat {"seen":[null,null],"threw":"imgui.inputFloat(): v[0] must be a finite number within the range of a float; got inf"} dragFloat {"seen":[3e+38,null,null],...,"threw":"... got inf"}` (JSON null is Infinity); test failed |
+| codex r2 | `ui-imgui-bind-widgets.js` (FLOATWB) | the drag accumulator reset removed | `FLOATWB WRONG dragFloat {"seen":[3.0000000054977558e+38,3.4028234663852886e+38,-3.4028234663852886e+38],...}`: the third move flipped the value to -FLT_MAX; test failed |
 
 ## Behaviours no test detects
 
@@ -1953,4 +1955,16 @@ Codex's text: `.superpowers/sdd/2026-11-27-imgui-binding/codex-code-r2.md`.
   not settable through the binding. The sweep of every primitive a style
   length scales is the table in the surface entry of `pushStyleVar`;
   nothing else needed a bound. PICKER draws the open picker at the bound.
+- **D4 (float write-back)** verified (widgets:2367, 2631; bind_util's
+  f32 check). `Call::write(RefFloat&)` now writes +-FLT_MAX for an
+  infinity and the element's previous value for a NaN, for every
+  float-writing function; each accepts any finite value, and the colour
+  editors clamp to their domain first. One retained value re-produced the
+  overflow: the drag accumulator left at -inf, which flipped the value to
+  -FLT_MAX at the next move (FLOATWB, the reset removed). The binding now
+  resets a non-finite accumulator before each dragFloat (a new write to
+  ImGui's internal state, listed). The README's "refused at the next
+  call" sentence for the colour editors is corrected (in the D1/D2
+  commit); the earlier progress notes that say so are history, superseded
+  by the write-back ruling.
 

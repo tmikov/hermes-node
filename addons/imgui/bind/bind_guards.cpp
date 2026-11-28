@@ -17,6 +17,7 @@
 
 #include <imgui_internal.h>
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -722,6 +723,16 @@ void sanitizeColorEditState() {
       static_cast<double>(g.ColorEditSavedHue),
       static_cast<double>(g.ColorEditSavedSat));
   g.ColorEditSavedID = 0;
+}
+
+void resetNonFiniteDragAccumulator() {
+  ImGuiContext &g = *GImGui;
+  if (std::isfinite(g.DragCurrentAccum))
+    return;
+  trace(
+      "dragFloat: drag accumulator %g reset to 0",
+      static_cast<double>(g.DragCurrentAccum));
+  g.DragCurrentAccum = 0.0f;
 }
 
 ColorEditState colorEditState() {

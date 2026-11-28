@@ -704,5 +704,6 @@ read against the code to find out.
     scales; `dragInt`'s value, bounds and speed, which rest on the
     platform half clamping mouse coordinates and wheel deltas to +-2^16.
     A value written back is clamped to the function's accepted domain
-    (the surface table's G6), so user interaction never leads to a
-    refusal; only values the program passes are refused.
+    (the surface table's G6), and a float is written finite, so user
+    interaction never leads to a refusal; only values the program passes
+    are refused.

@@ -191,6 +191,15 @@ TableScope tableScope();
 /// 0 .. 1, everything an ordinary edit or the picker saves, is kept, so
 /// hue preservation is unchanged for it. Traced when it forgets.
 void sanitizeColorEditState();
+/// Sets ImGui's drag accumulator (g.DragCurrentAccum) to 0 when it is not
+/// finite, before a dragFloat runs (round 2, D4). A float drag that
+/// overflows the value to infinity leaves `accum - (inf - v)`, an infinity
+/// or NaN, in the accumulator (imgui_widgets.cpp:2648), which ImGui would
+/// add to the value at the next step (2631): the value the binding wrote
+/// back as FLT_MAX would then flip to -FLT_MAX. Reset, the next step
+/// overflows again and the value stays at FLT_MAX. Only an active drag
+/// reads the accumulator, and activation resets it anyway (2598-2602).
+void resetNonFiniteDragAccumulator();
 /// For __test.colorEditState(): whether a saved state is held, and its
 /// hue and saturation.
 struct ColorEditState {
