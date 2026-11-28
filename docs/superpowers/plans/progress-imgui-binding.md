@@ -346,6 +346,7 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | codex r2 | `ui-imgui-bind-style.js` (PICKER) | (RED, and the mutation) `framePaddingYLimit()` returning the length limit | `NOTHROW ERR_OUT_OF_RANGE` (FramePadding [4, Y + 1] accepted); test failed. By hand before the fix, Codex's padding [4, 100000] with the picker open drew 1106303 vertices, arcs of about 91,700 segments each, each one primitive past 16-bit indices (no abort: Render()'s check sees only the last offset, draw:3554) |
 | codex r2 | `ui-imgui-bind-widgets.js` (FLOATWB) | (RED, and the mutation) `Call::write()`'s infinity rule removed | `FLOATWB WRONG inputFloat {"seen":[null,null],"threw":"imgui.inputFloat(): v[0] must be a finite number within the range of a float; got inf"} dragFloat {"seen":[3e+38,null,null],...,"threw":"... got inf"}` (JSON null is Infinity); test failed |
 | codex r2 | `ui-imgui-bind-widgets.js` (FLOATWB) | the drag accumulator reset removed | `FLOATWB WRONG dragFloat {"seen":[3.0000000054977558e+38,3.4028234663852886e+38,-3.4028234663852886e+38],...}`: the third move flipped the value to -FLT_MAX; test failed |
+| codex r3 | `ui-imgui-bind-widgets.js` (TRANSITION) | (RED, and the mutation) `guard::resetDragAccumulatorForInt()` not called | `TRANSITION WRONG {"integer":[-1073741823],"floating":[1.0000000150474662e+30],...}`: the 5e11 accumulator converted to int (INT_MIN on x86-64, undefined) and the write-back clamped it; test failed |
 
 ## Behaviours no test detects
 
@@ -1967,4 +1968,25 @@ Codex's text: `.superpowers/sdd/2026-11-27-imgui-binding/codex-code-r2.md`.
   call" sentence for the colour editors is corrected (in the D1/D2
   commit); the earlier progress notes that say so are history, superseded
   by the write-back ruling.
+
+### Codex code review, round 3
+
+- **E1 (accumulator carried across a type change)** verified (widgets:
+  2648 keeps a delta too small to change the float whole; 2700-2727
+  dispatch on the new type; 2631 converts) and reproduced by TRANSITION
+  with the fix removed: the integer became -1073741823 (INT_MIN clamped).
+  Fixed by resetting `g.DragCurrentAccum` to 0 before dragInt and the
+  colour editors when its magnitude is 1 or more: the integer path never
+  leaves 1 or more between calls, so the rule is exactly "a float drag's
+  remainder". The colour editors' internal DragInt/DragFloat run inside
+  one ImGui call, but their type can change only between calls (the
+  flags, or the options menu, which a held left drag cannot reach), so the
+  reset before the call covers them. The siblings are "Not covered" 3l,
+  each read and none needing a reset. The first run of TRANSITION failed
+  on a double click (it presses where FLOATWB did); it sets the 1 us
+  double-click time as DRAGDOMAIN does.
+- **E2** 3k reworded: no single threshold, the component conversion
+  (8421505 or more as converted) and the hue-bar cursor (geometry
+  dependent, about 1.0e7 at the default picker) stated apart; the tracker
+  issue's line too.
 

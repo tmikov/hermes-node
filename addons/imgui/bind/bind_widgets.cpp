@@ -606,6 +606,7 @@ napi_value dragInt(napi_env env, napi_callback_info info) {
       !dragIntDomainOk(c, v.values[0], vSpeed, vMin, vMax, flags, &speed) ||
       !c.needFrame() || !c.needLabelId("label", label))
     return nullptr;
+  guard::resetDragAccumulatorForInt();
   c.enterImGui();
   const bool changed = ImGui::DragInt(
       label.c_str(), v.ptr(), speed, vMin, vMax, format.c_str(), flags);
@@ -848,6 +849,7 @@ napi_value colorEdit3(napi_env env, napi_callback_info info) {
       !c.needFrame() || !colorComponentsOk(c, col.values, col.n, flags))
     return nullptr;
   guard::sanitizeColorEditState();
+  guard::resetDragAccumulatorForInt();
   c.enterImGui();
   const bool changed = ImGui::ColorEdit3(label.c_str(), col.ptr(), flags);
   if (!c.leaveImGui())
@@ -870,6 +872,7 @@ napi_value colorEdit4(napi_env env, napi_callback_info info) {
       !c.needFrame() || !colorComponentsOk(c, col.values, col.n, flags))
     return nullptr;
   guard::sanitizeColorEditState();
+  guard::resetDragAccumulatorForInt();
   c.enterImGui();
   const bool changed = ImGui::ColorEdit4(label.c_str(), col.ptr(), flags);
   if (!c.leaveImGui())

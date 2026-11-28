@@ -735,6 +735,16 @@ void resetNonFiniteDragAccumulator() {
   g.DragCurrentAccum = 0.0f;
 }
 
+void resetDragAccumulatorForInt() {
+  ImGuiContext &g = *GImGui;
+  if (std::fabs(g.DragCurrentAccum) < 1.0f)
+    return;
+  trace(
+      "drag: accumulator %g reset to 0 before an integer drag",
+      static_cast<double>(g.DragCurrentAccum));
+  g.DragCurrentAccum = 0.0f;
+}
+
 ColorEditState colorEditState() {
   ImGuiContext *g = ImGui::GetCurrentContext();
   if (g == nullptr)

@@ -94,6 +94,17 @@
 //            third (where ImGui's accumulator, left at -inf by the
 //            overflow, would make it -inf, the binding resets it) still
 //            FLT_MAX, every call accepted.
+//  TRANSITION a drag whose widget changes type under the held mouse (Codex's
+//            round 3, E1): one widget a frame with the same ID, a dragFloat
+//            of [1e30] at speed 1e10, then a dragInt of [0] at speed 1.
+//            Pressed on it and moved 50 units as the float drag (the delta,
+//            5e11, cannot change 1e30, and ImGui keeps it whole in its
+//            accumulator); then, the button still down, switched to the
+//            integer drag and moved 10 more: the integer is exactly 10
+//            (the binding reset the carried accumulator, traced), the float
+//            still 1e30. Before the fix the integer path converted 5e11 to
+//            int, undefined, which on x86-64 gave INT_MIN, written back as
+//            -1073741823.
 //  DRAGDOMAIN dragInt's domain (dragIntDomainOk() in bind/bind_widgets.cpp:
 //            a drag adds the mouse delta times the speed to the value in
 //            int, and the platform half clamps mouse coordinates to
@@ -928,6 +939,47 @@ async function main() {
                                      'FLOATWB WRONG ' + wrong.join(' '));
   }
 
+  // --- TRANSITION ------------------------------------------------------
+  {
+    const floating = [1e30], integer = [0];
+    let integerMode = false, r = null, threw = null;
+    const draw = inWindow(() => {
+      try {
+        if (integerMode)
+          imgui.dragInt('value', integer, 1);
+        else
+          imgui.dragFloat('value', floating, 1e10);
+      } catch (e) {
+        threw = e.message;
+      }
+      r = rect();
+    });
+    await settle(draw);
+    // FLOATWB pressed here just before: a 1 us double-click time keeps this
+    // press from being a double click (DRAGDOMAIN says why).
+    const previousDoubleClick = imgui.__test.setDoubleClickTime(1e-6);
+    const at = [Math.floor(r.min[0]) + 8, Math.floor((r.min[1] + r.max[1]) / 2)];
+    await harness.moveTo(h, draw, at);
+    harness.inject(h, {type: 'MOUSE_DOWN', button: LEFT, mouseX: at[0],
+                       mouseY: at[1]});
+    await harness.until(h, draw, (s) => s.mouseDown[LEFT], 'TRANSITION down');
+    await harness.moveTo(h, draw, [at[0] + 50, at[1]]);
+    await h.run(draw);
+    integerMode = true;
+    await h.run(draw);
+    await harness.moveTo(h, draw, [at[0] + 60, at[1]]);
+    await h.run(draw);
+    harness.inject(h, {type: 'MOUSE_UP', button: LEFT, mouseX: at[0] + 60,
+                       mouseY: at[1]});
+    await harness.until(h, draw, (s) => !s.mouseDown[LEFT], 'TRANSITION up');
+    await h.run(draw);
+    imgui.__test.setDoubleClickTime(previousDoubleClick);
+    const ok = integer[0] === 10 && floating[0] === Math.fround(1e30) &&
+        threw === null;
+    console.log(ok ? 'TRANSITION ok' : 'TRANSITION WRONG ' +
+                     JSON.stringify({integer, floating, threw}));
+  }
+
   // --- DRAGDOMAIN ------------------------------------------------------
   {
     const messages = [];
@@ -1092,6 +1144,7 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorButton(): col[1] must be from -2048 to 2048; got 3.40282347e+38{{$}}
 // CHECK-NEXT: {{^}}SAVEDHUE ok{{$}}
 // CHECK-NEXT: {{^}}FLOATWB ok{{$}}
+// CHECK-NEXT: {{^}}TRANSITION ok{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got 1e+10{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got 819.5{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got -820{{$}}
@@ -1110,3 +1163,5 @@ main().catch((e) => {
 // TRACE: {{^}}[ui] imgui: context created
 // SAVEDHUE: the saved hue of 1e10 forgotten before the next editor call.
 // TRACE: {{^}}[ui] imgui: colorEdit: saved hue 1e+10, saturation 0 outside 0..1, forgotten{{$}}
+// TRANSITION: the float drag's accumulator reset before the integer drag.
+// TRACE: {{^}}[ui] imgui: drag: accumulator {{.*}} reset to 0 before an integer drag{{$}}

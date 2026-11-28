@@ -200,6 +200,18 @@ void sanitizeColorEditState();
 /// overflows again and the value stays at FLT_MAX. Only an active drag
 /// reads the accumulator, and activation resets it anyway (2598-2602).
 void resetNonFiniteDragAccumulator();
+/// Sets g.DragCurrentAccum to 0 unless its magnitude is below 1, before a
+/// call whose drag may be an integer one: dragInt, and colorEdit3 /
+/// colorEdit4, whose component drags are DragInt in the 0..255 data type
+/// (imgui_widgets.cpp:6032) (Codex's code review, round 3, E1). The
+/// integer path converts the accumulator plus the frame's delta to int and
+/// adds it to the value (2631); between calls it leaves only the fraction
+/// it could not apply, below 1 (2648), or 0 (2598-2602), so 1 or more can
+/// only be a float drag's remainder (a delta too small to change its value
+/// is kept whole, 2648 subtracting zero), carried to an integer drag that
+/// took over the same active ID while the mouse stayed down: DragBehavior
+/// dispatches on the new data type and resets nothing (2700-2727).
+void resetDragAccumulatorForInt();
 /// For __test.colorEditState(): whether a saved state is held, and its
 /// hue and saturation.
 struct ColorEditState {

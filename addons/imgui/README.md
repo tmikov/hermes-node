@@ -1009,7 +1009,11 @@ What the binding takes from `imgui_internal.h`, all of it in
   `int` (`guard::sanitizeColorEditState()`); and `g.DragCurrentAccum`,
   set to 0 before a `dragFloat` when it is not finite, so a drag that
   overflowed to `FLT_MAX` stays there instead of flipping to `-FLT_MAX`
-  (`guard::resetNonFiniteDragAccumulator()`). Outside that header,
+  (`guard::resetNonFiniteDragAccumulator()`), and before a `dragInt`,
+  `colorEdit3` or `colorEdit4` when its magnitude is 1 or more, which only
+  a float drag's remainder can be: a widget switched from a float drag to
+  an integer one with the same ID while the mouse is held would otherwise
+  convert it to `int` (`guard::resetDragAccumulatorForInt()`). Outside that header,
   `bind/bind_clipper.cpp` writes `ImGuiListClipper::ItemsCount`, declared
   in `imgui.h` but commented "[Internal]", to -1 when it abandons a
   clipper; and the four `io.ConfigErrorRecovery*` fields above are public

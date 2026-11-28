@@ -3624,6 +3624,24 @@ a C++ program.
    `ImAddClampOverflow`, which saturates (widgets:2351-2352;
    internal:543-544), and need no bound.
 
+3l. **State a widget of another type leaves for the same active ID**
+   (Codex's round 3, E1, the siblings of the drag accumulator). One
+   widget a frame with the same ID can change type while the mouse is
+   held. The drag accumulator is reset (the `g.DragCurrentAccum` row of
+   "Written"). The rest, read: `g.DragCurrentAccumDirty` only says the
+   accumulator has something to apply, harmless once it is 0;
+   `g.DragSpeedDefaultRatio` is a constant (imgui.cpp:4561);
+   `g.SliderCurrentAccum` is read only from the keyboard and gamepad
+   branch (widgets:3203-3258), which navigation this addon never enables
+   reaches (3i); `g.SliderGrabClickOffset` is 0 for an integer slider and
+   for a float one enters only `ImSaturate` (widgets:3195-3198); the
+   Ctrl+click text is parsed at commit with the type then current
+   (widgets:2416, 3j); a cancel copies the activation value's bytes into
+   the new type (widgets:2706-2711): an `int` read from a float's bits is
+   an int the write-back clamps (G6), a float read from an int's bits is
+   finite or NaN, which the float write-back keeps finite (G6); and
+   `inputInt` / `inputFloat` keep no state for their step buttons.
+
 3k. **A value typed into the colour picker's own editors** (Codex's
    round 2, D1, by reading). The picker that a colour editor opens draws
    three editors of its own on the same array, "##rgb", "##hsv" and
@@ -3637,8 +3655,21 @@ a C++ program.
    size (`IM_ROUND`, 6543). The binding sees the array and the saved state
    only between calls, where it clamps and forgets them (G6,
    `sanitizeColorEditState()`); between these three editors it cannot
-   intervene. A value of 2^23 or more typed there reaches an undefined
-   conversion in that call. The outer editor's own fields are not this
+   intervene. There is no single threshold; two conversions are
+   reachable, each with its own bound (Codex's round 3, E2). The
+   component conversion `IM_F32_TO_INT8_UNBOUND` (5980; internal:296) is
+   undefined once `|x| * 255 + 0.5` reaches 2^31, x being the
+   component in the form that editor converts: an RGB value typed into
+   "##rgb" is shown by "##hsv" as its value V = max(R, G, B), so 8421505
+   or more triggers it, and 8388608 does not (8388608 * 255 = 2139095040
+   < INT_MAX). The hue-bar cursor `IM_ROUND(picker_pos.y + H *
+   sv_picker_size)` (6543) depends on the picker's position and size: a
+   hue typed into "##hsv" (HSV display, HDR, Float, with saturation or
+   value 0 so that the picker restores it) of about 2^31 / sv_picker_size
+   or more triggers it, about 1.0e7 for the default picker, whose square
+   is 205 units (12 frame heights of 19, less one frame height and the
+   4-unit spacing, 6098, 6248), so
+   10000000000, Codex's D1 example, does. The outer editor's own fields are not this
    case: what they produce is consumed at the next call, after the
    binding's check.
 
@@ -3723,7 +3754,7 @@ Written:
 | State | Declared | Written by | Why |
 |---|---|---|---|
 | `g.ErrorCallback`, `g.ErrorCallbackUserData` | 2876, 2877 | context creation | the design's error callback |
-| `g.DragCurrentAccum` | 2824 | `dragFloat`, set to 0 before ImGui is called when it is not finite (`guard::resetNonFiniteDragAccumulator()`) | Codex's round 2, D4: a drag that overflowed leaves it infinite or NaN (widgets:2648), and the next step adds it to the value (2631); activation sets it to 0 too (2598-2602) |
+| `g.DragCurrentAccum` | 2824 | `dragFloat`, set to 0 before ImGui is called when it is not finite (`guard::resetNonFiniteDragAccumulator()`); `dragInt`, `colorEdit3`, `colorEdit4`, set to 0 when its magnitude is 1 or more (`guard::resetDragAccumulatorForInt()`; Codex's round 3, E1: an integer drag leaves below 1 between calls, widgets:2648, so more is a float drag's remainder carried to an integer drag of the same active ID, which DragBehavior does not reset, 2700-2727, and converts at 2631) | Codex's round 2, D4: a drag that overflowed leaves it infinite or NaN (widgets:2648), and the next step adds it to the value (2631); activation sets it to 0 too (2598-2602) |
 | `g.ColorEditSavedID` (read with `ColorEditSavedHue`, `ColorEditSavedSat`, 2810-2812) | 2810 | `colorEdit3`, `colorEdit4`, set to 0 before ImGui is called when the saved hue or saturation is outside 0 .. 1 or not finite (`guard::sanitizeColorEditState()`) | Codex's round 2, D1: ImGui restores the saved hue and saturation while the colour matches (widgets:5902-5917, 5978) and converts them to int (5980); 0 is the "nothing saved" value ImGui starts with (imgui.cpp:4550) |
 | `g.BeginComboDepth` | 2808 | `newFrame()`, set to 0 before `ImGui::NewFrame()` | ruling 19: nothing in ImGui restores the counter after a combo left open (see `endCombo`); zero is always correct at the start of a frame |
 | `ImGuiListClipper::ItemsCount` | imgui.h:3074, commented "[Internal]" | `listClipper`, set to -1 when abandoning | the design's abandon rule (imgui.cpp:3521) |
