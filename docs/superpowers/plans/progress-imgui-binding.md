@@ -335,6 +335,7 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | codex | `ui-imgui-bind-widgets.js` (DRAGDOMAIN) | `dragIntDomainOk()` returning true | `NOTHROW ERR_OUT_OF_RANGE` at Codex's `vSpeed` `1e10`; test failed |
 | codex | `ui-imgui-bind-widgets.js` (DRAGDOMAIN) | the automatic-speed check removed | `NOTHROW ERR_OUT_OF_RANGE` (at bounds 0 .. 80001 with `vSpeed` 0, the first refusal it reopens); test failed |
 | codex | `ui-imgui-bind-widgets.js` (DRAGDOMAIN) | the `v[0]` check removed | `NOTHROW ERR_OUT_OF_RANGE` (at Codex's `v` `[2147483647]`); test failed |
+| codex | `ui-imgui-bind-clipper.js` (POOLGROW) | (RED, and the mutation) the table compared by address again, as before the fix (the address kept in the snapshot's index field and compared with the current one) | `POOLGROW WRONG {"error":"imgui.listClipper(): the callback changed the window scope (...); the clipper was abandoned","before":8,"after":18,"nested":9,...}`; test failed. The fixed build: `POOLGROW ok`, the capacity grown from 8 to 18 |
 
 ## Behaviours no test detects
 
@@ -1865,4 +1866,23 @@ on each in `codex-findings.md` beside it. Mutations are the rows tagged
   clock. The case now sets the double-click time to 1 us for its drags
   (`__test.setDoubleClickTime`), as `ui-imgui-bind-layout.js` DOUBLE
   widens it; two more parallel runs and the full suite then passed.
+- **C6 (the clipper's table by address)** verified by reading: `g.Tables`
+  is an `ImPool` whose storage is one `ImVector`, and `BeginTable` of a
+  new ID adds to it (imgui_tables.cpp:358; imgui_internal.h:811-830), so
+  the outer table's address changes while its index does not, and
+  `EndTable` restores the outer table by index (imgui_tables.cpp:1671).
+  Reproduced by POOLGROW with the old comparison: 9 nested tables grew the
+  capacity from 8 to 18 and the clipper was abandoned. The snapshot now
+  keeps the table's pool index and ID (with its instance, as before). The
+  test reads the growth back through a new field of `__test.tableScope()`,
+  `poolCapacity`. **Audit of the other ImGui pointers the addon keeps
+  across a call that can run JavaScript**: the snapshot's window address
+  is stable (each window is its own allocation, imgui.cpp:7153, freed only
+  at shutdown, 4744); the clipper's `TempData` points into
+  `g.ClipperTempData`, an `ImVector` a nested clipper can grow, and
+  `ImGuiListClipper::End()` re-points the outer clipper's `TempData` when
+  the nested one ends (imgui.cpp:3526-3530), and the binding ends every
+  clipper it began before returning; the guards and the test hooks hold
+  ImGui pointers only within one call, with no JavaScript in between. No
+  other case was found.
 

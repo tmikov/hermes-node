@@ -668,13 +668,24 @@ const char *canDockSpaceOverViewport(unsigned dockspaceId, int flags) {
   return nullptr;
 }
 
+namespace {
+
+/// The current table's index in g.Tables, -1 with none.
+int currentTableIndex() {
+  ImGuiContext &g = *GImGui;
+  return g.CurrentTable != nullptr ? g.Tables.GetIndex(g.CurrentTable) : -1;
+}
+
+} // namespace
+
 ScopeSnapshot snapshotScope() {
   ImGuiContext &g = *GImGui;
   return ScopeSnapshot{
       g.CurrentWindow,
       g.CurrentWindow->BeginCount,
       g.CurrentWindowStack.Size,
-      g.CurrentTable,
+      currentTableIndex(),
+      g.CurrentTable != nullptr ? g.CurrentTable->ID : 0u,
       g.CurrentTable != nullptr ? g.CurrentTable->InstanceCurrent : -1};
 }
 
@@ -683,14 +694,15 @@ bool sameScope(const ScopeSnapshot &s) {
   return g.CurrentWindow == s.window &&
       g.CurrentWindow->BeginCount == s.windowBeginCount &&
       g.CurrentWindowStack.Size == s.windowStackSize &&
-      g.CurrentTable == s.table &&
+      currentTableIndex() == s.tableIndex &&
       (g.CurrentTable == nullptr ||
-       g.CurrentTable->InstanceCurrent == s.tableInstance);
+       (g.CurrentTable->ID == s.tableId &&
+        g.CurrentTable->InstanceCurrent == s.tableInstance));
 }
 
 TableScope tableScope() {
   ImGuiContext &g = *GImGui;
-  TableScope s{g.CurrentTable != nullptr, "", ""};
+  TableScope s{g.CurrentTable != nullptr, "", "", g.Tables.Buf.Capacity};
   if (g.CurrentWindow != nullptr)
     s.currentWindow = g.CurrentWindow->Name;
   if (g.CurrentTable != nullptr && g.CurrentTable->InnerWindow != nullptr)

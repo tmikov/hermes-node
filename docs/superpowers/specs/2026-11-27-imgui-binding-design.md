@@ -649,7 +649,9 @@ read against the code to find out.
    each (the last three added by the final review).
 6. **The clipper's scope comparison** also includes the window's begin
    count and the table's instance, so a window or table closed and
-   reopened inside the callback is detected.
+   reopened inside the callback is detected. The table is compared by its
+   pool index and ID, not its address, which moves when the pool grows
+   (Codex's code review).
 7. **`ERR_INVALID_ARG_VALUE`** is also thrown for a detached
    `Float32Array`; a non-finite element of one is `ERR_OUT_OF_RANGE`.
 8. **Error recovery** sets four fields, not three: `ConfigErrorRecovery`

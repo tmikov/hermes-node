@@ -145,11 +145,23 @@ const char *canDockSpaceOverViewport(unsigned dockspaceId, int flags);
 /// the window's BeginCount, raised by every Begin() of it in a frame
 /// (imgui.cpp:8892), and the table's InstanceCurrent, raised by every
 /// BeginTable() of it in a frame (imgui_tables.cpp:376, 391).
+///
+/// The window is kept as its address, which is stable: each window is an
+/// allocation of its own (imgui.cpp:7153), freed only when the context is
+/// destroyed (imgui.cpp:4744), and g.Windows holds pointers to them. The
+/// table is not: g.Tables is an ImPool, whose storage is one ImVector that
+/// moves when a table is added ("Add/remove invalidate all pointers",
+/// imgui_internal.h:811; ImVector::reserve, imgui.h:2385), so a callback
+/// that begins a new table can move the clipper's own table (Codex's code
+/// review, C6). It is kept as its pool index, stable for the table's
+/// lifetime (the same comment), which is how ImGui itself finds the outer
+/// table again after a nested one ends (imgui_tables.cpp:1671), with its ID.
 struct ScopeSnapshot {
   const void *window;
   int windowBeginCount;
   int windowStackSize;
-  const void *table;
+  int tableIndex; // in g.Tables; -1 with no current table
+  unsigned tableId;
   int tableInstance;
 };
 ScopeSnapshot snapshotScope();
@@ -161,6 +173,7 @@ struct TableScope {
   bool table;
   std::string currentWindow;
   std::string innerWindow;
+  int poolCapacity; // g.Tables' storage capacity, which grows by moving
 };
 TableScope tableScope();
 

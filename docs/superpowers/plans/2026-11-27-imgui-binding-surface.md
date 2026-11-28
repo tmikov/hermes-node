@@ -3606,6 +3606,8 @@ Read:
 | `g.GroupStack` (`Size`, `back().WindowID`) | 2636; `ImGuiGroupData::WindowID` 1273 | `endGroup`, `endMenuBar`, `endMainMenuBar`, `endListBox` |
 | `g.CurrentWindow->BeginCount` | 3048 | `listClipper` (scope comparison) |
 | `g.CurrentTable->InstanceCurrent` | 3374 | `listClipper` (scope comparison) |
+| `g.Tables.GetIndex(g.CurrentTable)`, `g.CurrentTable->ID` | 825; 3358 | `listClipper` (scope comparison: the table by its pool index and ID, since the pool's storage moves when a table is added, 811; Codex's code review, C6) |
+| `g.Tables.Buf.Capacity` | 816 (`Buf`) | the test hook `__test.tableScope().poolCapacity` |
 | `g.CurrentWindowStack` (`Size`; the `Window` of the entry below the top) | 2548 | `endListBox` (the parent window whose group `EndGroup()` will close); `listClipper` (stack depth, design) |
 | `g.BeginComboDepth` | 2808 | `endCombo` |
 | `g.CurrentTable` | 2764 | `tableNextRow`, `tableSetColumnIndex` (not NULL); `endTable`, `tableNextColumn`, `tableHeadersRow`, `tableSetupScrollFreeze`, `tableSetupColumn`, `end`, `endChild`, `endListBox` (guard applied when not NULL); `listClipper`; `__test.tableScope()` |

@@ -630,11 +630,12 @@ napi_value setTooltipDelay(napi_env env, napi_callback_info info) {
   return result;
 }
 
-/// `tableScope()`: `{table, currentWindow, innerWindow}`, whether ImGui has
-/// a current table and the names of the current window and of that
-/// table's inner window ("" without one), for a test that must prove it
-/// reached a state before relying on it. Inside a frame only: throws
-/// ERR_IMGUI_NO_FRAME otherwise.
+/// `tableScope()`: `{table, currentWindow, innerWindow, poolCapacity}`,
+/// whether ImGui has a current table, the names of the current window and
+/// of that table's inner window ("" without one), and the capacity of
+/// ImGui's table pool (g.Tables), whose growth moves every table, for a
+/// test that must prove it reached a state before relying on it. Inside a frame
+/// only: throws ERR_IMGUI_NO_FRAME otherwise.
 napi_value tableScope(napi_env env, napi_callback_info) {
   if (!frameOpen()) {
     napi_throw_error(
@@ -648,7 +649,8 @@ napi_value tableScope(napi_env env, napi_callback_info) {
   if (napi_create_object(env, &result) != napi_ok ||
       !setBool(env, result, "table", s.table) ||
       !setString(env, result, "currentWindow", s.currentWindow.c_str()) ||
-      !setString(env, result, "innerWindow", s.innerWindow.c_str()))
+      !setString(env, result, "innerWindow", s.innerWindow.c_str()) ||
+      !setNumber(env, result, "poolCapacity", s.poolCapacity))
     return nullptr;
   return result;
 }

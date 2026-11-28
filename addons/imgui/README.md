@@ -275,7 +275,11 @@ usage error for writes nothing back.
   not `newFrame()` or `render()` (`ERR_IMGUI_USAGE`). After each callback
   the binding compares the current window (and how many times it was begun
   this frame), the window-stack depth, and the current table (and its
-  instance this frame) with what they were at entry. If they match, the
+  instance this frame) with what they were at entry. The table is
+  compared by its index in ImGui's table pool and its ID, never by
+  address: the pool's storage moves when a table is added, so a callback
+  that begins and properly ends new nested tables can move the clipper's
+  own one. If they match, the
   loop continues, or after a throw the clipper is ended normally and the
   exception propagates. If they do not (the callback closed the clipper's
   window or table, left one open, or ended and began one again), the
@@ -818,7 +822,7 @@ they had as `[assert, debugLog, tooltip]`: what the last binding call left
 in force. `test/ui-imgui-bind-recovery.js` uses it to show that the next
 binding call turns them off again.
 
-`__test.tableScope()`, inside a frame (`ERR_IMGUI_NO_FRAME` otherwise), returns `{table, currentWindow, innerWindow}`: whether ImGui has a current table, and the names of the current window and of that table's inner window (`""` without one), so a test of a table guard can show it reached the state the guard is about before relying on it.
+`__test.tableScope()`, inside a frame (`ERR_IMGUI_NO_FRAME` otherwise), returns `{table, currentWindow, innerWindow, poolCapacity}`: whether ImGui has a current table, the names of the current window and of that table's inner window (`""` without one), and the capacity of ImGui's table pool, whose growth moves every table, so a test of a table guard can show it reached the state the guard is about before relying on it (`ui-imgui-bind-clipper.js` POOLGROW shows the pool grew).
 
 `__test.detachArrayBuffer(buffer)` detaches an `ArrayBuffer` with `napi_detach_arraybuffer`, so that a test can pass the binding a `Float32Array` whose buffer is gone (this runtime has no `ArrayBuffer.prototype.transfer` or `structuredClone`, and `hermes-node-ui` takes no VM options); the binding then throws `ERR_INVALID_ARG_VALUE`.
 
@@ -957,7 +961,8 @@ What the binding takes from `imgui_internal.h`, all of it in
 - Read by the test hooks: `__test.state().windows` reads `g.Windows`, each
   window's `Name`, `Active`, `WasActive` and `DockIsActive`, and
   `g.WithinFrameScope`; `__test.tableScope()` reads `g.CurrentTable`, its
-  `InnerWindow`'s `Name`, and `g.CurrentWindow`'s `Name`.
+  `InnerWindow`'s `Name`, `g.CurrentWindow`'s `Name`, and
+  `g.Tables.Buf.Capacity`.
 - Read for the length limit (`guard::pixelDensity()`): the current
   window's `DrawList->_InvFringeScale`, the density the draw list
   multiplies lengths by; it is declared in `imgui.h`, commented

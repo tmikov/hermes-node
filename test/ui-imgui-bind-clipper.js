@@ -53,6 +53,14 @@
 //  FROZEN    a scrolled table with a frozen header row gives the clipper a
 //            first range [0, 1] and at least one more; a callback throwing
 //            on that first range is called once and its error propagates.
+//  POOLGROW  a clipper in a table's cell whose callback, on its first
+//            range, begins and properly ends more new nested tables than
+//            ImGui's table pool has room for, so that the pool's storage
+//            moves (read back: __test.tableScope().poolCapacity grew), and
+//            returns with the outer table and window current: no error,
+//            and the callback's ranges cover every item from 0 (Codex's
+//            code review, C6: the scope is compared by the table's pool
+//            index and ID, not its address).
 //  REJECTED  itemHeight 0, -1, NaN and 0.5 (at least 1: Step() converts
 //            distance / itemHeight to int, imgui.cpp:3692-3693), count -1
 //            and 2147483647 (INT_MAX, ImGui's "unknown count"), and a list
@@ -76,7 +84,9 @@
 //  the callback not called (ImGui loop kept): RANGES fails;
 //  enterImGui() removed from listClipper: REJECTED fails (NOTCALLED);
 //  itemHeight's check removed: REJECTED fails;
-//  the callback given (start, start): RANGES fails.
+//  the callback given (start, start): RANGES fails;
+//  (codex) the table compared by address again: POOLGROW fails (the
+//  clipper is abandoned, ERR_IMGUI_USAGE).
 // The pending-exception check removed (Step() called again after a throw)
 // is not detected, FROZEN's second range included: Hermes's
 // napi_call_function refuses to call while an exception is pending
@@ -461,6 +471,52 @@ async function main() {
                      }));
   }
 
+  // --- POOLGROW --------------------------------------------------------
+  {
+    const ranges = [];
+    let error = null, before = 0, after = 0, nested = 0;
+    const drew = await h.run(() => windowAt('pool', () => {
+      if (!imgui.beginTable('outer', 1))
+        fail('POOLGROW outer table not shown');
+      try {
+        imgui.listClipper(3, height, (s, e) => {
+          ranges.push([s, e]);
+          for (let i = s; i < e; ++i) {
+            imgui.tableNextRow();
+            imgui.tableNextColumn();
+            imgui.text('row ' + i);
+          }
+          if (ranges.length !== 1)
+            return;
+          // More new tables than the pool has room for, whatever is in it.
+          before = imgui.__test.tableScope().poolCapacity;
+          for (let n = 0; n <= before; ++n) {
+            if (imgui.beginTable('nested ' + n, 1)) {
+              imgui.tableNextRow();
+              imgui.tableNextColumn();
+              imgui.text('n');
+              imgui.endTable();
+              ++nested;
+            }
+          }
+          after = imgui.__test.tableScope().poolCapacity;
+        });
+      } catch (e) {
+        error = e;
+      }
+      imgui.endTable();
+    }));
+    const ok = error === null && drew === true && after > before &&
+        nested === before + 1 && contiguousFromZero(ranges) &&
+        ranges[ranges.length - 1][1] === 3;
+    console.log(ok ? 'POOLGROW ok' :
+                     'POOLGROW WRONG ' + JSON.stringify({
+                       error: error && error.message, before, after, nested,
+                       ranges, drew,
+                     }));
+    console.log('POOLGROW capacity ' + before + ' -> ' + after);
+  }
+
   // --- REJECTED --------------------------------------------------------
   {
     const messages = [];
@@ -524,6 +580,8 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}SCOPE_REBEGINTABLE-throw ok{{$}}
 // CHECK-NEXT: {{^}}SCOPE message imgui.listClipper(): the callback changed the window scope (it closed the clipper's window or table, or left one open); the clipper was abandoned{{$}}
 // CHECK-NEXT: {{^}}FROZEN ok{{$}}
+// CHECK-NEXT: {{^}}POOLGROW ok{{$}}
+// CHECK-NEXT: {{^}}POOLGROW capacity {{[0-9]+}} -> {{[0-9]+}}{{$}}
 // CHECK-NEXT: {{^}}REJECTED ok{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.listClipper(): itemHeight must be at least 1; got 0{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.listClipper(): itemHeight must be at least 1; got -1{{$}}
