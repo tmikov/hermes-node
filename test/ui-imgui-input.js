@@ -50,7 +50,8 @@
 //  LEAVE       the mouse leaves the window: ImGui's position is "none"
 //              (-FLT_MAX) and it does not want the mouse.
 //  CLAMP       a mouse move to (1e9, -1e9) is read back as (65536,
-//              -65536), and a wheel step of 1e9 as 65536: the platform half
+//              -65536), a wheel step of 1e9 as 65536, and a move to
+//              (-300, -40) as itself: the platform half
 //              clamps both to +-2^16 (kMaxMouseCoordinate, imgui_addon.h),
 //              each clamp traced. ImGui converts a position to int as it is,
 //              a drag multiplies the difference of two positions by its
@@ -315,7 +316,12 @@ async function main() {
     inject({type: 'MOUSE_SCROLL', scrollY: 1e9, mouseX: 1e9, mouseY: -1e9});
     await until((t) => t.wheel !== base, 'CLAMP wheel');
     s = state();
-    console.log('CLAMP mouse=' + pos + ' wheel=' + (s.wheel - base));
+    // A negative coordinate inside the bound (a drag captured outside the
+    // window) reaches ImGui unchanged.
+    inject({type: 'MOUSE_MOVE', mouseX: -300, mouseY: -40});
+    await until((t) => mouseAt(t, -300, -40), 'CLAMP inside');
+    console.log('CLAMP mouse=' + pos + ' wheel=' + (s.wheel - base) +
+        ' inside=' + state().mouseX + ',' + state().mouseY);
   }
 
   // --- REAL -------------------------------------------------------------
@@ -357,7 +363,7 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}HELD keyADown=true mouseDown=true,false,false{{$}}
 // CHECK-NEXT: {{^}}BLUR keyADown=false mouseDown=false,false,false{{$}}
 // CHECK-NEXT: {{^}}LEAVE wantCaptureMouse=false mouseY<-1e30=true{{$}}
-// CHECK-NEXT: {{^}}CLAMP mouse=65536,-65536 wheel=65536{{$}}
+// CHECK-NEXT: {{^}}CLAMP mouse=65536,-65536 wheel=65536 inside=-300,-40{{$}}
 // CHECK-NEXT: {{^}}REAL apress=1{{$}}
 // CODE: EXITCODE 0
 

@@ -339,6 +339,8 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | codex | `ui-imgui-app.js` (LOGROWS) | (RED, and the mutation) LOGROWS written, the Log's `add()` storing the text as it is (the code before the fix; the rectangles recorded) | `LOGROWS WRONG bottom row 9 height 26 want 13`: an entry with a line break is two lines tall; test failed |
 | codex | `imgui-app-viewer.js` (CLASSIFY) | (RED) the new cases written, `completeLength()` unchanged | `CLASSIFY WRONG E0-80={"status":"text",...,"truncated":true} ED-A0=... F4-90=... F0-80=... F0-80-80=...`: each invalid suffix trimmed and the file classified as text; the four new valid splits passed; test failed |
 | codex | `imgui-app-viewer.js` (CLASSIFY) | `secondByteOk()` giving every lead the default range 0x80..0xBF (the same outcome as removing the check) | the same five `CLASSIFY WRONG ... "status":"text"` entries; test failed |
+| codex (write-back) | `ui-imgui-bind-widgets.js` (DRAGDOMAIN) | both write-back clamps removed (dragInt's and the colour editors') | `DRAGDOMAIN WRONG top {"first":1126141823,...,"refused":"imgui.dragInt(): v[0] must be from -1073741823 to 1073741823; got 1126141823"...} hdr {"first":-256.643...,"refused":"imgui.colorEdit3(): col[0] must be from 0 to 8388608; got -256.643127"...}`; test failed |
+| codex (write-back) | `ui-imgui-bind-widgets.js` (DRAGDOMAIN) | the automatic speed not capped (vSpeed 0 passed through) | `DRAGDOMAIN WRONG capped {"v":[0],"want":53644500,...}`: the accumulator overflowed int (INT_MIN on x86-64) and ImGui's own wrap test clamped to the lower bound; test failed |
 
 ## Behaviours no test detects
 
@@ -1904,4 +1906,15 @@ on each in `codex-findings.md` beside it. Mutations are the rows tagged
   says the stat-then-open window is not closed and what closing it would
   need; **L3** `readCapped`'s comment is back above `readCapped`, and
   `kindOf()`'s fallback reads "an unknown kind of file".
+- **Coordinator's ruling after the fix wave: values written back are
+  clamped** (rule G6). dragInt clamps to +-(2^30 - 1) and the colour
+  editors to their input mode's domain before writing back; user
+  interaction never leads to a refusal. The speed bound is now the exact
+  819 (1 + 10 * 2^17 * 819 = 1073479681 < 2^30), and an automatic speed
+  above it is passed as 819 instead of refusing the range (a wide range
+  drags at 819 per unit). DRAGDOMAIN now checks the clamped write-back
+  (value at the bound, the next calls accepted, a second drag leaves it
+  there; an HDR red component dragged below 0 ends at 0) and the capped
+  speed's exact float product. The input test's CLAMP checks that a
+  negative coordinate inside the bound reaches ImGui unchanged.
 

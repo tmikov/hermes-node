@@ -157,6 +157,21 @@ applied" at the end lists them.
   it with `ImAtoi<int>` (widgets:3746-3755, 3771), which overflows a signed
   `int` from ten digits; it skips the width unread (widgets:3766-3767).
 
+- **G6, write-back** (added after Codex's code review). A value written
+  back is clamped to the function's accepted domain, so a reference array
+  always holds a value the next call accepts: user interaction never
+  leads to a refusal, and only a value the program passes is refused.
+  Where ImGui can write past the domain the value stops at the bound. It
+  applies to `dragInt` (+-(2^30 - 1)) and `colorEdit3`/`colorEdit4` (the
+  input mode's component domain); every other writing function's
+  write-back lies in its accepted set already (sliders and drags with no
+  value domain, `inputInt`, `inputFloat`, checkboxes, text). ImGui's
+  retained state cannot carry a clamped-away value forward: a drag keeps
+  only its accumulator's fraction (widgets:2648) and re-reads the value
+  every frame (2612); a number field's text entry re-parses its own buffer
+  (2416); a colour editor converts its array afresh (widgets:5971), its
+  saved hue being reused only while the colour matches (5891-5920).
+
 ## Shared preconditions
 
 - **S1, current window.** Every in-frame function dereferences
@@ -1371,8 +1386,10 @@ All six pass a finished string and never let ImGui interpret `%`.
 - Frame: open.
 - Rejected: a `format` that is not exactly one integer conversion; and
   (added after Codex's code review, C5) a `v[0]`, `vMin` or `vMax`
-  outside +-(2^30 - 1), a `vSpeed` outside +-800, and with `vSpeed` 0 on
-  a bounded drag an automatic speed `(vMax - vMin) / 100` above 800.
+  outside +-(2^30 - 1), and a `vSpeed` outside +-819. With `vSpeed` 0 on a
+  bounded drag, an automatic speed `(vMax - vMin) / 100` above 819 is
+  passed to ImGui as 819 instead (not refused). The value written back is
+  clamped to +-(2^30 - 1) (G6).
 - Label-id: yes.
 - Preconditions: widgets:2696 as for `dragFloat` (G1); label-id
   (widgets:2774); (a) the domain above, which keeps `DragBehaviorT<ImS32>`
@@ -1382,11 +1399,11 @@ All six pass a finished string and never let ImGui interpret `%`.
   (widgets:2562-2563, 2593, 2659-2661). With the platform half's mouse
   coordinates within +-2^16 a frame's delta is at most 2^17, times 10
   with Shift, and the carried remainder below 1, so the accumulator stays
-  below 1 + 10 * 2^17 * 800 < 2^30 (`dragIntDomainOk()`,
+  below 1 + 10 * 2^17 * 819 < 2^30 (`dragIntDomainOk()`,
   `bind/bind_widgets.cpp`, has the lines). The keyboard source is "Not
   covered" 3i; typed text, 3j.
-- Notes: a value ImGui writes back outside the domain (an unbounded drag
-  past 2^30 - 1) is refused at the next call, before ImGui adds to it.
+- Notes: an unbounded drag (or Ctrl+click text) past 2^30 - 1 is written
+  back as the bound (G6), and the value stops there.
 
 ### `inputText`
 
@@ -1640,9 +1657,9 @@ All six pass a finished string and never let ImGui interpret `%`.
 - Overload: only one. Nullable: none. Omitted: none.
 - Frame: open. Rejected: as `colorEdit3`.
 - Preconditions: as `colorEdit3` (widgets:5960-5961).
-- Notes: a component ImGui writes back can lie outside the domain (an HDR
-  drag below 0, or a saturation dragged past 1 in the HSV display): the
-  next call then refuses it, before ImGui converts it.
+- Notes: a component ImGui writes back outside the domain (an HDR drag
+  below 0, or a saturation dragged past 1 in the HSV display) is written
+  back clamped to it (G6): the component stops at the edge.
 
 ### `colorButton`
 
@@ -3456,7 +3473,7 @@ a C++ program.
    | `sliderInt` `vMin`, `vMax` | asserted | widgets:3346 | yes, INT_MIN/2 .. INT_MAX/2 |
    | slider `v` | saturated (clamped into the range) | widgets:3029 | not needed |
    | `dragFloat` `v`, `vSpeed`, `vMin`, `vMax` | never (float arithmetic, `SIGNEDTYPE` float) | widgets:2551-2664 | not needed |
-   | `dragInt` `v`, `vSpeed`, `vMin`, `vMax` | as it is: the accumulated delta times the speed converted to int and added (widgets:2584, 2605, 2631), `v_max - v_min` in int (2562-2563, 2593, 2659-2661) | widgets:2551-2678 | yes (C5): `v`, `vMin`, `vMax` within +-(2^30 - 1); `vSpeed`, and the automatic speed `(vMax - vMin) / 100` when `vSpeed` is 0, within +-800; with the platform half's mouse bound (below). The keyboard source is 3i, typed text 3j |
+   | `dragInt` `v`, `vSpeed`, `vMin`, `vMax` | as it is: the accumulated delta times the speed converted to int and added (widgets:2584, 2605, 2631), `v_max - v_min` in int (2562-2563, 2593, 2659-2661) | widgets:2551-2678 | yes (C5): `v`, `vMin`, `vMax` within +-(2^30 - 1); `vSpeed` within +-819 (an automatic speed above it passed as 819); the value written back clamped (G6); with the platform half's mouse bound (below). The keyboard source is 3i, typed text 3j |
    | the mouse position and wheel delta (the platform half's input, not an argument) | as it is (`ImFloor` in `AddMousePosEvent`, imgui.cpp:2051), as a drag's delta (above), and as a scroll target (`ImRoundPositive64`, imgui.cpp:12815-12817) | imgui_platform.cpp | yes, clamped to +-2^16 (C5) |
    | `inputFloat` `step`, `stepFast` | never (float addition) | widgets:2367-2370 | not needed |
    | `inputInt` `step`, `stepFast` | never (`ImAddClampOverflow`, saturating) | widgets:2351-2352; internal:543-544 | not needed |

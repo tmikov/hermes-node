@@ -78,21 +78,25 @@
 //  DRAGDOMAIN dragInt's domain (dragIntDomainOk() in bind/bind_widgets.cpp:
 //            a drag adds the mouse delta times the speed to the value in
 //            int, and the platform half clamps mouse coordinates to
-//            +-65536). Refused with ERR_OUT_OF_RANGE, not called: Codex's
-//            vSpeed 1e10; vSpeed 800.5 and -801; v [2147483647] (Codex's
+//            +-65536), and the write-back rule G6. Refused with
+//            ERR_OUT_OF_RANGE, not called (program-supplied values): Codex's
+//            vSpeed 1e10; vSpeed 819.5 and -820; v [2147483647] (Codex's
 //            endpoint), [1073741824] and [-1073741824]; Codex's bounds
 //            -2147483648, 2147483647 with vSpeed 0; a bound of
-//            +-1073741824; vSpeed 0 with bounds 0 .. 80001 (an automatic
-//            speed above 800). Accepted, called: v at +-1073741823 with
-//            speeds +-800, bounds +-1073741823, bounds 0 .. 80000 with
-//            vSpeed 0. Then three drags, each pressed on the widget and
-//            moved straight to x = 1e9, which ImGui reads back as 65536
-//            (the clamp), each value read back exactly: v
-//            [1073741823] at speed 800 gains exactly 800 times the move's
-//            distance, without overflow, and the next call refuses
-//            the result, which is outside the domain; v [0] at speed -800
-//            loses the same; v [0] bounded 0 .. 80000 with vSpeed 0 (an
-//            automatic speed of 800) ends at 80000.
+//            +-1073741824. Accepted, called: v at +-1073741823 with speeds
+//            +-819; bounds +-1073741823; bounds 0 .. 80000, 0 .. 100000 and
+//            +-1073741823 with vSpeed 0 (an automatic speed above 819 is
+//            passed as 819); speed 1 over 0 .. 1000000. Then real drags,
+//            each pressed on the widget and moved straight to x = +-1e9,
+//            which ImGui reads back as +-65536, each value read back
+//            exactly: v [1073741823] at speed 800 dragged right ends at
+//            1073741823 (written back clamped), the next calls are
+//            accepted, and a second drag right leaves it there; v [0] at
+//            speed -800 loses 800 times the distance; v [0] bounded
+//            0 .. 80000 with vSpeed 0 ends at 80000; bounded 0 .. 10^9 with
+//            vSpeed 0 gains the float product 819 times the distance; an
+//            HDR colorEdit3 red component of 0.5 dragged left ends at 0,
+//            accepted again, and stays 0 after a second drag.
 //  COVERAGE  every Widgets function has reached ImGui.
 //
 // THE MUTATIONS THIS MUST BREAK: the full list, with what each did, is the
@@ -793,17 +797,18 @@ async function main() {
           messages.push(rejects('dragInt', () => imgui.dragInt('##d', ...args),
                                 'ERR_OUT_OF_RANGE').message);
       rx([0], 1e10);
-      rx([0], 800.5);
-      rx([0], -801);
+      rx([0], 819.5);
+      rx([0], -820);
       rx([2147483647]);
       rx([top + 1]);
       rx([-top - 1]);
       rx([0], 0, -2147483648, 2147483647);
       rx([0], 1, -top - 1, 0);
       rx([0], 1, 0, top + 1);
-      rx([0], 0, 0, 80001);
-      for (const args of [[[top], 800], [[-top], -800], [[0], 1, -top, top],
-                          [[0], 0, 0, 80000], [[5], 0, 5, 5]]) {
+      for (const args of [[[top], 819], [[-top], -819], [[0], 1, -top, top],
+                          [[0], 0, 0, 80000], [[5], 0, 5, 5],
+                          [[0], 1, 0, 1000000], [[0], 0, 0, 100000],
+                          [[0], 0, -top, top]]) {
         const before = calls('dragInt');
         imgui.dragInt('##a', ...args);
         if (calls('dragInt') !== before + 1)
@@ -814,17 +819,17 @@ async function main() {
       console.log('DRAGDOMAIN message ' + m);
 
     /**
-     * Press on a dragInt of `v` (`args` after it), then move straight to
-     * x = 1e9, which the platform half clamps to 65536; returns {after, x,
-     * refused}: v[0] after the move, where the press was, and the message
-     * of a refusal at a later call.
+     * Draws `widget()` (which records its own item), presses on it, moves
+     * straight to x = `toX` (the platform half clamps 1e9 to 65536, -1e9 to
+     * -65536), waits until ImGui has that x and two more frames, releases;
+     * returns {x, refused}: where the press was, and the message of any
+     * call refused meanwhile.
      */
-    async function dragFar(v, args) {
+    async function dragAcross(widget, toX) {
       let r = null, refused = null;
-      const start = v[0];
       const draw = inWindow(() => {
         try {
-          imgui.dragInt('##far', v, ...args);
+          widget();
         } catch (e) {
           refused = e.message;
           imgui.dummy([10, 10]);
@@ -832,44 +837,75 @@ async function main() {
         r = rect();
       });
       await settle(draw);
-      const at = harness.center(r);
+      const at = [Math.floor(r.min[0]) + 8, Math.floor((r.min[1] + r.max[1]) / 2)];
       await harness.moveTo(h, draw, at);
       harness.inject(h, {type: 'MOUSE_DOWN', button: LEFT, mouseX: at[0],
                          mouseY: at[1]});
       await harness.until(h, draw, (s) => s.mouseDown[LEFT],
                           'DRAGDOMAIN down');
-      harness.inject(h, {type: 'MOUSE_MOVE', mouseX: 1e9, mouseY: at[1]});
-      await harness.until(h, draw,
-                          (s) => s.mouseX === 65536 && v[0] !== start,
+      const clampedX = toX > 0 ? 65536 : -65536;
+      harness.inject(h, {type: 'MOUSE_MOVE', mouseX: toX, mouseY: at[1]});
+      await harness.until(h, draw, (s) => s.mouseX === clampedX,
                           'DRAGDOMAIN far move');
-      const after = v[0];
-      harness.inject(h, {type: 'MOUSE_UP', button: LEFT, mouseX: 1e9,
+      await h.run(draw);
+      await h.run(draw);
+      harness.inject(h, {type: 'MOUSE_UP', button: LEFT, mouseX: toX,
                          mouseY: at[1]});
       await harness.until(h, draw, (s) => !s.mouseDown[LEFT], 'DRAGDOMAIN up');
       await h.run(draw);
-      return {after, x: at[0], refused};
+      return {x: at[0], refused};
     }
-    const wrong = [];
-    // Each drag presses at the same place, and a press within ImGui's
+    // Each drag presses where the last one did, and a press within ImGui's
     // double-click time of the last opens the drag's text input instead
     // (in ImGui's own time, which a loaded machine can leave short): a
     // double-click time of 1 us, below any frame's time step, rules it out.
     const previousDoubleClick = imgui.__test.setDoubleClickTime(1e-6);
+    const wrong = [];
     {
-      const d = await dragFar([top], [800]);
-      if (d.after !== top + 800 * (65536 - d.x))
-        wrong.push('top ' + JSON.stringify(d));
-      console.log('DRAGDOMAIN refused ' + d.refused);
+      // Past the bound: written back as the bound, accepted again, and a
+      // second drag the same way leaves it there.
+      const v = [top];
+      const d1 = await dragAcross(() => imgui.dragInt('##far', v, 800), 1e9);
+      const first = v[0];
+      const d2 = await dragAcross(() => imgui.dragInt('##far', v, 800), 1e9);
+      if (first !== top || v[0] !== top || d1.refused !== null ||
+          d2.refused !== null)
+        wrong.push('top ' + JSON.stringify({first, v, d1, d2}));
     }
     {
-      const d = await dragFar([0], [-800]);
-      if (d.after !== -800 * (65536 - d.x) || d.refused !== null)
-        wrong.push('negative ' + JSON.stringify(d));
+      const v = [0];
+      const d = await dragAcross(() => imgui.dragInt('##far', v, -800), 1e9);
+      if (v[0] !== -800 * (65536 - d.x) || d.refused !== null)
+        wrong.push('negative ' + JSON.stringify({v, d}));
     }
     {
-      const d = await dragFar([0], [0, 0, 80000]);
-      if (d.after !== 80000 || d.refused !== null)
-        wrong.push('automatic ' + JSON.stringify(d));
+      const v = [0];
+      const d = await dragAcross(
+          () => imgui.dragInt('##far', v, 0, 0, 80000), 1e9);
+      if (v[0] !== 80000 || d.refused !== null)
+        wrong.push('automatic ' + JSON.stringify({v, d}));
+    }
+    {
+      // An automatic speed above the bound is passed as the bound, 819:
+      // exactly the float product ImGui accumulates.
+      const v = [0];
+      const d = await dragAcross(
+          () => imgui.dragInt('##far', v, 0, 0, 1000000000), 1e9);
+      const want = Math.trunc(Math.fround(819 * (65536 - d.x)));
+      if (v[0] !== want || d.refused !== null)
+        wrong.push('capped ' + JSON.stringify({v, want, d}));
+    }
+    {
+      // An HDR colour component dragged far below 0: written back as 0,
+      // accepted again, and a second drag the same way leaves it there.
+      const c = [0.5, 0, 0];
+      const hdr = imgui.ColorEditFlags_HDR;
+      const d1 = await dragAcross(() => imgui.colorEdit3('##hdr', c, hdr), -1e9);
+      const first = c[0];
+      const d2 = await dragAcross(() => imgui.colorEdit3('##hdr', c, hdr), -1e9);
+      if (first !== 0 || c[0] !== 0 || d1.refused !== null ||
+          d2.refused !== null)
+        wrong.push('hdr ' + JSON.stringify({first, c, d1, d2}));
     }
     imgui.__test.setDoubleClickTime(previousDoubleClick);
     console.log(wrong.length === 0 ? 'DRAGDOMAIN ok' :
@@ -913,17 +949,15 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit4(): col[3] must be from 0 to 8388608; got -0.5{{$}}
 // CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit3(): col[0] must be from -2048 to 2048; got 2048.5{{$}}
 // CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit4(): col[3] must be from -2048 to 2048; got -2048.5{{$}}
-// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -800 to 800; got 1e+10{{$}}
-// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -800 to 800; got 800.5{{$}}
-// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -800 to 800; got -801{{$}}
+// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got 1e+10{{$}}
+// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got 819.5{{$}}
+// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got -820{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): v[0] must be from -1073741823 to 1073741823; got 2147483647{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): v[0] must be from -1073741823 to 1073741823; got 1073741824{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): v[0] must be from -1073741823 to 1073741823; got -1073741824{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vMin must be from -1073741823 to 1073741823; got -2147483648{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vMin must be from -1073741823 to 1073741823; got -1073741824{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vMax must be from -1073741823 to 1073741823; got 1073741824{{$}}
-// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): with vSpeed 0 the automatic speed, (vMax - vMin) / 100, must be at most 800; got 800.01 (vMin 0, vMax 80001){{$}}
-// CHECK-NEXT: {{^}}DRAGDOMAIN refused imgui.dragInt(): v[0] must be from -1073741823 to 1073741823; got {{[0-9]+}}{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN ok{{$}}
 // CHECK-NEXT: {{^}}COVERAGE Widgets ok{{$}}
 // CODE: EXITCODE 0

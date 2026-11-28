@@ -17,6 +17,7 @@
 
 #include "imgui_addon.h"
 
+#include <algorithm>
 #include <cfloat>
 #include <climits>
 #include <string>
@@ -165,14 +166,20 @@ constexpr float kMaxHsvComponent = 2048.0f;
 /// The editor's own DragInt on `255 * component` (5980, 6032) then adds a
 /// drag's accumulator at speed 1, below 1 + 10 * 2^17 (dragIntDomainOk()),
 /// to at most 255 * 2^23 = 2139095040: still below 2^31.
-bool colorComponentsOk(Call &c, const RefFloat &col, int flags) {
+/// The domain colorComponentsOk() checks: [*lo, *hi] for \p flags.
+void colorDomain(int flags, float *lo, float *hi) {
   int input = flags & ImGuiColorEditFlags_InputMask_;
   if (input == 0)
     input =
         ImGui::GetIO().ConfigColorEditFlags & ImGuiColorEditFlags_InputMask_;
   const bool hsv = (input & ImGuiColorEditFlags_InputHSV) != 0;
-  const float lo = hsv ? -kMaxHsvComponent : 0.0f;
-  const float hi = hsv ? kMaxHsvComponent : kMaxRgbComponent;
+  *lo = hsv ? -kMaxHsvComponent : 0.0f;
+  *hi = hsv ? kMaxHsvComponent : kMaxRgbComponent;
+}
+
+bool colorComponentsOk(Call &c, const RefFloat &col, int flags) {
+  float lo = 0.0f, hi = 0.0f;
+  colorDomain(flags, &lo, &hi);
   for (int k = 0; k < col.n; ++k) {
     const std::string what = "col[" + std::to_string(k) + "]";
     if (!c.inRange(col.values[k], what.c_str(), lo, hi))
@@ -181,10 +188,26 @@ bool colorComponentsOk(Call &c, const RefFloat &col, int flags) {
   return true;
 }
 
+/// Clamps what a colour editor wrote back into the domain the next call
+/// accepts (the surface table's general rule G6): an HDR drag below 0, a
+/// saturation dragged past 1 in the HSV display, or a value typed in,
+/// stops at the domain's edge. The editor reads `col` afresh every frame
+/// (imgui_widgets.cpp:5971) and converts it then, so the clamp is what it
+/// converts next; what ImGui keeps between frames, the saved hue and
+/// saturation, is reused only while the colour still matches it
+/// (5891-5920), and is otherwise ignored.
+void clampColor(RefFloat &col, int flags) {
+  float lo = 0.0f, hi = 0.0f;
+  colorDomain(flags, &lo, &hi);
+  for (int k = 0; k < col.n; ++k)
+    col.values[k] = std::clamp(col.values[k], lo, hi);
+}
+
 /// The largest magnitude of a dragInt value or bound: 2^30 - 1.
 constexpr int kMaxDragIntValue = (1 << 30) - 1;
-/// The largest magnitude of a dragInt speed, given or automatic.
-constexpr float kMaxDragIntSpeed = 800.0f;
+/// The largest magnitude of a dragInt speed, given or automatic: the
+/// largest whole number S with 1 + 10 * 2^17 * S < 2^30 (below).
+constexpr float kMaxDragIntSpeed = 819.0f;
 
 /// dragInt's domain, which keeps DragBehaviorT<ImS32> (imgui_widgets.cpp:
 /// 2551-2678) inside int arithmetic. It adds the accumulated delta to the
@@ -199,23 +222,26 @@ constexpr float kMaxDragIntSpeed = 800.0f;
 ///   (imgui.cpp:11126-11129) the platform half clamps to
 ///   +-kMaxMouseCoordinate (imgui_addon.h), at most 2^17, so the
 ///   accumulator is below 1 + 10 * 2^17 * |speed|, which at the speed
-///   bound is 1048576001 < 2^30. The keyboard and gamepad source (2575-
+///   bound is 1073479681 < 2^30. The keyboard and gamepad source (2575-
 ///   2583) is the surface table's "Not covered" 3i.
 /// - The value. It is within +-(2^30 - 1), so the sum stays inside int.
 /// - The bounds. Each is within +-(2^30 - 1), so `v_max - v_min + 1` is
 ///   at most 2^31 - 1.
-/// - The speed: |vSpeed| <= kMaxDragIntSpeed; and with vSpeed 0 on a
-///   bounded drag (ImGui's test, 2556) the automatic speed, `(v_max -
-///   v_min) * g.DragSpeedDefaultRatio` (2562-2563; 1/100, imgui.cpp:4561,
-///   which no bound function changes), within the same bound, so a
-///   bounded range of at most 80000 with vSpeed 0.
+/// - The speed: |vSpeed| <= kMaxDragIntSpeed. With vSpeed 0 on a bounded
+///   drag (ImGui's test, 2556) ImGui would use `(v_max - v_min) *
+///   g.DragSpeedDefaultRatio` (2562-2563; 1/100, imgui.cpp:4561, which no
+///   bound function changes); the binding computes that speed itself and,
+///   when it is above the bound, passes the bound instead (\p speed), so
+///   a wide range drags at 819 per unit rather than being refused. Below
+///   the bound it passes 0, leaving ImGui's own computation untouched.
 bool dragIntDomainOk(
     Call &c,
     int v,
     float vSpeed,
     int vMin,
     int vMax,
-    int flags) {
+    int flags,
+    float *speed) {
   if (v < -kMaxDragIntValue || v > kMaxDragIntValue) {
     c.throwRange(
         "v[0] must be from %d to %d; got %d",
@@ -238,21 +264,14 @@ bool dragIntDomainOk(
   }
   if (!c.inRange(vSpeed, "vSpeed", -kMaxDragIntSpeed, kMaxDragIntSpeed))
     return false;
+  *speed = vSpeed;
   const bool bounded = vMin < vMax ||
       (vMin == vMax &&
        (vMin != 0 || (flags & ImGuiSliderFlags_ClampZeroRange)));
   if (vSpeed == 0.0f && bounded) {
     const float automatic = static_cast<float>((vMax - vMin) * (1.0f / 100.0f));
-    if (!(automatic <= kMaxDragIntSpeed)) {
-      c.throwRange(
-          "with vSpeed 0 the automatic speed, (vMax - vMin) / 100, must be at "
-          "most %g; got %g (vMin %d, vMax %d)",
-          static_cast<double>(kMaxDragIntSpeed),
-          static_cast<double>(automatic),
-          vMin,
-          vMax);
-      return false;
-    }
+    if (!(automatic <= kMaxDragIntSpeed))
+      *speed = kMaxDragIntSpeed;
   }
   return true;
 }
@@ -561,6 +580,7 @@ napi_value dragInt(napi_env env, napi_callback_info info) {
   std::string label;
   RefInt v;
   float vSpeed = 1.0f;
+  float speed = 1.0f;
   int vMin = 0;
   int vMax = 0;
   std::string format = "%d";
@@ -572,13 +592,23 @@ napi_value dragInt(napi_env env, napi_callback_info info) {
       (!c.isMissing(4) && !c.int32(4, "vMax", &vMax)) ||
       (!c.isMissing(5) && !c.format(5, "format", FormatKind::Int, &format)) ||
       !sliderFlags(c, 6, false, &flags) ||
-      !dragIntDomainOk(c, v.values[0], vSpeed, vMin, vMax, flags) ||
+      !dragIntDomainOk(c, v.values[0], vSpeed, vMin, vMax, flags, &speed) ||
       !c.needFrame() || !c.needLabelId("label", label))
     return nullptr;
   c.enterImGui();
   const bool changed = ImGui::DragInt(
-      label.c_str(), v.ptr(), vSpeed, vMin, vMax, format.c_str(), flags);
-  if (!c.leaveImGui() || !c.write(v))
+      label.c_str(), v.ptr(), speed, vMin, vMax, format.c_str(), flags);
+  if (!c.leaveImGui())
+    return nullptr;
+  // Written back within the domain the next call accepts (the surface
+  // table's general rule G6): an unbounded drag, or a number typed with
+  // Ctrl+click, stops at +-(2^30 - 1). Clamping the array between frames
+  // keeps ImGui's arithmetic defined: the drag carries over only the
+  // accumulator's fraction (imgui_widgets.cpp:2648) and re-reads the value
+  // from the array every frame (2612), and the text entry is re-parsed
+  // from its own buffer into the array (2416).
+  v.values[0] = std::clamp(v.values[0], -kMaxDragIntValue, kMaxDragIntValue);
+  if (!c.write(v))
     return nullptr;
   return c.result(changed);
 }
@@ -808,7 +838,10 @@ napi_value colorEdit3(napi_env env, napi_callback_info info) {
     return nullptr;
   c.enterImGui();
   const bool changed = ImGui::ColorEdit3(label.c_str(), col.ptr(), flags);
-  if (!c.leaveImGui() || !c.write(col))
+  if (!c.leaveImGui())
+    return nullptr;
+  clampColor(col, flags);
+  if (!c.write(col))
     return nullptr;
   return c.result(changed);
 }
@@ -826,7 +859,10 @@ napi_value colorEdit4(napi_env env, napi_callback_info info) {
     return nullptr;
   c.enterImGui();
   const bool changed = ImGui::ColorEdit4(label.c_str(), col.ptr(), flags);
-  if (!c.leaveImGui() || !c.write(col))
+  if (!c.leaveImGui())
+    return nullptr;
+  clampColor(col, flags);
+  if (!c.write(col))
     return nullptr;
   return c.result(changed);
 }

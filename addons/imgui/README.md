@@ -207,7 +207,7 @@ The rules, as `bind/bind_util.cpp` reads and writes them:
 | `const char* format` of a slider, drag or input | A string with exactly one printf conversion of the value's kind (`f F e E g G a A` for a float, `d i u x X o` for an int), with flags, a width and a precision and nothing else (no `*`, `$`, length modifier or `%n`; `%%` is a literal). The conversion, from `%` to its conversion character, is at most 30 bytes, and its width and precision at most two digits each. Otherwise `ERR_INVALID_ARG_VALUE`. |
 | `const ImVec2&`, `const ImVec4&`, or by value | A real `Array` (not a typed array or other array-like) of at least 2 or 4 elements, each a `float`; elements past the 2nd or 4th are ignored. |
 | Returns `ImVec2` / `ImVec4` | A new `Array`, or the `Array` passed as the extra last argument, elements 0..1 or 0..3 filled, and that array returned. The extra argument comes after every C++ parameter, so defaults before it are passed as `undefined`: `imgui.getWindowPos(out)`, `imgui.getMouseDragDelta(0, undefined, out)`. It is checked before ImGui is called. |
-| `bool* p`, `int* p`, `float* p`, `float v[N]`, `int v[N]` | A reference array: an `Array` of at least N elements (1 for a plain pointer) of the element's type as above, read before the call and written back after it, in parameter order. A nullable one accepts `undefined` or `null`, which pass `NULL` and are not written. |
+| `bool* p`, `int* p`, `float* p`, `float v[N]`, `int v[N]` | A reference array: an `Array` of at least N elements (1 for a plain pointer) of the element's type as above, read before the call and written back after it, in parameter order, clamped to the function's accepted domain where it has one (see "Limits"). A nullable one accepts `undefined` or `null`, which pass `NULL` and are not written. |
 | `char* buf, size_t buf_size` | A one-element reference array holding a string, then the capacity in bytes, an integer from 1 to 2^24: `imgui.inputText('Name', name, 256)`. The string is encoded and, if longer than capacity minus one, cut at a character boundary. After the call the buffer is compared with the original string's encoding, and written back whenever they differ, whatever the widget returned (a truncation is written back too); a new string is created only then. |
 | A struct pointer with no JavaScript form (`const ImGuiViewport*`, `const ImGuiWindowClass*`, `ImGuiStyle*`) | Omitted, passed as `NULL`. |
 | A default argument | May be omitted or `undefined`; `null` is a value, accepted only where the parameter is nullable. |
@@ -609,17 +609,29 @@ the format rule and throws a `TypeError` with `ERR_INVALID_ARG_VALUE`:
   call, before ImGui converts it;
 - `tableSetupColumn`'s `initWidthOrWeight` below 2^31 (a fixed column's
   width is converted as it is);
-- `dragInt`: the value and both bounds within +-(2^30 - 1), `vSpeed`
-  within +-800, and with `vSpeed` 0 on a bounded drag the automatic speed
-  `(vMax - vMin) / 100` at most 800, so a bounded range of at most 80000
-  (ImGui adds the mouse delta times the speed to the value in `int` before
-  clamping, and computes `vMax - vMin` in `int`; the bound rests on the
-  platform half's clamp of mouse coordinates). A value a drag writes back
-  past the bound is refused at the next call;
+- `dragInt`: the value and both bounds within +-(2^30 - 1) and `vSpeed`
+  within +-819 (ImGui adds the mouse delta times the speed to the value in
+  `int` before clamping, and computes `vMax - vMin` in `int`; the bound
+  rests on the platform half's clamp of mouse coordinates). With `vSpeed`
+  0 on a bounded drag, an automatic speed `(vMax - vMin) / 100` above 819
+  is passed to ImGui as 819: a range wider than 81900 is accepted and
+  drags at 819 per unit;
 - `plotHistogram`, each value and each scale other than `FLT_MAX` within
   +-`FLT_MAX`/2, and the scale range 0 or with a finite reciprocal (each
   bar is a filled rectangle, whose corners are converted to `int`, and
   an overflowing scale makes them NaN).
+
+**A value written back is clamped to the function's accepted domain**, so
+what the widget produced is always a value the next call accepts: only a
+value the program passes is ever refused. Where the domain is narrower
+than what ImGui can write, the value stops at the bound: a `dragInt`
+dragged or typed past +-(2^30 - 1) holds the bound, and a colour editor's
+component dragged below 0 in HDR mode (or a saturation past what the RGB
+display can hold) holds the domain's edge. ImGui keeps nothing from the
+array between frames that the clamp could contradict (a drag carries over
+only its accumulator's fraction and re-reads the value; a colour editor
+converts its array afresh), so the clamp cannot push its arithmetic out
+of the domain either.
 
 Beyond those, each function refuses the flag combinations and values
 ImGui asserts on plainly (`InputTextFlags_Callback*`, `Col_COUNT`,
@@ -642,7 +654,10 @@ Platform half (`imgui_platform.cpp`):
   `dragInt` multiplies the difference of two by its speed before
   converting it, and a wheel delta becomes a scroll target ImGui converts
   to a 64-bit integer. No display reaches 2^16 (X11's own coordinates are
-  16-bit). Neither the style nor the font size is scaled.
+  16-bit). The bound is in logical units, the unit `hnui` reports
+  (`hnui_abi.h`, `hnui_event::x`), and anything inside it, a negative
+  coordinate of a drag captured outside the window included, reaches ImGui
+  unchanged. Neither the style nor the font size is scaled.
 - One native event listener (`hnui_add_event_listener`), registered when
   the context is created, feeds ImGui's input queue. Native listeners run
   before JavaScript ones, so ImGui has an event before the program's own
