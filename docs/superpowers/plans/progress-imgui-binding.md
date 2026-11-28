@@ -329,6 +329,12 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | codex | `ui-imgui-bind-drawlist.js` (LENGTHS) | `addText`'s position check removed | `NOTHROW ERR_OUT_OF_RANGE` (at `[2^31, 0]`); test failed |
 | codex | `ui-imgui-bind-plots.js` (HISTSCALE) | `histogramOk()` returning true | `NOTHROW ERR_OUT_OF_RANGE` at `[0, FLT_MAX]`; test failed |
 | codex | `ui-imgui-bind-plots.js` (HISTSCALE) | only the reciprocal check removed | `NOTHROW ERR_OUT_OF_RANGE` (at `[0, 1e-45]`); test failed |
+| codex | `ui-imgui-bind-widgets.js` (DRAGDOMAIN) | (RED) DRAGDOMAIN written, `dragInt` unchanged | `NOTHROW ERR_OUT_OF_RANGE` after `COLORDOMAIN message ...` (Codex's `vSpeed` `1e10` accepted), `EXITCODE 1`. By hand before the fix, Codex's drag (`dragInt('n', [0], 1e10)`, dragged 100 units right): `v 0`, where `(int)` of the accumulator gave INT_MIN twice (cvttss2si's value on x86-64) and their sum wrapped |
+| codex | `ui-imgui-input.js` (CLAMP) | (RED) CLAMP written, the platform half unchanged | `CLAMP mouse=1000000000,-1000000000 wheel=1000000000`; FileCheck failed |
+| codex | `ui-imgui-input.js` (CLAMP), `ui-imgui-bind-widgets.js` (DRAGDOMAIN) | the clamp removed (`clampedInput()` returning its argument) | input: `CLAMP mouse=1000000000,-1000000000 wheel=1000000000`, FileCheck failed; widgets: `TIMEOUT DRAGDOMAIN far move` (the position never reads back as 65536); both failed |
+| codex | `ui-imgui-bind-widgets.js` (DRAGDOMAIN) | `dragIntDomainOk()` returning true | `NOTHROW ERR_OUT_OF_RANGE` at Codex's `vSpeed` `1e10`; test failed |
+| codex | `ui-imgui-bind-widgets.js` (DRAGDOMAIN) | the automatic-speed check removed | `NOTHROW ERR_OUT_OF_RANGE` (at bounds 0 .. 80001 with `vSpeed` 0, the first refusal it reopens); test failed |
+| codex | `ui-imgui-bind-widgets.js` (DRAGDOMAIN) | the `v[0]` check removed | `NOTHROW ERR_OUT_OF_RANGE` (at Codex's `v` `[2147483647]`); test failed |
 
 ## Behaviours no test detects
 
@@ -1830,4 +1836,33 @@ on each in `codex-findings.md` beside it. Mutations are the rows tagged
   size), from reading, not measured; the tracker issue gained it.
 - Every new case's RED was recorded by running the new tests against the
   unfixed addon (the fix set aside and the addon rebuilt), then GREEN.
+- **C5 (dragInt)** verified by reading and reproduced before the fix:
+  `dragInt('n', [0], 1e10)` dragged 100 units right ended at 0, the
+  accumulator's `(int)` giving INT_MIN on x86-64 twice and the sum
+  wrapping (undefined behaviour twice over). Fixed by a domain, option
+  (a) of the ruling: the platform half clamps mouse coordinates (and wheel
+  deltas, which become a scroll target converted to an `ImS64`,
+  imgui.cpp:12815-12817; found in the same reading) to +-2^16, a frame's
+  delta is then at most 2^17; the value and the bounds are within
+  +-(2^30 - 1) (so `v_max - v_min + 1` fits, for wrapping); the speed,
+  given or automatic, within +-800, so the accumulator stays below
+  1 + 10 * 2^17 * 800 < 2^30. The bound on the bounds is applied whatever
+  the flags (the alternative, applying it only when ImGui computes the
+  range, was not taken: simpler, and the same rule as `sliderInt`'s).
+  `dragFloat` is float arithmetic only; `sliderInt`'s and `sliderFloat`'s
+  bounds are ImGui's asserted ones (Task 4) and the value is clamped;
+  `inputInt`'s steps saturate (`ImAddClampOverflow`). Not covered, from
+  reading: a keyboard-driven drag (3i), whose delta is bounded by the
+  frame's length, and typed text (3j, `sscanf`). The colour editors' own
+  `DragInt` on `255 * component` keeps its headroom under the same mouse
+  bound. `test/ui-imgui-input.js` and part A's other input tests pass with
+  the clamp.
+- The first full-suite run with DRAGDOMAIN failed it once, under the
+  16-way load: `TIMEOUT DRAGDOMAIN far move` in its second drag, which
+  presses where the first one did. The cause taken (not proved): a press
+  within ImGui's double-click time of the last one opens a drag's text
+  input instead of dragging, and ImGui's time advances with the real
+  clock. The case now sets the double-click time to 1 us for its drags
+  (`__test.setDoubleClickTime`), as `ui-imgui-bind-layout.js` DOUBLE
+  widens it; two more parallel runs and the full suite then passed.
 

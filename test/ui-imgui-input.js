@@ -49,6 +49,13 @@
 //              cancel out.
 //  LEAVE       the mouse leaves the window: ImGui's position is "none"
 //              (-FLT_MAX) and it does not want the mouse.
+//  CLAMP       a mouse move to (1e9, -1e9) is read back as (65536,
+//              -65536), and a wheel step of 1e9 as 65536: the platform half
+//              clamps both to +-2^16 (kMaxMouseCoordinate, imgui_addon.h),
+//              each clamp traced. ImGui converts a position to int as it is,
+//              a drag multiplies the difference of two positions by its
+//              speed, and a wheel step becomes a scroll target ImGui
+//              converts to an ImS64 (Codex's review, C5).
 //  REAL        a real key, `key a` through the window driver (an X client
 //              on Linux, the in-process driver on macOS), enters above
 //              Sokol: one press.
@@ -61,7 +68,9 @@
 //  (c) no listener registered: every case fails, REAL included;
 //  (d) IMGUI_USE_WCHAR32 dropped: ASTRAL fails;
 //  (e) modifier events skipped: no case here fails (the clipboard chords
-//      test does).
+//      test does);
+//  (codex) the clamp removed (clampedInput() returning its argument):
+//      CLAMP fails.
 // And two this test cannot detect, recorded so nobody relies on it for
 // them:
 //  (f) the listener's `key != ImGuiKey_None` guard removed: UNKNOWN still
@@ -296,6 +305,19 @@ async function main() {
         ' mouseY<-1e30=' + (s.mouseY < -1e30));
   }
 
+  // --- CLAMP ------------------------------------------------------------
+  {
+    inject({type: 'MOUSE_MOVE', mouseX: 1e9, mouseY: -1e9});
+    await until((s) => s.mouseX !== -Infinity && s.mouseX > -1e30, 'CLAMP move');
+    let s = state();
+    const pos = s.mouseX + ',' + s.mouseY;
+    const base = s.wheel;
+    inject({type: 'MOUSE_SCROLL', scrollY: 1e9, mouseX: 1e9, mouseY: -1e9});
+    await until((t) => t.wheel !== base, 'CLAMP wheel');
+    s = state();
+    console.log('CLAMP mouse=' + pos + ' wheel=' + (s.wheel - base));
+  }
+
   // --- REAL -------------------------------------------------------------
   {
     const driver = await startDriver({ui: h.ui, driverPath, title: TITLE});
@@ -335,7 +357,11 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}HELD keyADown=true mouseDown=true,false,false{{$}}
 // CHECK-NEXT: {{^}}BLUR keyADown=false mouseDown=false,false,false{{$}}
 // CHECK-NEXT: {{^}}LEAVE wantCaptureMouse=false mouseY<-1e30=true{{$}}
+// CHECK-NEXT: {{^}}CLAMP mouse=65536,-65536 wheel=65536{{$}}
 // CHECK-NEXT: {{^}}REAL apress=1{{$}}
 // CODE: EXITCODE 0
 
 // TRACE: {{^}}[ui] imgui: event listener registered (id {{[1-9][0-9]*}}){{$}}
+// TRACE: {{^}}[ui] imgui: input: mouse x 1e+09 clamped to 65536{{$}}
+// TRACE-NEXT: {{^}}[ui] imgui: input: mouse y -1e+09 clamped to -65536{{$}}
+// TRACE: {{^}}[ui] imgui: input: wheel y 1e+09 clamped to 65536{{$}}

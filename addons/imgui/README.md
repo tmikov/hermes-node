@@ -605,6 +605,13 @@ the format rule and throws a `TypeError` with `ERR_INVALID_ARG_VALUE`:
   call, before ImGui converts it;
 - `tableSetupColumn`'s `initWidthOrWeight` below 2^31 (a fixed column's
   width is converted as it is);
+- `dragInt`: the value and both bounds within +-(2^30 - 1), `vSpeed`
+  within +-800, and with `vSpeed` 0 on a bounded drag the automatic speed
+  `(vMax - vMin) / 100` at most 800, so a bounded range of at most 80000
+  (ImGui adds the mouse delta times the speed to the value in `int` before
+  clamping, and computes `vMax - vMin` in `int`; the bound rests on the
+  platform half's clamp of mouse coordinates). A value a drag writes back
+  past the bound is refused at the next call;
 - `plotHistogram`, each value and each scale other than `FLT_MAX` within
   +-`FLT_MAX`/2, and the scale range 0 or with a finite reciprocal (each
   bar is a filled rectangle, whose corners are converted to `int`, and
@@ -624,8 +631,14 @@ Platform half (`imgui_platform.cpp`):
   logical size (1 for a zero-sized window), both read from
   `hnui_get_window_state` every frame, so a resize needs no event handling.
   `hnui` reports mouse positions in logical units and the wheel in Sokol's
-  scroll units, and both go to ImGui unconverted. Neither the style nor the
-  font size is scaled.
+  scroll units, and both go to ImGui unconverted except that each
+  coordinate and each wheel delta is clamped to +-2^16
+  (`kMaxMouseCoordinate`, `imgui_addon.h`; traced as `input: <what> <v>
+  clamped to <limit>`): ImGui converts a position to `int` as it is, a
+  `dragInt` multiplies the difference of two by its speed before
+  converting it, and a wheel delta becomes a scroll target ImGui converts
+  to a 64-bit integer. No display reaches 2^16 (X11's own coordinates are
+  16-bit). Neither the style nor the font size is scaled.
 - One native event listener (`hnui_add_event_listener`), registered when
   the context is created, feeds ImGui's input queue. Native listeners run
   before JavaScript ones, so ImGui has an event before the program's own

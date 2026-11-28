@@ -699,4 +699,5 @@ read against the code to find out.
     radii, thicknesses and roundings and for style lengths; a domain per
     style variable; colour-editor components; a table column's width;
     draw-list rectangle corners and text positions; histogram values and
-    scales.
+    scales; `dragInt`'s value, bounds and speed, which rest on the
+    platform half clamping mouse coordinates and wheel deltas to +-2^16.

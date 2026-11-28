@@ -30,6 +30,13 @@ napi_value throwNoFrame(napi_env env, const char *name);
 // returns. False, having done nothing, when there is no window.
 bool ensureContext(napi_env env);
 // platform
+// The largest magnitude of a mouse coordinate and of a wheel delta the
+// platform half gives ImGui, in logical units: 2^16, beyond any display
+// (X11's own coordinates are 16-bit). ImGui converts a position to int as
+// it is (ImFloor in AddMousePosEvent, imgui.cpp:2051), and a drag
+// multiplies the difference of two by its speed before converting it
+// (dragInt in bind/bind_widgets.cpp has the arithmetic).
+constexpr float kMaxMouseCoordinate = 65536.0f;
 void platformInit(hnui_window *w); // listener, clipboard hooks, backend flags
 void platformNewFrame(
     hnui_window *w); // DisplaySize, DisplayFramebufferScale, DeltaTime

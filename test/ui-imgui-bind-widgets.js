@@ -75,6 +75,24 @@
 //            DisplayHSV (the conversion that needs RGB components not to be
 //            negative), [0, 0, 0, 0], and with InputHSV and an RGB display
 //            [-2048, 2048, -2048, 2048].
+//  DRAGDOMAIN dragInt's domain (dragIntDomainOk() in bind/bind_widgets.cpp:
+//            a drag adds the mouse delta times the speed to the value in
+//            int, and the platform half clamps mouse coordinates to
+//            +-65536). Refused with ERR_OUT_OF_RANGE, not called: Codex's
+//            vSpeed 1e10; vSpeed 800.5 and -801; v [2147483647] (Codex's
+//            endpoint), [1073741824] and [-1073741824]; Codex's bounds
+//            -2147483648, 2147483647 with vSpeed 0; a bound of
+//            +-1073741824; vSpeed 0 with bounds 0 .. 80001 (an automatic
+//            speed above 800). Accepted, called: v at +-1073741823 with
+//            speeds +-800, bounds +-1073741823, bounds 0 .. 80000 with
+//            vSpeed 0. Then three drags, each pressed on the widget and
+//            moved straight to x = 1e9, which ImGui reads back as 65536
+//            (the clamp), each value read back exactly: v
+//            [1073741823] at speed 800 gains exactly 800 times the move's
+//            distance, without overflow, and the next call refuses
+//            the result, which is outside the domain; v [0] at speed -800
+//            loses the same; v [0] bounded 0 .. 80000 with vSpeed 0 (an
+//            automatic speed of 800) ends at 80000.
 //  COVERAGE  every Widgets function has reached ImGui.
 //
 // THE MUTATIONS THIS MUST BREAK: the full list, with what each did, is the
@@ -766,6 +784,98 @@ async function main() {
       console.log('COLORDOMAIN message ' + m);
   }
 
+  // --- DRAGDOMAIN ------------------------------------------------------
+  {
+    const messages = [];
+    const top = 1073741823;
+    await h.run(inWindow(() => {
+      const rx = (...args) =>
+          messages.push(rejects('dragInt', () => imgui.dragInt('##d', ...args),
+                                'ERR_OUT_OF_RANGE').message);
+      rx([0], 1e10);
+      rx([0], 800.5);
+      rx([0], -801);
+      rx([2147483647]);
+      rx([top + 1]);
+      rx([-top - 1]);
+      rx([0], 0, -2147483648, 2147483647);
+      rx([0], 1, -top - 1, 0);
+      rx([0], 1, 0, top + 1);
+      rx([0], 0, 0, 80001);
+      for (const args of [[[top], 800], [[-top], -800], [[0], 1, -top, top],
+                          [[0], 0, 0, 80000], [[5], 0, 5, 5]]) {
+        const before = calls('dragInt');
+        imgui.dragInt('##a', ...args);
+        if (calls('dragInt') !== before + 1)
+          fail('NOTCALLED dragInt ' + JSON.stringify(args));
+      }
+    }));
+    for (const m of messages)
+      console.log('DRAGDOMAIN message ' + m);
+
+    /**
+     * Press on a dragInt of `v` (`args` after it), then move straight to
+     * x = 1e9, which the platform half clamps to 65536; returns {after, x,
+     * refused}: v[0] after the move, where the press was, and the message
+     * of a refusal at a later call.
+     */
+    async function dragFar(v, args) {
+      let r = null, refused = null;
+      const start = v[0];
+      const draw = inWindow(() => {
+        try {
+          imgui.dragInt('##far', v, ...args);
+        } catch (e) {
+          refused = e.message;
+          imgui.dummy([10, 10]);
+        }
+        r = rect();
+      });
+      await settle(draw);
+      const at = harness.center(r);
+      await harness.moveTo(h, draw, at);
+      harness.inject(h, {type: 'MOUSE_DOWN', button: LEFT, mouseX: at[0],
+                         mouseY: at[1]});
+      await harness.until(h, draw, (s) => s.mouseDown[LEFT],
+                          'DRAGDOMAIN down');
+      harness.inject(h, {type: 'MOUSE_MOVE', mouseX: 1e9, mouseY: at[1]});
+      await harness.until(h, draw,
+                          (s) => s.mouseX === 65536 && v[0] !== start,
+                          'DRAGDOMAIN far move');
+      const after = v[0];
+      harness.inject(h, {type: 'MOUSE_UP', button: LEFT, mouseX: 1e9,
+                         mouseY: at[1]});
+      await harness.until(h, draw, (s) => !s.mouseDown[LEFT], 'DRAGDOMAIN up');
+      await h.run(draw);
+      return {after, x: at[0], refused};
+    }
+    const wrong = [];
+    // Each drag presses at the same place, and a press within ImGui's
+    // double-click time of the last opens the drag's text input instead
+    // (in ImGui's own time, which a loaded machine can leave short): a
+    // double-click time of 1 us, below any frame's time step, rules it out.
+    const previousDoubleClick = imgui.__test.setDoubleClickTime(1e-6);
+    {
+      const d = await dragFar([top], [800]);
+      if (d.after !== top + 800 * (65536 - d.x))
+        wrong.push('top ' + JSON.stringify(d));
+      console.log('DRAGDOMAIN refused ' + d.refused);
+    }
+    {
+      const d = await dragFar([0], [-800]);
+      if (d.after !== -800 * (65536 - d.x) || d.refused !== null)
+        wrong.push('negative ' + JSON.stringify(d));
+    }
+    {
+      const d = await dragFar([0], [0, 0, 80000]);
+      if (d.after !== 80000 || d.refused !== null)
+        wrong.push('automatic ' + JSON.stringify(d));
+    }
+    imgui.__test.setDoubleClickTime(previousDoubleClick);
+    console.log(wrong.length === 0 ? 'DRAGDOMAIN ok' :
+                                     'DRAGDOMAIN WRONG ' + wrong.join(' '));
+  }
+
   harness.checkGroupCoverage(h, 'Widgets');
   process.exit(0);
 }
@@ -803,6 +913,18 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit4(): col[3] must be from 0 to 8388608; got -0.5{{$}}
 // CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit3(): col[0] must be from -2048 to 2048; got 2048.5{{$}}
 // CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit4(): col[3] must be from -2048 to 2048; got -2048.5{{$}}
+// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -800 to 800; got 1e+10{{$}}
+// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -800 to 800; got 800.5{{$}}
+// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -800 to 800; got -801{{$}}
+// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): v[0] must be from -1073741823 to 1073741823; got 2147483647{{$}}
+// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): v[0] must be from -1073741823 to 1073741823; got 1073741824{{$}}
+// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): v[0] must be from -1073741823 to 1073741823; got -1073741824{{$}}
+// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vMin must be from -1073741823 to 1073741823; got -2147483648{{$}}
+// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vMin must be from -1073741823 to 1073741823; got -1073741824{{$}}
+// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vMax must be from -1073741823 to 1073741823; got 1073741824{{$}}
+// CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): with vSpeed 0 the automatic speed, (vMax - vMin) / 100, must be at most 800; got 800.01 (vMin 0, vMax 80001){{$}}
+// CHECK-NEXT: {{^}}DRAGDOMAIN refused imgui.dragInt(): v[0] must be from -1073741823 to 1073741823; got {{[0-9]+}}{{$}}
+// CHECK-NEXT: {{^}}DRAGDOMAIN ok{{$}}
 // CHECK-NEXT: {{^}}COVERAGE Widgets ok{{$}}
 // CODE: EXITCODE 0
 

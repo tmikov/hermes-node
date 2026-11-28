@@ -20,6 +20,7 @@
 #include <cfloat>
 #include <climits>
 #include <string>
+#include <utility>
 
 namespace hnimgui {
 namespace bind {
@@ -161,6 +162,9 @@ constexpr float kMaxHsvComponent = 2048.0f;
 ///   call (6745-6747, called at 5948 and read back at 5951-5952) unless the
 ///   flags fix one.
 /// - HSV: -kMaxHsvComponent to kMaxHsvComponent.
+/// The editor's own DragInt on `255 * component` (5980, 6032) then adds a
+/// drag's accumulator at speed 1, below 1 + 10 * 2^17 (dragIntDomainOk()),
+/// to at most 255 * 2^23 = 2139095040: still below 2^31.
 bool colorComponentsOk(Call &c, const RefFloat &col, int flags) {
   int input = flags & ImGuiColorEditFlags_InputMask_;
   if (input == 0)
@@ -173,6 +177,82 @@ bool colorComponentsOk(Call &c, const RefFloat &col, int flags) {
     const std::string what = "col[" + std::to_string(k) + "]";
     if (!c.inRange(col.values[k], what.c_str(), lo, hi))
       return false;
+  }
+  return true;
+}
+
+/// The largest magnitude of a dragInt value or bound: 2^30 - 1.
+constexpr int kMaxDragIntValue = (1 << 30) - 1;
+/// The largest magnitude of a dragInt speed, given or automatic.
+constexpr float kMaxDragIntSpeed = 800.0f;
+
+/// dragInt's domain, which keeps DragBehaviorT<ImS32> (imgui_widgets.cpp:
+/// 2551-2678) inside int arithmetic. It adds the accumulated delta to the
+/// value as `v_cur += (SIGNEDTYPE)g.DragCurrentAccum` (2631), converting
+/// the float accumulator and adding before any clamp, and computes
+/// `v_max - v_min` in int for the automatic speed (2562-2563), the
+/// logarithmic scale (2593) and wrapping, with one more (2659-2661).
+/// - The accumulator. Each frame adds the mouse delta times the speed
+///   (2567-2584), times 10 with Shift and 0.01 with Alt, and the flush
+///   leaves only the fraction ImGui could not apply (2648), or resets it
+///   (2598-2602). The mouse delta is the difference of two positions
+///   (imgui.cpp:11126-11129) the platform half clamps to
+///   +-kMaxMouseCoordinate (imgui_addon.h), at most 2^17, so the
+///   accumulator is below 1 + 10 * 2^17 * |speed|, which at the speed
+///   bound is 1048576001 < 2^30. The keyboard and gamepad source (2575-
+///   2583) is the surface table's "Not covered" 3i.
+/// - The value. It is within +-(2^30 - 1), so the sum stays inside int.
+/// - The bounds. Each is within +-(2^30 - 1), so `v_max - v_min + 1` is
+///   at most 2^31 - 1.
+/// - The speed: |vSpeed| <= kMaxDragIntSpeed; and with vSpeed 0 on a
+///   bounded drag (ImGui's test, 2556) the automatic speed, `(v_max -
+///   v_min) * g.DragSpeedDefaultRatio` (2562-2563; 1/100, imgui.cpp:4561,
+///   which no bound function changes), within the same bound, so a
+///   bounded range of at most 80000 with vSpeed 0.
+bool dragIntDomainOk(
+    Call &c,
+    int v,
+    float vSpeed,
+    int vMin,
+    int vMax,
+    int flags) {
+  if (v < -kMaxDragIntValue || v > kMaxDragIntValue) {
+    c.throwRange(
+        "v[0] must be from %d to %d; got %d",
+        -kMaxDragIntValue,
+        kMaxDragIntValue,
+        v);
+    return false;
+  }
+  for (const auto &[bound, what] :
+       {std::pair<int, const char *>{vMin, "vMin"}, {vMax, "vMax"}}) {
+    if (bound < -kMaxDragIntValue || bound > kMaxDragIntValue) {
+      c.throwRange(
+          "%s must be from %d to %d; got %d",
+          what,
+          -kMaxDragIntValue,
+          kMaxDragIntValue,
+          bound);
+      return false;
+    }
+  }
+  if (!c.inRange(vSpeed, "vSpeed", -kMaxDragIntSpeed, kMaxDragIntSpeed))
+    return false;
+  const bool bounded = vMin < vMax ||
+      (vMin == vMax &&
+       (vMin != 0 || (flags & ImGuiSliderFlags_ClampZeroRange)));
+  if (vSpeed == 0.0f && bounded) {
+    const float automatic = static_cast<float>((vMax - vMin) * (1.0f / 100.0f));
+    if (!(automatic <= kMaxDragIntSpeed)) {
+      c.throwRange(
+          "with vSpeed 0 the automatic speed, (vMax - vMin) / 100, must be at "
+          "most %g; got %g (vMin %d, vMax %d)",
+          static_cast<double>(kMaxDragIntSpeed),
+          static_cast<double>(automatic),
+          vMin,
+          vMax);
+      return false;
+    }
   }
   return true;
 }
@@ -491,8 +571,9 @@ napi_value dragInt(napi_env env, napi_callback_info info) {
       (!c.isMissing(3) && !c.int32(3, "vMin", &vMin)) ||
       (!c.isMissing(4) && !c.int32(4, "vMax", &vMax)) ||
       (!c.isMissing(5) && !c.format(5, "format", FormatKind::Int, &format)) ||
-      !sliderFlags(c, 6, false, &flags) || !c.needFrame() ||
-      !c.needLabelId("label", label))
+      !sliderFlags(c, 6, false, &flags) ||
+      !dragIntDomainOk(c, v.values[0], vSpeed, vMin, vMax, flags) ||
+      !c.needFrame() || !c.needLabelId("label", label))
     return nullptr;
   c.enterImGui();
   const bool changed = ImGui::DragInt(

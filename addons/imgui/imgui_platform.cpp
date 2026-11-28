@@ -301,6 +301,19 @@ void addModifiers(ImGuiIO &io, int modifiers) {
   io.AddKeyEvent(ImGuiMod_Super, (modifiers & HNUI_MOD_META) != 0);
 }
 
+/// \p v clamped to +-kMaxMouseCoordinate, traced when it was outside;
+/// \p what names it in the trace.
+float clampedInput(double v, const char *what) {
+  const double limit = kMaxMouseCoordinate;
+  if (v >= -limit && v <= limit)
+    return static_cast<float>(v);
+  const float clamped = v > limit ? kMaxMouseCoordinate
+      : v < -limit                ? -kMaxMouseCoordinate
+                                  : 0.0f; // NaN
+  trace("input: %s %g clamped to %g", what, v, static_cast<double>(clamped));
+  return clamped;
+}
+
 /// The one event listener: every hnui event, translated into ImGui's input
 /// queue. ImGui applies the queue at the next NewFrame(), trickling it over
 /// several frames where one frame would lose a press-and-release.
@@ -316,24 +329,33 @@ void onEvent(hnui_window *, void *, const hnui_event *event) {
   }
   ImGuiIO &io = ImGui::GetIO();
   switch (static_cast<hnui_event_type>(event->type)) {
-    case HNUI_EVENT_MOUSE_MOVE:
-      io.AddMousePosEvent(
-          static_cast<float>(event->x), static_cast<float>(event->y));
+    case HNUI_EVENT_MOUSE_MOVE: {
+      // Two statements, so that the traces come in this order.
+      const float x = clampedInput(event->x, "mouse x");
+      const float y = clampedInput(event->y, "mouse y");
+      io.AddMousePosEvent(x, y);
       break;
+    }
     case HNUI_EVENT_MOUSE_DOWN:
     case HNUI_EVENT_MOUSE_UP: {
       addModifiers(io, event->modifiers);
-      io.AddMousePosEvent(
-          static_cast<float>(event->x), static_cast<float>(event->y));
+      const float x = clampedInput(event->x, "mouse x");
+      const float y = clampedInput(event->y, "mouse y");
+      io.AddMousePosEvent(x, y);
       const int button = translateButton(event->button);
       if (button >= 0)
         io.AddMouseButtonEvent(button, event->type == HNUI_EVENT_MOUSE_DOWN);
       break;
     }
-    case HNUI_EVENT_MOUSE_WHEEL:
-      io.AddMouseWheelEvent(
-          static_cast<float>(event->dx), static_cast<float>(event->dy));
+    case HNUI_EVENT_MOUSE_WHEEL: {
+      // A wheel delta times the scroll step becomes the scroll target,
+      // which CalcNextScrollFromScrollTargetAndClamp converts to an ImS64
+      // (ImRoundPositive64, imgui.cpp:12815-12817).
+      const float dx = clampedInput(event->dx, "wheel x");
+      const float dy = clampedInput(event->dy, "wheel y");
+      io.AddMouseWheelEvent(dx, dy);
       break;
+    }
     case HNUI_EVENT_MOUSE_LEAVE:
       io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
       break;

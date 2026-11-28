@@ -1369,11 +1369,24 @@ All six pass a finished string and never let ImGui interpret `%`.
   ImGuiSliderFlags flags = 0);` (`imgui.h:702`)
 - Overload: only one. Nullable: none in JavaScript. Omitted: none.
 - Frame: open.
-- Rejected: a `format` that is not exactly one integer conversion.
+- Rejected: a `format` that is not exactly one integer conversion; and
+  (added after Codex's code review, C5) a `v[0]`, `vMin` or `vMax`
+  outside +-(2^30 - 1), a `vSpeed` outside +-800, and with `vSpeed` 0 on
+  a bounded drag an automatic speed `(vMax - vMin) / 100` above 800.
 - Label-id: yes.
 - Preconditions: widgets:2696 as for `dragFloat` (G1); label-id
-  (widgets:2774).
-- Notes: none.
+  (widgets:2774); (a) the domain above, which keeps `DragBehaviorT<ImS32>`
+  inside `int`: it converts the accumulated delta times the speed to int
+  and adds it to the value before any clamp (widgets:2584, 2605, 2631),
+  and computes `v_max - v_min` (plus one when wrapping) in int
+  (widgets:2562-2563, 2593, 2659-2661). With the platform half's mouse
+  coordinates within +-2^16 a frame's delta is at most 2^17, times 10
+  with Shift, and the carried remainder below 1, so the accumulator stays
+  below 1 + 10 * 2^17 * 800 < 2^30 (`dragIntDomainOk()`,
+  `bind/bind_widgets.cpp`, has the lines). The keyboard source is "Not
+  covered" 3i; typed text, 3j.
+- Notes: a value ImGui writes back outside the domain (an unbounded drag
+  past 2^30 - 1) is refused at the next call, before ImGui adds to it.
 
 ### `inputText`
 
@@ -3443,7 +3456,8 @@ a C++ program.
    | `sliderInt` `vMin`, `vMax` | asserted | widgets:3346 | yes, INT_MIN/2 .. INT_MAX/2 |
    | slider `v` | saturated (clamped into the range) | widgets:3029 | not needed |
    | `dragFloat` `v`, `vSpeed`, `vMin`, `vMax` | never (float arithmetic, `SIGNEDTYPE` float) | widgets:2551-2664 | not needed |
-   | `dragInt` `v`, `vSpeed`, `vMin`, `vMax` | as it is: the accumulated delta times the speed converted to int and added (widgets:2584, 2605, 2631), `v_max - v_min` in int (2562-2563, 2593, 2659-2661) | widgets:2551-2664 | not yet: Codex's C5 |
+   | `dragInt` `v`, `vSpeed`, `vMin`, `vMax` | as it is: the accumulated delta times the speed converted to int and added (widgets:2584, 2605, 2631), `v_max - v_min` in int (2562-2563, 2593, 2659-2661) | widgets:2551-2678 | yes (C5): `v`, `vMin`, `vMax` within +-(2^30 - 1); `vSpeed`, and the automatic speed `(vMax - vMin) / 100` when `vSpeed` is 0, within +-800; with the platform half's mouse bound (below). The keyboard source is 3i, typed text 3j |
+   | the mouse position and wheel delta (the platform half's input, not an argument) | as it is (`ImFloor` in `AddMousePosEvent`, imgui.cpp:2051), as a drag's delta (above), and as a scroll target (`ImRoundPositive64`, imgui.cpp:12815-12817) | imgui_platform.cpp | yes, clamped to +-2^16 (C5) |
    | `inputFloat` `step`, `stepFast` | never (float addition) | widgets:2367-2370 | not needed |
    | `inputInt` `step`, `stepFast` | never (`ImAddClampOverflow`, saturating) | widgets:2351-2352; internal:543-544 | not needed |
    | `inputText` family `bufSize` | an allocation | design, "Buffers" | yes, 1 .. 2^24 |
@@ -3514,6 +3528,38 @@ a C++ program.
    length. It needs the variable pushed around `dockSpaceOverViewport()`
    (whose `DockSpace()` updates the tree inside the frame) while the user
    drags a splitter.
+
+3i. **A `dragInt` driven from the keyboard** (Codex's code review, by
+   reading). The binding's domain for `dragInt` (`dragIntDomainOk()`,
+   `bind/bind_widgets.cpp`) bounds the per-frame accumulator by the mouse
+   delta, which the platform half bounds. With the keyboard as the
+   active item's source the delta is instead the arrow keys' typematic
+   repeat count over the frame, times 10 with the fast tweak key
+   (widgets:2575-2583; imgui.cpp:14755-14776), and that count is the
+   frame's duration over a repeat rate of 15 ms (imgui.cpp:10376,
+   10383-10390, 10356-10368), so it has no bound but the frame's length:
+   at the speed bound the accumulator reaches 2^30 after a frame of about
+   2000 s with an arrow key held. The keyboard becomes the source only
+   through navigation: `ImGuiConfigFlags_NavEnableKeyboard` (and
+   `_NavEnableGamepad`) are never set by the addon (imgui_module.cpp:112
+   sets only docking) nor by a bound function, and tabbing to a drag
+   opens its text input instead (`ImGuiActivateFlags_PreferInput`); what
+   remains is a click on the drag in the frame in which Tab moved to it
+   (`SetActiveID`, imgui.cpp:5002). The repeat count's own conversion,
+   `(int)((t - repeat_delay) / repeat_rate)` of a key's down duration
+   (imgui.cpp:10364-10365), overflows after a key held for about a year.
+
+3j. **Text typed into a number field** (`dragInt`, `dragFloat`,
+   `sliderInt` and `sliderFloat*` with Ctrl+click or a double click,
+   `inputInt`, `inputFloat`; Codex's review). `DataTypeApplyFromText`
+   parses the text with `sscanf` into the value's own type
+   (widgets:2416), and the C standard leaves the result undefined when
+   the number does not fit the type (C11 7.21.6.2p10). glibc and Apple's
+   libc convert through `strtol` / `strtod` and so saturate or give
+   infinity; no argument check can see text the user is about to type.
+   The step and fast step of `inputInt` are applied with
+   `ImAddClampOverflow`, which saturates (widgets:2351-2352;
+   internal:543-544), and need no bound.
 
 Recorded here for completeness, although not assertions:
 
