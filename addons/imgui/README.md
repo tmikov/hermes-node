@@ -1020,8 +1020,12 @@ What the binding takes from `imgui_internal.h`, all of it in
   a colour editor whose component drag is the active item (its own
   "##X".."##W", or its picker's, computed from the ID stack), by the same
   rule for that component's path (`guard::beforeColorEdit()`): a caller
-  can reproduce those IDs with `pushID(label)` and a drag named "##X".
-  An inactive widget never writes it. Outside that header,
+  can reproduce those IDs with `pushID(label)` and a drag named "##X";
+  only the components that call will draw count (colorEdit3 has no alpha
+  drag, NoInputs and the hex display none, the picker's only while its
+  popup is open). An inactive widget never writes it. The drags inside
+  `showDemoWindow()` and `showMetricsWindow()` are ImGui's own and are not
+  guarded (the surface table's "Not covered" 3m). Outside that header,
   `bind/bind_clipper.cpp` writes `ImGuiListClipper::ItemsCount`, declared
   in `imgui.h` but commented "[Internal]", to -1 when it abandons a
   clipper; and the four `io.ConfigErrorRecovery*` fields above are public

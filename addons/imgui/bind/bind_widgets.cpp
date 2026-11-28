@@ -850,7 +850,8 @@ napi_value colorEdit3(napi_env env, napi_callback_info info) {
       !c.needFrame() || !colorComponentsOk(c, col.values, col.n, flags))
     return nullptr;
   guard::sanitizeColorEditState();
-  guard::beforeColorEdit(label.c_str(), flags);
+  // ColorEdit3 adds NoAlpha (imgui_widgets.cpp:5888): no "##W" drag.
+  guard::beforeColorEdit(label.c_str(), flags | ImGuiColorEditFlags_NoAlpha);
   c.enterImGui();
   const bool changed = ImGui::ColorEdit3(label.c_str(), col.ptr(), flags);
   if (!c.leaveImGui())

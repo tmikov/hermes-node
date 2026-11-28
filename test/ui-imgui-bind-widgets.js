@@ -113,6 +113,16 @@
 //            frame ten times, drawn alone and then beside an unrelated
 //            dragInt, colorEdit3 and colorEdit4: both runs end at exactly
 //            the same value, 16777234 (8 + 10 units).
+//  UNUSEDIDS a float drag under an ID a colour editor would use only if it
+//            drew that component (Codex's round 6, H1), driven as in
+//            SHAREDACCUM, ends at exactly the same 16777234: "##W" under
+//            pushID('editor') beside colorEdit3('editor', ..., Uint8),
+//            which has no alpha drag; "##X" beside the same editor with
+//            ColorEditFlags_NoInputs, which has no component drag; and the
+//            picker's nested "##rgb" editor's "##X" (reproduced with
+//            getID('picker'), a window named "##Popup_<id>" and
+//            pushID('##picker'), pushID('##rgb')) beside the editor with its
+//            picker closed.
 //  LOGDRAG   a logarithmic dragInt of [1] over 1 .. 100 at speed 819 (round
 //            4, F2): a 10-unit move right takes it to 100 and leaves a
 //            remainder of about 81.7 parametric units (above 1, legitimate),
@@ -1068,6 +1078,58 @@ async function main() {
                      JSON.stringify({alone, beside}));
   }
 
+  // --- UNUSEDIDS -------------------------------------------------------
+  {
+    const U8 = imgui.ColorEditFlags_Uint8;
+    /** The SHAREDACCUM drag of a float drawn by `drawFloat(f)`. */
+    const run = async (drawFloat, drawAfter) => {
+      const f = [16777216], color = [0.5, 0.5, 0.5];
+      const out = {r: null};
+      let threw = null;
+      const draw = inWindow(() => {
+        try {
+          drawFloat(f, out);
+          drawAfter(color);
+        } catch (e) {
+          threw = e.message;
+        }
+      });
+      await heldDrag(draw, out, [8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+      return {f: f[0], threw};
+    };
+    const floatUnder = (ids, name) => (f, out) => {
+      for (const id of ids)
+        imgui.pushID(id);
+      imgui.dragFloat(name, f, 1, 0, 0, '%.0f', imgui.SliderFlags_NoRoundToFormat);
+      out.r = rect();
+      for (let k = 0; k < ids.length; ++k)
+        imgui.popID();
+    };
+    const results = {};
+    results.alpha = await run(floatUnder(['editor'], '##W'),
+                              (c) => imgui.colorEdit3('editor', c, U8));
+    results.noInputs = await run(
+        floatUnder(['editor'], '##X'),
+        (c) => imgui.colorEdit3('editor', c, U8 | imgui.ColorEditFlags_NoInputs));
+    // The picker's nested "##rgb" editor's red: its popup's window, named
+    // after the popup's ID, then the picker's and the nested editor's IDs.
+    results.picker = await run((f, out) => {
+      imgui.pushID('editor');
+      const popupId = imgui.getID('picker');
+      imgui.popID();
+      imgui.end();
+      imgui.setNextWindowPos([40, 300]);
+      imgui.setNextWindowSize([300, 100]);
+      imgui.begin('##Popup_' + popupId.toString(16).padStart(8, '0'));
+      floatUnder(['##picker', '##rgb'], '##X')(f, out);
+      imgui.end();
+      imgui.begin('widgets');
+    }, (c) => imgui.colorEdit3('editor', c, U8));
+    const ok = Object.values(results).every(
+        (r) => r.f === 16777234 && r.threw === null);
+    console.log(ok ? 'UNUSEDIDS ok' : 'UNUSEDIDS WRONG ' + JSON.stringify(results));
+  }
+
   // --- LOGDRAG ---------------------------------------------------------
   {
     const v = [1];
@@ -1312,6 +1374,7 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}FLOATWB ok{{$}}
 // CHECK-NEXT: {{^}}TRANSITION ok{{$}}
 // CHECK-NEXT: {{^}}SHAREDACCUM ok{{$}}
+// CHECK-NEXT: {{^}}UNUSEDIDS ok{{$}}
 // CHECK-NEXT: {{^}}LOGDRAG ok{{$}}
 // CHECK-NEXT: {{^}}COLORMODE ok{{$}}
 // CHECK-NEXT: {{^}}COLORFOREIGN ok{{$}}

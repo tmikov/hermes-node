@@ -785,13 +785,23 @@ void beforeColorEdit(const char *label, int flags) {
   };
   if (topDrags)
     check(editor);
-  // The picker's nested editors, whose IDs exist whether or not it is open.
-  char popup[20];
-  ImFormatString(
-      popup, IM_COUNTOF(popup), "##Popup_%08x", ImHashStr("picker", 0, editor));
-  const ImGuiID picker = ImHashStr("##picker", 0, ImHashStr(popup));
-  check(ImHashStr("##rgb", 0, picker));
-  check(ImHashStr("##hsv", 0, picker));
+  // The picker's nested editors, only when its popup will run in this
+  // call: ColorEdit4 begins it only without NoSmallPreview (6067, 6086),
+  // and BeginPopup() begins it only when it is open at the current popup
+  // level (imgui.cpp:13473-13480, 13428-13432 and IsPopupOpen's test,
+  // 13157). Its editors get the outer flags' data type and NoAlpha
+  // (6096-6097, 6422), and are drawn in every display (6421-6435).
+  const ImGuiID popupId = ImHashStr("picker", 0, editor);
+  const bool pickerRuns = (flags & ImGuiColorEditFlags_NoSmallPreview) == 0 &&
+      g.OpenPopupStack.Size > g.BeginPopupStack.Size &&
+      g.OpenPopupStack[g.BeginPopupStack.Size].PopupId == popupId;
+  if (pickerRuns) {
+    char popup[20];
+    ImFormatString(popup, IM_COUNTOF(popup), "##Popup_%08x", popupId);
+    const ImGuiID picker = ImHashStr("##picker", 0, ImHashStr(popup));
+    check(ImHashStr("##rgb", 0, picker));
+    check(ImHashStr("##hsv", 0, picker));
+  }
   if (!active)
     return;
   const float a = g.DragCurrentAccum;

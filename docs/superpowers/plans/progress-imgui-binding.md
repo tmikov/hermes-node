@@ -350,6 +350,7 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | codex r4 | `ui-imgui-bind-widgets.js` (SHAREDACCUM, LOGDRAG) | (RED, and the mutation) the round-3 rule restored: reset unless below 1 before every dragInt, without the active-ID condition or the logarithmic case | `SHAREDACCUM WRONG {"alone":{"f":16777234},"beside":{"f":16777224}}` (the unrelated dragInt discarded the float drag's remainder every frame) and `LOGDRAG WRONG {"afterRight":100,"v":[1]}` (the legitimate remainder discarded, so the move back dropped to 1); test failed |
 | codex r4 | `ui-imgui-bind-widgets.js` (TRANSITION) | `guard::beforeIntDrag()` not called | `TRANSITION WRONG {"integer":[-1073741823],...}`; test failed |
 | codex r5 | `ui-imgui-bind-widgets.js` (COLORFOREIGN) | (RED, and the mutation) `guard::beforeColorEdit()` not called | `COLORFOREIGN WRONG {"three":{"color":[1,0.2,0.2]},"four":{"color":[0.2,0.2,0.2,1]}}`: the carried 5e11 converted to int (INT_MIN, undefined) and ImGui's overflow test then clamped the component to 255; test failed |
+| codex r6 | `ui-imgui-bind-widgets.js` (UNUSEDIDS) | (RED, and the mutations) colorEdit3's NoAlpha not passed to the guard, and the picker-open condition removed | `UNUSEDIDS WRONG {"alpha":{"f":16777224},"noInputs":{"f":16777234},"picker":{"f":16777224}}`: the "##W" and the picker-component cases stalled 10 units short; the NoInputs case, which the guard already excluded, passed; test failed |
 
 ## Behaviours no test detects
 
@@ -2029,4 +2030,21 @@ Codex's text: `.superpowers/sdd/2026-11-27-imgui-binding/codex-code-r2.md`.
   stands, pushing nothing, and applies the per-path rule only when
   `g.ActiveId` is one of them. The sweep for the same shape elsewhere is
   in 3l: nothing else runs a drag internally.
+
+### Codex code review, round 6
+
+- **H1** verified (widgets:5888, 6067, 6086) and reproduced by UNUSEDIDS
+  under the round-5 guard: a float drag under colorEdit3's nonexistent
+  "##W", and one under a closed picker's component ID, each stalled.
+  The guard now matches only the drags that call will run: colorEdit3's
+  NoAlpha, NoInputs and the hex display, and the picker's nested editors
+  only while its popup is open at the current level and NoSmallPreview is
+  not set.
+- **H2** verified (imgui_demo.cpp:436, 1001, 1119) and recorded, not
+  guarded, as the coordinator ruled: "Not covered" 3m, with the Metrics
+  window's drags and slider (imgui.cpp:22531-22537, 23107, 23762) and
+  both windows' own style and font editing. The round-5 sweep's "nothing
+  else runs a drag internally" (above, round 5) was wrong and is
+  replaced in the surface table; the tracker issue gained 3m. No small
+  rule closing it without the demo's IDs was found (see the report).
 

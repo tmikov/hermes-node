@@ -3654,8 +3654,39 @@ a C++ program.
    (widgets:3474-3488), whose state is the slider accumulator, read only
    from the keyboard branch, and the grab offset, saturated (above); the
    `inputInt` / `inputFloat` field is an `InputText` and its step buttons
-   are buttons (widgets:3877-3925), neither reading the drag accumulator;
-   no other bound function runs a drag internally.
+   are buttons (widgets:3877-3925), neither reading the drag accumulator.
+   The bound functions that run drags are `dragInt`, `dragFloat`,
+   `colorEdit3` and `colorEdit4`, each guarded, and `showDemoWindow()` and
+   `showMetricsWindow()`, which run ImGui's own code and are not (3m).
+
+3m. **Widgets the binding does not call itself** (Codex's round 6, H2,
+   recorded rather than guarded). `showDemoWindow()` runs ImGui's whole
+   demo, and `showMetricsWindow()` its debug tools, inside one binding
+   call each: drags, sliders and inputs under IDs fixed by
+   `imgui_demo.cpp` and `imgui.cpp`, which consume the retained state of
+   3l with no per-path check of the binding's. Codex's sequence: with the
+   demo's Widgets > Basic section open, draw for some frames instead
+   `begin('Dear ImGui Demo'); pushID('Basic'); dragFloat('drag int',
+   [1e30], 1e10); popID(); end();`, hold and drag 50 units, then, still
+   held, call `showDemoWindow()` again and move: the demo's
+   `DragInt("drag int", &i1, 1)` (imgui_demo.cpp:436, 1001, 1119, with no
+   other ID scope between, 4668-4682) has the same ID, takes the float's
+   5e11 remainder and converts it to int (widgets:2631), undefined. The
+   Metrics window runs `DragFloat` on the style's and fonts' sizes
+   (imgui.cpp:22531-22537, 23762) and a `SliderInt` (23107), so a
+   non-finite accumulator handed to one of them under a held mouse is
+   added to a font size; and both windows edit the style and the fonts
+   themselves (the demo's style editor, imgui_demo.cpp:394-396; the
+   Metrics window's font tools), outside every domain this binding
+   enforces on `pushStyleVar` (the font size framePaddingYLimit() reads
+   included). Guarding them would mean reproducing the demo's and the
+   tools' ID trees in the binding and keeping them in step with every
+   ImGui bump; the sequence needs a program to imitate the demo's window
+   name and ID path and swap code under a held mouse. Both functions are
+   debugging aids. Done when the binding sanitises the accumulator for
+   any integer consumer by remembering what fed the active ID (which
+   would cover ImGui's own widgets too), or part C's scope tracking
+   decides it.
 
 3k. **A value typed into the colour picker's own editors** (Codex's
    round 2, D1, by reading). The picker that a colour editor opens draws
@@ -3769,7 +3800,7 @@ Written:
 | State | Declared | Written by | Why |
 |---|---|---|---|
 | `g.ErrorCallback`, `g.ErrorCallbackUserData` | 2876, 2877 | context creation | the design's error callback |
-| `g.DragCurrentAccum` | 2824 | only when the widget about to be drawn is the active item (`g.ActiveId` equals `ImGui::GetID(label)`, the ID its DragScalar uses; ImGui reads the accumulator only for the active item, widgets:2716-2717; Codex's round 4, F1): set to 0 before that `dragFloat` when it is not finite (`guard::beforeFloatDrag()`), before that linear `dragInt` unless its magnitude is below 1, and before that logarithmic `dragInt` when it is not finite (`guard::beforeIntDrag()`). The linear integer path converts it at 2631 and leaves below 1 itself (2648); a larger one is another path's remainder carried to the same active ID (a float drag's, which DragBehavior does not reset across the type change, 2700-2727, round 3, E1; or the same widget's in logarithmic mode). The logarithmic path takes any finite value, its own remainder can exceed 1 (2624-2627, 2640-2644, 3087-3088; round 4, F2). The colour editors (Codex's round 5, G1, which showed the earlier "not touched" wrong: a caller can reproduce a component's ID with `pushID(label)` and a drag named "##X"): before `colorEdit3` / `colorEdit4`, only when `g.ActiveId` is one of the IDs its component drags use, its own "##X".."##W" under `PushID(label)` in the RGB and HSV displays and its picker's nested "##rgb" / "##hsv" editors' (computed with `ImHashStr` from the ID stack as it stands, `guard::beforeColorEdit()`), set to 0 for that component's path in the effective data type: a linear DragInt (Uint8) unless below 1, a DragFloat (Float) when not finite; no colour flag selects a logarithmic drag (widgets:6011) | Codex's round 2, D4: a drag that overflowed leaves it infinite or NaN (widgets:2648), and the next step adds it to the value (2631); activation sets it to 0 too (2598-2602) |
+| `g.DragCurrentAccum` | 2824 | only when the widget about to be drawn is the active item (`g.ActiveId` equals `ImGui::GetID(label)`, the ID its DragScalar uses; ImGui reads the accumulator only for the active item, widgets:2716-2717; Codex's round 4, F1): set to 0 before that `dragFloat` when it is not finite (`guard::beforeFloatDrag()`), before that linear `dragInt` unless its magnitude is below 1, and before that logarithmic `dragInt` when it is not finite (`guard::beforeIntDrag()`). The linear integer path converts it at 2631 and leaves below 1 itself (2648); a larger one is another path's remainder carried to the same active ID (a float drag's, which DragBehavior does not reset across the type change, 2700-2727, round 3, E1; or the same widget's in logarithmic mode). The logarithmic path takes any finite value, its own remainder can exceed 1 (2624-2627, 2640-2644, 3087-3088; round 4, F2). The colour editors (Codex's round 5, G1, which showed the earlier "not touched" wrong: a caller can reproduce a component's ID with `pushID(label)` and a drag named "##X"): before `colorEdit3` / `colorEdit4`, only when `g.ActiveId` is one of the IDs of the component drags that call will run, its own "##X".."##W" under `PushID(label)` in the RGB and HSV displays without NoInputs ("##W" only with alpha, and colorEdit3 adds NoAlpha, widgets:5888) and, only while the picker's popup is open at the current popup level and NoSmallPreview is not set (6067, 6086), its nested "##rgb" / "##hsv" editors' (round 6, H1; computed with `ImHashStr` from the ID stack as it stands, `guard::beforeColorEdit()`), set to 0 for that component's path in the effective data type: a linear DragInt (Uint8) unless below 1, a DragFloat (Float) when not finite; no colour flag selects a logarithmic drag (widgets:6011) | Codex's round 2, D4: a drag that overflowed leaves it infinite or NaN (widgets:2648), and the next step adds it to the value (2631); activation sets it to 0 too (2598-2602) |
 | `g.ColorEditSavedID` (read with `ColorEditSavedHue`, `ColorEditSavedSat`, 2810-2812) | 2810 | `colorEdit3`, `colorEdit4`, set to 0 before ImGui is called when the saved hue or saturation is outside 0 .. 1 or not finite (`guard::sanitizeColorEditState()`) | Codex's round 2, D1: ImGui restores the saved hue and saturation while the colour matches (widgets:5902-5917, 5978) and converts them to int (5980); 0 is the "nothing saved" value ImGui starts with (imgui.cpp:4550) |
 | `g.BeginComboDepth` | 2808 | `newFrame()`, set to 0 before `ImGui::NewFrame()` | ruling 19: nothing in ImGui restores the counter after a combo left open (see `endCombo`); zero is always correct at the start of a frame |
 | `ImGuiListClipper::ItemsCount` | imgui.h:3074, commented "[Internal]" | `listClipper`, set to -1 when abandoning | the design's abandon rule (imgui.cpp:3521) |

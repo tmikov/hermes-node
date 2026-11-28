@@ -239,8 +239,10 @@ void beforeIntDrag(unsigned id, bool logarithmic);
 /// no colour flag selects a logarithmic drag, `drag_flags` being
 /// ColorMarkers or None, 6011), present only in the RGB and HSV displays
 /// without NoInputs (5989; the hex display is an InputText, 6047); and,
-/// with its picker open, the picker's own "##rgb" and "##hsv" editors'
-/// components (6425, 6433), under the picker's popup window (BeginPopup
+/// when its picker's popup will run in this call (no NoSmallPreview, and
+/// the popup open at the current popup level), the picker's own "##rgb"
+/// and "##hsv" editors' components (6425, 6433), under the picker's popup
+/// window (BeginPopup
 /// ("picker"), 6086; "##Popup_%08x" of that ID, imgui.cpp:13437, a window
 /// whose ID stack starts with ImHashStr of its name, 4852-4853), then
 /// PushID("##picker") (6220) and the nested editor's PushID(label). The
@@ -249,7 +251,9 @@ void beforeIntDrag(unsigned id, bool logarithmic);
 /// the display likewise, which the options menu can change only with a
 /// left click a held left drag excludes. Computed with ImGui's own hashing
 /// (ImHashStr, the same as window->GetID) from the ID stack as it stands,
-/// pushing nothing. When g.ActiveId is not one of them, nothing is written.
+/// pushing nothing. \p flags must be what ColorEdit4 receives (colorEdit3
+/// adds NoAlpha, 5888, so its "##W" never exists). When g.ActiveId is not
+/// one of the drags that will run, nothing is written.
 void beforeColorEdit(const char *label, int flags);
 /// For __test.colorEditState(): whether a saved state is held, and its
 /// hue and saturation.
