@@ -1708,8 +1708,10 @@ holds the detail (surface, trace lines, test hooks, bumping ImGui), and
   `imgui-missing.js` and `ui-imgui-feature.js` only `ui`. The last is the
   feature's forcing function. Window tests are `test/ui-imgui-*.js`, so the Sokol
   stderr rule covers them.
-- Run on Linux/GL under Xvfb at scale 1 and on one Apple-silicon Mac,
-  Metal at 2x (2026-11-27). What no test reaches is in `dz list`.
+- Part A (the backend and frame protocol) was run on Linux/GL under Xvfb
+  at scale 1 and on one Apple-silicon Mac, Metal at 2x (2026-11-27); the
+  binding below has been run on Linux/GL only so far. What no test
+  reaches is in `dz list`.
 - **The JS binding** (part B; design
   `docs/superpowers/specs/2026-11-27-imgui-binding-design.md`) is
   hand-written in `addons/imgui/bind/`, one file per group. A function is

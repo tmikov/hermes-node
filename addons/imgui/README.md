@@ -408,7 +408,7 @@ group's test; one added to the module and not to `bind-groups.js` fails
 |---|---|
 | `TypeError`, `ERR_INVALID_ARG_TYPE` | An argument of the wrong type, or missing. |
 | `TypeError`, `ERR_INVALID_ARG_VALUE` | A string with U+0000; a format that does not fit; a detached `Float32Array`. |
-| `RangeError`, `ERR_OUT_OF_RANGE` | A number outside its range (a non-integer `int` included); a flag bit or enum value that is not exported, or not accepted by that function; a reference array too short; a limit exceeded (below). |
+| `RangeError`, `ERR_OUT_OF_RANGE` | A number outside its range (a non-integer `int` included); a flag bit or enum value that is not exported, or not accepted by that function; a vector or reference array with too few elements; a limit exceeded (below). |
 | `Error`, `ERR_IMGUI_NO_FRAME` | A function that needs a frame, called with none open. |
 | `Error`, `ERR_IMGUI_NO_WINDOW` | A function that needs the context, called before any window exists. |
 | `Error`, `ERR_IMGUI_USAGE` | A usage error ImGui reported and recovered from; a guarded precondition (below) that does not hold; `loadIniSettingsFromMemory` in a frame; `newFrame()` / `render()` in a clipper callback; an abandoned clipper. |
@@ -420,14 +420,16 @@ condition. Each is thrown before ImGui is called, except an
 has recovered) and an abandoned clipper's.
 
 **Usage errors ImGui recovers from.** ImGui reports these through
-`IM_ASSERT_USER_ERROR` and repairs its state. Context creation, and every
-`newFrame()` again, sets `io.ConfigErrorRecovery`, and clears
-`ConfigErrorRecoveryEnableAssert` (so a recoverable error never aborts a
-Debug build), `ConfigErrorRecoveryEnableTooltip` (ImGui's tooltip carries a
-button that turns the asserts back on) and
-`ConfigErrorRecoveryEnableDebugLog` (with it set ImGui `printf`s every
-error to stdout, from inside a library); it also installs ImGui's error
-callback, which traces every message and records the first. A message
+`IM_ASSERT_USER_ERROR` and repairs its state. Context creation sets
+`io.ConfigErrorRecovery`, and clears `ConfigErrorRecoveryEnableAssert` (so
+a recoverable error never aborts a Debug build),
+`ConfigErrorRecoveryEnableTooltip` (ImGui's tooltip carries a button that
+turns the asserts back on) and `ConfigErrorRecoveryEnableDebugLog` (with it
+set ImGui `printf`s every error to stdout, from inside a library); and it
+installs ImGui's error callback, once, which traces every message and
+records the first. Every `newFrame()` then sets those four flags again
+(and resets the combo depth, see "Bumping ImGui"); it does not touch the
+callback. A message
 reported during a binding call makes that call throw `ERR_IMGUI_USAGE`
 with ImGui's message, after ImGui has recovered; ImGui's state is
 consistent afterwards and the frame may continue. One reported while the
@@ -527,10 +529,12 @@ points to the surface table's "Not covered" section.
 
 Where ImGui has no bound and a large value is an unbounded allocation, a
 failed assertion later, or an undefined conversion to `int`, the binding
-imposes one, and its `ERR_OUT_OF_RANGE` message names it:
+imposes one, and the error's message names it. Every limit below throws a
+`RangeError` with `ERR_OUT_OF_RANGE`, except the first, which is part of
+the format rule and throws a `TypeError` with `ERR_INVALID_ARG_VALUE`:
 
 - a format's conversion, at most 30 bytes (ImGui copies it into 32-byte
-  buffers behind a plain assertion);
+  buffers behind a plain assertion): `ERR_INVALID_ARG_VALUE`;
 - plots, at most 4096 values (above that ImGui's own index arithmetic can
   reach its plain assertion), and `graphSize[0]` below 2^31;
 - `drawList.addPolyline`, at most 16383 points, and `addBezierCubic`, at
@@ -548,9 +552,10 @@ imposes one, and its `ERR_OUT_OF_RANGE` message names it:
 - `beginTable`, 1 to 511 columns; `tableSetupScrollFreeze`, 0 to 511
   columns and 0 to 127 rows;
 - a mouse button, 0 to 4;
-- `sliderFloat` and `sliderFloat2`..`4`, `vMin` and `vMax` within
-  `-FLT_MAX/2 .. FLT_MAX/2`, and `sliderInt`'s within `INT_MIN/2 ..
-  INT_MAX/2` (ImGui's slider asserts on a wider range);
+- `sliderFloat` and `sliderFloat2`..`4`: `vMin >= -FLT_MAX/2` and
+  `vMax <= FLT_MAX/2`; `sliderInt`: `vMin >= INT_MIN/2` and
+  `vMax <= INT_MAX/2` (the two bounds ImGui's slider asserts, and nothing
+  more: `vMin` is not checked from above, nor `vMax` from below);
   `setScrollHereY`'s ratio from 0 to 1.
 
 Beyond those, each function refuses the flag combinations and values
@@ -859,7 +864,9 @@ What the binding takes from `imgui_internal.h`, all of it in
 - Read by the guards: `g.CurrentWindow` and its `ID`, `Flags`,
   `SkipItems`, `Name`, `IDStack`, `BeginCount`, `DC.MenuBarAppending`,
   `DC.TreeDepth`, `DC.TreeHasStackDataDepthMask`, `DC.CursorPos` (of the
-  table's inner window); `g.CurrentWindowStack`; `g.GroupStack` and
+  table's inner window); `g.CurrentWindowStack` (its `Size`, and
+  `ImGuiWindowStackData::Window` of the entry below the top, the list
+  box's parent in `canEndListBox`); `g.GroupStack` and
   `ImGuiGroupData::WindowID`; `g.TreeNodeStack`; `g.BeginComboDepth`;
   `g.CurrentTabBar->LastTabItemIdx`; `g.LastItemData.ID`; `g.CurrentTable`
   and its `InnerWindow`, `OuterWindow`, `IsLayoutLocked`, `IsInsideRow`,
@@ -869,9 +876,10 @@ What the binding takes from `imgui_internal.h`, all of it in
   `g.Tables`; `DockContextFindNodeByID()` and the node's `ParentNode`,
   `LastFrameActive`, `IsDockSpace()`; `g.FrameCount`; `ImHashStr`,
   `ImFormatString`.
-- Read by the test hook `__test.state().windows`: `g.Windows`, each
+- Read by the test hooks: `__test.state().windows` reads `g.Windows`, each
   window's `Name`, `Active`, `WasActive` and `DockIsActive`, and
-  `g.WithinFrameScope`.
+  `g.WithinFrameScope`; `__test.tableScope()` reads `g.CurrentTable`, its
+  `InnerWindow`'s `Name`, and `g.CurrentWindow`'s `Name`.
 - Copied from ImGui's private source rather than a header, and so checked
   by eye at a bump: the expression of `TREE_NODE_GET_DEPTH_MASK`
   (`canTreePop`), the combo popup's window name `"##Combo_%02d"`

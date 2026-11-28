@@ -53,7 +53,12 @@ install: no npm dependencies, and so no `package.json`.
   closes or finishes loading, and drawn through the list clipper, so a
   frame costs the rows on screen whatever the tree holds (a directory of
   5000 entries open costs about 150 more binding calls a frame than the
-  default view; see "Tested").
+  default view; see "Tested"). A name with a control character in it is shown with
+  `?` in its place, so every row stays one line tall, and a name holding
+  `##` (which ImGui takes as the end of a label) is drawn as plain text
+  beside its node, so it is shown whole. Each level is indented by the
+  text line height, not by ImGui's `style.IndentSpacing`, since the binding
+  has no style accessor: a cosmetic difference from ImGui's own trees.
 - **Viewer** (`panels/viewer.js`). The selected file's first 1 MiB, read
   with `fs.promises.open` and 64 KiB `FileHandle.read` calls at explicit
   positions, never `readFile`; the handle is closed in a `finally`. Valid
@@ -157,7 +162,8 @@ registers no frame callback, prints an `APP opened`, `APP dir` or
 `app.rects` the rectangle of everything the last frame drew that a test
 clicks (Files rows, menu items, Widgets tabs; nothing is recorded in
 normal use). With the fixed clock the canvas is drawn at times the test
-sets. The test clicks fixture files, opens a directory of 5001 entries and
+sets. The test clicks fixture files (names with a newline and with `##`
+among them), opens a directory of 5001 entries and
 compares one frame's binding calls with a 50-entry one, scrolls to the end
 of the list and opens the last entry, reads pixels of the canvas, shrinks
 the window to 1x1 and back, makes a panel throw from inside a list

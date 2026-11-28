@@ -118,15 +118,47 @@ function openFile(ctx, node) {
   }));
 }
 
-function drawNodeRow(ctx, node, isRoot) {
+/**
+ * Control characters, replaced by '?' for display: ImGui lays text out as
+ * it is, so a newline in a file name would make its row two lines tall,
+ * and the list clipper's uniform row height would be wrong for every row
+ * below it.
+ */
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
+
+/**
+ * One tree node row labelled `text`, recorded under `key`; returns
+ * {result, clicked} (clicked only read when `wantClick`). The row's ID is
+ * the pushID() around it, never the label. ImGui stops displaying a label
+ * at its first "##" (FindRenderedTextEnd, imgui.cpp:4037-4046), so a name
+ * containing one is drawn as a node with an empty label followed by the
+ * name as plain text, which ImGui shows whole; the text's rectangle is
+ * recorded under `label:<key>`.
+ */
+function treeRow(ctx, key, text, flags, wantClick) {
   const {imgui, state} = ctx;
+  const label = text.replace(CONTROL_CHARS, '?');
+  const asText = label.includes('##');
+  const result = imgui.treeNodeEx(asText ? '##row' : label, flags);
+  state.recordRect(key);
+  const clicked = wantClick && imgui.isItemClicked();
+  if (asText) {
+    imgui.sameLine(0, 0);
+    imgui.text(label);
+    state.recordRect('label:' + key);
+  }
+  return {result, clicked};
+}
+
+function drawNodeRow(ctx, node, isRoot) {
+  const {imgui} = ctx;
   imgui.pushID(node.path);
   if (node.kind === 'dir') {
     imgui.setNextItemOpen(node.open, imgui.Cond_Always);
-    const open = imgui.treeNodeEx(isRoot ? node.path : node.name + '/',
+    const open = treeRow(ctx, node.path, isRoot ? node.path : node.name + '/',
         imgui.TreeNodeFlags_SpanAvailWidth |
-            imgui.TreeNodeFlags_NoTreePushOnOpen);
-    state.recordRect(node.path);
+            imgui.TreeNodeFlags_NoTreePushOnOpen,
+        false).result;
     if (open !== node.open) {
       node.open = open;
       rows = null;
@@ -138,10 +170,9 @@ function drawNodeRow(ctx, node, isRoot) {
         imgui.TreeNodeFlags_NoTreePushOnOpen |
         imgui.TreeNodeFlags_SpanAvailWidth |
         (selected === node.path ? imgui.TreeNodeFlags_Selected : 0);
-    imgui.treeNodeEx(
-        node.kind === 'link' ? node.name + ' (link)' : node.name, flags);
-    state.recordRect(node.path);
-    if (imgui.isItemClicked())
+    const row = treeRow(ctx, node.path,
+        node.kind === 'link' ? node.name + ' (link)' : node.name, flags, true);
+    if (row.clicked)
       openFile(ctx, node);
   }
   imgui.popID();

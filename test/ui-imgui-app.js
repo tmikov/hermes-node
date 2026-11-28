@@ -16,8 +16,9 @@
 // The root is a copy of test/fixtures/imgui/app-tree at %t.tree, to which
 // the test adds `gone.txt` (removed after it was listed), `locked/` (mode
 // 000; as root, which can read it anyway, the case prints `SKIP locked`),
-// `big/` (5001 files, one over the Files panel's 5000-entry cap) and
-// `small/` (50 files).
+// `big/` (5001 files, one over the Files panel's 5000-entry cap),
+// `small/` (50 files) and `odd/` (file names ImGui would not show as they
+// are, and `plain.txt`).
 //
 // Two runs, selected by the first argument.
 //
@@ -28,7 +29,7 @@
 //  PANELS     after 10 frames state().windows holds Files, Viewer,
 //             Widgets, Monitor, Canvas and Log, each active and docked.
 //             (Then, frames until app.idle(): the root's listing, `APP dir
-//             <tree> entries=9`.)
+//             <tree> entries=10`.)
 //  OPEN       a click on a.txt's row: `APP opened <tree>/a.txt 12
 //             lines=3`, and the viewer's state is text with 3 lines.
 //  DIR        a click on dir1's row: `APP dir <tree>/dir1 entries=2`, and
@@ -38,6 +39,12 @@
 //             <path> ENOENT`), locked/ (`APP error <path> EACCES`): each
 //             prints its line and the next frame draws. (The size and
 //             encoding edges are test/imgui-app-viewer.js's.)
+//  NAMES      odd/ opened: `hash##tag.txt` and `line<LF>break.txt` (each
+//             `SKIP name <json>` instead if the file system refused it)
+//             are drawn as one-line rows, their rectangles the height of
+//             plain.txt's and the three rows evenly spaced; the "##" name
+//             is shown whole (its text's width is calcTextSize() of the
+//             whole name); a click on each opens it in the viewer.
 //  COLLAPSE   a click on dir1's row again: in the next frame app.rects
 //             has no rectangle under dir1/ (it holds what was drawn).
 //  BIG        big/ opened (`APP dir ... entries=5001`), then collapsed and
@@ -92,6 +99,8 @@
 //  call count;
 //  app.rects not emptied per frame: COLLAPSE fails;
 //  resetLayout() not reopening panels: RESET fails;
+//  the Files panel's label sanitising removed (the name passed to
+//  treeNodeEx as it is): NAMES fails;
 //  the Reset Layout load done inside the frame: RESET (the load throws
 //  ERR_IMGUI_USAGE);
 //  the canvas drawing's orbit radius changed: CANVAS;
@@ -116,7 +125,7 @@
 // CODE: EXITCODE 0
 //
 // CHECK: SCALE {{[0-9.]+$}}
-// CHECK: APP dir [[TREE]] entries=9
+// CHECK: APP dir [[TREE]] entries=10
 // CHECK: PANELS ok
 // CHECK: APP opened [[TREE]]/a.txt 12 lines=3
 // CHECK: OPEN ok
@@ -130,6 +139,7 @@
 // CHECK: EDGES gone.txt ok
 // CHECK: {{^(APP error .*/locked EACCES|SKIP locked)$}}
 // CHECK: EDGES locked ok
+// CHECK: NAMES ok
 // CHECK: COLLAPSE ok
 // CHECK: APP dir [[TREE]]/big entries=5001
 // CHECK: APP dir [[TREE]]/small entries=50
@@ -193,6 +203,8 @@ const BIG_CALL_SLACK = 60;
 const BIG_CALL_LIMIT = 1500;
 /** Sokol's MOUSE_SCROLL: far more than any list here, either way. */
 const WHEEL_TO_END = -100000;
+/** File names ImGui would not display as they are (NAMES). */
+const ODD_NAMES = ['hash##tag.txt', 'line\nbreak.txt'];
 
 // ImGui's own saved settings with every panel floating (header).
 const FLOATING = [
@@ -277,6 +289,18 @@ async function main() {
   const small = path.join(tree, 'small');
   fillDirectory(big, BIG_FILES, 'f', 4);
   fillDirectory(small, SMALL_FILES, 's', 2);
+  const odd = path.join(tree, 'odd');
+  fs.mkdirSync(odd);
+  fs.writeFileSync(path.join(odd, 'plain.txt'), 'plain\n');
+  const oddNames = [];
+  for (const name of ODD_NAMES) {
+    try {
+      fs.writeFileSync(path.join(odd, name), 'odd\n');
+      oddNames.push(name);
+    } catch (e) {
+      console.log('SKIP name ' + JSON.stringify(name) + ' ' + e.code);
+    }
+  }
   const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
 
   const app = await createApp({root: tree, clock: 'fixed', driven: true});
@@ -403,6 +427,60 @@ async function main() {
     if (isRoot)
       console.log('SKIP locked');
     await edge('locked', () => null);
+  }
+
+  // --- NAMES ------------------------------------------------------------
+  {
+    await clickRow(odd);
+    await settle('NAMES');
+    const plainPath = path.join(odd, 'plain.txt');
+    const plain = await waitRect(plainPath);
+    const rowHeight = plain.max[1] - plain.min[1];
+    const rects = [];
+    for (const name of oddNames.slice().sort()) {
+      const r = await waitRect(path.join(odd, name));
+      rects.push({name, min: r.min.slice(), max: r.max.slice()});
+    }
+    rects.push(
+        {name: 'plain.txt', min: plain.min.slice(), max: plain.max.slice()});
+    for (const r of rects) {
+      if (r.max[1] - r.min[1] !== rowHeight)
+        fail('NAMES WRONG row height ' + JSON.stringify(r) + ' want ' +
+            rowHeight);
+    }
+    for (let i = 2; i < rects.length; ++i) {
+      if (rects[i].min[1] - rects[i - 1].min[1] !==
+          rects[1].min[1] - rects[0].min[1])
+        fail('NAMES WRONG uneven rows ' + JSON.stringify(rects));
+    }
+    for (const name of oddNames.filter((n) => n.includes('##'))) {
+      const key = 'label:' + path.join(odd, name);
+      if (!app.rects.has(key))
+        fail('NAMES WRONG no whole-name text drawn for ' +
+            JSON.stringify(name));
+      const r = app.rects.get(key);
+      let want = 0;
+      await harness.tick(h, [() => {
+        imgui.newFrame();
+        want = imgui.calcTextSize(name)[0];
+        return imgui.render();
+      }]);
+      if (r.max[0] - r.min[0] !== want)
+        fail('NAMES WRONG ' + JSON.stringify(name) + ' shown ' +
+            (r.max[0] - r.min[0]) + ' wide, want ' + want);
+    }
+    for (const name of oddNames) {
+      const p = path.join(odd, name);
+      await clickRow(p);
+      await settle('NAMES open');
+      const v = app.panels.viewer.state;
+      if (v.path !== p || v.status !== 'text')
+        fail('NAMES WRONG open ' + JSON.stringify(
+            {name, path: v.path, status: v.status}));
+    }
+    await clickRow(odd);
+    await h.run();
+    console.log('NAMES ok');
   }
 
   // --- COLLAPSE ---------------------------------------------------------

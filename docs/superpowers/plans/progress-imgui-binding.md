@@ -288,6 +288,9 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 9 (review) | `imgui-app-viewer.js` | the lead-byte test widened back to `b >= 0xc0` | `CLASSIFY WRONG invalid-lead={"status":"text","lines":23549,"truncated":true}`; test failed |
 | 9 (review) | `test-process-emit-return.js` | the emit fix reverted (`if (!list) return false;`) | `exception`: `EMIT true true true true false`, `STILL ALIVE`, `EXITCODE 0`; `rejection` (run by hand): only `LISTENER first`, no report of the second rejection; test failed |
 | 10 | `ui-imgui-bind-widgets.js` (FORMATLEN, the int candidates alone) | the 30-byte limit removed (`formatProblem`'s `TooLong` return disabled), with FORMATLEN's two float candidates temporarily removed from the test so that the float abort (the Task 4 review row) cannot come first; both restored, the addon rebuilt, the test passing again | the 31-byte `%...1d` format was accepted by `dragInt`, and its Ctrl+click text entry aborted ImGui: `imgui_widgets.cpp:3730: ImParseFormatSanitizeForScanning ... Assertion (size_t)(fmt_end - fmt_in + 1) < fmt_out_size failed`, exit 134; test failed. The int-specific half of the bound is therefore shown, separately from the float half |
+| 10 (review) | `ui-imgui-app.js` (NAMES) | the Files panel's label sanitising removed (`treeRow` passing the name to `treeNodeEx` as it is) | `NAMES WRONG row height {"name":"line\nbreak.txt","min":[34,199],"max":[372,225]} want 13`; test failed |
+| 10 (review) | `ui-imgui-app.js` (NAMES) | only the control-character replacement removed | the same `NAMES WRONG row height` line; test failed |
+| 10 (review) | `ui-imgui-app.js` (NAMES) | only the "##" path removed (`asText` always false) | `NAMES WRONG no whole-name text drawn for "hash##tag.txt"`; test failed |
 
 ## Behaviours no test detects
 
@@ -1356,8 +1359,9 @@ automated test would notice losing. Each task appends its own.
   | `cmake-build-noasan` (Release, UI on) | 1.590 ms, 1.603 ms | 2.28 ms, 2.30 ms | 254.0 |
 
   The Debug maximum is one frame in about 63 (152 ms at frame 193 rising
-  to 212 ms at frame 589 in a run that printed them), which has the shape
-  of garbage collection while the heap grows; Release has no such frame.
+  to 212 ms at frame 589 in a run that printed them); Release has no such
+  frame. Its cause was not measured (it could be garbage collection while
+  the heap grows; nothing here shows that).
   Not a leak: a Release run of 16000 frames had rss 147 MiB at the start,
   a peak of 172 MiB near frame 6000, and 152.5 MiB from frame 10000 to the
   end.
@@ -1461,10 +1465,15 @@ automated test would notice losing. Each task appends its own.
   The extra 152 calls are the panel filling with file rows (about 20
   visible rows of 8 calls) where the default view has 2. Under ASAN the
   mean nearly doubles with big/ open and the occasional slow frame
-  doubles too; the row list is not rebuilt (above), so this has the shape
-  of garbage collection over a larger live heap (5000 more nodes and
-  their strings), not of per-frame work. The Release cost of the open
-  directory is about 0.2-0.4 ms a frame.
+  doubles too, although the row list is not rebuilt (above). The cause of
+  the ASAN increase is not established: nothing measured garbage
+  collection, and the per-call cost does not account for it either way
+  (the default view's ~0.05 ms per call under ASAN predicts about +7.6 ms
+  for the 152 extra calls, against about +11 ms measured; in Release about
+  +0.8 ms is predicted against about +0.25 ms measured). The Release cost
+  of the open directory is about 0.2-0.4 ms a frame. (Corrected in Task 10:
+  this note first said the increase had the shape of garbage collection
+  over a larger live heap.)
 
 ### Task 10
 
@@ -1525,3 +1534,37 @@ automated test would notice losing. Each task appends its own.
   `ui-imgui-*.js` there: 1 passed, 33 unsupported). After the suite run in `cmake-build-asan`, the
   twelve tests whose comments this task edited were run again there
   (12 passed).
+
+### Task 10, review fixes
+
+- README: the Limits section says which code each limit throws (a format
+  too long is `ERR_INVALID_ARG_VALUE`, the rest `ERR_OUT_OF_RANGE`); the
+  slider bounds are stated as the two one-sided checks they are; a vector
+  with too few elements is in the `ERR_OUT_OF_RANGE` row; the error
+  callback is installed once, at context creation, and `newFrame()`
+  re-sets only the flags and the combo depth; the audit list names
+  `__test.tableScope()`'s reads and `ImGuiWindowStackData::Window`.
+  `CLAUDE.md`'s verification bullet now says it is part A's.
+- 01a21f89-a7e7's container command gained its entry script and was
+  re-run as written: eval off under `hermes-node --bundle`, on under
+  `hermes-node-ui --bundle`, as the issue says.
+- **Files labels** (`examples/imgui-app/panels/files.js`, `treeRow`): a
+  control character in a name is shown as `?`, so a newline cannot make a
+  row two lines tall and throw the clipper's uniform height off; a name
+  holding `##`, which ImGui takes as the end of the displayed label
+  (FindRenderedTextEnd, imgui.cpp:4037-4046), is drawn as a node labelled
+  `##row` followed by `sameLine(0, 0)` and `text()` of the name, which
+  ImGui shows whole (TextEx does not hide after `##`). The row's ID was
+  already `pushID(node.path)`. Only such names take the second path, so
+  the measured call counts of ordinary trees are unchanged. NAMES in
+  `ui-imgui-app.js` (the root now lists 10 entries, `odd/` added): both
+  names one-line rows, evenly spaced, the `##` name's text as wide as
+  `calcTextSize()` of the whole name, each opening when clicked.
+- The two measurement notes no longer attribute the ASAN slow frames or
+  the ASAN increase with big/ open to garbage collection: nothing measured
+  it, and the per-call arithmetic does not account for the increase.
+- The application README notes the indent by text line height (no style
+  accessor is bound) and the label handling.
+- Suite after these fixes, `cmake --build cmake-build-asan --target
+  check-hermes-node` (2026-11-28): JS 270 passed, 10 unsupported, 0
+  failed; unit 460 passed.
