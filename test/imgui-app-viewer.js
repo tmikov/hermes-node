@@ -62,7 +62,9 @@
 //  classification by searching the decoded text for U+FFFD: CLASSIFY
 //  fails on fffd.txt;
 //  the trailing-byte trim removed: CLASSIFY fails on the straddling files;
-//  truncation decided by stat.size again: GROWING fails;
+//  truncation decided by stat.size again, the probe removed: CAP fails
+//  (no truncation probe); the probe kept but also requiring stat.size
+//  past the cap: GROWING fails;
 //  the lead-byte test widened back to 0xC0..0xFF: CLASSIFY fails on the
 //  0xF8 file.
 //

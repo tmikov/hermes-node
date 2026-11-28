@@ -44,7 +44,8 @@
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
 //  PlotHistogram() removed, enterImGui() kept: RECTS and HISTOGRAM fail;
-//  enterImGui() removed from plotLines: COVERAGE fails;
+//  enterImGui() removed from plotLines: REJECTED fails first
+//  (`NOTCALLED plotLines`, its accepted edge), before COVERAGE;
 //  valuesOffset's upper bound removed: REJECTED fails;
 //  valuesOffset passed as 0: OFFSET fails;
 //  the graph size not passed (ImVec2(0, 0)): RECTS fails.

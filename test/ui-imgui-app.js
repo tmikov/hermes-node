@@ -96,7 +96,8 @@
 //  ERR_IMGUI_USAGE);
 //  the canvas drawing's orbit radius changed: CANVAS;
 //  the callback scope left raised after the callback threw: `throw` (the
-//  next newFrame() throws ERR_IMGUI_USAGE and PANELS fails).
+//  next newFrame() throws ERR_IMGUI_USAGE, uncaught, and no `THROW ok`
+//  is printed).
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display

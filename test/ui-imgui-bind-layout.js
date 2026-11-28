@@ -81,15 +81,9 @@
 //            isItemDeactivatedAfterEdit is only called here; its
 //            behaviour is test/ui-imgui-bind-input-text.js DEACTIVATE.
 //
-// THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
-//  ImGui::Indent() removed, enterImGui() kept: INDENT fails;
-//  ImGui::IsKeyDown() replaced by false, enterImGui() kept: KEY fails;
-//  enterImGui() removed from getFrameHeight: COVERAGE fails;
-//  getMouseDragDelta writing a new array instead of `out`: DRAG fails;
-//  the mouse-button range check removed: REJECTED fails (ImGui aborts);
-//  pushID(number) dispatched to the string overload: IDS fails;
-//  setNextItemWidth's or pushItemWidth's 2^31 bound removed: ITEMWIDTH
-//  fails.
+// THE MUTATIONS THIS MUST BREAK: the full list, with what each did, is the
+// Mutations table of docs/superpowers/plans/progress-imgui-binding.md
+// (the rows for this file: Task 3, its review, and Task 8's widths).
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display

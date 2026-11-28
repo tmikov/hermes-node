@@ -20,7 +20,7 @@ Node.js API compatibility layer for Hermes. Ports Node's native bindings to Node
 - Vendored Node JS (will be modified): `libjs-node/`
 - Our JS: `libjs/`
 - Product addons: `addons/<name>/`, a native `.node` addon built by the main CMake, with its own `CMakeLists.txt` and README (today only `addons/imgui/`)
-- Examples: `examples/` — each subdirectory that uses npm packages has its own `package.json` + `package-lock.json` (`examples/http-server/` and `examples/imgui-demo/` use none and have neither); `node_modules/` is gitignored (users run `npm install`). `examples/ditz2/` is the exception on two counts: its subject is a **submodule** (`examples/ditz2/ditz2`) rather than an npm dependency, because ditz2 is not published to npm, and it needs a build step of its own (`build-cjs.sh`) because it is TypeScript **and ESM**, which this runtime cannot load. Its `package.json` therefore pins ditz2's three runtime dependencies plus TypeScript, and the transpile lands in `examples/ditz2/dist-cjs/` rather than inside the submodule, so the submodule checkout stays clean. Delete that script when the ESM loader lands.
+- Examples: `examples/` — each subdirectory that uses npm packages has its own `package.json` + `package-lock.json` (`examples/http-server/`, `examples/imgui-demo/` and `examples/imgui-app/` use none and have neither); `node_modules/` is gitignored (users run `npm install`). `examples/ditz2/` is the exception on two counts: its subject is a **submodule** (`examples/ditz2/ditz2`) rather than an npm dependency, because ditz2 is not published to npm, and it needs a build step of its own (`build-cjs.sh`) because it is TypeScript **and ESM**, which this runtime cannot load. Its `package.json` therefore pins ditz2's three runtime dependencies plus TypeScript, and the transpile lands in `examples/ditz2/dist-cjs/` rather than inside the submodule, so the submodule checkout stays clean. Delete that script when the ESM loader lands.
 - Build: CMake + Ninja
 - Tests: GTest (`unittests/`), lit (`test/`)
 - Test target: `check-hermes-node`
@@ -1710,6 +1710,28 @@ holds the detail (surface, trace lines, test hooks, bumping ImGui), and
   stderr rule covers them.
 - Run on Linux/GL under Xvfb at scale 1 and on one Apple-silicon Mac,
   Metal at 2x (2026-11-27). What no test reaches is in `dz list`.
+- **The JS binding** (part B; design
+  `docs/superpowers/specs/2026-11-27-imgui-binding-design.md`) is
+  hand-written in `addons/imgui/bind/`, one file per group. A function is
+  ImGui's name with a lower-case first letter, its arguments the C++ ones
+  by a fixed rule, and a pointer argument a reference array (an `Array`
+  read before the call and written after it: `imgui.checkbox('x', v)` with
+  `v = [true]`); every argument is checked before ImGui is called, and a
+  usage error ImGui recovers from throws `ERR_IMGUI_USAGE`. The README has
+  the convention, its exceptions, the errors and the limits; the bound
+  surface, with every function's preconditions and source lines, is
+  `docs/superpowers/plans/2026-11-27-imgui-binding-surface.md`.
+  **`imgui_internal.h` is included by `bind/bind_guards.cpp` and nothing
+  else**: every read of ImGui's internal state (the guards that refuse a
+  closer ImGui would assert on) and its writes (the error callback, one
+  counter) go through
+  `bind_guards.h`, and the README lists each field for the re-audit an
+  ImGui bump needs. `test/fixtures/imgui/bind-groups.js` is the checked-in
+  surface: `test/imgui-bind-surface.js` compares it with the exports, and
+  each group's window test ends with `harness.checkGroupCoverage()`, which
+  fails unless every function of the group reached ImGui
+  (`__test.bindCalls()`), so a function cannot be added without a test.
+  `examples/imgui-app/` is the application written against it.
 
 ## Test Infrastructure
 

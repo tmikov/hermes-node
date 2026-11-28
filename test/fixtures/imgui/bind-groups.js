@@ -215,7 +215,8 @@ const groups = {
 // enumerator's value), the exact sorted list of exported names (its
 // length is the table's "Exported" count; test/imgui-bind-surface.js
 // compares it with the module exactly), and the names the table excludes
-// (and its obsolete, uncompiled ones), none of which may be exported. The `ImGuiMod_*` enumerators are members of `ImGuiKey`
+// (and its obsolete, uncompiled ones), none of which may be exported.
+// The `ImGuiMod_*` enumerators are members of `ImGuiKey`
 // (imgui.h:1772-1777), so `Mod_` names count under `Key`.
 const constantTypes = {
   WindowFlags: {kind: 'flags', names: [

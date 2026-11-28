@@ -35,7 +35,11 @@
 //  enterImGui() removed from endMainMenuBar: COVERAGE fails;
 //  menuItem(label, shortcut, p)'s write-back removed: MENUREF fails;
 //  ImGui::EndMenu() or ImGui::EndMainMenuBar() removed, enterImGui()
-//  kept: CLOSERS fails.
+//  kept: the run dies before CLOSERS prints, from ImGui's own report of
+//  the missing closer, uncaught. Without EndMenu() the next
+//  endMainMenuBar() throws "Calling EndMainMenuBar() not from a
+//  menu-bar!" in the first frame with the menu open; without
+//  EndMainMenuBar() the first frame's render() throws "Missing End()".
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display

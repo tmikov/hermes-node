@@ -46,8 +46,8 @@
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
 //  the re-entrancy flag never set: REENTRANT fails;
-//  enterImGui() moved before the argument reads: every "not called" check
-//  fails;
+//  enterImGui() moved before the argument reads: the first "not called"
+//  check (NOFRAME's) fails;
 //  an argument check removed (the element-type check of refBool):
 //  REFARRAY fails;
 //  the write-back of showDemoWindow's pOpen removed: FRAME fails;

@@ -18,7 +18,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-binding.md`
 | Task 7 | Style, plots, draw list, list clipper | done (GL) |
 | Task 8 | Docking and settings | done (GL) |
 | Task 9 | The application | done (GL) |
-| Task 10 | Documentation and the full suite | |
+| Task 10 | Documentation and the full suite | done (GL) |
 
 ## Mutations
 
@@ -287,6 +287,7 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 9 (review) | `imgui-app-viewer.js` | the probe kept but `&& stat.size > CAP` added | `GROWING WRONG {"status":"text","truncated":false}`; test failed |
 | 9 (review) | `imgui-app-viewer.js` | the lead-byte test widened back to `b >= 0xc0` | `CLASSIFY WRONG invalid-lead={"status":"text","lines":23549,"truncated":true}`; test failed |
 | 9 (review) | `test-process-emit-return.js` | the emit fix reverted (`if (!list) return false;`) | `exception`: `EMIT true true true true false`, `STILL ALIVE`, `EXITCODE 0`; `rejection` (run by hand): only `LISTENER first`, no report of the second rejection; test failed |
+| 10 | `ui-imgui-bind-widgets.js` (FORMATLEN, the int candidates alone) | the 30-byte limit removed (`formatProblem`'s `TooLong` return disabled), with FORMATLEN's two float candidates temporarily removed from the test so that the float abort (the Task 4 review row) cannot come first; both restored, the addon rebuilt, the test passing again | the 31-byte `%...1d` format was accepted by `dragInt`, and its Ctrl+click text entry aborted ImGui: `imgui_widgets.cpp:3730: ImParseFormatSanitizeForScanning ... Assertion (size_t)(fmt_end - fmt_in + 1) < fmt_out_size failed`, exit 134; test failed. The int-specific half of the bound is therefore shown, separately from the float half |
 
 ## Behaviours no test detects
 
@@ -458,7 +459,8 @@ automated test would notice losing. Each task appends its own.
   what)`, which checks a getter's optional output array before the ImGui
   call (so a wrong `out` is a rejected call, not counted);
   `Call::typeOf`, `isNull`, `isArray`, `name`; `Call::napiOk()` (see
-  "Behaviours no test detects"); `bind::bindCalls()` for the test hook. Every reader of the plan's interface is implemented, including
+  "Behaviours no test detects"); `bind::bindCalls()` for the test hook.
+  Every reader of the plan's interface is implemented, including
   those no pilot uses yet (`refInt`, `refString`, `floats`, `flags`,
   `enumValue`, `stringOrNull`): they are untested until their tasks.
 - **Until Task 2**, every flags and enum argument was read with `int32`
@@ -1463,3 +1465,63 @@ automated test would notice losing. Each task appends its own.
   of garbage collection over a larger live heap (5000 more nodes and
   their strings), not of per-frame work. The Release cost of the open
   directory is about 0.2-0.4 ms a frame.
+
+### Task 10
+
+- **Documentation.** `addons/imgui/README.md` describes the binding as
+  built: the frame protocol (part A's "JS surface", kept where still
+  true), the calling convention as `bind_util.cpp` reads it, the
+  exceptions, the error codes, the functions that work outside a frame,
+  the surface by group (generated from `bind-groups.js`, named there as
+  the authority), the audited recoverable errors, every guard condition
+  `bind_guards.cpp` registers, the limits, the trace lines and test hooks
+  the binding added (`usage error:`, `listClipper: abandoned`;
+  `bindCalls()`, `guards()`, `state().windows`), the tests, "Verified, and
+  not", and the `imgui_internal.h` audit list under "Bumping ImGui". The
+  audit list adds what the surface table's "Internal state read by
+  bind_guards.cpp" omits: the test hook's reads of each window's
+  `Active`, `WasActive` and `DockIsActive` and of `g.WithinFrameScope`.
+  `CLAUDE.md` gains a paragraph on the binding and `examples/imgui-app/`
+  in the list of examples without npm packages. The README's example was
+  run (a copy capped at 30 frames: `FRAMES 30 drew=true show=true`).
+- **Tracker**, filed 2026-11-28: 01a21f89-a69d (preconditions not
+  prevented, pointing to the surface table's "Not covered"),
+  01a21f89-a6f1 (behaviours no test detects), 01a21f89-a743 (the draw
+  list's clip rectangle functions, left to part C), 01a21f89-a794
+  (`process.memoryUsage()` heap fields 0), 01a21f89-a7e7 (`hermes-node-ui`
+  and VM options), 01a21f89-a836 (the two unhandled-rejection differences
+  from node), 01a21f89-a889 (Linux/GL at scale 1 only; the Mac round).
+  Each was measured on 2026-11-28 where it states a behaviour. Found while
+  measuring 01a21f89-a7e7, beyond what Task 9 recorded: a container built
+  with `--vm=-enable-eval=false` (locked) runs with eval **on** under
+  `hermes-node-ui --bundle`, its baked options ignored. Part A's
+  01a21c59-bd05 and 01a21c59-bd54 are unchanged: nothing in part B
+  touched the renderer paths the first lists, or packaging.
+- **Test headers reconciled with the Mutations table** (comments only):
+  `ui-imgui-bind-layout.js` now points to the table, as
+  `-widgets.js` does; `-menus.js` says the closer mutations kill the run
+  before CLOSERS; `-popups.js` (the empty-name check: `NOTHROW`, no abort),
+  `-plots.js` and `-tables.js` (the coverage mutation fails REJECTED's
+  `NOTCALLED` first), `-args.js` (the first "not called" check),
+  `-errors.js` (the abort is in the first `newFrame()`), `ui-imgui-app.js`
+  (no `THROW ok`, not PANELS) and `imgui-app-viewer.js` (the two stat.size
+  mutations fail CAP and GROWING) say what was measured. Long comment
+  lines wrapped in `bind-groups.js`, `ui-imgui-bind-constants.js` and this
+  file's Task 1 notes.
+- **The int half of the format bound** is now a recorded mutation (the
+  Mutations table, Task 10), so it is not added to "Behaviours no test
+  detects".
+- **The full suite**, 2026-11-28, one configuration at a time:
+
+  | Build | Command | JS (lit) | Unit |
+  |---|---|---|---|
+  | `cmake-build-asan` (Debug, ASAN, UI on) | `cmake --build cmake-build-asan --target check-hermes-node` | 270 passed, 10 unsupported, 0 failed | 460 passed |
+  | `cmake-build-noasan` (Release, UI on) | `cmake --build cmake-build-noasan`, then `--target check-hermes-node` (the whole suite) | 269 passed, 11 unsupported, 0 failed | 460 passed |
+  | `cmake-build-asan-noui` (Debug, ASAN, UI off) | `cmake --build cmake-build-asan-noui --target check-hermes-node` | 200 passed, 80 unsupported, 0 failed | 336 passed |
+
+  No flake appeared, so nothing was rerun. With the UI off every binding
+  test reports UNSUPPORTED except `imgui-app-viewer.js`, which needs no
+  window and passes (checked by running every `imgui-*.js` and
+  `ui-imgui-*.js` there: 1 passed, 33 unsupported). After the suite run in `cmake-build-asan`, the
+  twelve tests whose comments this task edited were run again there
+  (12 passed).

@@ -142,8 +142,9 @@
 //                 process.exit(5) is preserved.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
-//  configureContext() not called from ensureContext: ImGui asserts on the
-//  first usage error (abort), or the cases fail;
+//  configureContext() not called from ensureContext: ImGui aborts in the
+//  first newFrame() (with its three error outputs off it requires an error
+//  callback, imgui.cpp:11857-11858);
 //  the usage-error check moved after hnui_frame_target in render():
 //  LEFT_OPEN's publication check fails;
 //  canEndGroup() returning nullptr always: GUARD_GROUP aborts;

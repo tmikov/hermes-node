@@ -50,7 +50,8 @@
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
 //  ImGui::TableHeadersRow() removed, enterImGui() kept: HEADERS fails;
-//  enterImGui() removed from tableSetupScrollFreeze: COVERAGE fails;
+//  enterImGui() removed from tableSetupScrollFreeze: REJECTED fails
+//  first (`NOTCALLED`, its accepted edge), before COVERAGE;
 //  tableNextColumn() returning false always (its result not written back):
 //  NEXTCOLUMN fails;
 //  beginTable's column-count check removed: REJECTED fails (ImGui aborts);

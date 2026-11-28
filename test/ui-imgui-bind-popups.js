@@ -54,7 +54,9 @@
 //  enterImGui() removed from endPopup: COVERAGE fails;
 //  ImGui::SetItemTooltip() removed: TOOLTIPS fails;
 //  beginPopupModal's write-back of pOpen removed: MODAL fails;
-//  beginPopupModal's empty-name check removed: REJECTED fails (abort).
+//  beginPopupModal's empty-name check removed: REJECTED fails
+//  (`NOTHROW`; ImGui's own assertion is in Begin(), reached only when the
+//  popup is open, so nothing aborts).
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display

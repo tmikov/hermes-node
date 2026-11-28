@@ -30,7 +30,8 @@
 //            no exported enumerator has (1 << 30), an internal one
 //            (WindowFlags_ChildWindow), a non-integer (2.5), a negative
 //            value with bit 31, and 2^31 and 2^32 - 1 (a flags argument is
-//            a C int, so the unsigned spelling of bit 31 is out of range); beginChild's child and window flags; a
+//            a C int, so the unsigned spelling of bit 31 is out of
+//            range); beginChild's child and window flags; a
 //            combined ImGuiCond (3) for setNextWindowPos/Size; a slider
 //            flag in ImGuiSliderFlags_InvalidMask_ (bit 0); Col_COUNT and
 //            -1 for pushStyleColor, StyleVar_COUNT for pushStyleVar.
