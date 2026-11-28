@@ -74,7 +74,10 @@ install: no npm dependencies, and so no `package.json`.
   opened, decided by `fs.promises.stat` of the path first (which follows
   a symbolic link): anything else, such as a link to a FIFO, is shown as
   "not a regular file", since opening a FIFO with no writer or reading a
-  terminal would hold a threadpool thread for good. Above it, the file's
+  terminal would hold a threadpool thread for good. A path replaced by a
+  FIFO between that stat and the open is not caught, and its open blocks
+  as before; closing that window would need the open itself not to block
+  (`O_NONBLOCK`) and a stat of the opened handle. Above it, the file's
   `stat` fields. A request superseded by a newer one stores nothing.
 - **Widgets** (`panels/widgets.js`). A gallery in tabs: Basic (buttons,
   checkbox, radio buttons, sliders, drags, text and number inputs, a
@@ -100,7 +103,10 @@ install: no npm dependencies, and so no `package.json`.
 - **Log** (`panels/log.js`). The application's own events (a file opened,
   a read error, a layout reset), the last 1000, newest at the bottom. It
   follows the bottom unless you have scrolled up, with a Clear button and
-  a filter field.
+  a filter field. A message is made one line as it is logged (a control
+  character in a path becomes `?`, by the same helper the file tree uses,
+  `display-text.js`), since the list clipper gives every entry one line's
+  height.
 
 ## What is Node's and what is ImGui's
 

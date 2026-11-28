@@ -9,6 +9,8 @@
 
 'use strict';
 
+const {oneLine} = require('../display-text.js');
+
 const LIMIT = 1000;
 
 const entries = new Array(LIMIT);
@@ -24,9 +26,15 @@ function stamp(date) {
       two(date.getSeconds());
 }
 
-/** Append one entry, dropping the oldest when the ring is full. */
+/**
+ * Append one entry, dropping the oldest when the ring is full. The text is
+ * made one line (display-text.js): the list clipper below gives every
+ * entry one line's height, and seeks to an entry by multiplying its index
+ * by that height (imgui.cpp:3554), so a message holding a line break (a
+ * path, which may) would put every later entry in the wrong place.
+ */
 function add(text) {
-  const line = stamp(new Date()) + '  ' + text;
+  const line = stamp(new Date()) + '  ' + oneLine(text);
   if (count < LIMIT) {
     entries[(first + count) % LIMIT] = line;
     ++count;
@@ -84,8 +92,10 @@ module.exports = {
       const n = shown === null ? count : shown.length;
       imgui.listClipper(n, imgui.getTextLineHeightWithSpacing(),
           (start, end) => {
-            for (let i = start; i < end; ++i)
+            for (let i = start; i < end; ++i) {
               imgui.text(shown === null ? at(i) : shown[i]);
+              ctx.state.recordRect('log:' + i);
+            }
           });
       // Follow the bottom only while the view is already there (as of the
       // last frame), so a user who scrolled up to read is not pulled back

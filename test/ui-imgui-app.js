@@ -54,6 +54,14 @@
 //             plain.txt's and the three rows evenly spaced; the "##" name
 //             is shown whole (its text's width is calcTextSize() of the
 //             whole name); a click on each opens it in the viewer.
+//  LOGROWS    after NAMES (whose opens logged the odd paths, one with a
+//             line break) and 300 more messages each holding one: every
+//             Log row drawn is one text line tall and the rows are one
+//             getTextLineHeightWithSpacing() apart, which the Log's list
+//             clipper assumes when it seeks (imgui.cpp:3554); then a wheel
+//             step up over the Log scrolls it (the first row drawn moves
+//             to an earlier entry) and the same holds (Codex's review, C7:
+//             messages are made one line, display-text.js).
 //  COLLAPSE   a click on dir1's row again: in the next frame app.rects
 //             has no rectangle under dir1/ (it holds what was drawn).
 //  BIG        big/ opened (`APP dir ... entries=5001`), then collapsed and
@@ -110,6 +118,8 @@
 //  resetLayout() not reopening panels: RESET fails;
 //  the Files panel's label sanitising removed (the name passed to
 //  treeNodeEx as it is): NAMES fails;
+//  (codex) the Log's sanitising removed (log.js add() storing the text as
+//  it is): LOGROWS fails;
 //  the Reset Layout load done inside the frame: RESET (the load throws
 //  ERR_IMGUI_USAGE);
 //  the canvas drawing's orbit radius changed: CANVAS;
@@ -153,6 +163,7 @@
 // CHECK: APP opened [[TREE]]/special/plain.txt 6 lines=1
 // CHECK: SPECIAL ok
 // CHECK: NAMES ok
+// CHECK: LOGROWS ok
 // CHECK: COLLAPSE ok
 // CHECK: APP dir [[TREE]]/big entries=5001
 // CHECK: APP dir [[TREE]]/small entries=50
@@ -547,6 +558,61 @@ async function main() {
     await clickRow(odd);
     await h.run();
     console.log('NAMES ok');
+  }
+
+  // --- LOGROWS ----------------------------------------------------------
+  {
+    for (let i = 0; i < 300; ++i)
+      app.panels.log.add('filler ' + i + ' line\nbreak');
+    await h.run();
+    await h.run();
+    let lineHeight = 0, spacing = 0;
+    await harness.tick(h, [() => {
+      imgui.newFrame();
+      lineHeight = imgui.getTextLineHeight();
+      spacing = imgui.getTextLineHeightWithSpacing();
+      return imgui.render();
+    }]);
+    await h.run();
+    /** The Log rows the last frame drew, by entry index. */
+    const logRows = () => [...app.rects.keys()]
+        .filter((k) => k.startsWith('log:'))
+        .map((k) => ({i: Number(k.slice(4)), r: app.rects.get(k)}))
+        .sort((a, b) => a.i - b.i);
+    /** What is wrong with `rows`, or null. */
+    const check = (rows, label) => {
+      if (rows.length < 2)
+        return label + ' rows ' + rows.length;
+      for (let n = 0; n < rows.length; ++n) {
+        const {i, r} = rows[n];
+        if (r.max[1] - r.min[1] !== lineHeight)
+          return label + ' row ' + i + ' height ' + (r.max[1] - r.min[1]) +
+              ' want ' + lineHeight;
+        const dy = r.min[1] - rows[0].r.min[1];
+        if (dy !== (i - rows[0].i) * spacing)
+          return label + ' row ' + i + ' at ' + dy + ' want ' +
+              (i - rows[0].i) * spacing;
+      }
+      return null;
+    };
+    const bottom = logRows();
+    let wrong = check(bottom, 'bottom');
+    if (wrong === null) {
+      const at = harness.center(bottom[bottom.length - 1].r);
+      await harness.moveTo(h, null, at);
+      harness.inject(h, {type: 'MOUSE_SCROLL', scrollY: 3, mouseX: at[0],
+                         mouseY: at[1]});
+      for (let n = 0; n < 600 && logRows()[0].i >= bottom[0].i; ++n)
+        await h.run();
+      const scrolled = logRows();
+      if (scrolled[0].i >= bottom[0].i)
+        wrong = 'scroll did not move the Log';
+      else
+        wrong = check(scrolled, 'scrolled');
+    }
+    if (wrong !== null)
+      fail('LOGROWS WRONG ' + wrong);
+    console.log('LOGROWS ok');
   }
 
   // --- COLLAPSE ---------------------------------------------------------

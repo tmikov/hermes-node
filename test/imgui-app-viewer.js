@@ -43,10 +43,15 @@
 //                UTF-8); an invalid byte sequence: hex; one U+0000: hex;
 //                files of valid UTF-8 longer than the cap with a character
 //                cut by it (two bytes cut after 1; three after 1 and 2;
-//                four after 1, 2 and 3): text, truncated, the cut
-//                character dropped (no U+FFFD, no partial character); a
-//                cut file whose last byte is an invalid lead (0xF8), and
-//                one whose last two are stray continuation bytes: hex;
+//                four after 1, 2 and 3; and after the second byte of U+0800,
+//                U+D7FF, U+10000 and U+10FFFF, each second byte at the edge
+//                of the narrower range its lead allows): text, truncated,
+//                the cut character dropped (no U+FFFD, no partial
+//                character); a cut file whose last byte is an invalid lead
+//                (0xF8), one whose last two are stray continuation bytes,
+//                and ones ending in a lead and second byte no further byte
+//                could complete (E0 80, ED A0, F4 90, F0 80, F0 80 80):
+//                hex;
 //                one 1 MiB line: text, 1 line, cut for display at
 //                LINE_LIMIT characters with the marker.
 //  MISSING       a path that does not exist: 'error', ENOENT.
@@ -76,6 +81,10 @@
 //  past the cap: GROWING fails;
 //  the lead-byte test widened back to 0xC0..0xFF: CLASSIFY fails on the
 //  0xF8 file;
+//  (codex) the second-byte check removed (any continuation byte accepted
+//  after a lead): CLASSIFY fails on the E0 80, ED A0, F4 90, F0 80 and
+//  F0 80 80 files; the check applied with the default range for every
+//  lead: CLASSIFY fails on the same, the narrower ranges' edges kept;
 //  the regular-file check removed (open() whatever stat() says):
 //  NOT_REGULAR fails on the recorded open.
 //
@@ -435,12 +444,18 @@ async function caseClassify() {
 
   // A character of `ch`'s length cut by the cap after `before` of its
   // bytes: only those are read, and they must be dropped.
+  // The last four cut after the second byte of a lead whose second byte
+  // has a narrower range (U+0800 E0 A0, U+D7FF ED 9F, U+10000 F0 90,
+  // U+10FFFF F4 8F), each at that range's edge.
   for (const [ch, before] of [['\u00e9', 1], ['\u20ac', 1], ['\u20ac', 2],
-           ['\u{1f600}', 1], ['\u{1f600}', 2], ['\u{1f600}', 3]]) {
+           ['\u{1f600}', 1], ['\u{1f600}', 2], ['\u{1f600}', 3],
+           ['\u0800', 2], ['\ud7ff', 2], ['\u{10000}', 2],
+           ['\u{10ffff}', 2]]) {
     const enc = Buffer.from(ch);
     const filler = textOfLength(CAP - before);
     const bytes = Buffer.concat([Buffer.from(filler), enc, Buffer.from('b')]);
-    const label = 'straddle-' + enc.length + '-' + before;
+    const label = 'straddle-' + enc.length + '-' + before + '-U+' +
+        ch.codePointAt(0).toString(16);
     await expect(label, write(label + '.txt', bytes), (s) => {
       if (s.status !== 'text' || s.truncated !== true)
         return false;
@@ -449,9 +464,15 @@ async function caseClassify() {
     });
   }
   // Cut files whose end is not the start of a character: an invalid lead
-  // byte, and two stray continuation bytes. Not text.
+  // byte, two stray continuation bytes, and a lead followed by a second
+  // byte no following byte could complete (Codex's review, C8: an overlong
+  // E0 80 and F0 80, a surrogate's ED A0, F4 90 past U+10FFFF, and F0 80 80
+  // with a third byte). Not text.
   for (const [label, tail] of [['invalid-lead', [0xf8]],
-           ['stray-continuation', [0x80, 0x80]]]) {
+           ['stray-continuation', [0x80, 0x80]],
+           ['E0-80', [0xe0, 0x80]], ['ED-A0', [0xed, 0xa0]],
+           ['F4-90', [0xf4, 0x90]], ['F0-80', [0xf0, 0x80]],
+           ['F0-80-80', [0xf0, 0x80, 0x80]]]) {
     const bytes = Buffer.concat([
       Buffer.from(textOfLength(CAP - tail.length)),
       Buffer.from(tail),

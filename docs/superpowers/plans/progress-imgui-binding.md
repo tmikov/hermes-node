@@ -19,7 +19,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-binding.md`
 | Task 8 | Docking and settings | done (GL) |
 | Task 9 | The application | done (GL) |
 | Task 10 | Documentation and the full suite | done (GL) |
-| Codex review | Codex's code review, round 1 (C1-C8, L1-L3) | in progress (GL) |
+| Codex review | Codex's code review, round 1 (C1-C8, L1-L3) | done (GL) |
 
 ## Mutations
 
@@ -336,6 +336,9 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | codex | `ui-imgui-bind-widgets.js` (DRAGDOMAIN) | the automatic-speed check removed | `NOTHROW ERR_OUT_OF_RANGE` (at bounds 0 .. 80001 with `vSpeed` 0, the first refusal it reopens); test failed |
 | codex | `ui-imgui-bind-widgets.js` (DRAGDOMAIN) | the `v[0]` check removed | `NOTHROW ERR_OUT_OF_RANGE` (at Codex's `v` `[2147483647]`); test failed |
 | codex | `ui-imgui-bind-clipper.js` (POOLGROW) | (RED, and the mutation) the table compared by address again, as before the fix (the address kept in the snapshot's index field and compared with the current one) | `POOLGROW WRONG {"error":"imgui.listClipper(): the callback changed the window scope (...); the clipper was abandoned","before":8,"after":18,"nested":9,...}`; test failed. The fixed build: `POOLGROW ok`, the capacity grown from 8 to 18 |
+| codex | `ui-imgui-app.js` (LOGROWS) | (RED, and the mutation) LOGROWS written, the Log's `add()` storing the text as it is (the code before the fix; the rectangles recorded) | `LOGROWS WRONG bottom row 9 height 26 want 13`: an entry with a line break is two lines tall; test failed |
+| codex | `imgui-app-viewer.js` (CLASSIFY) | (RED) the new cases written, `completeLength()` unchanged | `CLASSIFY WRONG E0-80={"status":"text",...,"truncated":true} ED-A0=... F4-90=... F0-80=... F0-80-80=...`: each invalid suffix trimmed and the file classified as text; the four new valid splits passed; test failed |
+| codex | `imgui-app-viewer.js` (CLASSIFY) | `secondByteOk()` giving every lead the default range 0x80..0xBF (the same outcome as removing the check) | the same five `CLASSIFY WRONG ... "status":"text"` entries; test failed |
 
 ## Behaviours no test detects
 
@@ -1885,4 +1888,20 @@ on each in `codex-findings.md` beside it. Mutations are the rows tagged
   clipper it began before returning; the guards and the test hooks hold
   ImGui pointers only within one call, with no JavaScript in between. No
   other case was found.
+- **C7 (Log rows)** verified and reproduced by LOGROWS before the fix: an
+  entry holding a line break was 26 units tall against a 13-unit line.
+  `display-text.js` (new) holds the control-character replacement the
+  Files tree used; the Log applies it in `add()`, and records each drawn
+  row (`log:<index>`, test mode only) so the test reads the geometry back
+  at the bottom and after a wheel step up.
+- **C8 (UTF-8 trim)** verified and reproduced by the new CLASSIFY cases
+  before the fix (all five invalid suffixes classified as text). The trim
+  now also requires the second byte to be in the range its lead allows
+  (RFC 3629 section 4); four valid splits at those ranges' edges are
+  covered too.
+- **L1** the README's recovery paragraph states the cost (a context test
+  and four `bool` stores per binding call); **L2** the application README
+  says the stat-then-open window is not closed and what closing it would
+  need; **L3** `readCapped`'s comment is back above `readCapped`, and
+  `kindOf()`'s fallback reads "an unknown kind of file".
 

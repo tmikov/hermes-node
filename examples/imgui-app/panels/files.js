@@ -27,6 +27,7 @@
 'use strict';
 
 const path = require('path');
+const {oneLine} = require('../display-text.js');
 
 /** At most this many entries of one directory are shown. */
 const ENTRY_LIMIT = 5000;
@@ -155,14 +156,6 @@ function openFile(ctx, node) {
 }
 
 /**
- * Control characters, replaced by '?' for display: ImGui lays text out as
- * it is, so a newline in a file name would make its row two lines tall,
- * and the list clipper's uniform row height would be wrong for every row
- * below it.
- */
-const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
-
-/**
  * One tree node row labelled `text`, recorded under `key`; returns
  * {result, clicked} (clicked only read when `wantClick`). The row's ID is
  * the pushID() around it, never the label. ImGui stops displaying a label
@@ -173,7 +166,8 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
  */
 function treeRow(ctx, key, text, flags, wantClick) {
   const {imgui, state} = ctx;
-  const label = text.replace(CONTROL_CHARS, '?');
+  // Control characters as '?' (display-text.js).
+  const label = oneLine(text);
   const asText = label.includes('##');
   const result = imgui.treeNodeEx(asText ? '##row' : label, flags);
   state.recordRect(key);

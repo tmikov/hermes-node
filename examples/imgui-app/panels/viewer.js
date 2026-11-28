@@ -37,11 +37,29 @@ const CUT_MARKER = ' [... line cut at ' + LINE_LIMIT + ' characters]';
 const HEX_ROW = 16;
 
 /**
+ * Whether `second` may follow the lead byte `lead` in UTF-8: the ranges
+ * that exclude overlong forms (after 0xE0 and 0xF0), surrogates (after
+ * 0xED) and code points past U+10FFFF (after 0xF4); 0x80..0xBF otherwise
+ * (RFC 3629, section 4).
+ */
+function secondByteOk(lead, second) {
+  const [lo, hi] = lead === 0xe0 ? [0xa0, 0xbf] :
+      lead === 0xed ? [0x80, 0x9f] :
+      lead === 0xf0 ? [0x90, 0xbf] :
+      lead === 0xf4 ? [0x80, 0x8f] :
+                      [0x80, 0xbf];
+  return second >= lo && second <= hi;
+}
+
+/**
  * The length of `bytes` without a trailing incomplete UTF-8 sequence: a
- * lead byte at most three bytes from the end, followed only by
- * continuation bytes, fewer than its sequence needs. Only real lead bytes
- * count (0xC2..0xF4); anything else is left for isUtf8() to reject, so a
- * cut file whose last byte is invalid is a hex dump, not text.
+ * suffix that is a proper prefix of a valid encoding, a lead byte at most
+ * three bytes from the end followed by fewer continuation bytes than its
+ * sequence needs, the first of them in the range its lead allows. Only
+ * real lead bytes count (0xC2..0xF4), and a suffix no following byte could
+ * complete (0xE0 0x80, 0xED 0xA0, 0xF4 0x90, ...) is kept: anything else
+ * is left for isUtf8() to reject, so a cut file ending in an invalid
+ * sequence is a hex dump, not text.
  */
 function completeLength(bytes) {
   const end = bytes.length;
@@ -51,7 +69,7 @@ function completeLength(bytes) {
       continue; // a continuation byte: look further back for its lead
     if (b >= 0xc2 && b <= 0xf4) {
       const need = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : 2;
-      if (k < need)
+      if (k < need && (k === 1 || secondByteOk(b, bytes[end - k + 1])))
         return end - k;
     }
     return end;
@@ -105,16 +123,6 @@ function toHexRows(bytes) {
   return rows;
 }
 
-/**
- * Read at most CAP bytes of `path` through `fs`. Resolves with
- * `{bytes, stat, truncated}`; rejects with the filesystem's error. The
- * handle is closed whether or not the reads succeed.
- *
- * Whether the file goes on past the cap is decided by reading, not by
- * stat.size: procfs files and devices report 0, and a file being appended
- * to grows after the stat. Once CAP bytes are in, one more read of one
- * byte at position CAP says whether there is more.
- */
 /** What a stat says `path` is, for a message, when it is not a file. */
 function kindOf(stat) {
   if (stat.isFIFO())
@@ -127,7 +135,7 @@ function kindOf(stat) {
     return 'a block device';
   if (stat.isDirectory())
     return 'a directory';
-  return 'not a regular file';
+  return 'an unknown kind of file';
 }
 
 /**
@@ -147,6 +155,16 @@ async function checkRegular(fs, path) {
   throw e;
 }
 
+/**
+ * Read at most CAP bytes of `path` through `fs`. Resolves with
+ * `{bytes, stat, truncated}`; rejects with the filesystem's error. The
+ * handle is closed whether or not the reads succeed.
+ *
+ * Whether the file goes on past the cap is decided by reading, not by
+ * stat.size: procfs files and devices report 0, and a file being appended
+ * to grows after the stat. Once CAP bytes are in, one more read of one
+ * byte at position CAP says whether there is more.
+ */
 async function readCapped(fs, path) {
   await checkRegular(fs, path);
   const fh = await fs.open(path, 'r');
