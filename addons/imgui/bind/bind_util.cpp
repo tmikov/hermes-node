@@ -755,6 +755,9 @@ void Call::enterImGui() {
   // An error reported outside any binding call belongs to none: drop it,
   // so it is not blamed on this one. (It was traced when it happened.)
   guard::takeUsageError();
+  // The last ImGui call may have turned asserts or ImGui's own error output
+  // back on (bind_guards.h says which does).
+  guard::restoreRecoveryFlags();
   ++gCallCounts[name_];
 }
 
@@ -899,6 +902,9 @@ CallbackScope::CallbackScope() : savedFlag_(gInsideCall) {
 CallbackScope::~CallbackScope() {
   --gCallbackDepth;
   gInsideCall = savedFlag_;
+  // The binding call that ran the callback goes on calling ImGui without
+  // another enterImGui(), and the callback may have run anything.
+  guard::restoreRecoveryFlags();
 }
 
 bool insideCallback() {

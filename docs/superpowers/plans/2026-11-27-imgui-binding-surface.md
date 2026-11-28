@@ -191,8 +191,10 @@ there is no "Proposed addition" under any group.
   (part A's frame protocol and context creation); none is reachable from a
   JavaScript argument, because a style variable left pushed is popped by
   the end-of-frame recovery before the next `NewFrame()`.
-- Notes: unchanged from part A except that it sets the two
-  `ConfigErrorRecovery*` fields again, takes part in the re-entrancy
+- Notes: unchanged from part A except that it sets the
+  `ConfigErrorRecovery*` fields again (as every binding call does before
+  its ImGui call, and as the discard path does before its `EndFrame()`:
+  README, "Errors"), takes part in the re-entrancy
   flag (design, "Errors" and "Re-entrancy"), and sets
   `g.BeginComboDepth = 0` before calling `ImGui::NewFrame()` (ruling 19;
   see `endCombo`).

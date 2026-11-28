@@ -135,6 +135,8 @@ napi_value newFrame(napi_env env, napi_callback_info info) {
     // left a frame open: the two cannot be told apart, so neither throws.
     // What the discarded frame left open is reported (and traced) by
     // EndFrame()'s recovery; it belongs to no call, so it is dropped.
+    // The frame's last call may have turned the asserts back on.
+    guard::restoreRecoveryFlags();
     ImGui::EndFrame();
     guard::takeUsageError();
     gFrameOpen = false;

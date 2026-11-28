@@ -291,6 +291,10 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 10 (review) | `ui-imgui-app.js` (NAMES) | the Files panel's label sanitising removed (`treeRow` passing the name to `treeNodeEx` as it is) | `NAMES WRONG row height {"name":"line\nbreak.txt","min":[34,199],"max":[372,225]} want 13`; test failed |
 | 10 (review) | `ui-imgui-app.js` (NAMES) | only the control-character replacement removed | the same `NAMES WRONG row height` line; test failed |
 | 10 (review) | `ui-imgui-app.js` (NAMES) | only the "##" path removed (`asText` always false) | `NAMES WRONG no whole-name text drawn for "hash##tag.txt"`; test failed |
+| final review | `ui-imgui-bind-recovery.js` | (RED) the new test run before the fix (hook only) | CALL aborted: `imgui.cpp:8992: void ImGui::End(): Assertion ... "Calling End() too many times!" failed`, `EXITCODE 134`; stdout empty (ImGui's `[imgui-error]` lines are lost to the buffer, as Task 1's note says) |
+| final review | `ui-imgui-bind-recovery.js` | the re-assert removed from `Call::enterImGui()` | the same abort in CALL, `EXITCODE 134`; test failed |
+| final review | `ui-imgui-bind-recovery.js` | the re-assert removed from `newFrame()`'s discard path | DISCARD aborted: `imgui.cpp:12004: ErrorRecoveryTryToRecoverState ... Assertion (0) && "Missing End()" failed`, `EXITCODE 134` after `CALL ok`, `RENDER ok`; test failed |
+| final review | `ui-imgui-bind-recovery.js` | the re-assert removed from `CallbackScope`'s destructor | `CLIPPER WRONG inside=false,false,false after=true,true,true drew=true`, `EXITCODE 1`; test failed |
 
 ## Behaviours no test detects
 
@@ -1568,3 +1572,30 @@ automated test would notice losing. Each task appends its own.
 - Suite after these fixes, `cmake --build cmake-build-asan --target
   check-hermes-node` (2026-11-28): JS 270 passed, 10 unsupported, 0
   failed; unit 460 passed.
+
+### Final review
+
+The whole-branch review's ten findings (F1-F10), each checked against
+the code and ImGui's source before it was changed.
+
+- **F1, the error outputs turned back on** (Important). Confirmed:
+  `imgui_demo.cpp:626-627`, inside Configuration > Configuration, sets
+  `ConfigErrorRecoveryEnableAssert`, `...DebugLog` and `...Tooltip` all
+  true whenever all three are false, every frame; `ErrorLog()` returns the
+  assert flag (imgui.cpp:12141), so `IM_ASSERT_USER_ERROR` then asserts.
+  The flags were set only at context creation and in `guard::beginFrame()`.
+  Now `guard::restoreRecoveryFlags()` sets them before every call into
+  ImGui that can report an error: in `Call::enterImGui()` (so `render()`'s
+  `Render()` too), before the discard path's `EndFrame()`, and in
+  `CallbackScope`'s destructor, since the list clipper calls `Step()` and
+  `End()` after a callback without another `enterImGui()`. It does nothing
+  with no context (`colorConvertFloat4ToU32()` reaches `enterImGui()`
+  without one). The demo's node cannot be opened from the binding, so the
+  test uses a new hook, `__test.setErrorOutputs(on)`, which does what the
+  demo does and returns what was in force: `test/ui-imgui-bind-recovery.js`
+  (CALL, RENDER, DISCARD, CLIPPER). Release cannot see DISCARD's mutation
+  (its read-back follows `NewFrame()`, which re-asserts anyway, and a
+  Release assert is a no-op); the Debug build the suite runs aborts. The
+  stdout half stays as Task 1's "Behaviours no test detects" note says:
+  ImGui's `printf` is lost to the stdio buffer at `_exit()`, so the test
+  reads the flags back instead.

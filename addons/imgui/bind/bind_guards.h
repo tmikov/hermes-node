@@ -24,6 +24,15 @@ namespace guard {
 /// callback; called from context creation, before any binding call can
 /// meet the context.
 void configureContext();
+/// Sets the recovery flags again (configureContext() says which), when a
+/// context exists. Called before every call into ImGui that can report a
+/// usage error: by Call::enterImGui(), by newFrame() before the EndFrame()
+/// of a discarded frame, and by CallbackScope's destructor, before the
+/// list clipper's Step() and End() that follow a callback. Anything ImGui
+/// runs can set the flags back on: ShowDemoWindow() does, with its
+/// Configuration > Configuration node open (imgui_demo.cpp:626-627), and
+/// leaves them on for the rest of the frame.
+void restoreRecoveryFlags();
 /// Re-asserts the recovery flags and sets g.BeginComboDepth to 0; called by
 /// newFrame() before ImGui::NewFrame(). The counter counts the combo popup
 /// windows currently begun, none is at that point (EndFrame() has closed

@@ -45,7 +45,8 @@ void onImGuiError(ImGuiContext *, void *, const char *msg) {
   }
 }
 
-/// The recovery flags, set at context creation and again every frame.
+/// The recovery flags, set at context creation, every frame, and before
+/// every call into ImGui (restoreRecoveryFlags()).
 /// Asserts off, so a recoverable error never aborts a Debug build; the
 /// tooltip off, since it carries a button turning the asserts back on
 /// (imgui.cpp:12186); and ImGui's own debug log off, which with its
@@ -222,6 +223,12 @@ void configureContext() {
   ImGuiContext &g = *GImGui;
   g.ErrorCallback = onImGuiError;
   g.ErrorCallbackUserData = nullptr;
+}
+
+void restoreRecoveryFlags() {
+  // colorConvertFloat4ToU32() calls ImGui with no context.
+  if (GImGui != nullptr)
+    setRecoveryFlags();
 }
 
 void beginFrame() {

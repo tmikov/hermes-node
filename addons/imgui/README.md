@@ -427,9 +427,20 @@ a recoverable error never aborts a Debug build),
 turns the asserts back on) and `ConfigErrorRecoveryEnableDebugLog` (with it
 set ImGui `printf`s every error to stdout, from inside a library); and it
 installs ImGui's error callback, once, which traces every message and
-records the first. Every `newFrame()` then sets those four flags again
-(and resets the combo depth, see "Bumping ImGui"); it does not touch the
-callback. A message
+records the first. The four flags are then set again before every call
+into ImGui that can report an error: by every binding function just
+before its ImGui call (`Call::enterImGui()`, `render()`'s `Render()`
+included), by `newFrame()` before it ends a discarded frame, and by the
+list clipper after each callback, before its own `Step()` and `End()`.
+That is what keeps them off: ImGui code can turn them back on, and the
+demo window does (`showDemoWindow()` with its Configuration >
+Configuration node open sets all three outputs on every frame,
+imgui_demo.cpp:626-627, and its Tools > Debug Options menu has a checkbox
+for the assert). Setting them at context creation and at each
+`newFrame()` alone left the rest of such a frame, its `render()` and the
+next discard running with the assert on, so a recoverable usage error
+aborted a Debug build. `newFrame()` also resets the combo depth (see
+"Bumping ImGui"); nothing touches the callback after creation. A message
 reported during a binding call makes that call throw `ERR_IMGUI_USAGE`
 with ImGui's message, after ImGui has recovered; ImGui's state is
 consistent afterwards and the frame may continue. One reported while the
@@ -744,6 +755,14 @@ condition with no refusal case (`harness.checkGuardCoverage`).
 
 `__test.setTooltipDelay(stationary[, delayShort])` sets `style.HoverStationaryDelay` and `style.HoverDelayShort` (the second defaulting to the first), the two delays of the hover check `setItemTooltip()` makes, creating the context (`ERR_IMGUI_NO_WINDOW` without a window), and returns their previous values as `[stationary, delayShort]`, so `setTooltipDelay(...previous)` restores both. With 0 a tooltip test does not depend on how long its frames take.
 
+`__test.setErrorOutputs(on)` sets ImGui's three error outputs
+(`io.ConfigErrorRecoveryEnableAssert`, `...EnableDebugLog`,
+`...EnableTooltip`) all to `on`, as the demo window does, creating the
+context (`ERR_IMGUI_NO_WINDOW` without a window), and returns the values
+they had as `[assert, debugLog, tooltip]`: what the last binding call left
+in force. `test/ui-imgui-bind-recovery.js` uses it to show that the next
+binding call turns them off again.
+
 `__test.tableScope()`, inside a frame (`ERR_IMGUI_NO_FRAME` otherwise), returns `{table, currentWindow, innerWindow}`: whether ImGui has a current table, and the names of the current window and of that table's inner window (`""` without one), so a test of a table guard can show it reached the state the guard is about before relying on it.
 
 `__test.detachArrayBuffer(buffer)` detaches an `ArrayBuffer` with `napi_detach_arraybuffer`, so that a test can pass the binding a `Float32Array` whose buffer is gone (this runtime has no `ArrayBuffer.prototype.transfer` or `structuredClone`, and `hermes-node-ui` takes no VM options); the binding then throws `ERR_INVALID_ARG_VALUE`.
@@ -781,7 +800,8 @@ and share `test/fixtures/imgui/harness.js`. Part A's: `ui-imgui-frame.js`,
 `-resize.js` and `-demo.js`. The binding's: `ui-imgui-bind-args.js` (the
 convention, the Frame group, re-entry, accessors),
 `ui-imgui-bind-errors.js` (usage errors and a refusal case for every guard
-condition), `-constants.js`, one per group (`-windows.js`, `-layout.js`,
+condition), `-recovery.js` (the error outputs kept off whatever turns them
+on), `-constants.js`, one per group (`-windows.js`, `-layout.js`,
 `-widgets.js`, `-input-text.js`, `-trees-tabs.js`, `-menus.js`,
 `-popups.js`, `-tables.js`, `-style.js`, `-plots.js`, `-drawlist.js`,
 `-clipper.js`, `-docking.js`); the application's: `ui-imgui-app.js` and

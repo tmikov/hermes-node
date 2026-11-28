@@ -9,7 +9,9 @@
 // `scene(name[, arg])` draws a fixed native scene into the open frame,
 // `state()` reads back what ImGui and the renderer hold, `bindCalls()` how
 // many times each binding function has called ImGui, and `guards()` how
-// many times each guard condition has refused.
+// many times each guard condition has refused; and a few setters of ImGui
+// state a test needs (setDoubleClickTime, setTooltipDelay,
+// setErrorOutputs).
 
 #include "imgui_addon.h"
 
@@ -682,6 +684,57 @@ napi_value detachArrayBuffer(napi_env env, napi_callback_info info) {
   return undefined;
 }
 
+/// `setErrorOutputs(on)`: sets ImGui's three error outputs,
+/// io.ConfigErrorRecoveryEnableAssert, ...EnableDebugLog and
+/// ...EnableTooltip, all to \p on, as the demo window does from inside
+/// ShowDemoWindow() (imgui_demo.cpp:626-627, with its Configuration node
+/// open, sets all three when all three are off), and returns the values
+/// they had, `[assert, debugLog, tooltip]`: what the last binding call left
+/// in force. Creates the context as the binding functions do;
+/// ERR_IMGUI_NO_WINDOW without a window.
+napi_value setErrorOutputs(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  napi_valuetype type = napi_undefined;
+  bool on = false;
+  if (argc < 1 || napi_typeof(env, argv[0], &type) != napi_ok ||
+      type != napi_boolean ||
+      napi_get_value_bool(env, argv[0], &on) != napi_ok) {
+    napi_throw_type_error(
+        env,
+        "ERR_INVALID_ARG_TYPE",
+        "imgui.__test.setErrorOutputs(): on must be a boolean");
+    return nullptr;
+  }
+  if (!ensureContext(env)) {
+    napi_throw_error(
+        env,
+        "ERR_IMGUI_NO_WINDOW",
+        "imgui.__test.setErrorOutputs(): no window; call "
+        "ui.createWindow() first");
+    return nullptr;
+  }
+  ImGuiIO &io = ImGui::GetIO();
+  const bool previous[3] = {
+      io.ConfigErrorRecoveryEnableAssert,
+      io.ConfigErrorRecoveryEnableDebugLog,
+      io.ConfigErrorRecoveryEnableTooltip};
+  io.ConfigErrorRecoveryEnableAssert = on;
+  io.ConfigErrorRecoveryEnableDebugLog = on;
+  io.ConfigErrorRecoveryEnableTooltip = on;
+  napi_value result = nullptr;
+  if (napi_create_array_with_length(env, 3, &result) != napi_ok)
+    return nullptr;
+  for (uint32_t i = 0; i < 3; ++i) {
+    napi_value v = nullptr;
+    if (napi_get_boolean(env, previous[i], &v) != napi_ok ||
+        napi_set_element(env, result, i, v) != napi_ok)
+      return nullptr;
+  }
+  return result;
+}
+
 } // namespace
 
 napi_value createTestHooks(napi_env env) {
@@ -698,6 +751,7 @@ napi_value createTestHooks(napi_env env) {
       {"guards", guards},
       {"setDoubleClickTime", setDoubleClickTime},
       {"setTooltipDelay", setTooltipDelay},
+      {"setErrorOutputs", setErrorOutputs},
       {"tableScope", tableScope},
       {"detachArrayBuffer", detachArrayBuffer}};
   for (const auto &f : functions) {
