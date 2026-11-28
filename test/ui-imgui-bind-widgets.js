@@ -122,7 +122,11 @@
 //            picker's nested "##rgb" editor's "##X" (reproduced with
 //            getID('picker'), a window named "##Popup_<id>" and
 //            pushID('##picker'), pushID('##rgb')) beside the editor with its
-//            picker closed.
+//            picker closed; and (Codex's round 7, I1) the same ID drawn in
+//            the picker's real popup, opened with openPopup('picker') under
+//            pushID('editor') and begun with beginPopup('picker') before the
+//            editor in the same frame, so the editor's own BeginPopup is the
+//            window's second begin and its picker does not run.
 //  LOGDRAG   a logarithmic dragInt of [1] over 1 .. 100 at speed 819 (round
 //            4, F2): a 10-unit move right takes it to 100 and leaves a
 //            remainder of about 81.7 parametric units (above 1, legitimate),
@@ -141,7 +145,10 @@
 //            colorEdit3('editor', [0.2, 0.2, 0.2], ColorEditFlags_Uint8)
 //            and moved 10 more: red is exactly 61/255 (51 + 10; the binding
 //            reset the carried 5e11, traced). The same for colorEdit4's
-//            alpha ("##W"), [0.2, 0.2, 0.2, 0.5]: alpha is 138/255.
+//            alpha ("##W"), [0.2, 0.2, 0.2, 0.5]: alpha is 138/255. And
+//            inside the open picker (round 7): the float drawn in the picker
+//            popup as its "##rgb" editor's red, then the editor itself,
+//            whose picker runs: red is exactly 138/255 (128 + 10).
 //  DRAGDOMAIN dragInt's domain (dragIntDomainOk() in bind/bind_widgets.cpp:
 //            a drag adds the mouse delta times the speed to the value in
 //            int, and the platform half clamps mouse coordinates to
@@ -1125,6 +1132,20 @@ async function main() {
       imgui.end();
       imgui.begin('widgets');
     }, (c) => imgui.colorEdit3('editor', c, U8));
+    // I1: the picker popup open and already begun this frame.
+    let opened = false;
+    results.begun = await run((f, out) => {
+      imgui.pushID('editor');
+      if (!opened) {
+        imgui.openPopup('picker');
+        opened = true;
+      }
+      if (imgui.beginPopup('picker')) {
+        floatUnder(['##picker', '##rgb'], '##X')(f, out);
+        imgui.endPopup();
+      }
+      imgui.popID();
+    }, (c) => imgui.colorEdit3('editor', c, U8));
     const ok = Object.values(results).every(
         (r) => r.f === 16777234 && r.threw === null);
     console.log(ok ? 'UNUSEDIDS ok' : 'UNUSEDIDS WRONG ' + JSON.stringify(results));
@@ -1201,11 +1222,49 @@ async function main() {
     };
     const three = await run(false);
     const four = await run(true);
+    // Inside the open picker (round 7): the same foreign float drawn in the
+    // picker's popup as its "##rgb" editor's red ("##X"), then, still held,
+    // the editor itself, whose picker runs and consumes the remainder.
+    const inPicker = await (async () => {
+      const large = [1e30], color = [0.5, 0.5, 0.5];
+      let colorMode = false, opened = false, threw = null;
+      const out = {r: null};
+      const draw = inWindow(() => {
+        try {
+          if (!colorMode) {
+            imgui.pushID('editor');
+            if (!opened) {
+              imgui.openPopup('picker');
+              opened = true;
+            }
+            if (imgui.beginPopup('picker')) {
+              imgui.pushID('##picker');
+              imgui.pushID('##rgb');
+              imgui.dragFloat('##X', large, 1e10);
+              out.r = rect();
+              imgui.popID();
+              imgui.popID();
+              imgui.endPopup();
+            }
+            imgui.popID();
+          } else {
+            imgui.colorEdit3('editor', color, imgui.ColorEditFlags_Uint8);
+          }
+        } catch (e) {
+          threw = e.message;
+        }
+      });
+      await heldDrag(draw, out, [50, 10], () => {
+        colorMode = true;
+      });
+      return {color, threw};
+    })();
     const ok = three.threw === null && four.threw === null &&
         three.color[0] === Math.fround(61 / 255) &&
-        four.color[3] === Math.fround(138 / 255);
+        four.color[3] === Math.fround(138 / 255) && inPicker.threw === null &&
+        inPicker.color[0] === Math.fround(138 / 255);
     console.log(ok ? 'COLORFOREIGN ok' : 'COLORFOREIGN WRONG ' +
-                     JSON.stringify({three, four}));
+                     JSON.stringify({three, four, inPicker}));
   }
 
   // --- DRAGDOMAIN ------------------------------------------------------

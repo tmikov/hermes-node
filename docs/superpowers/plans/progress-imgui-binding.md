@@ -351,6 +351,8 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | codex r4 | `ui-imgui-bind-widgets.js` (TRANSITION) | `guard::beforeIntDrag()` not called | `TRANSITION WRONG {"integer":[-1073741823],...}`; test failed |
 | codex r5 | `ui-imgui-bind-widgets.js` (COLORFOREIGN) | (RED, and the mutation) `guard::beforeColorEdit()` not called | `COLORFOREIGN WRONG {"three":{"color":[1,0.2,0.2]},"four":{"color":[0.2,0.2,0.2,1]}}`: the carried 5e11 converted to int (INT_MIN, undefined) and ImGui's overflow test then clamped the component to 255; test failed |
 | codex r6 | `ui-imgui-bind-widgets.js` (UNUSEDIDS) | (RED, and the mutations) colorEdit3's NoAlpha not passed to the guard, and the picker-open condition removed | `UNUSEDIDS WRONG {"alpha":{"f":16777224},"noInputs":{"f":16777234},"picker":{"f":16777224}}`: the "##W" and the picker-component cases stalled 10 units short; the NoInputs case, which the guard already excluded, passed; test failed |
+| codex r7 | `ui-imgui-bind-widgets.js` (UNUSEDIDS) | (RED, and the mutation) the picker's first-begin condition removed | `UNUSEDIDS WRONG {...,"begun":{"f":16777224}}`: a float drag under the picker component's ID, in the picker popup begun earlier in the frame, stalled; test failed |
+| codex r7 | `ui-imgui-bind-widgets.js` (COLORFOREIGN) | `pickerRuns` forced false | `COLORFOREIGN WRONG {...,"inPicker":{"color":[1,0.50,0.50]}}`: the picker's nested red consumed the carried 5e11 (INT_MIN, clamped to 255); test failed. The top-level cases kept their correct values (61/255, 138/255). |
 
 ## Behaviours no test detects
 
@@ -2047,4 +2049,15 @@ Codex's text: `.superpowers/sdd/2026-11-27-imgui-binding/codex-code-r2.md`.
   else runs a drag internally" (above, round 5) was wrong and is
   replaced in the surface table; the tracker issue gained 3m. No small
   rule closing it without the demo's IDs was found (see the report).
+
+### Codex code review, round 7
+
+- **I1** verified (widgets:6088, `BeginCount == 1`) and reproduced by
+  UNUSEDIDS's new "begun" case under the round-6 guard. The picker
+  condition is now the conjunction of every condition on ColorEdit4's
+  path to ColorPicker4 that can be read before the call (the table is in
+  the report), plus the editor window's SkipItems for both the editor's
+  and the picker's drags. Begin()'s own item skipping for the popup is
+  not predicted; the code says why that errs only toward an unneeded
+  reset. COLORFOREIGN gained the positive case inside an open picker.
 

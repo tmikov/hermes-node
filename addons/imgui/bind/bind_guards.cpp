@@ -762,21 +762,28 @@ void beforeColorEdit(const char *label, int flags) {
   ImGuiContext &g = *GImGui;
   if (g.ActiveId == 0)
     return;
+  // ColorEdit4 returns before any drag when the window skips items
+  // (imgui_widgets.cpp:5925-5926).
+  if (g.CurrentWindow->SkipItems)
+    return;
   const ImGuiIO &io = g.IO;
+  // The data type and display as ColorEdit4 completes them from the
+  // stored options (5951-5958); NoInputs forces DisplayRGB (5943-5944).
   if ((flags & ImGuiColorEditFlags_DataTypeMask_) == 0)
     flags |= io.ConfigColorEditFlags & ImGuiColorEditFlags_DataTypeMask_;
   int display = flags & ImGuiColorEditFlags_DisplayMask_;
   if (display == 0)
     display = io.ConfigColorEditFlags & ImGuiColorEditFlags_DisplayMask_;
-  if (flags & ImGuiColorEditFlags_NoInputs)
-    display = ImGuiColorEditFlags_DisplayRGB; // and no drags (below)
+  // The editor's own component drags: RGB or HSV display without NoInputs
+  // (5989); the hex display is an InputText (6038-6047); alpha only
+  // without NoAlpha (5962-5964), which ColorEdit3 adds (5888).
   const bool topDrags = (flags & ImGuiColorEditFlags_NoInputs) == 0 &&
       (display &
        (ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_DisplayHSV)) != 0;
   const int components = (flags & ImGuiColorEditFlags_NoAlpha) ? 3 : 4;
   static const char *const kNames[4] = {"##X", "##Y", "##Z", "##W"};
-  // The editor's own ID-stack seed: PushID(label) pushes window->GetID(
-  // label) (imgui.cpp:10164-10168).
+  // The editor's own ID-stack seed: PushID(label) (5936) pushes
+  // window->GetID(label) (imgui.cpp:10164-10168).
   const ImGuiID editor = g.CurrentWindow->GetID(label);
   bool active = false;
   const auto check = [&](ImGuiID seed) {
@@ -785,20 +792,38 @@ void beforeColorEdit(const char *label, int flags) {
   };
   if (topDrags)
     check(editor);
-  // The picker's nested editors, only when its popup will run in this
-  // call: ColorEdit4 begins it only without NoSmallPreview (6067, 6086),
-  // and BeginPopup() begins it only when it is open at the current popup
-  // level (imgui.cpp:13473-13480, 13428-13432 and IsPopupOpen's test,
-  // 13157). Its editors get the outer flags' data type and NoAlpha
-  // (6096-6097, 6422), and are drawn in every display (6421-6435).
+  // The picker's nested editors: ColorEdit4 reaches ColorPicker4 (6100)
+  // only when every one of these holds:
+  // - no NoSmallPreview (6067);
+  // - BeginPopup("picker") (6086) succeeds: the popup open at the current
+  //   popup level (imgui.cpp:13473, and IsPopupOpen's test, 13157, from
+  //   BeginPopupEx, 13428-13432), then its window's Begin() returning true
+  //   (13439-13440), that is, not skipping items (8947-8951);
+  // - this is the popup window's first Begin() of the frame
+  //   (BeginCount == 1, 6088): its LastFrameActive is not this frame
+  //   (Begin's first_begin_of_the_frame, imgui.cpp:8025, resets BeginCount).
+  // Begin()'s item skipping is not predicted: for a popup window, which is
+  // neither docked nor a child, it happens only with style.Alpha at 0 and
+  // no auto-fit or "cannot skip" frames pending (8933, 8936, 8947-8951).
+  // Counting the picker then can only reset a remainder no drag consumes,
+  // which errs toward resetting; predicting it wrongly the other way would
+  // let an unchecked remainder reach a component.
   const ImGuiID popupId = ImHashStr("picker", 0, editor);
-  const bool pickerRuns = (flags & ImGuiColorEditFlags_NoSmallPreview) == 0 &&
+  bool pickerRuns = (flags & ImGuiColorEditFlags_NoSmallPreview) == 0 &&
       g.OpenPopupStack.Size > g.BeginPopupStack.Size &&
       g.OpenPopupStack[g.BeginPopupStack.Size].PopupId == popupId;
+  char popup[20];
+  ImFormatString(popup, IM_COUNTOF(popup), "##Popup_%08x", popupId);
+  const ImGuiID popupWindowId = ImHashStr(popup);
   if (pickerRuns) {
-    char popup[20];
-    ImFormatString(popup, IM_COUNTOF(popup), "##Popup_%08x", popupId);
-    const ImGuiID picker = ImHashStr("##picker", 0, ImHashStr(popup));
+    const ImGuiWindow *w = ImGui::FindWindowByID(popupWindowId);
+    if (w != nullptr && w->LastFrameActive == g.FrameCount)
+      pickerRuns = false; // already begun this frame: BeginCount would be 2
+  }
+  if (pickerRuns) {
+    // The nested editors get the outer flags' data type and NoAlpha
+    // (6096-6097, 6422), and every display (6097, 6421-6435).
+    const ImGuiID picker = ImHashStr("##picker", 0, popupWindowId);
     check(ImHashStr("##rgb", 0, picker));
     check(ImHashStr("##hsv", 0, picker));
   }
