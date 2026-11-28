@@ -627,13 +627,12 @@ const char *canTableSetupColumn(bool hasLabel, int flags) {
 const char *canListClipper() {
   ImGuiContext &g = *GImGui;
   ImGuiTable *table = g.CurrentTable;
-  if (table == nullptr || !table->IsInsideRow ||
-      g.CurrentWindow == table->InnerWindow)
+  if (table == nullptr || g.CurrentWindow == table->InnerWindow)
     return nullptr;
   return refuse(
       kListClipperWrongWindow,
-      "listClipper() inside a table row, in another window than the table's "
-      "own (a window begun inside a cell is current)");
+      "listClipper() with a table current in another window than the "
+      "table's own (a window begun inside a cell is current)");
 }
 
 const char *canDockSpaceOverViewport(unsigned dockspaceId, int flags) {

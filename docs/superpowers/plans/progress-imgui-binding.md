@@ -295,6 +295,9 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | final review | `ui-imgui-bind-recovery.js` | the re-assert removed from `Call::enterImGui()` | the same abort in CALL, `EXITCODE 134`; test failed |
 | final review | `ui-imgui-bind-recovery.js` | the re-assert removed from `newFrame()`'s discard path | DISCARD aborted: `imgui.cpp:12004: ErrorRecoveryTryToRecoverState ... Assertion (0) && "Missing End()" failed`, `EXITCODE 134` after `CALL ok`, `RENDER ok`; test failed |
 | final review | `ui-imgui-bind-recovery.js` | the re-assert removed from `CallbackScope`'s destructor | `CLIPPER WRONG inside=false,false,false after=true,true,true drew=true`, `EXITCODE 1`; test failed |
+| final review | `ui-imgui-bind-errors.js` | (RED) CLIPPER_WRONG_NOROW written, the guard unchanged | `NOTHROW ERR_IMGUI_USAGE` after `CLIPPER_WRONG_WINDOW ok`, `EXITCODE 1`; test failed. By hand on the same build, the finding's sequence: `endTable()` threw `EndTable() with the cursor moved before the table's first row`, and the frame-end recovery then aborted at `imgui_tables.cpp:1493` (`table->RowPosY2 == inner_window->DC.CursorPos.y`), exit 134 |
+| final review | `ui-imgui-bind-errors.js` | the `IsInsideRow` term put back into `canListClipper()` | `NOTHROW ERR_IMGUI_USAGE` in CLIPPER_WRONG_NOROW; test failed |
+| final review | `ui-imgui-bind-errors.js` | `canListClipper()` returning nullptr always | CLIPPER_WRONG_WINDOW aborted: `imgui_tables.cpp:2126: TableEndRow ... Assertion window == table->InnerWindow failed`, `EXITCODE 134`; test failed |
 
 ## Behaviours no test detects
 
@@ -1599,3 +1602,19 @@ the code and ImGui's source before it was changed.
   stdout half stays as Task 1's "Behaviours no test detects" note says:
   ImGui's `printf` is lost to the stdio buffer at `_exit()`, so the test
   reads the flags back instead.
+- **F2, the clipper outside its table's window** (Important). Confirmed
+  by reading (the seek sets `table->RowPosY2` from the current window's
+  cursor whether or not a row is open, imgui.cpp:3461-3472) and by running
+  the finding's sequence on the unfixed build: `endTable()` refused as
+  `cursor-moved`, then the frame-end recovery's `EndTable()` aborted at
+  tables:1493. `canListClipper()` now refuses whenever a table is current
+  and the current window is not its inner window. Checked for a valid use
+  it refuses: none. A window's first Begin() in a frame resets its
+  `DC.CurrentTableIdx` (imgui.cpp:8228), so a table is current in a window
+  other than its inner one only when the outer window of a scrolling table
+  is appended to again; a child, popup or other window begun in a cell has
+  no table current, and a plain table's inner window is its outer one.
+  CLIPPER_WRONG_NOROW in `ui-imgui-bind-errors.js`; the message no longer
+  says "inside a table row", and the `bind_guards.h` comment no longer says
+  the later seeks are covered by the scope comparison (they are covered
+  because a state that passes the guard is not one the clipper changes).

@@ -123,6 +123,9 @@
 //                 one; and a child whose plain table was ended.
 //  CLIPPER_WRONG_WINDOW listClipper() in TABLE_WRONG_WINDOW's window, inside
 //                 the row: refused, not called, the callback never run.
+//  CLIPPER_WRONG_NOROW the same window before the table's first row (the
+//                 state read back as in TABLE_WRONG_NOROW): refused, not
+//                 called, the callback never run; endTable() then accepted.
 //  LOADINI_INFRAME loadIniSettingsFromMemory() inside a frame: refused,
 //                 not called, traced; the frame then draws.
 //  DOCKSPACE_TWICE dockSpaceOverViewport() a second time in a frame, with
@@ -165,6 +168,8 @@
 //  canTableSetupColumn's all-disabled check off, or blind to queued
 //  reconcile requests: TABLE_DISABLED fails;
 //  canListClipper() returning nullptr always: CLIPPER_WRONG_WINDOW aborts;
+//  canListClipper() refusing only inside a row: CLIPPER_WRONG_NOROW fails
+//  (endTable() refused as cursor-moved);
 //  canDockSpaceOverViewport()'s twice or not-root condition off:
 //  DOCKSPACE_TWICE or DOCKSPACE_NOT_ROOT aborts;
 //  needNoFrame() not tracing its refusal: ONCE fails;
@@ -1031,6 +1036,44 @@ async function main() {
                     'CLIPPER_WRONG_WINDOW WRONG ' + drew + ' ' + called);
   }
 
+  // --- CLIPPER_WRONG_NOROW ---------------------------------------------
+  // The same state before the table's first row. No row is open, so
+  // Begin() ends none; but the clipper's seek sets the table's RowPosY2
+  // from the current window's cursor (imgui.cpp:3472), so endTable() is
+  // then refused by canEndTable:cursor-moved for good, and the frame-end
+  // recovery's EndTable() reaches tables:1493's plain assertion.
+  {
+    let called = 0;
+    let shown = false;
+    let ended = 'none';
+    let drew = true;
+    // As in TABLE_WRONG_NOROW: frames until beginTable() has returned true.
+    for (let i = 0; i < 10 && !shown; ++i)
+      drew = await harness.frame(h, () => {
+        const win = 'clipper wrong norow';
+        beginAt(win);
+        if (!imgui.beginTable('s', 1, imgui.TableFlags_ScrollY, [0, 100])) {
+          imgui.end();
+          return;
+        }
+        shown = true;
+        imgui.begin(win);
+        const scope = imgui.__test.tableScope();
+        if (!(scope.table && scope.currentWindow === win &&
+              scope.innerWindow.startsWith(win + '/s_')))
+          fail('SETUP clipper wrong norow ' + JSON.stringify(scope));
+        refused('listClipper',
+                () => imgui.listClipper(10, 20, () => ++called));
+        imgui.end();
+        ended = accepted('endTable', () => imgui.endTable());
+        imgui.end();
+      });
+    console.log(drew && shown && called === 0 && ended === undefined ?
+                    'CLIPPER_WRONG_NOROW ok' :
+                    'CLIPPER_WRONG_NOROW WRONG ' + drew + ' ' + shown + ' ' +
+                        called + ' ' + ended);
+  }
+
   // --- LOADINI_INFRAME -------------------------------------------------
   {
     let message;
@@ -1163,6 +1206,7 @@ async function main() {
 // CHECK-NEXT: {{^}}TABLE_REGION accepted imgui.end(): Missing EndTable(){{$}}
 // CHECK-NEXT: {{^}}TABLE_REGION accepted imgui.endListBox(): Missing EndTable(){{$}}
 // CHECK-NEXT: {{^}}CLIPPER_WRONG_WINDOW ok{{$}}
+// CHECK-NEXT: {{^}}CLIPPER_WRONG_NOROW ok{{$}}
 // CHECK-NEXT: {{^}}LOADINI_INFRAME ok{{$}}
 // CHECK-NEXT: {{^}}LOADINI_INFRAME message imgui.loadIniSettingsFromMemory(): must be called outside a frame (before newFrame()){{$}}
 // CHECK-NEXT: {{^}}DOCKSPACE_TWICE ok{{$}}
@@ -1247,7 +1291,8 @@ async function main() {
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing EndTable(){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing EndTable(){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: Missing EndTable(){{$}}
-// ONCE-NEXT: {{^}}[ui] imgui: usage error: listClipper() inside a table row, in another window than the table's own (a window begun inside a cell is current){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: listClipper() with a table current in another window than the table's own (a window begun inside a cell is current){{$}}
+// ONCE-NEXT: {{^}}[ui] imgui: usage error: listClipper() with a table current in another window than the table's own (a window begun inside a cell is current){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: must be called outside a frame (before newFrame()){{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: DockSpaceOverViewport() twice in a frame with the same ID{{$}}
 // ONCE-NEXT: {{^}}[ui] imgui: usage error: DockSpaceOverViewport() twice in a frame with the same ID{{$}}

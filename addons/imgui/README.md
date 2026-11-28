@@ -523,7 +523,7 @@ its condition's name (`__test.guards()`) and traced as a usage error.
 | `canEndTable:cursor-moved` | `endTable()` with no row begun and the cursor moved by `setCursorScreenPos()`. |
 | `canTableSetupColumn:name-offset` | `tableSetupColumn()` with a label once the table's column names pass 32767 bytes. |
 | `canTableSetupColumn:all-disabled` | The `tableSetupColumn()` that would declare the last column with every column `TableColumnFlags_Disabled` (queued column changes included). |
-| `canListClipper:wrong-window` | `listClipper()` inside a table row, in another window than the table's own. |
+| `canListClipper:wrong-window` | `listClipper()` with a table current, in another window than the table's own, whether or not a row is open (the clipper ends a row there and seeks the table's row position from that window's cursor). |
 | `canDockSpaceOverViewport:twice` | `dockSpaceOverViewport()` a second time in a frame with the same ID (unless `DockNodeFlags_KeepAliveOnly`). A zero ID is the default ImGui computes, and the guard computes it the same way. |
 | `canDockSpaceOverViewport:not-root` | `dockSpaceOverViewport()` with the ID of a split node's child. Stricter than ImGui twice over: ImGui accepts the call and only marks the node, which then asserts at the next submission; and with the host window's `SkipItems` set, which the guard cannot see before the call, ImGui would accept a second call or a child's ID that the guard refuses. |
 

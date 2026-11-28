@@ -103,12 +103,17 @@ const char *canEndTable();
 /// locked, that is, that no row was begun (tables:1858).
 const char *canTableSetupScrollFreeze();
 
-/// ImGuiListClipper::Begin() ends an open table row with TableEndRow()
-/// (imgui.cpp:3494-3496), which asserts plainly that the current window is
-/// the table's inner window (tables:2126): refused when a table is current,
-/// inside a row, in another window (the window of canTableRowCall's
-/// wrong-window condition). The later Step() and seek calls are covered by
-/// the scope comparison below.
+/// The clipper works on the current table whenever there is one, and
+/// assumes that the current window is the table's inner window: Begin()
+/// and Step() end an open row with TableEndRow() (imgui.cpp:3494-3496,
+/// 3566-3567), which asserts plainly on that (tables:2126), and every seek,
+/// End()'s included (imgui.cpp:3521-3522), sets the table's RowPosY2 from
+/// the current window's cursor (imgui.cpp:3461-3472), which EndTable() then
+/// asserts plainly against the inner window's (tables:1493). Refused when a
+/// table is current in another window than its inner one (the window of
+/// canTableRowCall's wrong-window condition), whether or not a row is open.
+/// The scope comparison below does not catch this: it is the state the
+/// clipper was begun in, and nothing changes it.
 const char *canListClipper();
 
 /// DockSpace(), called by DockSpaceOverViewport() with the ImGuiID \p

@@ -2770,11 +2770,19 @@ only bound functions that can emit an unbounded primitive are
     the loop and never steps a finished clipper.
   - `Begin()`, each `Step()` and each seek end an open table row with
     `TableEndRow()` (imgui.cpp:3494-3496, 3565-3567, 3462-3465), which
-    asserts `window == table->InnerWindow` (tables:2126, plain). (b):
-    when `g.CurrentTable` is not NULL and its `IsInsideRow` is set,
-    `g.CurrentWindow == g.CurrentTable->InnerWindow`, tested before
-    `Begin()`. The design's comparison of window, window-stack depth and
-    table after each callback covers the later calls. The window and the
+    asserts `window == table->InnerWindow` (tables:2126, plain); and each
+    seek, `End()`'s included (imgui.cpp:3521-3522), sets the table's
+    `RowPosY2` from the current window's cursor whether or not a row is
+    open (imgui.cpp:3472), which `EndTable()` asserts against the inner
+    window's cursor (tables:1493, plain). (b): when `g.CurrentTable` is
+    not NULL, `g.CurrentWindow == g.CurrentTable->InnerWindow`, tested
+    before `Begin()`. (Corrected in the final review: the guard first
+    required this only inside a row, and a clipper in the outer window of
+    a scrolling table before its first row then left `endTable()` refused
+    as `cursor-moved` and the frame-end recovery asserting.) A state that
+    passes the guard is not changed by the clipper itself, so the
+    design's comparison of window, window-stack depth and table after
+    each callback covers the later calls. The window and the
     table are also compared by their begin counts (`window->BeginCount`,
     imgui.cpp:8892; `table->InstanceCurrent`, tables:376, 391), so that one
     ended and begun again with the same identity inside the callback is a
