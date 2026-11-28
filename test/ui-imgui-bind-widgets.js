@@ -105,6 +105,25 @@
 //            still 1e30. Before the fix the integer path converted 5e11 to
 //            int, undefined, which on x86-64 gave INT_MIN, written back as
 //            -1073741823.
+//  SHAREDACCUM ImGui's one drag accumulator, which only the active item
+//            reads (Codex's round 4, F1): a dragFloat of [16777216] at
+//            speed 1 with '%.0f' and SliderFlags_NoRoundToFormat (float
+//            spacing 2 there, so a one-unit step stays in the accumulator
+//            until a second one), held and moved 8 units, then 1 unit a
+//            frame ten times, drawn alone and then beside an unrelated
+//            dragInt, colorEdit3 and colorEdit4: both runs end at exactly
+//            the same value, 16777234 (8 + 10 units).
+//  LOGDRAG   a logarithmic dragInt of [1] over 1 .. 100 at speed 819 (round
+//            4, F2): a 10-unit move right takes it to 100 and leaves a
+//            remainder of about 81.7 parametric units (above 1, legitimate),
+//            and a 1-unit move back keeps it at 100, as ImGui does, because
+//            the remainder absorbs the move; discarding it would drop the
+//            value to 1.
+//  COLORMODE a colorEdit3 of [0.2, 0.2, 0.2] held on its red field and
+//            dragged 5 units with ColorEditFlags_Float, then, still held,
+//            switched to _Uint8 and dragged 5 more (the component's drag
+//            changes from float to integer under the same ID): every call
+//            accepted, red ends inside 0 .. 1 and above 0.2.
 //  DRAGDOMAIN dragInt's domain (dragIntDomainOk() in bind/bind_widgets.cpp:
 //            a drag adds the mouse delta times the speed to the value in
 //            int, and the platform half clamps mouse coordinates to
@@ -980,6 +999,108 @@ async function main() {
                      JSON.stringify({integer, floating, threw}));
   }
 
+  /**
+   * Press on the item `drawWith` records in `out.r`, then move by each
+   * of `steps` (units right, negative left) in turn, a frame after each,
+   * `between()` run once after the first; release. Presses use a 1 us
+   * double-click time (DRAGDOMAIN says why).
+   */
+  async function heldDrag(draw, out, steps, between = () => {}) {
+    await settle(draw);
+    const previousDoubleClick = imgui.__test.setDoubleClickTime(1e-6);
+    const at = [Math.floor(out.r.min[0]) + 8,
+                Math.floor((out.r.min[1] + out.r.max[1]) / 2)];
+    await harness.moveTo(h, draw, at);
+    harness.inject(h, {type: 'MOUSE_DOWN', button: LEFT, mouseX: at[0],
+                       mouseY: at[1]});
+    await harness.until(h, draw, (s) => s.mouseDown[LEFT], 'held down');
+    let x = at[0];
+    for (let n = 0; n < steps.length; ++n) {
+      x += steps[n];
+      await harness.moveTo(h, draw, [x, at[1]]);
+      await h.run(draw);
+      if (n === 0)
+        between();
+    }
+    harness.inject(h, {type: 'MOUSE_UP', button: LEFT, mouseX: x,
+                       mouseY: at[1]});
+    await harness.until(h, draw, (s) => !s.mouseDown[LEFT], 'held up');
+    await h.run(draw);
+    imgui.__test.setDoubleClickTime(previousDoubleClick);
+  }
+
+  // --- SHAREDACCUM -----------------------------------------------------
+  {
+    const run = async (others) => {
+      const f = [16777216], n = [0], c3 = [0.5, 0.5, 0.5], c4 = [0.5, 0.5, 0.5, 1];
+      const out = {r: null};
+      let threw = null;
+      const draw = inWindow(() => {
+        try {
+          imgui.dragFloat('float', f, 1, 0, 0, '%.0f',
+                          imgui.SliderFlags_NoRoundToFormat);
+          out.r = rect();
+          if (others) {
+            imgui.dragInt('unrelated', n);
+            imgui.colorEdit3('unrelated3', c3);
+            imgui.colorEdit4('unrelated4', c4);
+          }
+        } catch (e) {
+          threw = e.message;
+        }
+      });
+      await heldDrag(draw, out, [8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+      return {f: f[0], threw};
+    };
+    const alone = await run(false);
+    const beside = await run(true);
+    const ok = alone.f === 16777234 && beside.f === alone.f &&
+        alone.threw === null && beside.threw === null;
+    console.log(ok ? 'SHAREDACCUM ok' : 'SHAREDACCUM WRONG ' +
+                     JSON.stringify({alone, beside}));
+  }
+
+  // --- LOGDRAG ---------------------------------------------------------
+  {
+    const v = [1];
+    const out = {r: null};
+    const draw = inWindow(() => {
+      imgui.dragInt('log', v, 819, 1, 100, '%d', imgui.SliderFlags_Logarithmic);
+      out.r = rect();
+    });
+    let afterRight = null;
+    await heldDrag(draw, out, [10, -1], () => {
+      afterRight = v[0];
+    });
+    const ok = afterRight === 100 && v[0] === 100;
+    console.log(ok ? 'LOGDRAG ok' : 'LOGDRAG WRONG ' +
+                     JSON.stringify({afterRight, v}));
+  }
+
+  // --- COLORMODE -------------------------------------------------------
+  {
+    const c = [0.2, 0.2, 0.2];
+    let mode = imgui.ColorEditFlags_Float, threw = null;
+    const out = {r: null};
+    const draw = inWindow(() => {
+      try {
+        imgui.colorEdit3('mode', c, mode);
+      } catch (e) {
+        threw = e.message;
+      }
+      out.r = rect();
+    });
+    let afterFloat = null;
+    await heldDrag(draw, out, [5, 5], () => {
+      afterFloat = c[0];
+      mode = imgui.ColorEditFlags_Uint8;
+    });
+    const ok = threw === null && afterFloat > 0.2 && c[0] > afterFloat &&
+        c[0] <= 1;
+    console.log(ok ? 'COLORMODE ok' : 'COLORMODE WRONG ' +
+                     JSON.stringify({afterFloat, c, threw}));
+  }
+
   // --- DRAGDOMAIN ------------------------------------------------------
   {
     const messages = [];
@@ -1145,6 +1266,9 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}SAVEDHUE ok{{$}}
 // CHECK-NEXT: {{^}}FLOATWB ok{{$}}
 // CHECK-NEXT: {{^}}TRANSITION ok{{$}}
+// CHECK-NEXT: {{^}}SHAREDACCUM ok{{$}}
+// CHECK-NEXT: {{^}}LOGDRAG ok{{$}}
+// CHECK-NEXT: {{^}}COLORMODE ok{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got 1e+10{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got 819.5{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got -820{{$}}
@@ -1164,4 +1288,4 @@ main().catch((e) => {
 // SAVEDHUE: the saved hue of 1e10 forgotten before the next editor call.
 // TRACE: {{^}}[ui] imgui: colorEdit: saved hue 1e+10, saturation 0 outside 0..1, forgotten{{$}}
 // TRANSITION: the float drag's accumulator reset before the integer drag.
-// TRACE: {{^}}[ui] imgui: drag: accumulator {{.*}} reset to 0 before an integer drag{{$}}
+// TRACE: {{^}}[ui] imgui: drag: accumulator {{.*}} reset to 0 before the active integer drag{{$}}

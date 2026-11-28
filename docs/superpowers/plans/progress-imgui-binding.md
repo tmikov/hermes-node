@@ -347,6 +347,8 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | codex r2 | `ui-imgui-bind-widgets.js` (FLOATWB) | (RED, and the mutation) `Call::write()`'s infinity rule removed | `FLOATWB WRONG inputFloat {"seen":[null,null],"threw":"imgui.inputFloat(): v[0] must be a finite number within the range of a float; got inf"} dragFloat {"seen":[3e+38,null,null],...,"threw":"... got inf"}` (JSON null is Infinity); test failed |
 | codex r2 | `ui-imgui-bind-widgets.js` (FLOATWB) | the drag accumulator reset removed | `FLOATWB WRONG dragFloat {"seen":[3.0000000054977558e+38,3.4028234663852886e+38,-3.4028234663852886e+38],...}`: the third move flipped the value to -FLT_MAX; test failed |
 | codex r3 | `ui-imgui-bind-widgets.js` (TRANSITION) | (RED, and the mutation) `guard::resetDragAccumulatorForInt()` not called | `TRANSITION WRONG {"integer":[-1073741823],"floating":[1.0000000150474662e+30],...}`: the 5e11 accumulator converted to int (INT_MIN on x86-64, undefined) and the write-back clamped it; test failed |
+| codex r4 | `ui-imgui-bind-widgets.js` (SHAREDACCUM, LOGDRAG) | (RED, and the mutation) the round-3 rule restored: reset unless below 1 before every dragInt, without the active-ID condition or the logarithmic case | `SHAREDACCUM WRONG {"alone":{"f":16777234},"beside":{"f":16777224}}` (the unrelated dragInt discarded the float drag's remainder every frame) and `LOGDRAG WRONG {"afterRight":100,"v":[1]}` (the legitimate remainder discarded, so the move back dropped to 1); test failed |
+| codex r4 | `ui-imgui-bind-widgets.js` (TRANSITION) | `guard::beforeIntDrag()` not called | `TRANSITION WRONG {"integer":[-1073741823],...}`; test failed |
 
 ## Behaviours no test detects
 
@@ -1989,4 +1991,27 @@ Codex's text: `.superpowers/sdd/2026-11-27-imgui-binding/codex-code-r2.md`.
   (8421505 or more as converted) and the hue-bar cursor (geometry
   dependent, about 1.0e7 at the default picker) stated apart; the tracker
   issue's line too.
+
+### Codex code review, round 4
+
+- **F1** verified (widgets:2716-2717: an inactive item never reads the
+  accumulator) and reproduced by SHAREDACCUM under the round-3 rule: a
+  float drag at 16777216 beside an unrelated dragInt ended 10 units short.
+- **F2** verified: the round-3 note above ("the integer path never leaves
+  1 or more between calls") holds for the linear path only; a
+  logarithmic integer drag keeps a parametric remainder above 1
+  (LOGDRAG). The grab offset and "finite or NaN" statements of 3l were
+  wrong too, and are corrected.
+- **The rule now**: each accumulator write is conditioned on the drag
+  about to run being the active item (its `ImGui::GetID(label)` equals
+  `g.ActiveId`) and on what its own consuming path can take: a float or
+  logarithmic integer drag any finite value, a linear integer drag below
+  1. No type memory: each condition is the consuming path's requirement
+  and is inert for that path's own remainders, so it is sufficient
+  whatever type left the value, and remembering the type would add
+  nothing (the coordinator's rule 3 alone, shown sufficient; rule 2 not
+  implemented, with its mutation therefore not applicable). The colour
+  editors write nothing: their component IDs are theirs alone and both of
+  their drag types leave below 1 within the colour domain; COLORMODE
+  switches Float to Uint8 under a held drag.
 

@@ -191,27 +191,49 @@ TableScope tableScope();
 /// 0 .. 1, everything an ordinary edit or the picker saves, is kept, so
 /// hue preservation is unchanged for it. Traced when it forgets.
 void sanitizeColorEditState();
-/// Sets ImGui's drag accumulator (g.DragCurrentAccum) to 0 when it is not
-/// finite, before a dragFloat runs (round 2, D4). A float drag that
-/// overflows the value to infinity leaves `accum - (inf - v)`, an infinity
-/// or NaN, in the accumulator (imgui_widgets.cpp:2648), which ImGui would
-/// add to the value at the next step (2631): the value the binding wrote
-/// back as FLT_MAX would then flip to -FLT_MAX. Reset, the next step
-/// overflows again and the value stays at FLT_MAX. Only an active drag
-/// reads the accumulator, and activation resets it anyway (2598-2602).
-void resetNonFiniteDragAccumulator();
-/// Sets g.DragCurrentAccum to 0 unless its magnitude is below 1, before a
-/// call whose drag may be an integer one: dragInt, and colorEdit3 /
-/// colorEdit4, whose component drags are DragInt in the 0..255 data type
-/// (imgui_widgets.cpp:6032) (Codex's code review, round 3, E1). The
-/// integer path converts the accumulator plus the frame's delta to int and
-/// adds it to the value (2631); between calls it leaves only the fraction
-/// it could not apply, below 1 (2648), or 0 (2598-2602), so 1 or more can
-/// only be a float drag's remainder (a delta too small to change its value
-/// is kept whole, 2648 subtracting zero), carried to an integer drag that
-/// took over the same active ID while the mouse stayed down: DragBehavior
-/// dispatches on the new data type and resets nothing (2700-2727).
-void resetDragAccumulatorForInt();
+/// The drag accumulator, g.DragCurrentAccum, before a drag the binding
+/// calls (Codex's code review, rounds 2-4: D4, E1, F1, F2). ImGui reads it
+/// only for the active item (imgui_widgets.cpp:2716-2717), so each rule
+/// applies only when \p id, the ID the call's DragScalar will use
+/// (`window->GetID(label)`, the binding's ImGui::GetID(label)), is the
+/// active one; an inactive widget leaves it alone, as ImGui does.
+///
+/// beforeFloatDrag(): reset when not finite. A float drag that overflowed
+/// leaves `accum - (inf - v)`, infinite or NaN (2648), which the next step
+/// would add to the written-back FLT_MAX (2631), flipping it to -FLT_MAX.
+///
+/// beforeIntDrag(): an integer drag consumes it by its own path.
+/// - Linear: `v_cur += (SIGNEDTYPE)g.DragCurrentAccum` after adding the
+///   frame's delta (2605, 2631), defined only while the sum stays inside
+///   int; reset unless its magnitude is below 1. The linear path itself
+///   leaves only the fraction it could not apply (2648) or 0 (2598-2602),
+///   so this never touches its own remainder. What it does reset is a
+///   remainder another path left for the same active ID while the mouse
+///   stayed down: a float drag's (a delta too small to change a large
+///   value is kept whole, 2648; DragBehavior dispatches on the new data
+///   type and resets nothing, 2700-2727), or the same widget's while it
+///   was logarithmic, whose remainder is in parametric units and can exceed
+///   1 (below). With a carried magnitude below 1, a frame's delta below
+///   10 * 2^17 * 819 (dragIntDomainOk()) and the value within 2^30 - 1,
+///   the sum stays inside int.
+/// - Logarithmic: the accumulator is added to the value's parametric
+///   position (2624-2627) and converted back through
+///   ScaleValueFromRatioT, which returns a bound for t <= 0 or t >= 1
+///   (3087-3088) and otherwise converts a result within the range; any
+///   finite accumulator is safe there, and a remainder above 1 is
+///   legitimate (the clamped part of a fast drag, 2640-2644). NaN is not:
+///   it fails both tests and reaches the conversion. Reset only when not
+///   finite.
+/// No type memory is needed: each rule is the consuming path's own
+/// requirement, and each is inert for that path's own remainders. The
+/// colour editors need none: their component drags (DragFloat or DragInt
+/// under PushID(label), "##X".."##W", 5997, 6027, 6032) are fed only by
+/// themselves, and both leave below 1 within the colour domain: the
+/// integer one as above, the float one because a component of at most
+/// 2^23 has a float spacing of at most 1 and is rounded to three decimals
+/// (2636), so its remainder is at most half a spacing plus 0.0005.
+void beforeFloatDrag(unsigned id);
+void beforeIntDrag(unsigned id, bool logarithmic);
 /// For __test.colorEditState(): whether a saved state is held, and its
 /// hue and saturation.
 struct ColorEditState {

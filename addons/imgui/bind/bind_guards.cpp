@@ -725,24 +725,37 @@ void sanitizeColorEditState() {
   g.ColorEditSavedID = 0;
 }
 
-void resetNonFiniteDragAccumulator() {
+namespace {
+
+/// Sets the accumulator to 0, traced with \p why.
+void resetDragAccumulator(const char *why) {
   ImGuiContext &g = *GImGui;
-  if (std::isfinite(g.DragCurrentAccum))
-    return;
   trace(
-      "dragFloat: drag accumulator %g reset to 0",
-      static_cast<double>(g.DragCurrentAccum));
+      "drag: accumulator %g reset to 0 %s",
+      static_cast<double>(g.DragCurrentAccum),
+      why);
   g.DragCurrentAccum = 0.0f;
 }
 
-void resetDragAccumulatorForInt() {
+} // namespace
+
+void beforeFloatDrag(unsigned id) {
   ImGuiContext &g = *GImGui;
-  if (std::fabs(g.DragCurrentAccum) < 1.0f)
+  if (g.ActiveId == 0 || g.ActiveId != id)
     return;
-  trace(
-      "drag: accumulator %g reset to 0 before an integer drag",
-      static_cast<double>(g.DragCurrentAccum));
-  g.DragCurrentAccum = 0.0f;
+  if (!std::isfinite(g.DragCurrentAccum))
+    resetDragAccumulator("before the active float drag");
+}
+
+void beforeIntDrag(unsigned id, bool logarithmic) {
+  ImGuiContext &g = *GImGui;
+  if (g.ActiveId == 0 || g.ActiveId != id)
+    return;
+  const float a = g.DragCurrentAccum;
+  if (logarithmic ? !std::isfinite(a) : !(std::fabs(a) < 1.0f))
+    resetDragAccumulator(
+        logarithmic ? "before the active logarithmic integer drag"
+                    : "before the active integer drag");
 }
 
 ColorEditState colorEditState() {

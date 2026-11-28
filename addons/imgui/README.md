@@ -1007,13 +1007,17 @@ What the binding takes from `imgui_internal.h`, all of it in
   read for it) is outside 0 .. 1 or not finite, so ImGui forgets a hue
   typed past the domain instead of restoring it and converting it to
   `int` (`guard::sanitizeColorEditState()`); and `g.DragCurrentAccum`,
-  set to 0 before a `dragFloat` when it is not finite, so a drag that
-  overflowed to `FLT_MAX` stays there instead of flipping to `-FLT_MAX`
-  (`guard::resetNonFiniteDragAccumulator()`), and before a `dragInt`,
-  `colorEdit3` or `colorEdit4` when its magnitude is 1 or more, which only
-  a float drag's remainder can be: a widget switched from a float drag to
-  an integer one with the same ID while the mouse is held would otherwise
-  convert it to `int` (`guard::resetDragAccumulatorForInt()`). Outside that header,
+  written only when the drag about to be drawn is the active item
+  (`g.ActiveId` is its `ImGui::GetID(label)`), since ImGui reads it only
+  for that item: set to 0 before the active `dragFloat` when it is not
+  finite, so a drag that overflowed to `FLT_MAX` stays there instead of
+  flipping to `-FLT_MAX` (`guard::beforeFloatDrag()`); before the active
+  linear `dragInt` unless its magnitude is below 1, which is all that
+  path leaves itself, so a float drag's remainder carried to an integer
+  drag of the same ID under a held mouse is not converted to `int`; and
+  before the active logarithmic `dragInt` when it is not finite, that
+  path taking any finite remainder (`guard::beforeIntDrag()`). An
+  inactive widget, and the colour editors, never write it. Outside that header,
   `bind/bind_clipper.cpp` writes `ImGuiListClipper::ItemsCount`, declared
   in `imgui.h` but commented "[Internal]", to -1 when it abandons a
   clipper; and the four `io.ConfigErrorRecovery*` fields above are public

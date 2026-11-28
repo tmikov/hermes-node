@@ -183,8 +183,8 @@ applied" at the end lists them.
   overflow: a float drag that overflowed leaves an infinite or NaN
   accumulator (`accum -= inf - v`, widgets:2648), which the next step
   would add to the written-back FLT_MAX, flipping it to -FLT_MAX; the
-  binding resets a non-finite accumulator to 0 before each `dragFloat`
-  (`resetNonFiniteDragAccumulator()`), so the value stays at FLT_MAX.
+  binding resets a non-finite accumulator to 0 before the active
+  `dragFloat` (`beforeFloatDrag()`), so the value stays at FLT_MAX.
 
 ## Shared preconditions
 
@@ -3627,19 +3627,25 @@ a C++ program.
 3l. **State a widget of another type leaves for the same active ID**
    (Codex's round 3, E1, the siblings of the drag accumulator). One
    widget a frame with the same ID can change type while the mouse is
-   held. The drag accumulator is reset (the `g.DragCurrentAccum` row of
-   "Written"). The rest, read: `g.DragCurrentAccumDirty` only says the
+   held. The drag accumulator is reset when the consuming path cannot
+   take it (the `g.DragCurrentAccum` row of "Written"). Each conclusion
+   below is a safety conclusion for any value the state can hold, not an
+   assumption that activation or the drag was the ordinary one (Codex's
+   round 4, F2). The rest, read: `g.DragCurrentAccumDirty` only says the
    accumulator has something to apply, harmless once it is 0;
    `g.DragSpeedDefaultRatio` is a constant (imgui.cpp:4561);
    `g.SliderCurrentAccum` is read only from the keyboard and gamepad
    branch (widgets:3203-3258), which navigation this addon never enables
-   reaches (3i); `g.SliderGrabClickOffset` is 0 for an integer slider and
-   for a float one enters only `ImSaturate` (widgets:3195-3198); the
+   reaches (3i); `g.SliderGrabClickOffset` is set only on activation, to
+   0 for an integer slider (widgets:3188-3195), so a float slider's
+   non-zero offset survives a switch of the same active ID to an integer
+   slider, and whatever it holds enters only `ImSaturate` (3198); the
    Ctrl+click text is parsed at commit with the type then current
    (widgets:2416, 3j); a cancel copies the activation value's bytes into
    the new type (widgets:2706-2711): an `int` read from a float's bits is
    an int the write-back clamps (G6), a float read from an int's bits is
-   finite or NaN, which the float write-back keeps finite (G6); and
+   finite, infinite or NaN (an accepted -8388608 has the bits of -inf),
+   which the float write-back makes finite (G6); and
    `inputInt` / `inputFloat` keep no state for their step buttons.
 
 3k. **A value typed into the colour picker's own editors** (Codex's
@@ -3754,7 +3760,7 @@ Written:
 | State | Declared | Written by | Why |
 |---|---|---|---|
 | `g.ErrorCallback`, `g.ErrorCallbackUserData` | 2876, 2877 | context creation | the design's error callback |
-| `g.DragCurrentAccum` | 2824 | `dragFloat`, set to 0 before ImGui is called when it is not finite (`guard::resetNonFiniteDragAccumulator()`); `dragInt`, `colorEdit3`, `colorEdit4`, set to 0 when its magnitude is 1 or more (`guard::resetDragAccumulatorForInt()`; Codex's round 3, E1: an integer drag leaves below 1 between calls, widgets:2648, so more is a float drag's remainder carried to an integer drag of the same active ID, which DragBehavior does not reset, 2700-2727, and converts at 2631) | Codex's round 2, D4: a drag that overflowed leaves it infinite or NaN (widgets:2648), and the next step adds it to the value (2631); activation sets it to 0 too (2598-2602) |
+| `g.DragCurrentAccum` | 2824 | only when the widget about to be drawn is the active item (`g.ActiveId` equals `ImGui::GetID(label)`, the ID its DragScalar uses; ImGui reads the accumulator only for the active item, widgets:2716-2717; Codex's round 4, F1): set to 0 before that `dragFloat` when it is not finite (`guard::beforeFloatDrag()`), before that linear `dragInt` unless its magnitude is below 1, and before that logarithmic `dragInt` when it is not finite (`guard::beforeIntDrag()`). The linear integer path converts it at 2631 and leaves below 1 itself (2648); a larger one is another path's remainder carried to the same active ID (a float drag's, which DragBehavior does not reset across the type change, 2700-2727, round 3, E1; or the same widget's in logarithmic mode). The logarithmic path takes any finite value, its own remainder can exceed 1 (2624-2627, 2640-2644, 3087-3088; round 4, F2). The colour editors are not touched: their component drags are fed only by themselves and leave below 1 | Codex's round 2, D4: a drag that overflowed leaves it infinite or NaN (widgets:2648), and the next step adds it to the value (2631); activation sets it to 0 too (2598-2602) |
 | `g.ColorEditSavedID` (read with `ColorEditSavedHue`, `ColorEditSavedSat`, 2810-2812) | 2810 | `colorEdit3`, `colorEdit4`, set to 0 before ImGui is called when the saved hue or saturation is outside 0 .. 1 or not finite (`guard::sanitizeColorEditState()`) | Codex's round 2, D1: ImGui restores the saved hue and saturation while the colour matches (widgets:5902-5917, 5978) and converts them to int (5980); 0 is the "nothing saved" value ImGui starts with (imgui.cpp:4550) |
 | `g.BeginComboDepth` | 2808 | `newFrame()`, set to 0 before `ImGui::NewFrame()` | ruling 19: nothing in ImGui restores the counter after a combo left open (see `endCombo`); zero is always correct at the start of a frame |
 | `ImGuiListClipper::ItemsCount` | imgui.h:3074, commented "[Internal]" | `listClipper`, set to -1 when abandoning | the design's abandon rule (imgui.cpp:3521) |
