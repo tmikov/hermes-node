@@ -57,6 +57,23 @@
 //            called, and the frame then renders: a closed 16383-point
 //            polyline (65534 vertices, the most one primitive may reserve)
 //            and a Bezier curve of 512 segments.
+//  LENGTHS   the lengths and coordinates ImGui converts to int (the
+//            derivation is lengthLimit()'s, in bind/bind_util.cpp; this
+//            window's pixel density is 1, so the length limit is 2^20 =
+//            1048576 units). Refused with ERR_OUT_OF_RANGE, not called:
+//            Codex's addCircleFilled radius 1e10 and addLine thickness
+//            1e10 with DrawFlags_StrokeCenterBiased; a radius of 1048577
+//            for addCircle and addCircleFilled with an automatic segment
+//            count; a thickness of 1048577 or -1048577 for addLine,
+//            addRect, addCircle, addBezierCubic and addPolyline; a rounding
+//            of 1048577 or -1048577 for addRect and addRectFilled; an
+//            addRect or addRectFilled corner component of 2^30 + 128 (the
+//            next float above 2^30) or its negative; an addText position
+//            component of 2^31 or the float below -2^31. Accepted, called,
+//            and the frame then renders: each length at 1048576 and
+//            -1048576 (a radius at 1048576 only, and 1e10 with 32
+//            segments, which is not converted), corners at 2^30 and
+//            -2^30, addText at -2^31 and the largest float below 2^31.
 //  COVERAGE  every DrawList function has reached ImGui.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
@@ -65,7 +82,10 @@
 //  getColorU32 returning 0 (its result, the group's stand-in for a
 //  write-back, since no draw-list function writes one): COLOR fails;
 //  addPolyline's 16383-point cap removed: LIMITS fails;
-//  addPolyline passing one point fewer than given: POLYLINE fails.
+//  addPolyline passing one point fewer than given: POLYLINE fails;
+//  (codex) radiusOk() returning true, addLine's thickness check removed,
+//  cornerOk() returning true, or addText's position check removed: LENGTHS
+//  fails, each at the first refusal it reopens.
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -352,6 +372,72 @@ async function main() {
       console.log('LIMITS message ' + m);
   }
 
+  // --- LENGTHS ---------------------------------------------------------
+  {
+    const L = 1048576;
+    const messages = [];
+    const drew = await h.run(() => canvas(() => {
+      const rx = (name, fn) =>
+          messages.push(rejects('drawList.' + name, fn, 'ERR_OUT_OF_RANGE')
+                            .message);
+      // Codex's two sequences.
+      rx('addCircleFilled', () => dl.addCircleFilled([100, 100], 1e10, WHITE_U32));
+      rx('addLine', () => dl.addLine([10, 10], [100, 100], WHITE_U32, 1e10,
+                                     imgui.DrawFlags_StrokeCenterBiased));
+      rx('addCircle', () => dl.addCircle([100, 100], L + 1, WHITE_U32));
+      rx('addCircleFilled', () => dl.addCircleFilled([100, 100], L + 1, WHITE_U32, 0));
+      for (const t of [L + 1, -(L + 1)]) {
+        rx('addLine', () => dl.addLine([10, 10], [100, 100], WHITE_U32, t));
+        rx('addRect', () => dl.addRect([10, 10], [100, 100], WHITE_U32, 0, t));
+        rx('addCircle', () => dl.addCircle([100, 100], 10, WHITE_U32, 0, t));
+        rx('addBezierCubic', () => dl.addBezierCubic([0, 0], [1, 0], [2, 0],
+                                                     [3, 0], WHITE_U32, t));
+        rx('addPolyline', () => dl.addPolyline([0, 0, 10, 10], WHITE_U32, t));
+        rx('addRect', () => dl.addRect([10, 10], [100, 100], WHITE_U32, t));
+        rx('addRectFilled', () => dl.addRectFilled([10, 10], [100, 100], WHITE_U32, t));
+      }
+      const far = 2 ** 30 + 128;
+      for (const corner of [[far, 0], [0, far], [-far, 0], [0, -far]]) {
+        rx('addRect', () => dl.addRect(corner, [10, 10], WHITE_U32));
+        rx('addRect', () => dl.addRect([10, 10], corner, WHITE_U32));
+        rx('addRectFilled', () => dl.addRectFilled(corner, [10, 10], WHITE_U32));
+        rx('addRectFilled', () => dl.addRectFilled([10, 10], corner, WHITE_U32));
+      }
+      for (const pos of [[2 ** 31, 0], [0, 2 ** 31], [-(2 ** 31) - 256, 0],
+                         [0, -(2 ** 31) - 256]])
+        rx('addText', () => dl.addText(pos, WHITE_U32, 't'));
+
+      const ok = (name, fn) => accepted('drawList.' + name, fn);
+      ok('addCircle', () => dl.addCircle([100, 100], L, WHITE_U32));
+      ok('addCircleFilled', () => dl.addCircleFilled([100, 100], L, WHITE_U32));
+      ok('addCircleFilled', () => dl.addCircleFilled([100, 100], 1e10, WHITE_U32, 32));
+      ok('addCircle', () => dl.addCircle([100, 100], 1e10, WHITE_U32, 32));
+      for (const t of [L, -L]) {
+        ok('addLine', () => dl.addLine([10, 10], [100, 100], WHITE_U32, t,
+                                       imgui.DrawFlags_StrokeCenterBiased));
+        ok('addRect', () => dl.addRect([10, 10], [100, 100], WHITE_U32, 0, t,
+                                       imgui.DrawFlags_StrokeCenterBiased));
+        ok('addCircle', () => dl.addCircle([100, 100], 10, WHITE_U32, 0, t,
+                                           imgui.DrawFlags_StrokeOutside));
+        ok('addBezierCubic', () => dl.addBezierCubic([0, 0], [1, 0], [2, 0],
+                                                     [3, 0], WHITE_U32, t));
+        ok('addPolyline', () => dl.addPolyline([0, 0, 10, 10], WHITE_U32, t));
+        ok('addRect', () => dl.addRect([10, 10], [100, 100], WHITE_U32, t, 9));
+        ok('addRectFilled', () => dl.addRectFilled([10, 10], [100, 100], WHITE_U32, t));
+      }
+      ok('addRect', () => dl.addRect([-(2 ** 30), -(2 ** 30)], [2 ** 30, 2 ** 30],
+                                     WHITE_U32, L, L));
+      ok('addRectFilled', () => dl.addRectFilled([-(2 ** 30), -(2 ** 30)],
+                                                 [2 ** 30, 2 ** 30], WHITE_U32, L));
+      ok('addText', () => dl.addText([-(2 ** 31), -(2 ** 31)], WHITE_U32, 't'));
+      ok('addText', () => dl.addText([2147483520, 2147483520], WHITE_U32, 't'));
+    }));
+    console.log(drew === true ? 'LENGTHS ok' : 'LENGTHS render=' + drew);
+    for (const m of messages.slice(0, 4))
+      console.log('LENGTHS message ' + m);
+    console.log('LENGTHS refused ' + messages.length);
+  }
+
   harness.checkGroupCoverage(h, 'DrawList');
   process.exit(0);
 }
@@ -374,6 +460,12 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}LIMITS message imgui.drawList.addPolyline(): points must hold an even count of numbers (x, y pairs); got 3{{$}}
 // CHECK-NEXT: {{^}}LIMITS message imgui.drawList.addBezierCubic(): numSegments must be an integer from 0 to 512; got 513{{$}}
 // CHECK-NEXT: {{^}}LIMITS message imgui.drawList.addBezierCubic(): numSegments must be an integer from 0 to 512; got -1{{$}}
+// CHECK-NEXT: {{^}}LENGTHS ok{{$}}
+// CHECK-NEXT: {{^}}LENGTHS message imgui.drawList.addCircleFilled(): radius must be at most 1048576 (2^20 pixels at pixel density 1) with an automatic segment count; got 1e+10{{$}}
+// CHECK-NEXT: {{^}}LENGTHS message imgui.drawList.addLine(): thickness must be from -1048576 to 1048576 (2^20 pixels at pixel density 1); got 1e+10{{$}}
+// CHECK-NEXT: {{^}}LENGTHS message imgui.drawList.addCircle(): radius must be at most 1048576 (2^20 pixels at pixel density 1) with an automatic segment count; got 1048577{{$}}
+// CHECK-NEXT: {{^}}LENGTHS message imgui.drawList.addCircleFilled(): radius must be at most 1048576 (2^20 pixels at pixel density 1) with an automatic segment count; got 1048577{{$}}
+// CHECK-NEXT: {{^}}LENGTHS refused 38{{$}}
 // CHECK-NEXT: {{^}}COVERAGE DrawList ok{{$}}
 // CODE: EXITCODE 0
 

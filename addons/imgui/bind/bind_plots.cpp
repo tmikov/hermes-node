@@ -13,6 +13,8 @@
 
 #include <cfloat>
 #include <climits>
+#include <cmath>
+#include <utility>
 
 namespace hnimgui {
 namespace bind {
@@ -43,6 +45,76 @@ constexpr size_t kMaxPlotValues = 4096;
 constexpr float kMaxGraphWidth = 2147483648.0f;
 
 enum class PlotKind { Lines, Histogram };
+
+/// The largest magnitude of a histogram's value or scale, so that a
+/// difference of two of them is finite.
+constexpr float kMaxHistogramValue = FLT_MAX / 2;
+
+/// A histogram's values and scales, which reach a conversion through its
+/// bars: each bar is AddRectFilled(pos0, pos1) (imgui_widgets.cpp:9167),
+/// which converts its corners to int as they are (drawList.addRectFilled,
+/// bind_drawlist.cpp), and the corners are the frame lerped by
+/// `1 - ImSaturate((v - scale_min) * inv_scale)` and by the zero line
+/// `1 + scale_min * inv_scale`, with `inv_scale` 0 for equal scales and
+/// `1 / (scale_max - scale_min)` otherwise (9136-9141, 9152-9156).
+/// ImSaturate() bounds a finite or infinite factor but returns NaN as it is
+/// (imgui_internal.h:552). The values are finite (Call::floats()), so NaN
+/// arises only from an infinite `v - scale_min` times a zero `inv_scale`
+/// (scales equal, or their difference infinite), and from an infinite
+/// `inv_scale` times a zero `v - scale_min` (the smallest value, when the
+/// scale is computed from the values, 9104-9107). So: every value within
+/// +-FLT_MAX/2, each scale FLT_MAX ("computed") or within +-FLT_MAX/2, and
+/// the scale range's reciprocal, computed as PlotEx computes it, finite. A
+/// line plot draws lines, whose points are not converted, and needs none
+/// of this.
+bool histogramOk(
+    Call &c,
+    const FloatSpan &values,
+    float scaleMin,
+    float scaleMax) {
+  float vMin = FLT_MAX, vMax = -FLT_MAX;
+  for (size_t i = 0; i < values.count; ++i) {
+    const float v = values.data[i];
+    if (!(v >= -kMaxHistogramValue && v <= kMaxHistogramValue)) {
+      c.throwRange(
+          "values[%zu] must be within -FLT_MAX/2 .. FLT_MAX/2 in a histogram; "
+          "got %g",
+          i,
+          static_cast<double>(v));
+      return false;
+    }
+    vMin = v < vMin ? v : vMin;
+    vMax = v > vMax ? v : vMax;
+  }
+  for (const auto &[scale, what] :
+       {std::pair<float, const char *>{scaleMin, "scaleMin"},
+        {scaleMax, "scaleMax"}}) {
+    if (scale != FLT_MAX &&
+        !(scale >= -kMaxHistogramValue && scale <= kMaxHistogramValue)) {
+      c.throwRange(
+          "%s must be FLT_MAX or within -FLT_MAX/2 .. FLT_MAX/2 in a "
+          "histogram; got %g",
+          what,
+          static_cast<double>(scale));
+      return false;
+    }
+  }
+  if (values.count == 0)
+    return true; // nothing is drawn (imgui_widgets.cpp:9113-9114)
+  const float lo = scaleMin == FLT_MAX ? vMin : scaleMin;
+  const float hi = scaleMax == FLT_MAX ? vMax : scaleMax;
+  if (lo != hi && !std::isfinite(1.0f / (hi - lo))) {
+    c.throwRange(
+        "a histogram's scale range must be 0 or have a finite reciprocal; "
+        "got %g (scaleMax %g, scaleMin %g, a scale of FLT_MAX taken from the "
+        "values)",
+        static_cast<double>(hi - lo),
+        static_cast<double>(hi),
+        static_cast<double>(lo));
+    return false;
+  }
+  return true;
+}
 
 /// `plotLines` / `plotHistogram(label, values, valuesOffset = 0,
 /// overlayText = null, scaleMin = FLT_MAX, scaleMax = FLT_MAX, graphSize =
@@ -81,6 +153,9 @@ napi_value plot(napi_env env, napi_callback_info info, PlotKind kind) {
         "valuesOffset must be an integer from 0 to %zu; got %d",
         values.count - 1,
         offset);
+  if (kind == PlotKind::Histogram &&
+      !histogramOk(c, values, scaleMin, scaleMax))
+    return nullptr;
   if (!c.needFrame() || !c.needLabelId("label", label))
     return nullptr;
 

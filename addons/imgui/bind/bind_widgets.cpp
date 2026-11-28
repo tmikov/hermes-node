@@ -19,6 +19,7 @@
 
 #include <cfloat>
 #include <climits>
+#include <string>
 
 namespace hnimgui {
 namespace bind {
@@ -126,6 +127,52 @@ bool colorEditFlags(Call &c, size_t i, int *flags) {
         "flags must hold at most one of ColorEditFlags_PickerHueBar and "
         "_PickerHueWheel");
     return false;
+  }
+  return true;
+}
+
+/// The largest RGB component a colour editor takes. ColorEdit4 converts
+/// every component it shows to int with IM_F32_TO_INT8_UNBOUND,
+/// `(int)(v * 255.0f + 0.5f)` (imgui_widgets.cpp:5980,
+/// imgui_internal.h:296), whatever the flags (the Float and Hex displays
+/// included, and HDR, which lifts only the editor's own 0..1 clamp), and
+/// that is defined while |v| * 255 + 0.5 < 2^31, |v| < 8421504.25; 2^23 is
+/// the power of two below.
+constexpr float kMaxRgbComponent = 8388608.0f;
+/// The largest HSV component magnitude. With InputHSV and an RGB display
+/// the components are converted by ColorConvertHSVtoRGB first
+/// (imgui_widgets.cpp:5972-5973), whose outputs are `v`, `v * (1 - s)`,
+/// `v * (1 - s * f)` and `v * (1 - s * (1 - f))` with f in (-1, 1)
+/// (imgui.cpp:3037-3062): at |s|, |v| <= 2048 each is at most 2048 * 2049
+/// = 4196352 in magnitude, inside kMaxRgbComponent.
+constexpr float kMaxHsvComponent = 2048.0f;
+
+/// The colour editors' component domain, checked on `col` (\p n of them)
+/// for \p flags; inside a frame. The input is the flags' InputRGB or
+/// InputHSV, else io.ConfigColorEditFlags' (imgui_widgets.cpp:5957-5958),
+/// which no bound function changes and ColorEditOptionsPopup() never
+/// touches (it sets the display and the data type only, 6742-6754):
+/// - RGB: 0 to kMaxRgbComponent. Not negative because the HSV display
+///   converts with ColorConvertRGBtoHSV (5974-5978), whose saturation is
+///   `chroma / (r + 1e-20f)` (imgui.cpp:3031), r being the largest
+///   component: at most 1 when no component is negative, unbounded
+///   otherwise (r = 0 and a component of -1 give 1e20), and the user can
+///   select that display from the editor's own options menu during the
+///   call (6745-6747, called at 5948 and read back at 5951-5952) unless the
+///   flags fix one.
+/// - HSV: -kMaxHsvComponent to kMaxHsvComponent.
+bool colorComponentsOk(Call &c, const RefFloat &col, int flags) {
+  int input = flags & ImGuiColorEditFlags_InputMask_;
+  if (input == 0)
+    input =
+        ImGui::GetIO().ConfigColorEditFlags & ImGuiColorEditFlags_InputMask_;
+  const bool hsv = (input & ImGuiColorEditFlags_InputHSV) != 0;
+  const float lo = hsv ? -kMaxHsvComponent : 0.0f;
+  const float hi = hsv ? kMaxHsvComponent : kMaxRgbComponent;
+  for (int k = 0; k < col.n; ++k) {
+    const std::string what = "col[" + std::to_string(k) + "]";
+    if (!c.inRange(col.values[k], what.c_str(), lo, hi))
+      return false;
   }
   return true;
 }
@@ -676,7 +723,7 @@ napi_value colorEdit3(napi_env env, napi_callback_info info) {
   int flags = 0;
   if (!c.ok() || !c.string(0, "label", &label) ||
       !c.refFloat(1, "col", 3, false, &col) || !colorEditFlags(c, 2, &flags) ||
-      !c.needFrame())
+      !c.needFrame() || !colorComponentsOk(c, col, flags))
     return nullptr;
   c.enterImGui();
   const bool changed = ImGui::ColorEdit3(label.c_str(), col.ptr(), flags);
@@ -685,7 +732,8 @@ napi_value colorEdit3(napi_env env, napi_callback_info info) {
   return c.result(changed);
 }
 
-/// `colorEdit4(label, col, flags = 0)`, imgui.h:753.
+/// `colorEdit4(label, col, flags = 0)`, imgui.h:753. Both editors check
+/// `col` with colorComponentsOk().
 napi_value colorEdit4(napi_env env, napi_callback_info info) {
   Call c(env, info, "colorEdit4");
   std::string label;
@@ -693,7 +741,7 @@ napi_value colorEdit4(napi_env env, napi_callback_info info) {
   int flags = 0;
   if (!c.ok() || !c.string(0, "label", &label) ||
       !c.refFloat(1, "col", 4, false, &col) || !colorEditFlags(c, 2, &flags) ||
-      !c.needFrame())
+      !c.needFrame() || !colorComponentsOk(c, col, flags))
     return nullptr;
   c.enterImGui();
   const bool changed = ImGui::ColorEdit4(label.c_str(), col.ptr(), flags);

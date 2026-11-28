@@ -94,7 +94,18 @@ napi_value tableSetupColumn(napi_env env, napi_callback_info info) {
   if (!c.ok() || !c.stringOrNull(0, "label", &label, &noLabel) ||
       (!c.isMissing(1) && !c.flags(1, "flags", kTableColumnFlags, &flags)) ||
       (!c.isMissing(2) && !c.f32(2, "initWidthOrWeight", &initWidthOrWeight)) ||
-      (!c.isMissing(3) && !c.u32(3, "userData", &userData)))
+      (!c.isMissing(3) && !c.u32(3, "userData", &userData)) ||
+      // A fixed column's positive width is its width as it is: ImGui
+      // installs it as the requested width (tables:1689) or the auto
+      // width (tables:986-987, 2472-2474) and converts it with ImTrunc
+      // when it gives the column its width (tables:1103). Whether the
+      // column is fixed is ImGui's to decide from the table's sizing
+      // policy when the flags hold neither width flag
+      // (TableSetupColumnFlags, tables:791-798), so the bound applies
+      // whatever the flags. Zero or a negative value means "the default"
+      // (tables:1689-1690) and is not converted. A stretch weight is not
+      // converted as it is (see the surface table, "Not covered" 3f).
+      !c.belowIntLimit(initWidthOrWeight, "initWidthOrWeight"))
     return nullptr;
   // TableSetupColumn's plain assertion (tables:1742), and
   // TableSetupColumnFlags' (tables:802).

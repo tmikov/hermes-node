@@ -395,6 +395,70 @@ bool Call::inIntRange(float v, const char *what) {
   return false;
 }
 
+bool Call::inRange(float v, const char *what, float lo, float hi) {
+  if (v >= lo && v <= hi)
+    return true;
+  throwRange("%s must be from %.9g to %.9g; got %.9g", what, lo, hi, v);
+  return false;
+}
+
+// Where the limit comes from. Every bound length ends in the draw list,
+// which multiplies it by the window's pixel density D (`_InvFringeScale`,
+// set from the viewport's framebuffer scale, imgui.cpp:8672,
+// imgui_draw.cpp:752-756) and converts it to int:
+//
+// - `_CalcCircleAutoSegmentCount(r)` (imgui_draw.cpp:663-671) converts
+//   `r * D + 0.999f`, and past its 64 cached radii evaluates
+//   IM_DRAWLIST_CIRCLE_AUTO_SEGMENT_CALC (imgui_internal.h:925),
+//   `(int)ImCeil(IM_PI / ImAcos(1 - ImMin(e, r) / r))`, e being
+//   style.CircleTessellationMaxError, 0.30 (imgui.cpp:1654), which no bound
+//   function changes. Once e / r is 2^-25 or less, `1 - e / r` rounds to
+//   1, ImAcos() gives 0 and the conversion is of +inf: at e = 0.30 from
+//   r = 1.0e7, below INT_MAX, which is why INT_MAX is no bound here. At
+//   r * D <= e * 2^24 (5033164) the quotient is at most about 9100.
+//   It is reached by addCircle's outer radius, the radius plus the
+//   stroke's offset (imgui_draw.cpp:2718-2745), by addRect's outer
+//   rounding, the rounding plus that offset (imgui_draw.cpp:2388; 2476 to
+//   2246, and 2483-2486 through PathArcToFast, 1649-1657, to 1543), by
+//   addRectFilled's rounding through PathRect (imgui_draw.cpp:1843-1862),
+//   and by every style
+//   rounding a window or widget draws with. The offset is at most 1.5
+//   times the thickness: t / 2, t, or the centre-biased
+//   `(s / 2 + (s & 1) * (t * D - s)) / D` with s = (int)(t * D)
+//   (imgui_draw.cpp:873-875), which is 0 when s is 0 and below
+//   t / 2 + 1 / D <= 1.5 t otherwise.
+// - `(int)(t * D)` in that centre-biased offset (imgui_draw.cpp:873-874),
+//   `(int)(outer_rounding * D)` and `(int)(t * D)` (2412-2413), and
+//   `(int)(rounding * D)` (2598).
+// - In units, IM_IS_TRUNCATED's `(int)` of the outer rounding and the
+//   thickness (imgui_draw.cpp:2409) and of a rounding (2580): plain
+//   `(int)` casts in a build without SSE (imgui_internal.h:573-586) and in
+//   a Debug one (imgui_draw.cpp:906-908).
+//
+// With every radius, rounding and thickness within 2^20 / max(1, D) units,
+// the largest of those is 2^20 + 1.5 * 2^20 = 2621440 screen pixels, and
+// units: below e * 2^24 and far below 2^31.
+float lengthLimit() {
+  const float density = guard::pixelDensity();
+  return density > 1.0f ? kMaxScreenLength / density : kMaxScreenLength;
+}
+
+bool Call::length(float v, const char *what, bool nonNegative) {
+  const float limit = lengthLimit();
+  const float lo = nonNegative ? 0.0f : -limit;
+  if (v >= lo && v <= limit)
+    return true;
+  throwRange(
+      "%s must be from %.9g to %.9g (2^20 pixels at pixel density %g); got "
+      "%.9g",
+      what,
+      lo,
+      limit,
+      guard::pixelDensity(),
+      v);
+  return false;
+}
+
 bool Call::f64(size_t i, const char *what, double *out) {
   if (typeOf(i) != napi_number) {
     throwType("ERR_INVALID_ARG_TYPE", "%s must be a number", what);

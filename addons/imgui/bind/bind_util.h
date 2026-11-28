@@ -218,6 +218,12 @@ class Call {
   // A position ImGui converts to int as it is, whatever its sign:
   // ERR_OUT_OF_RANGE unless -2^31 <= \p v < 2^31.
   bool inIntRange(float v, const char *what);
+  // ERR_OUT_OF_RANGE unless \p lo <= \p v <= \p hi.
+  bool inRange(float v, const char *what, float lo, float hi);
+  // A length (a draw-list radius, thickness or rounding, or a style
+  // variable's length): ERR_OUT_OF_RANGE unless |v| <= lengthLimit(), and
+  // with \p nonNegative unless v >= 0. Inside a frame only.
+  bool length(float v, const char *what, bool nonNegative);
 
   // After the arguments are read: counts the call (under the test hooks
   // only, the counts' one reader), then the caller calls ImGui.
@@ -294,6 +300,17 @@ class CallbackScope {
 /// True while any CallbackScope is alive; newFrame() and render() throw
 /// ERR_IMGUI_USAGE then.
 bool insideCallback();
+
+/// A length's largest magnitude in screen pixels: 2^20.
+constexpr float kMaxScreenLength = 1048576.0f;
+/// The largest magnitude of a length, in units: kMaxScreenLength screen
+/// pixels at the current window's pixel density (guard::pixelDensity()),
+/// and never more than kMaxScreenLength units. Inside a frame only.
+///
+/// Derived in bind_util.cpp from the draw list's conversions of lengths
+/// multiplied by the density, which every bound length reaches: a radius,
+/// a thickness, a rounding, and the style variables that become one.
+float lengthLimit();
 
 /// name -> times that binding function called ImGui, for __test.bindCalls();
 /// empty without the test hooks, which are what counting is gated on.

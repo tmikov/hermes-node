@@ -1591,7 +1591,22 @@ All six pass a finished string and never let ImGui interpret `%`.
   widgets:6096-6100, and `ColorPicker4` asserts plainly that exactly one
   is set when the picker opens, widgets:6237). The same three rules
   apply to `colorEdit4`. They do not apply to `colorButton`, which opens
-  no picker and whose entry rejects nothing.
+  no picker and whose entry rejects nothing. And (added after Codex's
+  code review, C2) a component outside the editor's domain, for the input
+  the flags select or else `io.ConfigColorEditFlags`' (InputRGB, which no
+  bound function changes): with RGB input each component from 0 to 2^23,
+  with HSV input from -2048 to 2048, alpha included in both
+  (`colorComponentsOk()` in `bind/bind_widgets.cpp`). `ColorEdit4`
+  converts every component to int with `IM_F32_TO_INT8_UNBOUND`
+  (widgets:5980; internal:296), defined below 8421504.25 in magnitude,
+  whatever the flags; an RGB component may not be negative because the
+  HSV display, which the editor's own options menu can select during the
+  call (widgets:5948, 6745-6747), converts through `ColorConvertRGBtoHSV`,
+  whose saturation `chroma / (r + 1e-20f)` (imgui.cpp:3031) is unbounded
+  with a negative component; an HSV one is limited so that
+  `ColorConvertHSVtoRGB`'s products `v * (1 - s)` and the like
+  (imgui.cpp:3049-3052) stay below 2^23. The same applies to
+  `colorEdit4`.
 - Preconditions (in `ColorEdit4`, plain, (a)):
   `ImIsPowerOfTwo(flags & ImGuiColorEditFlags_DisplayMask_)`
   (widgets:5960) and `ImIsPowerOfTwo(flags &
@@ -1612,7 +1627,9 @@ All six pass a finished string and never let ImGui interpret `%`.
 - Overload: only one. Nullable: none. Omitted: none.
 - Frame: open. Rejected: as `colorEdit3`.
 - Preconditions: as `colorEdit3` (widgets:5960-5961).
-- Notes: none.
+- Notes: a component ImGui writes back can lie outside the domain (an HDR
+  drag below 0, or a saturation dragged past 1 in the HSV display): the
+  next call then refuses it, before ImGui converts it.
 
 ### `colorButton`
 
@@ -1928,7 +1945,14 @@ and open a row (`ui-imgui-bind-errors.js` TABLE_WRONG_NOROW).
 - Frame: open.
 - Rejected: the four status bits `ImGuiTableColumnFlags_IsEnabled`,
   `_IsVisible`, `_IsSorted`, `_IsHovered` (`_StatusMask_`, imgui.h:2248);
-  `_WidthStretch` together with `_WidthFixed`.
+  `_WidthStretch` together with `_WidthFixed`; an `initWidthOrWeight` of
+  2^31 or more (added after Codex's code review, C3): a fixed column's
+  positive width is installed as its requested or auto width (tables:1689,
+  986-987, 2472-2474) and converted by `ImTrunc` when the column is given
+  its width (tables:1103). Applied whatever the flags, since with neither
+  width flag the table's sizing policy decides (tables:791-798). Zero or
+  negative is "the default" (tables:1689-1690); a stretch weight is
+  converted only through sums ("Not covered" 3f).
 - Preconditions:
   - (c) `g.CurrentTable != NULL`: "Call should only be done while in
     BeginTable() scope!" (tables:1739).
@@ -2450,10 +2474,29 @@ and open a row (`ui-imgui-bind-errors.js` TABLE_WRONG_NOROW).
     (`imgui.h:551`)
 - Overload: both. NOT bound: `PushStyleVarX` (`imgui.h:552`) and
   `PushStyleVarY` (`imgui.h:553`). Nullable: none. Omitted: none.
-- Frame: open. Rejected: `StyleVar_COUNT`.
+- Frame: open. Rejected: `StyleVar_COUNT`; and, for the overload of the
+  variable's own type, a value outside the variable's domain (added after
+  Codex's code review, C1; `styleVarInfo()` in `bind/bind_style.cpp` has
+  each variable's source lines): `Alpha`, `DisabledAlpha` and the
+  alignments `WindowTitleAlign`, `ButtonTextAlign`, `SelectableTextAlign`,
+  `SeparatorTextAlign` from 0 to 1; `WindowMinSize` from 1 to the length
+  limit; `ScrollbarSize`, `ScrollbarPadding` and the four window and frame
+  border sizes from 0 to the length limit; every other length within the
+  length limit either way; `TableAngledHeadersAngle` and
+  `TableAngledHeadersTextAlign` unbounded (read only by the unbound
+  `TableAngledHeadersRow()`, tables:3498, 3551). The length limit is 2^20
+  screen pixels at the current window's pixel density, and at most 2^20
+  units (`lengthLimit()`, "Not covered" 3f's table has the derivation).
 - Preconditions:
   - `idx >= 0 && idx < ImGuiStyleVar_COUNT` (imgui.cpp:3891, plain, in
     `GetStyleVarInfo`). (a).
+  - (a) the value's domain, above: `ScrollbarSize >= 0` is a plain
+    assertion (widgets:989, Codex's C1, reproduced as an abort); `Alpha`
+    in 0..1 is asserted by `RenderColorRectWithAlphaCheckerboard()`
+    (draw:7749) and converted to `ImU32` by `GetColorU32(ImU32)`
+    (imgui.cpp:3787-3791); a negative border size or scrollbar padding can
+    reach ScrollbarEx's plain assertion (widgets:1060-1064); the rest are
+    conversions to int.
   - (c) the variable's type does not match the overload: "Calling
     PushStyleVar() variant with wrong type!" (imgui.cpp:3900 for the
     `float` overload, 3930 for the `ImVec2` one). Both are `_RET` forms:
@@ -2570,7 +2613,15 @@ and open a row (`ui-imgui-bind-errors.js` TABLE_WRONG_NOROW).
 - Overload: that one. NOT bound: the `values_getter` overload
   (`imgui.h:815`). Nullable: `overlay_text`.
 - Omitted: `values_count` and `stride`.
-- Frame: open. Rejected: as `plotLines`.
+- Frame: open. Rejected: as `plotLines`; and (the sweep after Codex's
+  review) a value beyond +-FLT_MAX/2, a scale other than FLT_MAX beyond
+  +-FLT_MAX/2, or a scale range (`scaleMax - scaleMin`, a FLT_MAX scale
+  taken from the values as PlotEx takes it, widgets:9104-9107) that is not
+  0 and has an infinite reciprocal: each bar is `AddRectFilled`
+  (widgets:9167), which converts its corners to int, and NaN reaches them
+  through `ImSaturate` from an overflowing difference times a zero
+  `inv_scale` or a zero difference times an infinite one
+  (widgets:9136-9156; `histogramOk()` in `bind/bind_plots.cpp`).
 - Label-id: yes.
 - Preconditions: as `plotLines` (the same `PlotEx`, called at
   widgets:9218).
@@ -2604,7 +2655,9 @@ only bound functions that can emit an unbounded primitive are
 - C++: `IMGUI_API void AddLine(const ImVec2& p1, const ImVec2& p2, ImU32
   col, float thickness = 1.0f, ImDrawFlags flags = 0);` (`imgui.h:3586`)
 - Overload: only one. Nullable: none. Omitted: none.
-- Frame: open. Rejected: none.
+- Frame: open. Rejected: a `thickness` beyond the length limit (2^20
+  screen pixels at the window's pixel density, at most 2^20 units; added
+  after Codex's code review, C4, derivation in "Not covered" 3f's table).
 - Preconditions: none found (draw:1993-2007, and `_AddLine`,
   draw:1866-1992). `ImDrawFlags_InvalidMask_` bits are not tested on this
   path.
@@ -2620,7 +2673,10 @@ only bound functions that can emit an unbounded primitive are
 - Overload: that one. The former order (`flags` before `thickness`) is a
   deleted overload under the addon's configuration (`imgui.h:3684`).
   Nullable: none. Omitted: none.
-- Frame: open. Rejected: none.
+- Frame: open. Rejected: a `thickness` or `rounding` beyond the length
+  limit (as `addLine`); a corner component beyond +-2^30 (the sweep after
+  Codex's review: `IM_IS_TRUNCATED4` converts the corners moved out by the
+  stroke offset to int, draw:2377-2388, 2409).
 - Preconditions: (c) `(flags & ImDrawFlags_InvalidMask_) == 0`:
   "Incorrect parameter. Did you swap 'thickness' and 'flags'?"
   (draw:2353), a `_RET` form. The mask is `~0x7FFFFFF0` (imgui.h:3512):
@@ -2637,7 +2693,9 @@ only bound functions that can emit an unbounded primitive are
   p_max, ImU32 col, float rounding = 0.0f, ImDrawFlags flags = 0);`
   (`imgui.h:3590`)
 - Overload: only one. Nullable: none. Omitted: none.
-- Frame: open. Rejected: none.
+- Frame: open. Rejected: a `rounding` beyond the length limit (as
+  `addLine`); a corner component beyond +-2^30 (`IM_IS_TRUNCATED4`,
+  draw:2580).
 - Preconditions: none found on the entry path (draw:2541-2556).
 - Notes: none.
 
@@ -2649,7 +2707,10 @@ only bound functions that can emit an unbounded primitive are
   ImU32 col, int num_segments = 0, float thickness = 1.0f, ImDrawFlags
   flags = 0);` (`imgui.h:3596`)
 - Overload: only one. Nullable: none. Omitted: none.
-- Frame: open. Rejected: none.
+- Frame: open. Rejected: with `numSegments <= 0`, a `radius` above the
+  length limit (as `addLine`; `_CalcCircleAutoSegmentCount`, draw:663-671,
+  whose fallback divides by zero from a radius of about 1e7,
+  internal:925); a `thickness` beyond the length limit.
 - Preconditions: none found. `num_segments` is clamped to 3..512
   (draw:2747; `IM_DRAWLIST_CIRCLE_AUTO_SEGMENT_MAX`, internal:924), a
   value at or below 0 means automatic (draw:2735, 2745), and the radius
@@ -2663,7 +2724,8 @@ only bound functions that can emit an unbounded primitive are
 - C++: `IMGUI_API void AddCircleFilled(const ImVec2& center, float radius,
   ImU32 col, int num_segments = 0);` (`imgui.h:3597`)
 - Overload: only one. Nullable: none. Omitted: none.
-- Frame: open. Rejected: none.
+- Frame: open. Rejected: with `numSegments <= 0`, a `radius` above the
+  length limit (as `addCircle`).
 - Preconditions: none found; `num_segments` is clamped as in `addCircle`
   (draw:2791).
 - Notes: none.
@@ -2687,7 +2749,8 @@ only bound functions that can emit an unbounded primitive are
   const ImVec2& p3, const ImVec2& p4, ImU32 col, float thickness, int
   num_segments = 0, ImDrawFlags flags = 0);` (`imgui.h:3604`)
 - Overload: only one. Nullable: none. Omitted: none.
-- Frame: open. Rejected: a `numSegments` outside 0..512.
+- Frame: open. Rejected: a `numSegments` outside 0..512; a `thickness`
+  beyond the length limit (as `addLine`).
 - Preconditions:
   - `num_segments` is not clamped: a positive value pushes that many
     path points (draw:1812-1814), which is an unbounded allocation and,
@@ -2719,7 +2782,8 @@ only bound functions that can emit an unbounded primitive are
   Nullable: none.
 - Omitted: `num_points` (the sequence's length over two) (design,
   "Exceptions: Point lists").
-- Frame: open. Rejected (`ERR_OUT_OF_RANGE`): a sequence of odd length;
+- Frame: open. Rejected (`ERR_OUT_OF_RANGE`): a `thickness` beyond the
+  length limit (as `addLine`); a sequence of odd length;
   more than 16383 points (a length above 32766), checked on the length
   before any element is read or copied. A detached `Float32Array`:
   `ERR_INVALID_ARG_VALUE` (as the plots').
@@ -2746,7 +2810,9 @@ only bound functions that can emit an unbounded primitive are
 - Overload: that one. NOT bound: the overload taking `ImFont* font, float
   font_size, ...` (`imgui.h:3603`). Nullable: none.
 - Omitted: `text_end`, passed as NULL.
-- Frame: open. Rejected: none.
+- Frame: open. Rejected: a `pos` component outside -2^31 .. below 2^31
+  (the sweep after Codex's review: `ImFont::RenderText` converts it with
+  `IM_TRUNC`, draw:7353-7354).
 - Preconditions: none found (draw:2983-2986, 2956-2981); an empty string
   returns early (draw:2962).
 - Notes: none.
@@ -3318,6 +3384,19 @@ a C++ program.
      (imgui.cpp:3692-3693): bounded by `itemHeight >= 1` and the list's
      height only while the cursor is where the window's layout put it.
 
+   The table below is the sweep made after Codex's code review: every
+   numeric argument of every bound function (flags and enums, G1; IDs and
+   ImU32 colours, G3; mouse buttons and keys are never converted to
+   anything but themselves and are left out). "As it is" means ImGui
+   converts the argument, or a quantity no bound on the argument alone
+   fails to bound, to an integer type, or asserts on it; "sum" that it is
+   converted only as part of a sum with an unbounded quantity (the cursor,
+   a window position, content); "saturated" that it reaches a conversion
+   only through `ImSaturate` or a clamp; "never" that it reaches no
+   conversion and no assertion. The length limit is `lengthLimit()`
+   (`bind/bind_util.cpp`, which has its derivation): 2^20 screen pixels at
+   the current window's pixel density, and at most 2^20 units.
+
    | Argument | Converted | Where | Bounded |
    |---|---|---|---|
    | `setNextItemWidth`, `pushItemWidth` `itemWidth` | as it is (positive) | imgui.cpp:12601 | yes, < 2^31 |
@@ -3327,19 +3406,62 @@ a C++ program.
    | `beginListBox` `size` | as it is (positive), then as a sum | widgets:8965; 8967, 8989 | yes, < 2^31 (the sum not) |
    | `setNextWindowPos` `pos` | as it is (zero pivot, both signs) | imgui.cpp:8155-8169, 9311 | yes, -2^31 .. < 2^31 |
    | `setNextWindowPos` with a pivot | sum | imgui.cpp:8426 | no |
+   | `setNextWindowBgAlpha` `alpha` | saturated (`IM_F32_TO_INT8_SAT`) | imgui.cpp:7728-7739 | not needed |
+   | `setScrollHereY` `centerYRatio` | asserted 0 .. 1 | imgui.cpp:12979 | yes, 0 .. 1 |
    | `plotLines`/`plotHistogram` `graphSize[0]` | as it is (positive) | widgets:9116 | yes, < 2^31 (Task 7) |
+   | `plotLines`/`plotHistogram` `graphSize[1]` | sum | widgets:9080-9085 | no |
+   | `plotLines`/`plotHistogram` `valuesOffset` | an index | widgets:9126-9127, 9151 | yes, 0 .. count - 1 |
+   | `plotHistogram` `values`, `scaleMin`, `scaleMax` | as it is, the bars' corners (`AddRectFilled`); NaN from an overflowing scale | widgets:9104-9107, 9136-9167 | yes: values and scales within +-FLT_MAX/2 (a scale may be FLT_MAX), the range 0 or with a finite reciprocal (the sweep) |
+   | `plotLines` `values`, `scaleMin`, `scaleMax` | never (lines; the points are not converted) | widgets:9136-9164; draw:1866-1990 | not needed (finite, `Call::floats()`) |
+   | `beginTable` `columns` | a count | tables:330-331 | yes, 1 .. 511 |
    | `beginTable` `outerSize` | as it is (positive), then as a sum | tables:342; 343 | yes, < 2^31 (the final review; the sum not) |
    | `beginTable` `innerWidth` | as it is, with `TableFlags_ScrollX` | tables:419-422, imgui.cpp:9469 | yes, < 2^31 (the final review) |
+   | `tableSetupColumn` `initWidthOrWeight`, a fixed width | as it is (`ImTrunc`) | tables:1689, 986-987, 2472-2474, 1103 | yes, < 2^31 (C3) |
+   | `tableSetupColumn` `initWidthOrWeight`, a stretch weight | sum and product (with the available width; with a content width over the weight's share) | tables:1092-1093, 1558-1561, 1632, 1638 | no |
+   | `tableSetupScrollFreeze` `cols`, `rows` | counts | tables:1860 | yes |
+   | `tableNextRow` `minRowHeight` | sum (the row's y) | tables:2078, 2141 | no |
+   | `tableSetColumnIndex` `columnN` | an index | tables:2295-2305 | yes, 0 .. (ImGui's recoverable check above) |
+   | `listClipper` `count` | a count | imgui.h:3082 | yes, 0 .. INT_MAX - 1 |
    | `listClipper` `itemHeight` | sum (the cursor's distance to the clip rectangle, over it) | imgui.cpp:3692-3693 | no (`itemHeight >= 1` bounds it only for an unmoved cursor) |
    | `setCursorScreenPos` `pos` | sum (stored, imgui.cpp:12464; converted in `ItemSize` and text drawing) | imgui.cpp:12406-12407 | no |
    | `dummy` `size` | sum (`ItemSize`) | widgets:1627 | no |
    | `sameLine` `offsetFromStartX`, `spacing` | sum (cursor, imgui.cpp:12440, 12447) | imgui.cpp:12406-12407 | no |
    | `indent`, `unindent` `indentW` | sum, accumulating (imgui.cpp:12523, 12531) | imgui.cpp:12406 | no |
+   | `calcTextSize` `wrapWidth` | never (compared with line widths) | draw:7200-7290 | not needed |
+   | `pushID`, `getID` `intId` | never (hashed) | imgui.cpp:10164-10168 | not needed |
    | `button` `size` | sum (`CalcItemSize`, `ItemSize`) | widgets:803, 806 | no |
    | `invisibleButton` `size` | sum | widgets:856, 860 | no |
    | `selectable` `size` | sum | widgets:7529, 7532 | no |
    | `progressBar` `size` | sum | widgets:1450, 1452 | no |
-   | `colorButton` `size` | sum | widgets:6597-6599, 6631; imgui_draw.cpp:7760, 7769 | no |
+   | `progressBar` `fraction` | saturated, or reduced by `ImFmod` when negative | widgets:1458-1472 | not needed |
+   | `radioButton` `vButton` | never (compared and stored) | widgets:1431-1437 | not needed |
+   | `colorButton` `size` | sum | widgets:6597-6599, 6631; draw:7760, 7769 | no |
+   | `colorButton` `col`, `textColored` `col`, `pushStyleColor` `col`, `getColorU32` `col` and `alphaMul`, `colorConvertFloat4ToU32` `col` | saturated (`ColorConvertFloat4ToU32`, `IM_F32_TO_INT8_SAT`; `colorButton`'s HSV conversion gives finite or infinite products, never NaN) | imgui.cpp:3003-3011, 3762-3775; widgets:6611 | not needed |
+   | `colorEdit3`, `colorEdit4` `col` | as it is (`IM_F32_TO_INT8_UNBOUND`, after an RGB/HSV conversion) | widgets:5980, 5972-5978; imgui.cpp:3031, 3049-3052 | yes: RGB 0 .. 2^23, HSV -2048 .. 2048 (C2) |
+   | `colorEdit4` (picker open) `col` | sum (the picker's grab positions, a component times the picker's size) | widgets:6537-6562 | no |
+   | `sliderFloat`, `sliderFloat2`..`4` `vMin`, `vMax` | asserted | widgets:3358 | yes, +-FLT_MAX/2 |
+   | `sliderInt` `vMin`, `vMax` | asserted | widgets:3346 | yes, INT_MIN/2 .. INT_MAX/2 |
+   | slider `v` | saturated (clamped into the range) | widgets:3029 | not needed |
+   | `dragFloat` `v`, `vSpeed`, `vMin`, `vMax` | never (float arithmetic, `SIGNEDTYPE` float) | widgets:2551-2664 | not needed |
+   | `dragInt` `v`, `vSpeed`, `vMin`, `vMax` | as it is: the accumulated delta times the speed converted to int and added (widgets:2584, 2605, 2631), `v_max - v_min` in int (2562-2563, 2593, 2659-2661) | widgets:2551-2664 | not yet: Codex's C5 |
+   | `inputFloat` `step`, `stepFast` | never (float addition) | widgets:2367-2370 | not needed |
+   | `inputInt` `step`, `stepFast` | never (`ImAddClampOverflow`, saturating) | widgets:2351-2352; internal:543-544 | not needed |
+   | `inputText` family `bufSize` | an allocation | design, "Buffers" | yes, 1 .. 2^24 |
+   | `setKeyboardFocusHere` `offset` | stored plus one, in an `int` | imgui.cpp (Task 3) | yes, -1 .. 2^31 - 2 |
+   | `getMouseDragDelta` `lockThreshold` | never (squared and compared) | imgui.cpp:10986-10989 | not needed |
+   | `popStyleColor`, `popStyleVar` `count` | never (compared with the stack, recoverable) | imgui.cpp:3939-3942 | not needed |
+   | `pushStyleVar` `val` | as it is, per variable (`styleVarInfo()`, `bind/bind_style.cpp`) | imgui.cpp:11843-11844; widgets:989, 1060-1064; draw:7749; and the length limit's conversions | yes, per variable (C1) |
+   | `drawList.addLine` `thickness`, `addBezierCubic` `thickness`, `addPolyline` `thickness` | as it is, times the density (`_CalculateCenterBiasedOffset`) | draw:873-874 | yes, the length limit (C4) |
+   | `drawList.addRect` `rounding`, `thickness` | as it is, times the density, and through the arcs' automatic segment count | draw:2377-2413, 2476, 2483-2486, 2246, 663-671 | yes, the length limit (C4) |
+   | `drawList.addRectFilled` `rounding` | as it is, times the density, and through the arcs' segment count | draw:2580, 2598, 1843-1862 | yes, the length limit (C4) |
+   | `drawList.addRect`, `addRectFilled` `pMin`, `pMax` | as it is (`IM_IS_TRUNCATED4`, a plain `(int)` without SSE or in a Debug build) | draw:2409, 2580; internal:573-586; draw:906-908 | yes, +-2^30 (the sweep) |
+   | `drawList.addCircle`, `addCircleFilled` `radius`, with an automatic segment count | as it is (`_CalcCircleAutoSegmentCount`; its fallback divides by zero from about 1e7) | draw:2735-2747, 2780-2791, 663-671; internal:925 | yes, at most the length limit (C4) |
+   | `drawList.addCircle`, `addCircleFilled` `radius`, with an explicit count | never | draw:2745-2751, 1659-1670 | not needed |
+   | `drawList.addCircle` `thickness` | as it is (the outer radius, the centre-biased offset) | draw:2718-2745 | yes, the length limit (C4) |
+   | `drawList.addCircle`, `addCircleFilled` `numSegments` | clamped by ImGui | draw:2747, 2791 | not needed |
+   | `drawList.addBezierCubic` `numSegments` | one path point each, in one primitive | draw:1812-1814 | yes, 0 .. 512 (Task 7) |
+   | `drawList.addText` `pos` | as it is (`IM_TRUNC`) | draw:7353-7354 | yes, -2^31 .. < 2^31 (the sweep) |
+   | `drawList.addLine`, `addCircle`, `addCircleFilled`, `addTriangleFilled`, `addBezierCubic`, `addPolyline` points | never (stored as floats and drawn) | draw:1866-1990, 1333-1502, 1801-1816 | not needed |
 
    This is undefined behaviour rather than an assertion, and no sanitizer
    in the test builds reports it. Found by reading in the same survey,
@@ -3376,6 +3498,22 @@ a C++ program.
    `imgui.ini` is. The 98 assertions of the docking section
    (imgui.cpp:18000-22100) were not each audited for what a string can
    reach.
+
+3h. **A dock splitter dragged with `StyleVar_DockingSeparatorSize`
+   pushed above its node's size** (Codex's code review, found by
+   reading, not measured). While the user drags a splitter of a dock
+   space, `DockNodeTreeUpdateSplitter` marks the node beside it
+   `WantLockSizeOnce` (imgui.cpp:20796-20798), and
+   `DockNodeTreeUpdatePosSize` then gives the locked child
+   `ImMin(size_avail - 1, size)` with `size_avail = ImMax(size -
+   DockingSeparatorSize, 0)` and asserts plainly that both children's
+   sizes are positive (imgui.cpp:20620-20637). A separator at least as
+   large as the node makes `size_avail` 0 and the locked child -1. It
+   depends on the node's size, which no argument check can see; the
+   variable is bounded only by the length limit, like every other
+   length. It needs the variable pushed around `dockSpaceOverViewport()`
+   (whose `DockSpace()` updates the tree inside the frame) while the user
+   drags a splitter.
 
 Recorded here for completeness, although not assertions:
 
@@ -3438,6 +3576,7 @@ Read:
 | `g.CurrentTabBar` and `->LastTabItemIdx` | 2773, 3221 | `endTabItem` |
 | `g.LastItemData.ID` | 2624 | `beginPopupContextItem` (when `strId` is null) |
 | `g.Windows` | 2545 | the test hook `__test.state().windows` (design) |
+| `g.CurrentWindow->DrawList->_InvFringeScale` (declared in imgui.h:3560, "[internal]") | 3093 (`DrawList`) | the length limit, `guard::pixelDensity()` (Codex's code review) |
 | `DockContextFindNodeByID(&g, id)` (a function) | 3969 | `dockSpaceOverViewport` |
 | `ImGuiDockNode::ParentNode`, `::LastFrameActive`, `::IsDockSpace()` (`MergedFlags`); `g.FrameCount` | 2136, 2153, 2177; 2514 | `dockSpaceOverViewport` |
 | `ImHashStr`, `ImFormatString` (functions) | 388, 429 | `dockSpaceOverViewport` (its default ID) |

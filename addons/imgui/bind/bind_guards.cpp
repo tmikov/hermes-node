@@ -698,6 +698,10 @@ TableScope tableScope() {
   return s;
 }
 
+float pixelDensity() {
+  return GImGui->CurrentWindow->DrawList->_InvFringeScale;
+}
+
 std::vector<std::pair<std::string, int>> guardRefusals() {
   std::vector<std::pair<std::string, int>> result;
   for (const GuardCondition &c : gGuards)

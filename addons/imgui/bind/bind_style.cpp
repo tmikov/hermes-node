@@ -11,10 +11,152 @@
 
 #include "imgui_addon.h"
 
+#include <string>
+
 namespace hnimgui {
 namespace bind {
 
 namespace {
+
+/// What a style variable may hold. A pushed value lasts until popped, at
+/// the latest by the frame-end recovery (imgui.cpp:6432-6433, 12081), which
+/// runs before the next NewFrame()'s checks of the style (imgui.cpp:11843-
+/// 11844), so the domain is what ImGui's code inside a frame needs.
+enum class VarDomain {
+  /// 0 to 1.
+  Unit,
+  /// A length either way, within lengthLimit() (bind_util.h).
+  Length,
+  /// A length, not negative.
+  NonNegative,
+  /// 1 to lengthLimit().
+  MinSize,
+  /// Any float: no bound function reads it.
+  Any,
+};
+
+struct VarInfo {
+  const char *name; // as exported, for messages
+  int count; // 1 for a float, 2 for an ImVec2 (imgui.h:1945-1989)
+  VarDomain domain;
+};
+
+/// Each variable's type, from imgui.h:1945-1989, and domain, from its uses:
+/// - Unit: Alpha, which NewFrame() asserts (imgui.cpp:11843), which
+///   RenderColorRectWithAlphaCheckerboard() asserts as `alpha` from a
+///   colorButton with a translucent colour (imgui_draw.cpp:7749, from
+///   imgui_widgets.cpp:6633, 6643), and which GetColorU32(ImU32) converts
+///   to ImU32 after multiplying (imgui.cpp:3787-3791), undefined when
+///   negative; DisabledAlpha, which BeginDisabled() multiplies Alpha by
+///   (imgui.cpp:9082), reached by beginMenu() and menuItem() with
+///   `enabled` false; and the alignments WindowTitleAlign,
+///   ButtonTextAlign, SelectableTextAlign and SeparatorTextAlign, each a
+///   factor of the free space placing text that ImGui then converts to int
+///   (imgui.cpp:7921, 7931; imgui_widgets.cpp:820, 7688, 1760, 1770, and
+///   RenderText's IM_TRUNC, imgui_draw.cpp:7353-7354): inside 0 .. 1 the
+///   text stays inside its rectangle, outside it the product grows
+///   without bound.
+/// - MinSize: WindowMinSize, which NewFrame() asserts is at least 1
+///   (imgui.cpp:11844), and which becomes a window's size as it is when
+///   the content is smaller (imgui.cpp:7191-7197).
+/// - NonNegative: ScrollbarSize, which GetWindowScrollbarRect() asserts
+///   (imgui_widgets.cpp:989); and WindowBorderSize, ChildBorderSize,
+///   PopupBorderSize (each a window's border size, imgui.cpp:8302-8304),
+///   FrameBorderSize and ScrollbarPadding, which a negative value turns
+///   from shrinking the scrollbar's rectangle into growing it
+///   (imgui_widgets.cpp:990-995, 1054-1055): a rectangle at least one
+///   unit long over an inner rectangle shorter than one then reaches
+///   ScrollbarEx's plain assertion that the content or visible size is
+///   positive (imgui_widgets.cpp:1060-1064, sizes from 1018-1019).
+/// - Length: every other length, a padding, a spacing, a size, a border
+///   or a rounding: each reaches the draw list as a rounding or a
+///   thickness, or is converted to int as it is or with a small factor
+///   (FramePadding.x as a table's minimum column width,
+///   imgui_tables.cpp:905, 1047, 1103; ItemSpacing.x halved,
+///   imgui_widgets.cpp:9581; ScrollbarPadding, 1054; TabMinWidthBase and
+///   TabMinWidthShrink as a tab's width, 10221, 10196, 10285 and 1882-1925;
+///   FrameBorderSize halved, 991), and is otherwise part of a sum (surface
+///   table, "Not covered" 3f). A negative one is accepted: no
+///   assertion or undefined operation was found for it.
+/// - Any: TableAngledHeadersAngle and TableAngledHeadersTextAlign, read only
+///   by TableAngledHeadersRow() (imgui_tables.cpp:3498, 3551), which is not
+///   bound.
+VarInfo styleVarInfo(int idx) {
+  static_assert(ImGuiStyleVar_COUNT == 45, "re-audit the style variables");
+  using D = VarDomain;
+  switch (idx) {
+#define HNIMGUI_VAR(name, count, domain)  \
+  case ImGuiStyleVar_##name:              \
+    return VarInfo {                      \
+      "StyleVar_" #name, count, D::domain \
+    };
+    HNIMGUI_VAR(Alpha, 1, Unit)
+    HNIMGUI_VAR(DisabledAlpha, 1, Unit)
+    HNIMGUI_VAR(WindowPadding, 2, Length)
+    HNIMGUI_VAR(WindowRounding, 1, Length)
+    HNIMGUI_VAR(WindowBorderSize, 1, NonNegative)
+    HNIMGUI_VAR(WindowMinSize, 2, MinSize)
+    HNIMGUI_VAR(WindowTitleAlign, 2, Unit)
+    HNIMGUI_VAR(ChildRounding, 1, Length)
+    HNIMGUI_VAR(ChildBorderSize, 1, NonNegative)
+    HNIMGUI_VAR(PopupRounding, 1, Length)
+    HNIMGUI_VAR(PopupBorderSize, 1, NonNegative)
+    HNIMGUI_VAR(FramePadding, 2, Length)
+    HNIMGUI_VAR(FrameRounding, 1, Length)
+    HNIMGUI_VAR(FrameBorderSize, 1, NonNegative)
+    HNIMGUI_VAR(ItemSpacing, 2, Length)
+    HNIMGUI_VAR(ItemInnerSpacing, 2, Length)
+    HNIMGUI_VAR(IndentSpacing, 1, Length)
+    HNIMGUI_VAR(CellPadding, 2, Length)
+    HNIMGUI_VAR(ScrollbarSize, 1, NonNegative)
+    HNIMGUI_VAR(ScrollbarRounding, 1, Length)
+    HNIMGUI_VAR(ScrollbarPadding, 1, NonNegative)
+    HNIMGUI_VAR(GrabMinSize, 1, Length)
+    HNIMGUI_VAR(GrabRounding, 1, Length)
+    HNIMGUI_VAR(ImageRounding, 1, Length)
+    HNIMGUI_VAR(ImageBorderSize, 1, Length)
+    HNIMGUI_VAR(TabRounding, 1, Length)
+    HNIMGUI_VAR(TabBorderSize, 1, Length)
+    HNIMGUI_VAR(TabMinWidthBase, 1, Length)
+    HNIMGUI_VAR(TabMinWidthShrink, 1, Length)
+    HNIMGUI_VAR(TabBarBorderSize, 1, Length)
+    HNIMGUI_VAR(TabBarOverlineSize, 1, Length)
+    HNIMGUI_VAR(TableAngledHeadersAngle, 1, Any)
+    HNIMGUI_VAR(TableAngledHeadersTextAlign, 2, Any)
+    HNIMGUI_VAR(TreeLinesSize, 1, Length)
+    HNIMGUI_VAR(TreeLinesRounding, 1, Length)
+    HNIMGUI_VAR(MenuItemRounding, 1, Length)
+    HNIMGUI_VAR(SelectableRounding, 1, Length)
+    HNIMGUI_VAR(DragDropTargetRounding, 1, Length)
+    HNIMGUI_VAR(ButtonTextAlign, 2, Unit)
+    HNIMGUI_VAR(SelectableTextAlign, 2, Unit)
+    HNIMGUI_VAR(SeparatorSize, 1, Length)
+    HNIMGUI_VAR(SeparatorTextBorderSize, 1, Length)
+    HNIMGUI_VAR(SeparatorTextAlign, 2, Unit)
+    HNIMGUI_VAR(SeparatorTextPadding, 2, Length)
+    HNIMGUI_VAR(DockingSeparatorSize, 1, Length)
+#undef HNIMGUI_VAR
+    default:
+      return VarInfo{"StyleVar_COUNT", 0, D::Any};
+  }
+}
+
+/// Checks one component \p v of a value for \p var, named \p what.
+bool varValueOk(Call &c, const VarInfo &var, float v, const char *what) {
+  switch (var.domain) {
+    case VarDomain::Unit:
+      return c.inRange(v, what, 0.0f, 1.0f);
+    case VarDomain::Length:
+      return c.length(v, what, false);
+    case VarDomain::NonNegative:
+      return c.length(v, what, true);
+    case VarDomain::MinSize:
+      return c.inRange(v, what, 1.0f, lengthLimit());
+    case VarDomain::Any:
+      return true;
+  }
+  return true;
+}
 
 /// `styleColorsDark()`, imgui.h:435, with `dst` NULL: the current
 /// context's style. Inside or outside a frame.
@@ -99,10 +241,22 @@ napi_value pushStyleVar(napi_env env, napi_callback_info info) {
     return nullptr;
   if (idx == ImGuiStyleVar_COUNT)
     return c.throwRange("idx must not be StyleVar_COUNT");
+  // The value's domain (styleVarInfo) is checked for the overload of the
+  // variable's own type; the other one is ImGui's recoverable error, which
+  // pushes nothing (imgui.cpp:3900, 3930).
+  const VarInfo var = styleVarInfo(idx);
+  const std::string what = std::string("val for ") + var.name;
   if (c.isArray(1)) {
     ImVec2 val;
     if (!c.vec2(1, "val", &val) || !c.needFrame())
       return nullptr;
+    if (var.count == 2) {
+      const std::string x = std::string("val[0] for ") + var.name;
+      const std::string y = std::string("val[1] for ") + var.name;
+      if (!varValueOk(c, var, val.x, x.c_str()) ||
+          !varValueOk(c, var, val.y, y.c_str()))
+        return nullptr;
+    }
     c.enterImGui();
     ImGui::PushStyleVar(idx, val);
   } else {
@@ -112,6 +266,8 @@ napi_value pushStyleVar(napi_env env, napi_callback_info info) {
           "val must be a number or an array of 2 numbers");
     float val = 0.0f;
     if (!c.f32(1, "val", &val) || !c.needFrame())
+      return nullptr;
+    if (var.count == 1 && !varValueOk(c, var, val, what.c_str()))
       return nullptr;
     c.enterImGui();
     ImGui::PushStyleVar(idx, val);

@@ -164,6 +164,11 @@ struct TableScope {
 };
 TableScope tableScope();
 
+/// The current window's draw list's pixel density, the factor the draw
+/// list multiplies a length by before converting it (`_InvFringeScale`,
+/// an "[internal]" member of ImDrawList, imgui.h:3560). Inside a frame.
+float pixelDensity();
+
 /// Every registered guard condition, `can<Function>:<condition>`, with how
 /// many times it has refused.
 std::vector<std::pair<std::string, int>> guardRefusals();

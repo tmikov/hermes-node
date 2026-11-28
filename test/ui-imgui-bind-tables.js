@@ -43,11 +43,16 @@
 //              four status flags, or WidthStretch | WidthFixed;
 //              tableSetupScrollFreeze with cols -1 or 512, or rows -1 or
 //              128; beginTable with an outerSize component or an
-//              innerWidth of 2^31: ERR_OUT_OF_RANGE, ImGui not called.
+//              innerWidth of 2^31; tableSetupColumn with an
+//              initWidthOrWeight of 2^31, or Codex's 1e10 for a fixed
+//              column in a ScrollX table (ImGui converts a fixed width with
+//              ImTrunc, tables:1103): ERR_OUT_OF_RANGE, ImGui not called.
 //              beginTable with 511 columns, a negative innerWidth without
 //              ScrollX, a ScrollX table of the largest float below 2^31
-//              for its width and its innerWidth, a null column label and
-//              tableSetupScrollFreeze(511, 127) are accepted.
+//              for its width and its innerWidth, a null column label,
+//              tableSetupScrollFreeze(511, 127), and that float as a fixed
+//              column's width (Codex's table) and as a stretch weight, each
+//              then laid out by a row, are accepted.
 //  COVERAGE    every Tables function has reached ImGui.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
@@ -58,6 +63,8 @@
 //  NEXTCOLUMN fails;
 //  beginTable's column-count check removed: REJECTED fails (ImGui aborts);
 //  beginTable's outerSize or innerWidth bound removed: REJECTED fails;
+//  (codex) tableSetupColumn's initWidthOrWeight bound removed: REJECTED
+//  fails;
 //  tableSetupColumn passing 0 for its width: COLUMNS fails;
 //  ImGui::TableSetupScrollFreeze() removed: SCROLL fails.
 //
@@ -349,8 +356,26 @@ async function main() {
                               'ERR_OUT_OF_RANGE').message);
       accepted('tableSetupScrollFreeze',
                () => imgui.tableSetupScrollFreeze(511, 127));
+      for (const w of [2147483648, 1e10])
+        messages.push(
+            rejects('tableSetupColumn',
+                    () => imgui.tableSetupColumn(
+                        'w', imgui.TableColumnFlags_WidthFixed, w),
+                    'ERR_OUT_OF_RANGE').message);
       imgui.tableNextRow();
       imgui.endTable();
+      // Codex's table, with the largest float below 2^31 for the width.
+      for (const [id, flags] of [['fixed', imgui.TableColumnFlags_WidthFixed],
+                                 ['stretch', imgui.TableColumnFlags_WidthStretch]]) {
+        if (imgui.beginTable(id, 1,
+                             id === 'fixed' ? imgui.TableFlags_ScrollX : 0,
+                             [200, 100])) {
+          accepted('tableSetupColumn',
+                   () => imgui.tableSetupColumn('c', flags, 2147483520));
+          imgui.tableNextRow();
+          imgui.endTable();
+        }
+      }
     }));
     console.log('REJECTED ok');
     for (const m of messages)
@@ -389,6 +414,8 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}REJECTED message imgui.tableSetupScrollFreeze(): cols must be an integer from 0 to 511; got 512{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.tableSetupScrollFreeze(): rows must be an integer from 0 to 127; got -1{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.tableSetupScrollFreeze(): rows must be an integer from 0 to 127; got 128{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.tableSetupColumn(): initWidthOrWeight must be less than 2147483648; got 2.14748e+09{{$}}
+// CHECK-NEXT: {{^}}REJECTED message imgui.tableSetupColumn(): initWidthOrWeight must be less than 2147483648; got 1e+10{{$}}
 // CHECK-NEXT: {{^}}COVERAGE Tables ok{{$}}
 // CODE: EXITCODE 0
 

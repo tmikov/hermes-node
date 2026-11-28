@@ -19,6 +19,7 @@ Tracks progress on `docs/superpowers/plans/2026-11-27-imgui-binding.md`
 | Task 8 | Docking and settings | done (GL) |
 | Task 9 | The application | done (GL) |
 | Task 10 | Documentation and the full suite | done (GL) |
+| Codex review | Codex's code review, round 1 (C1-C8, L1-L3) | in progress (GL) |
 
 ## Mutations
 
@@ -310,6 +311,24 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | final review | `imgui-app-viewer.js` | the regular-file check removed (the stat kept, its answer ignored) | `NOT_REGULAR WRONG fifo={"status":"text","rec":["fs.stat","fs.open","handle.read","handle.close"],...}`; test failed. (Removing the stat call as well fails SUPERSEDE first, whose hand-settled step is now the stat.) |
 | final review | `ui-imgui-app.js` (SPECIAL) | (RED) run against the unfixed `files.js` and `viewer.js` | `SPECIAL WRONG the FIFO listed as {"kind":"file"}`; test failed |
 | final review | `ui-imgui-app.js` (SPECIAL) | the unfixed `viewer.js` alone (the tree's labelling kept) | `TIMEOUT idle SPECIAL link` after the link to the FIFO was clicked: the open() blocked a threadpool thread and app.idle() never resolved; the run ended in 34 s, bounded by the test's own wait, not a hang; test failed |
+| codex | `ui-imgui-bind-style.js` (VARS) | (RED) VARS written, `pushStyleVar` unchanged | `NOTHROW ERR_OUT_OF_RANGE` after `MISMATCH message ...`, `EXITCODE 1`: Codex's `ScrollbarSize -1` accepted. By hand on the same build, Codex's sequence: `imgui_widgets.cpp:989: GetWindowScrollbarRect ... Assertion scrollbar_size >= 0.0f failed`, exit 134 |
+| codex | `ui-imgui-bind-widgets.js` (COLORDOMAIN) | (RED) COLORDOMAIN written, the editors unchanged | `NOTHROW ERR_OUT_OF_RANGE` after `REJECTED ok` (Codex's `[1e10, 0, 0]` accepted), `EXITCODE 1` |
+| codex | `ui-imgui-bind-tables.js` (REJECTED) | (RED) the width cases written, `tableSetupColumn` unchanged | `NOTHROW ERR_OUT_OF_RANGE` after `SCROLL ok`, `EXITCODE 1` |
+| codex | `ui-imgui-bind-drawlist.js` (LENGTHS) | (RED) LENGTHS written, the draw list unchanged | `NOTHROW ERR_OUT_OF_RANGE` after `LIMITS message ...` (Codex's `addCircleFilled` radius `1e10` accepted), `EXITCODE 1` |
+| codex | `ui-imgui-bind-plots.js` (HISTSCALE) | (RED) HISTSCALE written, `plotHistogram` unchanged | `NOTHROW ERR_OUT_OF_RANGE` after `REJECTED message ...`, `EXITCODE 1` |
+| codex | `ui-imgui-bind-style.js` (VARS) | `varValueOk()` returning true | `NOTHROW ERR_OUT_OF_RANGE` at Codex's `ScrollbarSize -1`, `EXITCODE 1`; test failed |
+| codex | `ui-imgui-bind-style.js` (VARS) | `Call::length()`'s not-negative half removed (`lo` always `-limit`) | `NOTHROW ERR_OUT_OF_RANGE` (at `ScrollbarSize -1`, the first refusal it reopens); test failed |
+| codex | `ui-imgui-bind-style.js` (VARS) | the Unit domain checked as a length | `NOTHROW ERR_OUT_OF_RANGE` (at `Alpha -0.5`); test failed |
+| codex | `ui-imgui-bind-style.js` (VARS) | the MinSize domain checked as a length | `NOTHROW ERR_OUT_OF_RANGE` (at `WindowMinSize [0.5, 10]`); test failed |
+| codex | `ui-imgui-bind-widgets.js` (COLORDOMAIN) | `colorComponentsOk()` returning true | `NOTHROW ERR_OUT_OF_RANGE` at Codex's `[1e10, 0, 0]`; test failed |
+| codex | `ui-imgui-bind-widgets.js` (COLORDOMAIN) | the HSV domain removed (`hsv` always false) | `NOTHROW ERR_OUT_OF_RANGE` (at `[2048.5, 0, 0]` with `InputHSV`); test failed |
+| codex | `ui-imgui-bind-tables.js` (REJECTED) | `tableSetupColumn`'s `initWidthOrWeight` bound removed | `NOTHROW ERR_OUT_OF_RANGE` after `SCROLL ok`; test failed |
+| codex | `ui-imgui-bind-drawlist.js` (LENGTHS) | `radiusOk()` returning true | `NOTHROW ERR_OUT_OF_RANGE` at Codex's `addCircleFilled([100, 100], 1e10, ...)`; test failed |
+| codex | `ui-imgui-bind-drawlist.js` (LENGTHS) | `addLine`'s thickness check removed | `NOTHROW ERR_OUT_OF_RANGE` (at Codex's `addLine` thickness `1e10` with `StrokeCenterBiased`); test failed |
+| codex | `ui-imgui-bind-drawlist.js` (LENGTHS) | `cornerOk()` returning true | `NOTHROW ERR_OUT_OF_RANGE` (at the first corner of `2^30 + 128`); test failed |
+| codex | `ui-imgui-bind-drawlist.js` (LENGTHS) | `addText`'s position check removed | `NOTHROW ERR_OUT_OF_RANGE` (at `[2^31, 0]`); test failed |
+| codex | `ui-imgui-bind-plots.js` (HISTSCALE) | `histogramOk()` returning true | `NOTHROW ERR_OUT_OF_RANGE` at `[0, FLT_MAX]`; test failed |
+| codex | `ui-imgui-bind-plots.js` (HISTSCALE) | only the reciprocal check removed | `NOTHROW ERR_OUT_OF_RANGE` (at `[0, 1e-45]`); test failed |
 
 ## Behaviours no test detects
 
@@ -396,6 +415,13 @@ automated test would notice losing. Each task appends its own.
   dropped by the callback's first binding call. None is reachable with an
   itemHeight of at least 1 (the one recoverable check is in the measuring
   branch, imgui.cpp:3620), so no test reaches the two lines.
+- **The length limit's division by the pixel density** (`lengthLimit()`,
+  `bind/bind_util.cpp`; Codex review). Every window test opens its window
+  without `highDpi`, at density 1, where the limit is 2^20 units either
+  way: a mutation that drops the division (or the cap at 2^20 units for a
+  density below 1) leaves every test green. Read: at density D the draw
+  list multiplies each length by D before the conversions the limit
+  protects (imgui_draw.cpp:666, 873, 2412-2413, 2598).
 
 ## Notes
 
@@ -1740,3 +1766,68 @@ the code and ImGui's source before it was changed.
 - Each commit of this round ran `./utils/format.sh -f` and then
   `cmake --build cmake-build-asan --target check-hermes-node`, green
   (JS 271 passed, 10 unsupported; unit 460) before it was made.
+
+### Codex code review, round 1
+
+Codex's findings, verbatim, are in
+`.superpowers/sdd/2026-11-27-imgui-binding/codex-code-r1.md`; the ruling
+on each in `codex-findings.md` beside it. Mutations are the rows tagged
+"codex".
+
+- **C1 (style variable values)** verified and reproduced by hand before
+  the fix, on `cmake-build-asan`: Codex's sequence aborts at
+  `imgui_widgets.cpp:989`. Every exported variable now has a domain
+  (`styleVarInfo()` in `bind_style.cpp`, with the source lines of each):
+  0..1 for `Alpha`, `DisabledAlpha` and four alignments; 1..limit for
+  `WindowMinSize`; 0..limit for `ScrollbarSize` (the assertion),
+  `ScrollbarPadding` and the four window/frame border sizes (a negative one
+  grows the scrollbar's rectangle, which can reach ScrollbarEx's plain
+  assertion, widgets:1060-1064); the length limit either way for the rest;
+  the two angled-header variables unbounded (read only by the unbound
+  `TableAngledHeadersRow()`). A pushed value cannot reach the next
+  `NewFrame()`'s style assertions: the frame-end recovery pops it first
+  (imgui.cpp:6432-6433), and `pushStyleVar` needs a frame. The check
+  applies only to the overload of the variable's own type; the other is
+  ImGui's recoverable error, which pushes nothing (MISMATCH unchanged).
+- **The length limit** (`lengthLimit()`, `bind_util.cpp`), shared by C1
+  and C4: 2^20 screen pixels at the window's pixel density, at most 2^20
+  units. The binding reads the density from the current window's draw list
+  (`guard::pixelDensity()`, `_InvFringeScale`, an "[internal]" member of
+  `imgui.h`), so the bound is exact rather than assuming a framebuffer
+  scale; the alternative considered, clamping the framebuffer scale in the
+  platform half so the bound could be a constant, was not taken because it
+  would change rendering.
+- **C2 (colour editors)** verified by reading, and the conversions
+  demonstrated with ImGui's own expressions in a standalone program built
+  with `-fsanitize=float-cast-overflow` (`IM_F32_TO_INT8_UNBOUND(1e10)`:
+  "2.55e+12 is outside the range of representable values of type 'int'").
+  On x86-64 without the sanitizer the conversion is silent (cvttss2si's
+  0x80000000), which is why the window test can only show the refusal.
+  The domain depends on the input mode: RGB 0..2^23 (non-negative, because
+  the HSV display, selectable from the editor's own options menu during
+  the call, divides by the largest component); HSV -2048..2048, so that
+  the HSV-to-RGB products stay below 2^23. HDR values above 1 stay
+  accepted.
+- **C3 (column widths)** verified by reading (tables:1689, 1103). Bound
+  below 2^31 whatever the flags, since with neither width flag the table's
+  sizing policy decides (tables:791-798). A stretch weight is converted
+  only through sums and products with content widths: 3f.
+- **C4 (draw-list radii and thicknesses)** verified by reading and by the
+  same standalone program: the fallback segment formula at a radius of
+  4e8 (below `INT_MAX`) converts `inf`. Radius, thickness and rounding are
+  bounded by the length limit, derived from the segment count's fallback
+  (safe to `e * 2^24` = 5033164 screen pixels at e = 0.30) and the
+  centre-biased offset's cast.
+- **The sweep** (the table is "Not covered" 3f's, now every numeric
+  argument): beyond Codex's four, three conversions of arguments as they
+  are were found and bounded: `addRect`'s and `addRectFilled`'s corners
+  (`IM_IS_TRUNCATED4`, a plain `(int)` on ARM and in a Debug build),
+  `addText`'s position (`IM_TRUNC`), and a histogram's values and scales
+  (NaN corners from an overflowing scale, then the same conversion).
+  Classified "sum" and left in 3f: a stretch weight, `tableNextRow`'s
+  `minRowHeight`, the colour picker's grab positions. A new "Not covered"
+  item 3h (a dock splitter with `DockingSeparatorSize` above the node's
+  size), from reading, not measured; the tracker issue gained it.
+- Every new case's RED was recorded by running the new tests against the
+  unfixed addon (the fix set aside and the addon rebuilt), then GREEN.
+

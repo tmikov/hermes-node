@@ -432,8 +432,10 @@ into ImGui that can report an error: by every binding function just
 before its ImGui call (`Call::enterImGui()`, `render()`'s `Render()`
 included), by `newFrame()` before it ends a discarded frame, and by the
 list clipper after each callback, before its own `Step()` and `End()`.
-That is what keeps them off: ImGui code can turn them back on, and the
-demo window does (`showDemoWindow()` with its Configuration >
+The cost is a test for the context and four `bool` stores into `ImGuiIO`
+per binding call, made whether or not anything changed them. That is
+what keeps them off: ImGui code can turn them back on, and the demo
+window does (`showDemoWindow()` with its Configuration >
 Configuration node open sets all three outputs on every frame,
 imgui_demo.cpp:626-627, and its Tools > Debug Options menu has a checkbox
 for the assert). Setting them at context creation and at each
@@ -574,7 +576,39 @@ the format rule and throws a `TypeError` with `ERR_INVALID_ARG_VALUE`:
   `vMax <= FLT_MAX/2`; `sliderInt`: `vMin >= INT_MIN/2` and
   `vMax <= INT_MAX/2` (the two bounds ImGui's slider asserts, and nothing
   more: `vMin` is not checked from above, nor `vMax` from below);
-  `setScrollHereY`'s ratio from 0 to 1.
+  `setScrollHereY`'s ratio from 0 to 1;
+- a length, which the draw list multiplies by the window's pixel density
+  and converts to `int`: at most 2^20 screen pixels at that density, and
+  at most 2^20 units, either way (`lengthLimit()` in `bind/bind_util.cpp`
+  has the derivation; at density 1, 1048576). It is the bound on every
+  draw-list `thickness` and `rounding`, on an `addCircle` /
+  `addCircleFilled` `radius` with an automatic segment count (ImGui's
+  segment count divides by zero from a radius of about 1e7, below
+  `INT_MAX`), and on the style lengths below;
+- `drawList.addRect` and `addRectFilled`, each corner component within
+  +-2^30 (both convert the corners to `int`); `drawList.addText`'s
+  position from -2^31 to below 2^31;
+- `pushStyleVar`, per variable: `Alpha`, `DisabledAlpha` and the four
+  bound alignments from 0 to 1; `WindowMinSize` from 1 to the length
+  limit; `ScrollbarSize`, `ScrollbarPadding` and the window, child, popup
+  and frame border sizes from 0 to the length limit (a negative
+  scrollbar size is a plain assertion in ImGui, and the others can reach
+  one); every other length within the length limit either way
+  (`styleVarInfo()` in `bind/bind_style.cpp` lists each variable's
+  source lines);
+- `colorEdit3` and `colorEdit4`, each component (alpha included) from 0 to
+  2^23 with RGB input, from -2048 to 2048 with `ColorEditFlags_InputHSV`
+  (ImGui converts every component to `int`; an RGB one must not be
+  negative because the editor's HSV display, which its own options menu
+  can select, divides by the largest component). A value ImGui writes
+  back outside that domain (an HDR drag below 0) is refused at the next
+  call, before ImGui converts it;
+- `tableSetupColumn`'s `initWidthOrWeight` below 2^31 (a fixed column's
+  width is converted as it is);
+- `plotHistogram`, each value and each scale other than `FLT_MAX` within
+  +-`FLT_MAX`/2, and the scale range 0 or with a finite reciprocal (each
+  bar is a filled rectangle, whose corners are converted to `int`, and
+  an overflowing scale makes them NaN).
 
 Beyond those, each function refuses the flag combinations and values
 ImGui asserts on plainly (`InputTextFlags_Callback*`, `Col_COUNT`,
@@ -911,6 +945,10 @@ What the binding takes from `imgui_internal.h`, all of it in
   window's `Name`, `Active`, `WasActive` and `DockIsActive`, and
   `g.WithinFrameScope`; `__test.tableScope()` reads `g.CurrentTable`, its
   `InnerWindow`'s `Name`, and `g.CurrentWindow`'s `Name`.
+- Read for the length limit (`guard::pixelDensity()`): the current
+  window's `DrawList->_InvFringeScale`, the density the draw list
+  multiplies lengths by; it is declared in `imgui.h`, commented
+  "[internal]" (imgui.h:3560).
 - Copied from ImGui's private source rather than a header, and so checked
   by eye at a bump: the expression of `TREE_NODE_GET_DEPTH_MASK`
   (`canTreePop`), the combo popup's window name `"##Combo_%02d"`

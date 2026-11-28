@@ -691,3 +691,12 @@ read against the code to find out.
 15. **What is still not prevented** is longer than "the limit of goal 3"
     suggests: the plan's surface table lists each case under "Not
     covered", and the tracker carries them.
+16. **Value domains beyond sizes and positions** (Codex's code review):
+    every finite value that passes the float check but lies outside the
+    domain ImGui's code assumes is refused, each derived from the source
+    and listed in the surface table's "Not covered" 3f: a length limit
+    of 2^20 screen pixels at the window's pixel density for draw-list
+    radii, thicknesses and roundings and for style lengths; a domain per
+    style variable; colour-editor components; a table column's width;
+    draw-list rectangle corners and text positions; histogram values and
+    scales.

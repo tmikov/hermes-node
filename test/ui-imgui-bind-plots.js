@@ -40,6 +40,16 @@
 //            valuesOffset 3 on 4 values, an overlay text, and 4096 values
 //            in a frame 4096 wide (the widest the cap allows) are
 //            accepted.
+//  HISTSCALE a histogram's values and scales (histogramOk() in
+//            bind/bind_plots.cpp: a bar's corners are converted to int, and
+//            NaN reaches them from an overflowing scale): refused with
+//            ERR_OUT_OF_RANGE, not called: a value of FLT_MAX, a scaleMin
+//            or scaleMax of -FLT_MAX, the values [0, 1e-45] scaled from
+//            themselves and the explicit scale 0 .. 1e-45 (each a range
+//            whose reciprocal is infinite). Accepted, called and drawn: the
+//            values [FLT_MAX/2, -FLT_MAX/2] scaled from themselves, [0, 0]
+//            (equal scales), and plotLines of [0, 1e-45], which draws lines
+//            and needs no bound.
 //  COVERAGE  every Plots function has reached ImGui.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
@@ -48,7 +58,8 @@
 //  (`NOTCALLED plotLines`, its accepted edge), before COVERAGE;
 //  valuesOffset's upper bound removed: REJECTED fails;
 //  valuesOffset passed as 0: OFFSET fails;
-//  the graph size not passed (ImVec2(0, 0)): RECTS fails.
+//  the graph size not passed (ImVec2(0, 0)): RECTS fails;
+//  (codex) histogramOk() returning true: HISTSCALE fails.
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -298,6 +309,29 @@ async function main() {
       console.log('REJECTED message ' + m);
   }
 
+  // --- HISTSCALE -------------------------------------------------------
+  {
+    const messages = [];
+    const M = imgui.FLT_MAX;
+    const drew = await h.run(() => plotWindow(() => {
+      const rx = (...args) =>
+          messages.push(rejects('plotHistogram',
+                                () => imgui.plotHistogram('h', ...args),
+                                'ERR_OUT_OF_RANGE').message);
+      rx([0, M]);
+      rx([0, 1], 0, null, -M, 1);
+      rx([0, 1], 0, null, 0, -M);
+      rx([0, 1e-45]);
+      rx([0.5], 0, null, 0, 1e-45);
+      accepted('plotHistogram', () => imgui.plotHistogram('a', [M / 2, -M / 2]));
+      accepted('plotHistogram', () => imgui.plotHistogram('b', [0, 0]));
+      accepted('plotLines', () => imgui.plotLines('c', [0, 1e-45]));
+    }));
+    console.log(drew === true ? 'HISTSCALE ok' : 'HISTSCALE render=' + drew);
+    for (const m of messages)
+      console.log('HISTSCALE message ' + m);
+  }
+
   harness.checkGroupCoverage(h, 'Plots');
   process.exit(0);
 }
@@ -332,6 +366,12 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}REJECTED message imgui.plotHistogram(): values must hold at most 4096 numbers; got 4097{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.plotHistogram(): values is a detached Float32Array{{$}}
 // CHECK-NEXT: {{^}}REJECTED message imgui.plotLines(): graphSize[0] must be less than 2147483648; got 3e+09{{$}}
+// CHECK-NEXT: {{^}}HISTSCALE ok{{$}}
+// CHECK-NEXT: {{^}}HISTSCALE message imgui.plotHistogram(): values[1] must be within -FLT_MAX/2 .. FLT_MAX/2 in a histogram; got 3.40282e+38{{$}}
+// CHECK-NEXT: {{^}}HISTSCALE message imgui.plotHistogram(): scaleMin must be FLT_MAX or within -FLT_MAX/2 .. FLT_MAX/2 in a histogram; got -3.40282e+38{{$}}
+// CHECK-NEXT: {{^}}HISTSCALE message imgui.plotHistogram(): scaleMax must be FLT_MAX or within -FLT_MAX/2 .. FLT_MAX/2 in a histogram; got -3.40282e+38{{$}}
+// CHECK-NEXT: {{^}}HISTSCALE message imgui.plotHistogram(): a histogram's scale range must be 0 or have a finite reciprocal; got 1.4013e-45 (scaleMax 1.4013e-45, scaleMin 0, a scale of FLT_MAX taken from the values){{$}}
+// CHECK-NEXT: {{^}}HISTSCALE message imgui.plotHistogram(): a histogram's scale range must be 0 or have a finite reciprocal; got 1.4013e-45 (scaleMax 1.4013e-45, scaleMin 0, a scale of FLT_MAX taken from the values){{$}}
 // CHECK-NEXT: {{^}}COVERAGE Plots ok{{$}}
 // CODE: EXITCODE 0
 

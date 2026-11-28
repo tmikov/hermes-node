@@ -44,6 +44,24 @@
 //            nothing was pushed, so a following popStyleVar() is "too many
 //            times", ERR_IMGUI_USAGE too. StyleVar_COUNT is
 //            ERR_OUT_OF_RANGE, not called.
+//  VARS      each style variable's domain (styleVarInfo() in
+//            bind/bind_style.cpp has each one's source lines), at a pixel
+//            density of 1, where a length's limit is 2^20 = 1048576.
+//            Refused with ERR_OUT_OF_RANGE, not called: Codex's
+//            ScrollbarSize -1 before begin() with
+//            WindowFlags_AlwaysVerticalScrollbar; Alpha -0.5 and 1.5,
+//            DisabledAlpha 1.5, ButtonTextAlign [1.5, 0] and [0, -0.5]
+//            (0 to 1); WindowMinSize [0.5, 10] and [10, 1048577] (1 to
+//            the limit); WindowBorderSize, FrameBorderSize and
+//            ScrollbarPadding -0.5 (not negative); FramePadding
+//            [1048577, 0], WindowRounding -1048577 and TabMinWidthBase
+//            1048577 (within the limit either way). Accepted, called, and
+//            a window drawn with each in force: ScrollbarSize 0 in Codex's
+//            sequence, Alpha 0 and 1, ButtonTextAlign [1, 1],
+//            WindowMinSize [1, 1], WindowBorderSize 0, FramePadding
+//            [-1048576, 1048576], WindowRounding -1048576, and
+//            TableAngledHeadersAngle 1e30, which no bound function reads.
+//            The wrong overload is still ImGui's own error (MISMATCH).
 //  COVERAGE  every Style function has reached ImGui.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
@@ -53,7 +71,12 @@
 //  and GETCOLOR fail;
 //  getColorU32's Col_COUNT refusal removed: GETCOLOR fails;
 //  pushStyleVar's float overload passing 1 instead of the value: ALPHA
-//  fails.
+//  fails;
+//  (codex) the domain check removed (varValueOk() returning true), the
+//  not-negative half of Call::length() removed, the Unit domain checked
+//  as a length, or the MinSize domain checked as a length: VARS fails,
+//  each at the first refusal it reopens (ScrollbarSize -1, which is
+//  Codex's sequence; Alpha -0.5; WindowMinSize [0.5, 10]).
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -275,6 +298,58 @@ async function main() {
       console.log('MISMATCH message ' + m);
   }
 
+  // --- VARS ------------------------------------------------------------
+  {
+    const L = 1048576;
+    const messages = [];
+    const V = (name) => imgui['StyleVar_' + name];
+    const drew = await h.run(() => {
+      const rx = (name, val) =>
+          messages.push(rejects('pushStyleVar',
+                                () => imgui.pushStyleVar(V(name), val),
+                                'ERR_OUT_OF_RANGE').message);
+      // Codex's sequence, refused at the push.
+      rx('ScrollbarSize', -1);
+      imgui.setNextWindowSize([200, 200]);
+      imgui.begin('bad', null, imgui.WindowFlags_AlwaysVerticalScrollbar);
+      imgui.end();
+      for (const [name, val] of [['Alpha', -0.5], ['Alpha', 1.5],
+                                 ['DisabledAlpha', 1.5],
+                                 ['ButtonTextAlign', [1.5, 0]],
+                                 ['ButtonTextAlign', [0, -0.5]],
+                                 ['WindowMinSize', [0.5, 10]],
+                                 ['WindowMinSize', [10, L + 1]],
+                                 ['WindowBorderSize', -0.5],
+                                 ['FrameBorderSize', -0.5],
+                                 ['ScrollbarPadding', -0.5],
+                                 ['FramePadding', [L + 1, 0]],
+                                 ['WindowRounding', -(L + 1)],
+                                 ['TabMinWidthBase', L + 1]])
+        rx(name, val);
+      for (const [name, val] of [['ScrollbarSize', 0], ['Alpha', 0],
+                                 ['Alpha', 1], ['ButtonTextAlign', [1, 1]],
+                                 ['WindowMinSize', [1, 1]],
+                                 ['WindowBorderSize', 0],
+                                 ['FramePadding', [-L, L]],
+                                 ['WindowRounding', -L],
+                                 ['TableAngledHeadersAngle', 1e30]]) {
+        const before = calls('pushStyleVar');
+        imgui.pushStyleVar(V(name), val);
+        if (calls('pushStyleVar') !== before + 1)
+          fail('NOTCALLED pushStyleVar ' + name);
+        imgui.setNextWindowSize([200, 200]);
+        imgui.begin('vars ' + name, null,
+                    imgui.WindowFlags_AlwaysVerticalScrollbar);
+        imgui.button('b');
+        imgui.end();
+        imgui.popStyleVar();
+      }
+    });
+    console.log(drew === true ? 'VARS ok' : 'VARS render=' + drew);
+    for (const m of messages)
+      console.log('VARS message ' + m);
+  }
+
   harness.checkGroupCoverage(h, 'Style');
   process.exit(0);
 }
@@ -294,6 +369,21 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}MISMATCH ok{{$}}
 // CHECK-NEXT: {{^}}MISMATCH message imgui.pushStyleVar(): Calling PushStyleVar() variant with wrong type!{{$}}
 // CHECK-NEXT: {{^}}MISMATCH message imgui.popStyleVar(): Calling PopStyleVar() too many times!{{$}}
+// CHECK-NEXT: {{^}}VARS ok{{$}}
+// CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val for StyleVar_ScrollbarSize must be from 0 to 1048576 (2^20 pixels at pixel density 1); got -1{{$}}
+// CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val for StyleVar_Alpha must be from 0 to 1; got -0.5{{$}}
+// CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val for StyleVar_Alpha must be from 0 to 1; got 1.5{{$}}
+// CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val for StyleVar_DisabledAlpha must be from 0 to 1; got 1.5{{$}}
+// CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val[0] for StyleVar_ButtonTextAlign must be from 0 to 1; got 1.5{{$}}
+// CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val[1] for StyleVar_ButtonTextAlign must be from 0 to 1; got -0.5{{$}}
+// CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val[0] for StyleVar_WindowMinSize must be from 1 to 1048576; got 0.5{{$}}
+// CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val[1] for StyleVar_WindowMinSize must be from 1 to 1048576; got 1048577{{$}}
+// CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val for StyleVar_WindowBorderSize must be from 0 to 1048576 (2^20 pixels at pixel density 1); got -0.5{{$}}
+// CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val for StyleVar_FrameBorderSize must be from 0 to 1048576 (2^20 pixels at pixel density 1); got -0.5{{$}}
+// CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val for StyleVar_ScrollbarPadding must be from 0 to 1048576 (2^20 pixels at pixel density 1); got -0.5{{$}}
+// CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val[0] for StyleVar_FramePadding must be from -1048576 to 1048576 (2^20 pixels at pixel density 1); got 1048577{{$}}
+// CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val for StyleVar_WindowRounding must be from -1048576 to 1048576 (2^20 pixels at pixel density 1); got -1048577{{$}}
+// CHECK-NEXT: {{^}}VARS message imgui.pushStyleVar(): val for StyleVar_TabMinWidthBase must be from -1048576 to 1048576 (2^20 pixels at pixel density 1); got 1048577{{$}}
 // CHECK-NEXT: {{^}}COVERAGE Style ok{{$}}
 // CODE: EXITCODE 0
 

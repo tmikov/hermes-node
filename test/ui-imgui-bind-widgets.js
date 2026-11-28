@@ -65,6 +65,16 @@
 //            beginCombo's three flag combinations; colorEdit3/4's three;
 //            inputFloat / inputInt with a Callback* bit or WordWrap: each
 //            ERR_OUT_OF_RANGE, not called.
+//  COLORDOMAIN colorEdit3 and colorEdit4 components (colorComponentsOk()
+//            in bind/bind_widgets.cpp has the derivation): refused with
+//            ERR_OUT_OF_RANGE, not called: Codex's [1e10, 0, 0]; an RGB
+//            component of 8388609 or -0.5, alpha included; with
+//            ColorEditFlags_InputHSV, 2048.5 or -2048.5. Accepted, called
+//            and drawn: [8388608, 8388608, 8388608] and the same with alpha
+//            8388608, under ColorEditFlags_HDR and _Float and under
+//            DisplayHSV (the conversion that needs RGB components not to be
+//            negative), [0, 0, 0, 0], and with InputHSV and an RGB display
+//            [-2048, 2048, -2048, 2048].
 //  COVERAGE  every Widgets function has reached ImGui.
 //
 // THE MUTATIONS THIS MUST BREAK: the full list, with what each did, is the
@@ -718,6 +728,44 @@ async function main() {
     console.log(accepted === 5 ? 'REJECTED ok' : 'REJECTED accepted ' + accepted);
   }
 
+  // --- COLORDOMAIN -----------------------------------------------------
+  {
+    const messages = [];
+    const big = 8388608;
+    const HSV = imgui.ColorEditFlags_InputHSV;
+    let accepted = 0;
+    const drew = await h.run(inWindow(() => {
+      const rx = (name, col, flags) =>
+          messages.push(rejects(name, () => imgui[name]('##x', col, flags),
+                                'ERR_OUT_OF_RANGE').message);
+      rx('colorEdit3', [1e10, 0, 0]);
+      rx('colorEdit3', [0, big + 1, 0]);
+      rx('colorEdit3', [0, 0, -0.5]);
+      rx('colorEdit4', [0, 0, 0, big + 1]);
+      rx('colorEdit4', [0, 0, 0, -0.5]);
+      rx('colorEdit3', [2048.5, 0, 0], HSV);
+      rx('colorEdit4', [0, 0, 0, -2048.5], HSV);
+      const ok = (name, col, flags) => {
+        const before = calls(name);
+        imgui[name]('##' + accepted, col, flags);
+        if (calls(name) !== before + 1)
+          fail('NOTCALLED ' + name + ' ' + JSON.stringify(col));
+        ++accepted;
+      };
+      ok('colorEdit3', [big, big, big]);
+      ok('colorEdit4', [big, big, big, big],
+         imgui.ColorEditFlags_HDR | imgui.ColorEditFlags_Float);
+      ok('colorEdit4', [big, big, big, big], imgui.ColorEditFlags_DisplayHSV);
+      ok('colorEdit4', [0, 0, 0, 0], imgui.ColorEditFlags_DisplayHSV);
+      ok('colorEdit4', [-2048, 2048, -2048, 2048],
+         HSV | imgui.ColorEditFlags_DisplayRGB);
+    }));
+    console.log(drew === true && accepted === 5 ? 'COLORDOMAIN ok' :
+                'COLORDOMAIN render=' + drew + ' accepted=' + accepted);
+    for (const m of messages)
+      console.log('COLORDOMAIN message ' + m);
+  }
+
   harness.checkGroupCoverage(h, 'Widgets');
   process.exit(0);
 }
@@ -747,6 +795,14 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}FORMAT message imgui.sliderFloat(): format: a width or a precision must be at most 2 digits (at most 99); got '%100f'{{$}}
 // CHECK-NEXT: {{^}}FORMATLEN ok{{$}}
 // CHECK-NEXT: {{^}}REJECTED ok{{$}}
+// CHECK-NEXT: {{^}}COLORDOMAIN ok{{$}}
+// CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit3(): col[0] must be from 0 to 8388608; got 1e+10{{$}}
+// CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit3(): col[1] must be from 0 to 8388608; got 8388609{{$}}
+// CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit3(): col[2] must be from 0 to 8388608; got -0.5{{$}}
+// CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit4(): col[3] must be from 0 to 8388608; got 8388609{{$}}
+// CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit4(): col[3] must be from 0 to 8388608; got -0.5{{$}}
+// CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit3(): col[0] must be from -2048 to 2048; got 2048.5{{$}}
+// CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit4(): col[3] must be from -2048 to 2048; got -2048.5{{$}}
 // CHECK-NEXT: {{^}}COVERAGE Widgets ok{{$}}
 // CODE: EXITCODE 0
 
