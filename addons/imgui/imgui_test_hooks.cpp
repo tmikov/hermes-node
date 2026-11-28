@@ -655,6 +655,20 @@ napi_value tableScope(napi_env env, napi_callback_info) {
   return result;
 }
 
+/// `colorEditState()`: `{held, hue, saturation}`, whether ImGui holds a
+/// saved colour-edit state and its hue and saturation, which a colour
+/// editor restores while the colour still matches it.
+napi_value colorEditState(napi_env env, napi_callback_info) {
+  const guard::ColorEditState s = guard::colorEditState();
+  napi_value result = nullptr;
+  if (napi_create_object(env, &result) != napi_ok ||
+      !setBool(env, result, "held", s.held) ||
+      !setNumber(env, result, "hue", s.hue) ||
+      !setNumber(env, result, "saturation", s.sat))
+    return nullptr;
+  return result;
+}
+
 /// `detachArrayBuffer(buffer)`: detaches \p buffer with
 /// napi_detach_arraybuffer, so that a test can hand the binding a typed
 /// array whose buffer is gone. This runtime has no other way to detach one
@@ -755,6 +769,7 @@ napi_value createTestHooks(napi_env env) {
       {"setTooltipDelay", setTooltipDelay},
       {"setErrorOutputs", setErrorOutputs},
       {"tableScope", tableScope},
+      {"colorEditState", colorEditState},
       {"detachArrayBuffer", detachArrayBuffer}};
   for (const auto &f : functions) {
     napi_value fn = nullptr;

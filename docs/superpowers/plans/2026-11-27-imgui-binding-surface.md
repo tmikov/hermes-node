@@ -1669,7 +1669,11 @@ All six pass a finished string and never let ImGui interpret `%`.
   ImGuiColorEditFlags flags = 0, const ImVec2& size = ImVec2(0, 0));`
   (`imgui.h:756`)
 - Overload: only one. Nullable: none. Omitted: none.
-- Frame: open. Rejected: none.
+- Frame: open. Rejected: a component outside the colour editors' domain
+  for the flags' input mode (`colorEdit3`), added after Codex's second
+  round (D2): with `InputHSV`, `ColorConvertHSVtoRGB` can produce NaN from
+  a negative hue and a huge saturation at value 0 (imgui.cpp:3046-3055),
+  which the colour packing then converts to int (3006-3009).
 - Label-id: yes.
 - Preconditions: label-id (`ItemAdd(bb, id)`, widgets:6600). No plain
   assertion found (widgets:6588-6680).
@@ -3466,7 +3470,8 @@ a C++ program.
    | `progressBar` `fraction` | saturated, or reduced by `ImFmod` when negative | widgets:1458-1472 | not needed |
    | `radioButton` `vButton` | never (compared and stored) | widgets:1431-1437 | not needed |
    | `colorButton` `size` | sum | widgets:6597-6599, 6631; draw:7760, 7769 | no |
-   | `colorButton` `col`, `textColored` `col`, `pushStyleColor` `col`, `getColorU32` `col` and `alphaMul`, `colorConvertFloat4ToU32` `col` | saturated (`ColorConvertFloat4ToU32`, `IM_F32_TO_INT8_SAT`; `colorButton`'s HSV conversion gives finite or infinite products, never NaN) | imgui.cpp:3003-3011, 3762-3775; widgets:6611 | not needed |
+   | `textColored` `col`, `pushStyleColor` `col`, `getColorU32` `col` and `alphaMul`, `colorConvertFloat4ToU32` `col` | saturated (`ColorConvertFloat4ToU32`, `IM_F32_TO_INT8_SAT`), which bounds a finite or infinite component; NaN would pass through `ImSaturate` (internal:552) and be converted, but none arises: these colours meet only finite factors (style Alpha in 0..1, a finite `alphaMul`, constants and lerps of style colours, imgui.cpp:3762-3775, 12203, 13060, 20026), so a product can overflow to infinity, never become NaN | imgui.cpp:3003-3011, 3762-3775 | not needed |
+   | `colorButton` `col` | as it is with `ColorEditFlags_InputHSV`: `ColorConvertHSVtoRGB`'s `s * (1 - f)` overflows for a negative hue's f < 0, and times a zero value is NaN, which `ColorConvertFloat4ToU32` converts (imgui.cpp:3046-3055, 3006-3009; widgets:6610-6611; Codex's round 2, D2). The earlier "never NaN" reading assumed f >= 0 and was wrong | widgets:6610-6611 | yes: the colour editors' domain, RGB 0 .. 2^23, HSV -2048 .. 2048 (with \|s\|, \|v\| <= 2048 the factors stay below 1 + 2 * 2048) |
    | `colorEdit3`, `colorEdit4` `col` | as it is (`IM_F32_TO_INT8_UNBOUND`, after an RGB/HSV conversion) | widgets:5980, 5972-5978; imgui.cpp:3031, 3049-3052 | yes: RGB 0 .. 2^23, HSV -2048 .. 2048 (C2) |
    | `colorEdit4` (picker open) `col` | sum (the picker's grab positions, a component times the picker's size) | widgets:6537-6562 | no |
    | `sliderFloat`, `sliderFloat2`..`4` `vMin`, `vMax` | asserted | widgets:3358 | yes, +-FLT_MAX/2 |
@@ -3578,6 +3583,24 @@ a C++ program.
    `ImAddClampOverflow`, which saturates (widgets:2351-2352;
    internal:543-544), and need no bound.
 
+3k. **A value typed into the colour picker's own editors** (Codex's
+   round 2, D1, by reading). The picker that a colour editor opens draws
+   three editors of its own on the same array, "##rgb", "##hsv" and
+   "##hex" (widgets:6418-6437), inside the outer editor's one ImGui call.
+   A number typed into one of them (Ctrl+click; the drags do not clamp
+   typed text, `TempInputScalar` clamps only with `AlwaysClamp`) is
+   written to the array or saved as the hue (6124-6128) and read back by
+   the next editor and the picker in the same call: the "##hsv" editor
+   converts the array's HSV form to int (5980), and the picker restores
+   the saved hue (6461) and places its hue-bar cursor at it times its
+   size (`IM_ROUND`, 6543). The binding sees the array and the saved state
+   only between calls, where it clamps and forgets them (G6,
+   `sanitizeColorEditState()`); between these three editors it cannot
+   intervene. A value of 2^23 or more typed there reaches an undefined
+   conversion in that call. The outer editor's own fields are not this
+   case: what they produce is consumed at the next call, after the
+   binding's check.
+
 Recorded here for completeness, although not assertions:
 
 4. Guards are ImGui's own conditions and are as weak as they are (the
@@ -3659,6 +3682,7 @@ Written:
 | State | Declared | Written by | Why |
 |---|---|---|---|
 | `g.ErrorCallback`, `g.ErrorCallbackUserData` | 2876, 2877 | context creation | the design's error callback |
+| `g.ColorEditSavedID` (read with `ColorEditSavedHue`, `ColorEditSavedSat`, 2810-2812) | 2810 | `colorEdit3`, `colorEdit4`, set to 0 before ImGui is called when the saved hue or saturation is outside 0 .. 1 or not finite (`guard::sanitizeColorEditState()`) | Codex's round 2, D1: ImGui restores the saved hue and saturation while the colour matches (widgets:5902-5917, 5978) and converts them to int (5980); 0 is the "nothing saved" value ImGui starts with (imgui.cpp:4550) |
 | `g.BeginComboDepth` | 2808 | `newFrame()`, set to 0 before `ImGui::NewFrame()` | ruling 19: nothing in ImGui restores the counter after a combo left open (see `endCombo`); zero is always correct at the start of a frame |
 | `ImGuiListClipper::ItemsCount` | imgui.h:3074, commented "[Internal]" | `listClipper`, set to -1 when abandoning | the design's abandon rule (imgui.cpp:3521) |
 

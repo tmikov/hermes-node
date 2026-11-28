@@ -341,6 +341,8 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | codex | `imgui-app-viewer.js` (CLASSIFY) | `secondByteOk()` giving every lead the default range 0x80..0xBF (the same outcome as removing the check) | the same five `CLASSIFY WRONG ... "status":"text"` entries; test failed |
 | codex (write-back) | `ui-imgui-bind-widgets.js` (DRAGDOMAIN) | both write-back clamps removed (dragInt's and the colour editors') | `DRAGDOMAIN WRONG top {"first":1126141823,...,"refused":"imgui.dragInt(): v[0] must be from -1073741823 to 1073741823; got 1126141823"...} hdr {"first":-256.643...,"refused":"imgui.colorEdit3(): col[0] must be from 0 to 8388608; got -256.643127"...}`; test failed |
 | codex (write-back) | `ui-imgui-bind-widgets.js` (DRAGDOMAIN) | the automatic speed not capped (vSpeed 0 passed through) | `DRAGDOMAIN WRONG capped {"v":[0],"want":53644500,...}`: the accumulator overflowed int (INT_MIN on x86-64) and ImGui's own wrap test clamped to the lower bound; test failed |
+| codex r2 | `ui-imgui-bind-widgets.js` (SAVEDHUE) | (RED, and the mutation) `guard::sanitizeColorEditState()` not called | `SAVEDHUE WRONG large {"saved":{"held":true,"hue":10000000000,"saturation":0},"after":{"held":true,"hue":10000000000,...}}`: ImGui kept and restored the typed hue (and converted it at widgets:5980, silently on x86-64); test failed |
+| codex r2 | `ui-imgui-bind-widgets.js` (COLORDOMAIN) | (RED, and the mutation) `colorButton`'s domain check removed | `NOTHROW ERR_OUT_OF_RANGE` after `REJECTED ok` (Codex's `[-0.1, FLT_MAX, 0, 1]` with InputHSV accepted); test failed |
 
 ## Behaviours no test detects
 
@@ -1917,4 +1919,25 @@ on each in `codex-findings.md` beside it. Mutations are the rows tagged
   there; an HDR red component dragged below 0 ends at 0) and the capped
   speed's exact float product. The input test's CLAMP checks that a
   negative coordinate inside the bound reaches ImGui unchanged.
+
+### Codex code review, round 2
+
+Codex's text: `.superpowers/sdd/2026-11-27-imgui-binding/codex-code-r2.md`.
+
+- **D1 (saved hue)** verified by reading (widgets:5902-5917, 5978, 5980,
+  6124-6128) and reproduced: with the forgetting removed, SAVEDHUE reads
+  hue 1e10 still held after the next call, so ImGui restored and
+  converted it. Fixed by forgetting a saved state outside 0 .. 1
+  (`SavedID = 0`) before each editor call; in-domain state (everything an
+  ordinary drag or the picker saves) is kept, and SAVEDHUE shows hue 0.5
+  kept. Invalidation was chosen over clamping: it fabricates no hue. The
+  picker's nested editors produce and consume such a value inside one
+  ImGui call, which the binding cannot get between: "Not covered" 3k.
+- **D2 (colorButton NaN)** verified by reading (imgui.cpp:3046-3055:
+  a negative hue gives f < 0 and `s * (1 - f)` overflows; times v = 0,
+  NaN). The sweep row's "never NaN" was wrong (it assumed f >= 0); the
+  row is split and corrected. colorButton now takes the editors' domain
+  (one helper). The other float-colour arguments were re-derived: they
+  meet only finite factors and saturating packing, so they overflow to
+  infinity at worst, never NaN.
 

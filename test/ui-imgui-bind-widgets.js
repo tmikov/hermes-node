@@ -74,7 +74,17 @@
 //            8388608, under ColorEditFlags_HDR and _Float and under
 //            DisplayHSV (the conversion that needs RGB components not to be
 //            negative), [0, 0, 0, 0], and with InputHSV and an RGB display
-//            [-2048, 2048, -2048, 2048].
+//            [-2048, 2048, -2048, 2048]. colorButton takes the same domain
+//            (Codex's round 2, D2): [-0.1, FLT_MAX, 0, 1] with InputHSV is
+//            refused, [-2048, 2048, 0, 1] accepted and drawn.
+//  SAVEDHUE  ImGui's saved hue (round 2, D1): a colorEdit3 of [0, 0, 0]
+//            with InputRGB, DisplayHSV, Float and HDR; a Ctrl+click on its
+//            hue field, 0.5 and Enter: ImGui saves hue 0.5 (read back with
+//            __test.colorEditState()), and the next frames keep it (hue
+//            preservation unchanged). Then 10000000000 and Enter (a float,
+//            not 3j's overflowing text): ImGui saves it, and the next call
+//            forgets it before ImGui could restore it (held false, traced);
+//            the colour stays [0, 0, 0] and every call is accepted.
 //  DRAGDOMAIN dragInt's domain (dragIntDomainOk() in bind/bind_widgets.cpp:
 //            a drag adds the mouse delta times the speed to the value in
 //            int, and the platform half clamps mouse coordinates to
@@ -767,6 +777,12 @@ async function main() {
       rx('colorEdit4', [0, 0, 0, -0.5]);
       rx('colorEdit3', [2048.5, 0, 0], HSV);
       rx('colorEdit4', [0, 0, 0, -2048.5], HSV);
+      // Codex's round-2 D2: a negative hue and a huge saturation at value 0
+      // make ColorConvertHSVtoRGB produce NaN.
+      messages.push(rejects('colorButton',
+                            () => imgui.colorButton('bad', [-0.1, imgui.FLT_MAX, 0, 1],
+                                                    HSV),
+                            'ERR_OUT_OF_RANGE').message);
       const ok = (name, col, flags) => {
         const before = calls(name);
         imgui[name]('##' + accepted, col, flags);
@@ -781,11 +797,66 @@ async function main() {
       ok('colorEdit4', [0, 0, 0, 0], imgui.ColorEditFlags_DisplayHSV);
       ok('colorEdit4', [-2048, 2048, -2048, 2048],
          HSV | imgui.ColorEditFlags_DisplayRGB);
+      {
+        const before = calls('colorButton');
+        imgui.colorButton('good', [-2048, 2048, 0, 1], HSV);
+        if (calls('colorButton') !== before + 1)
+          fail('NOTCALLED colorButton');
+      }
     }));
     console.log(drew === true && accepted === 5 ? 'COLORDOMAIN ok' :
                 'COLORDOMAIN render=' + drew + ' accepted=' + accepted);
     for (const m of messages)
       console.log('COLORDOMAIN message ' + m);
+  }
+
+  // --- SAVEDHUE --------------------------------------------------------
+  {
+    const c = [0, 0, 0];
+    const flags = imgui.ColorEditFlags_InputRGB |
+        imgui.ColorEditFlags_DisplayHSV | imgui.ColorEditFlags_Float |
+        imgui.ColorEditFlags_HDR;
+    let r = null, threw = null;
+    const draw = inWindow(() => {
+      try {
+        imgui.colorEdit3('colour', c, flags);
+      } catch (e) {
+        threw = e.message;
+      }
+      r = rect();
+    });
+    await settle(draw);
+    const at = [Math.floor(r.min[0]) + 8, Math.floor((r.min[1] + r.max[1]) / 2)];
+    const state = () => imgui.__test.colorEditState();
+    /** Ctrl+click the hue field, type `text`, Enter; until `done`. */
+    async function typeHue(text, done) {
+      await harness.moveTo(h, draw, at);
+      harness.inject(h, {type: 'MOUSE_DOWN', button: LEFT, modifiers: 2,
+                         mouseX: at[0], mouseY: at[1]});
+      await harness.until(h, draw, (s) => s.mouseDown[LEFT], 'SAVEDHUE down');
+      harness.inject(h, {type: 'MOUSE_UP', button: LEFT, modifiers: 0,
+                         mouseX: at[0], mouseY: at[1]});
+      await harness.until(h, draw, (s) => s.wantTextInput, 'SAVEDHUE input');
+      for (const ch of text)
+        harness.inject(h, {type: 'CHAR', charCode: ch.codePointAt(0)});
+      await harness.pressKey(h, draw, SAPP_KEYCODE_ENTER, 0, done);
+    }
+    const wrong = [];
+    await typeHue('0.5', () => state().held && state().hue === 0.5);
+    await h.run(draw);
+    await h.run(draw);
+    const kept = state();
+    if (!(kept.held && kept.hue === 0.5))
+      wrong.push('kept ' + JSON.stringify(kept));
+    await typeHue('10000000000', () => state().hue === 10000000000);
+    const saved = state();
+    await h.run(draw);
+    await h.run(draw);
+    const after = state();
+    if (!(saved.held && !after.held) || !same(c, [0, 0, 0]) || threw !== null)
+      wrong.push('large ' + JSON.stringify({saved, after, c, threw}));
+    console.log(wrong.length === 0 ? 'SAVEDHUE ok' :
+                                     'SAVEDHUE WRONG ' + wrong.join(' '));
   }
 
   // --- DRAGDOMAIN ------------------------------------------------------
@@ -949,6 +1020,8 @@ main().catch((e) => {
 // CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit4(): col[3] must be from 0 to 8388608; got -0.5{{$}}
 // CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit3(): col[0] must be from -2048 to 2048; got 2048.5{{$}}
 // CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorEdit4(): col[3] must be from -2048 to 2048; got -2048.5{{$}}
+// CHECK-NEXT: {{^}}COLORDOMAIN message imgui.colorButton(): col[1] must be from -2048 to 2048; got 3.40282347e+38{{$}}
+// CHECK-NEXT: {{^}}SAVEDHUE ok{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got 1e+10{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got 819.5{{$}}
 // CHECK-NEXT: {{^}}DRAGDOMAIN message imgui.dragInt(): vSpeed must be from -819 to 819; got -820{{$}}
@@ -965,3 +1038,5 @@ main().catch((e) => {
 // No case here is a usage error, so none is traced (the
 // --implicit-check-not on the TRACE run).
 // TRACE: {{^}}[ui] imgui: context created
+// SAVEDHUE: the saved hue of 1e10 forgotten before the next editor call.
+// TRACE: {{^}}[ui] imgui: colorEdit: saved hue 1e+10, saturation 0 outside 0..1, forgotten{{$}}

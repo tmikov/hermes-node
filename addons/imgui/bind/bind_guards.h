@@ -177,6 +177,29 @@ struct TableScope {
 };
 TableScope tableScope();
 
+/// Brings ImGui's saved colour-edit state into its domain before a colour
+/// editor runs (Codex's code review, round 2, D1): the hue and saturation
+/// ImGui keeps from the last edit (g.ColorEditSavedHue / SavedSat) and
+/// restores, while the RGB value still matches, when it reads back a
+/// saturation or value of 0 (ColorEditRestoreHS, imgui_widgets.cpp:5902-
+/// 5917; called at 5978 by the editor and at 6274 and 6461 by its picker).
+/// The editor converts the restored values to int (5980), and the picker
+/// places its hue cursor at the hue times its size (IM_ROUND, 6543). A
+/// value typed into the HSV display with HDR is saved as it is (6124-
+/// 6128), so the state is forgotten (SavedID = 0, which no editor's ID
+/// equals) when either is outside 0 .. 1 or not finite; a state inside
+/// 0 .. 1, everything an ordinary edit or the picker saves, is kept, so
+/// hue preservation is unchanged for it. Traced when it forgets.
+void sanitizeColorEditState();
+/// For __test.colorEditState(): whether a saved state is held, and its
+/// hue and saturation.
+struct ColorEditState {
+  bool held;
+  float hue;
+  float sat;
+};
+ColorEditState colorEditState();
+
 /// The current window's draw list's pixel density, the factor the draw
 /// list multiplies a length by before converting it (`_InvFringeScale`,
 /// an "[internal]" member of ImDrawList, imgui.h:3560). Inside a frame.

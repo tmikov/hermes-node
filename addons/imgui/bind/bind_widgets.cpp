@@ -162,7 +162,15 @@ constexpr float kMaxHsvComponent = 2048.0f;
 ///   select that display from the editor's own options menu during the
 ///   call (6745-6747, called at 5948 and read back at 5951-5952) unless the
 ///   flags fix one.
-/// - HSV: -kMaxHsvComponent to kMaxHsvComponent.
+/// - HSV: -kMaxHsvComponent to kMaxHsvComponent. ColorConvertHSVtoRGB's
+///   fractional part f is in (-1, 1), negative for a negative hue
+///   (imgui.cpp:3046-3049), so its factors `1 - s * f` and
+///   `1 - s * (1 - f)` are at most 1 + 2 * 2048 in magnitude and no product
+///   overflows. With s unbounded, `s * (1 - f)` overflows for f < 0 and
+///   times a zero v gives NaN (3050-3055), which ImSaturate keeps
+///   (imgui_internal.h:552) and ColorConvertFloat4ToU32 converts to int
+///   (imgui.cpp:3006-3009): Codex's colorButton case (round 2, D2), which is
+///   why colorButton takes the same domain.
 /// The editor's own DragInt on `255 * component` (5980, 6032) then adds a
 /// drag's accumulator at speed 1, below 1 + 10 * 2^17 (dragIntDomainOk()),
 /// to at most 255 * 2^23 = 2139095040: still below 2^31.
@@ -177,12 +185,14 @@ void colorDomain(int flags, float *lo, float *hi) {
   *hi = hsv ? kMaxHsvComponent : kMaxRgbComponent;
 }
 
-bool colorComponentsOk(Call &c, const RefFloat &col, int flags) {
+/// The domain checked on \p n components \p v of `col`, for the colour
+/// editors and colorButton alike.
+bool colorComponentsOk(Call &c, const float *v, int n, int flags) {
   float lo = 0.0f, hi = 0.0f;
   colorDomain(flags, &lo, &hi);
-  for (int k = 0; k < col.n; ++k) {
+  for (int k = 0; k < n; ++k) {
     const std::string what = "col[" + std::to_string(k) + "]";
-    if (!c.inRange(col.values[k], what.c_str(), lo, hi))
+    if (!c.inRange(v[k], what.c_str(), lo, hi))
       return false;
   }
   return true;
@@ -193,9 +203,9 @@ bool colorComponentsOk(Call &c, const RefFloat &col, int flags) {
 /// saturation dragged past 1 in the HSV display, or a value typed in,
 /// stops at the domain's edge. The editor reads `col` afresh every frame
 /// (imgui_widgets.cpp:5971) and converts it then, so the clamp is what it
-/// converts next; what ImGui keeps between frames, the saved hue and
-/// saturation, is reused only while the colour still matches it
-/// (5891-5920), and is otherwise ignored.
+/// converts next. What ImGui keeps between frames, the saved hue and
+/// saturation, is brought into its own domain before each editor call
+/// (guard::sanitizeColorEditState()).
 void clampColor(RefFloat &col, int flags) {
   float lo = 0.0f, hi = 0.0f;
   colorDomain(flags, &lo, &hi);
@@ -834,8 +844,9 @@ napi_value colorEdit3(napi_env env, napi_callback_info info) {
   int flags = 0;
   if (!c.ok() || !c.string(0, "label", &label) ||
       !c.refFloat(1, "col", 3, false, &col) || !colorEditFlags(c, 2, &flags) ||
-      !c.needFrame() || !colorComponentsOk(c, col, flags))
+      !c.needFrame() || !colorComponentsOk(c, col.values, col.n, flags))
     return nullptr;
+  guard::sanitizeColorEditState();
   c.enterImGui();
   const bool changed = ImGui::ColorEdit3(label.c_str(), col.ptr(), flags);
   if (!c.leaveImGui())
@@ -855,8 +866,9 @@ napi_value colorEdit4(napi_env env, napi_callback_info info) {
   int flags = 0;
   if (!c.ok() || !c.string(0, "label", &label) ||
       !c.refFloat(1, "col", 4, false, &col) || !colorEditFlags(c, 2, &flags) ||
-      !c.needFrame() || !colorComponentsOk(c, col, flags))
+      !c.needFrame() || !colorComponentsOk(c, col.values, col.n, flags))
     return nullptr;
+  guard::sanitizeColorEditState();
   c.enterImGui();
   const bool changed = ImGui::ColorEdit4(label.c_str(), col.ptr(), flags);
   if (!c.leaveImGui())
@@ -878,6 +890,11 @@ napi_value colorButton(napi_env env, napi_callback_info info) {
       (!c.isMissing(2) && !c.flags(2, "flags", kColorEditFlags, &flags)) ||
       (!c.isMissing(3) && !c.vec2(3, "size", &size)) || !c.needFrame() ||
       !c.needLabelId("descId", descId))
+    return nullptr;
+  // The editors' domain (colorComponentsOk()): with InputHSV ColorButton
+  // converts through ColorConvertHSVtoRGB (imgui_widgets.cpp:6610-6611).
+  const float components[4] = {col.x, col.y, col.z, col.w};
+  if (!colorComponentsOk(c, components, 4, flags))
     return nullptr;
   c.enterImGui();
   const bool pressed = ImGui::ColorButton(descId.c_str(), col, flags, size);

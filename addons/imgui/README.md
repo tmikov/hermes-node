@@ -600,13 +600,15 @@ the format rule and throws a `TypeError` with `ERR_INVALID_ARG_VALUE`:
   one); every other length within the length limit either way
   (`styleVarInfo()` in `bind/bind_style.cpp` lists each variable's
   source lines);
-- `colorEdit3` and `colorEdit4`, each component (alpha included) from 0 to
-  2^23 with RGB input, from -2048 to 2048 with `ColorEditFlags_InputHSV`
-  (ImGui converts every component to `int`; an RGB one must not be
-  negative because the editor's HSV display, which its own options menu
-  can select, divides by the largest component). A value ImGui writes
-  back outside that domain (an HDR drag below 0) is refused at the next
-  call, before ImGui converts it;
+- `colorEdit3`, `colorEdit4` and `colorButton`, each component (alpha
+  included) from 0 to 2^23 with RGB input, from -2048 to 2048 with
+  `ColorEditFlags_InputHSV` (with HSV input both convert through
+  `ColorConvertHSVtoRGB`, which gives NaN for a negative hue and a huge
+  saturation at value 0; the editors convert every component to `int`;
+  an RGB one must not be negative because the editor's HSV display, which
+  its own options menu can select, divides by the largest component). A
+  value an editor writes back outside that domain (an HDR drag below 0)
+  is clamped into it (below);
 - `tableSetupColumn`'s `initWidthOrWeight` below 2^31 (a fixed column's
   width is converted as it is);
 - `dragInt`: the value and both bounds within +-(2^30 - 1) and `vSpeed`
@@ -992,7 +994,12 @@ What the binding takes from `imgui_internal.h`, all of it in
   `g.ErrorCallbackUserData` (context creation: the error callback), and
   `g.BeginComboDepth`, set to 0 by every `newFrame()` before
   `ImGui::NewFrame()` (nothing in ImGui resets it after a combo left open,
-  and zero is always right at the start of a frame). Outside that header,
+  and zero is always right at the start of a frame); and
+  `g.ColorEditSavedID`, set to 0 before a colour editor runs when the
+  saved hue or saturation (`g.ColorEditSavedHue`, `ColorEditSavedSat`,
+  read for it) is outside 0 .. 1 or not finite, so ImGui forgets a hue
+  typed past the domain instead of restoring it and converting it to
+  `int` (`guard::sanitizeColorEditState()`). Outside that header,
   `bind/bind_clipper.cpp` writes `ImGuiListClipper::ItemsCount`, declared
   in `imgui.h` but commented "[Internal]", to -1 when it abandons a
   clipper; and the four `io.ConfigErrorRecovery*` fields above are public

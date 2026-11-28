@@ -710,6 +710,28 @@ TableScope tableScope() {
   return s;
 }
 
+void sanitizeColorEditState() {
+  ImGuiContext &g = *GImGui;
+  if (g.ColorEditSavedID == 0)
+    return;
+  const auto inUnit = [](float v) { return v >= 0.0f && v <= 1.0f; };
+  if (inUnit(g.ColorEditSavedHue) && inUnit(g.ColorEditSavedSat))
+    return;
+  trace(
+      "colorEdit: saved hue %g, saturation %g outside 0..1, forgotten",
+      static_cast<double>(g.ColorEditSavedHue),
+      static_cast<double>(g.ColorEditSavedSat));
+  g.ColorEditSavedID = 0;
+}
+
+ColorEditState colorEditState() {
+  ImGuiContext *g = ImGui::GetCurrentContext();
+  if (g == nullptr)
+    return ColorEditState{false, 0.0f, 0.0f};
+  return ColorEditState{
+      g->ColorEditSavedID != 0, g->ColorEditSavedHue, g->ColorEditSavedSat};
+}
+
 float pixelDensity() {
   return GImGui->CurrentWindow->DrawList->_InvFringeScale;
 }
