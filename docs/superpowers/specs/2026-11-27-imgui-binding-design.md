@@ -615,3 +615,76 @@ flag and docked flag of each ImGui window in the last ended frame.
 - The fixture tree for the application's test mode.
 - Which ImGui preconditions each function's argument checks cover, from
   reading ImGui's source for that function.
+
+## As built
+
+The sections above are the design as it was reviewed before the build.
+The build kept its conventions and went further in several places, most
+of them because reading ImGui's source for each bound function found more
+plain assertions and unchecked conversions than the design had listed.
+`addons/imgui/README.md` describes the binding as it is; this list says
+where it differs from the text above, so that neither document has to be
+read against the code to find out.
+
+1. **Vectors** accept an `Array` of at least 2 or 4 numbers; further
+   elements are ignored.
+2. **Overload dispatch** on the JavaScript type also covers `getID`,
+   `pushStyleVar` (number or vector), `getColorU32`, `radioButton`,
+   `selectable` and `menuItem` (a boolean, `undefined` or `null` as third
+   argument selects the `selected` form, an array the reference form).
+3. **A non-integer number** where an `int` is required is a `RangeError`
+   (`ERR_OUT_OF_RANGE`), not a `TypeError`.
+4. **Keys**: besides being an exported enumerator, a key argument must be
+   a named key or exactly one `Mod_` constant.
+5. **More limits**, each named in its error message: plots take at most
+   4096 values and a graph width below 2^31; the list clipper needs
+   `itemHeight >= 1`, `count <= INT_MAX - 1` and `count * itemHeight <=
+   2^30`; item widths and the sizes of windows, children, list boxes and
+   multi-line fields are below 2^31; `setNextWindowPos` is within the
+   `int` range; a table has 1 to 511 columns and freezes at most 511
+   columns and 127 rows; slider bounds are within half the type's range;
+   `setScrollHereY`'s ratio is 0 to 1; a mouse button is 0 to 4.
+6. **The clipper's scope comparison** also includes the window's begin
+   count and the table's instance, so a window or table closed and
+   reopened inside the callback is detected.
+7. **`ERR_INVALID_ARG_VALUE`** is also thrown for a detached
+   `Float32Array`; a non-finite element of one is `ERR_OUT_OF_RANGE`.
+8. **Error recovery** sets four fields, not three: `ConfigErrorRecovery`
+   itself is set to true as well, and the debug log is turned off.
+9. **`imgui_internal.h`** is still confined to `bind_guards.cpp`, but that
+   file reads more than the design listed: the dock context (for the
+   dock-space guards), the table temp-data stack (for the table-region
+   check), each window's activity and docking flags (for the test hook).
+   It also **writes**: the error callback and its user data, and
+   `BeginComboDepth` at `newFrame()`. The README's "Bumping ImGui" section
+   holds the full list.
+10. **More guards**: a label that hashes to the window's own ID;
+    `endMainMenuBar`; a second `beginMenuBar`; `beginPopupContextItem`
+    with no item ID; `endTable` in the wrong window or with the cursor
+    moved above the table; `tableSetupColumn` with a name table over its
+    offset limit or leaving every column disabled;
+    `tableSetupScrollFreeze` after layout; `tableSetColumnIndex` with no
+    row; `end`, `endChild` and `endListBox` inside a scrolling table's
+    region, including through nested plain tables; `dockSpaceOverViewport`
+    twice in a frame or on a node that is not a root; `listClipper` in a
+    window that is not the table's. Two are deliberately stricter than
+    ImGui, because the call ImGui accepts aborts later:
+    `tableSetColumnIndex` with no table, and the dock-space conditions
+    when the host window is skipping items.
+11. **More test hooks**: `guards()`, `setDoubleClickTime`,
+    `setTooltipDelay`, `tableScope`, `detachArrayBuffer`.
+12. **`loadIniSettingsFromMemory` takes trusted input only**: a string
+    `saveIniSettingsToMemory` produced. A malformed one can hang or abort
+    ImGui, and the binding does not validate ImGui's settings grammar.
+13. **Ten functions, not four, work outside a frame**: the two style
+    functions, the two settings functions, `getTime` and the five IO
+    accessors; `colorConvertFloat4ToU32` needs no context at all.
+14. **The application's test mode** is `createApp({driven: true})` with a
+    fixed clock, not an environment variable. Its Monitor plots the
+    resident set size and shows heap figures only when the runtime
+    reports them, which this one does not yet. Reset Layout also reopens
+    closed panels. The file tree is drawn through the list clipper, so its
+    per-frame cost follows what is visible.
+15. **What is still not prevented** is longer than "the limit of goal 3"
+    suggests: the plan's surface table lists each case under "Not
+    covered", and the tracker carries them.
