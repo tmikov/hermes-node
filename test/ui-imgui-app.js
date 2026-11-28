@@ -7,14 +7,17 @@
 // test: createApp({root, clock: 'fixed', driven: true}) registers no frame
 // callback of its own, and every frame here is one app.frame() run through
 // harness.adopt(app)'s h.run. Clicks go to the rectangles the application
-// records (app.rects) for each Files row; asynchronous file work is waited
-// for with app.idle() while frames keep running; nothing is asserted from
-// elapsed time.
+// records in test mode (app.rects: exactly what the last frame drew, by
+// path for a Files row, by label for a menu item, `tab:<name>` for a
+// Widgets tab, `more:<path>` for a directory's "... N more" row);
+// asynchronous file work is waited for with app.idle() while frames keep
+// running; nothing is asserted from elapsed time.
 //
 // The root is a copy of test/fixtures/imgui/app-tree at %t.tree, to which
-// the test adds `gone.txt` (removed after it was listed) and `locked/`
-// (mode 000; as root, which can read it anyway, the case prints
-// `SKIP locked`).
+// the test adds `gone.txt` (removed after it was listed), `locked/` (mode
+// 000; as root, which can read it anyway, the case prints `SKIP locked`),
+// `big/` (5001 files, one over the Files panel's 5000-entry cap) and
+// `small/` (50 files).
 //
 // Two runs, selected by the first argument.
 //
@@ -25,7 +28,7 @@
 //  PANELS     after 10 frames state().windows holds Files, Viewer,
 //             Widgets, Monitor, Canvas and Log, each active and docked.
 //             (Then, frames until app.idle(): the root's listing, `APP dir
-//             <tree> entries=7`.)
+//             <tree> entries=9`.)
 //  OPEN       a click on a.txt's row: `APP opened <tree>/a.txt 12
 //             lines=3`, and the viewer's state is text with 3 lines.
 //  DIR        a click on dir1's row: `APP dir <tree>/dir1 entries=2`, and
@@ -35,6 +38,18 @@
 //             <path> ENOENT`), locked/ (`APP error <path> EACCES`): each
 //             prints its line and the next frame draws. (The size and
 //             encoding edges are test/imgui-app-viewer.js's.)
+//  COLLAPSE   a click on dir1's row again: in the next frame app.rects
+//             has no rectangle under dir1/ (it holds what was drawn).
+//  BIG        big/ opened (`APP dir ... entries=5001`), then collapsed and
+//             small/ opened (`... entries=50`): the binding calls of one
+//             frame (__test.bindCalls()) with each open differ by at most
+//             BIG_CALL_SLACK and stay under BIG_CALL_LIMIT, so the cost
+//             does not grow with the entries (the list clipper draws what
+//             is visible). Then big/ again, a wheel over the panel to the
+//             end of the list: the last entry shown (f4999) and the
+//             `... 1 more` row are drawn, and a click on f4999 opens it.
+//             Back to the top, big/ collapsed: nothing under big/ in
+//             app.rects.
 //  CANVAS     at setTime(0) the canvas's centre pixel is the centre
 //             circle's configured colour; at setTime(1) the pixel at
 //             canvas.orbitPosition(1) is the orbiting circle's colour and
@@ -44,29 +59,44 @@
 //             size granted is printed, unchecked) and back to 1280x800,
 //             with part A's resize protocol: no `APP error` between, no
 //             usage error (the trace's exclusion), PANELS holds after.
-//  RESET      a layout in which Log floats, loaded between frames with
-//             imgui.loadIniSettingsFromMemory: Log is then not docked;
-//             app.resetLayout() and two frames: all six docked again.
+//  RESET      FLOATING (ImGui's own saved settings with every panel
+//             floating, see below) loaded between frames: no panel is
+//             docked; Canvas closed through its open flag: not active;
+//             app.resetLayout() and two frames: all six active and docked
+//             again, Canvas included (a reset reopens closed panels).
 //  QUIT       app.quit(): the process ends with status 0 (CODE).
 //
-// `throw` (Review Focus 2): the Widgets panel's Table tab selected, then
-// with an uncaughtException listener installed
-// `panels.widgets.throwNextFrame = true`: the panel throws from inside a
-// listClipper callback, inside a table, inside a child window, inside its
-// tab and window. That frame is a frame callback of its own, registered
-// with ui.requestAnimationFrame (not harness.rawTick, which would catch
-// the throw itself and the listener would never see it); the listener
-// sees the error; after harness.resync, 10 frames later PANELS holds. Its
-// stderr: the discarded frame's usage errors and `frame discarded`, and
-// after the marker the test writes once the next frame has drawn, no
-// usage error at all.
+// `throw` (Review Focus 2): the Widgets panel's Table tab clicked (its
+// rectangle in app.rects), until its child window is active in
+// state().windows; then with an uncaughtException listener installed
+// `panels.widgets.throwNextFrame = true` (honoured only in test mode): the
+// panel throws from inside a listClipper callback, inside a table, inside
+// a child window, inside its tab and window. That frame is a frame
+// callback of its own, registered with ui.requestAnimationFrame (not
+// harness.rawTick, which would catch the throw itself and the listener
+// would never see it); the listener sees the error; after harness.resync,
+// 10 frames later PANELS holds. Its stderr: the discarded frame's usage
+// errors and `frame discarded`, and after the marker the test writes once
+// the next frame has drawn, no usage error at all.
+//
+// How FLOATING was produced: a scratch run of the application loaded,
+// between two frames, a window-only settings section for Log without a
+// DockId (the shape test/ui-imgui-bind-docking.js's UNDOCK loads), which
+// clears ImGui's dock data and so left all six panels floating; after five
+// more frames imgui.saveIniSettingsToMemory() returned this text, less the
+// fallback window's section and the LastUsed= lines. So what the test
+// loads is ImGui's own output, as the application's DEFAULT is.
 //
 // THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
+//  the Files list clipper removed (every row drawn): BIG fails on the
+//  call count;
+//  app.rects not emptied per frame: COLLAPSE fails;
+//  resetLayout() not reopening panels: RESET fails;
 //  the Reset Layout load done inside the frame: RESET (the load throws
 //  ERR_IMGUI_USAGE);
 //  the canvas drawing's orbit radius changed: CANVAS;
-//  CallbackScope's destructor not lowering the callback depth: `throw`
-//  (the next newFrame() throws ERR_IMGUI_USAGE and PANELS fails).
+//  the callback scope left raised after the callback threw: `throw` (the
+//  next newFrame() throws ERR_IMGUI_USAGE and PANELS fails).
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -85,7 +115,7 @@
 // CODE: EXITCODE 0
 //
 // CHECK: SCALE {{[0-9.]+$}}
-// CHECK: APP dir [[TREE]] entries=7
+// CHECK: APP dir [[TREE]] entries=9
 // CHECK: PANELS ok
 // CHECK: APP opened [[TREE]]/a.txt 12 lines=3
 // CHECK: OPEN ok
@@ -99,6 +129,12 @@
 // CHECK: EDGES gone.txt ok
 // CHECK: {{^(APP error .*/locked EACCES|SKIP locked)$}}
 // CHECK: EDGES locked ok
+// CHECK: COLLAPSE ok
+// CHECK: APP dir [[TREE]]/big entries=5001
+// CHECK: APP dir [[TREE]]/small entries=50
+// CHECK: BIG calls per frame: big {{[0-9]+}}, small {{[0-9]+$}}
+// CHECK: APP opened [[TREE]]/big/f4999 2 lines=1
+// CHECK: BIG ok
 // CHECK: CANVAS ok
 // CHECK: TINY start
 // CHECK-NOT: APP error
@@ -106,6 +142,7 @@
 // CHECK-NOT: APP error
 // CHECK: TINY ok
 // CHECK: RESET floating
+// CHECK: RESET closed
 // CHECK: RESET ok
 // CHECK: QUIT calling
 // CHECK: QUIT exit
@@ -147,6 +184,57 @@ const driverPath = process.argv[5];
 const PANEL_NAMES = ['Files', 'Viewer', 'Widgets', 'Monitor', 'Canvas', 'Log'];
 const TITLE = 'hermes-node ImGui';
 
+const BIG_FILES = 5001;
+const SMALL_FILES = 50;
+/** How far apart one frame's binding calls may be, big/ against small/. */
+const BIG_CALL_SLACK = 60;
+/** A bound on one frame's binding calls with big/ open. */
+const BIG_CALL_LIMIT = 1500;
+/** Sokol's MOUSE_SCROLL: far more than any list here, either way. */
+const WHEEL_TO_END = -100000;
+
+// ImGui's own saved settings with every panel floating (header).
+const FLOATING = [
+  '[Window][Files]',
+  'Pos=0,19',
+  'Size=380,390',
+  'Collapsed=0',
+  '',
+  '[Window][Viewer]',
+  'Pos=0,19',
+  'Size=380,702',
+  'Collapsed=0',
+  '',
+  '[Window][Widgets]',
+  'Pos=382,19',
+  'Size=518,520',
+  'Collapsed=0',
+  '',
+  '[Window][Log]',
+  'Pos=200,200',
+  'Size=300,200',
+  'Collapsed=0',
+  '',
+  '[Window][Monitor]',
+  'Pos=902,19',
+  'Size=378,330',
+  'Collapsed=0',
+  '',
+  '[Window][Canvas]',
+  'Pos=902,19',
+  'Size=378,702',
+  'Collapsed=0',
+  '',
+  '[Window][WindowOverViewport_11111111]',
+  'Pos=0,19',
+  'Size=1280,781',
+  'Collapsed=0',
+  '',
+  '[Docking][Data]',
+  'DockSpace ID=0x08BD597D Window=0x1BBC0F80 Pos=0,19 Size=1280,781 CentralNode=1',
+  '',
+].join('\n');
+
 function fail(line) {
   console.log(line);
   process.exit(1);
@@ -159,6 +247,14 @@ function sameColor(a, b) {
 /** ImGui's float-to-byte conversion (IM_F32_TO_INT8_SAT). */
 function toByte(v) {
   return Math.trunc(Math.min(Math.max(v, 0), 1) * 255 + 0.5);
+}
+
+function fillDirectory(dir, count, prefix, digits) {
+  fs.mkdirSync(dir);
+  for (let i = 0; i < count; ++i) {
+    fs.writeFileSync(
+        path.join(dir, prefix + String(i).padStart(digits, '0')), 'x\n');
+  }
 }
 
 async function main() {
@@ -176,6 +272,10 @@ async function main() {
     }
   });
   fs.writeFileSync(gone, 'removed after it was listed\n');
+  const big = path.join(tree, 'big');
+  const small = path.join(tree, 'small');
+  fillDirectory(big, BIG_FILES, 'f', 4);
+  fillDirectory(small, SMALL_FILES, 's', 2);
   const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
 
   const app = await createApp({root: tree, clock: 'fixed', driven: true});
@@ -196,7 +296,7 @@ async function main() {
     await h.run();
   }
 
-  /** Frames until app.rects has `key`. */
+  /** Frames until the last frame drew `key` (app.rects). */
   async function waitRect(key) {
     for (let i = 0; i < 600 && !app.rects.has(key); ++i)
       await h.run();
@@ -208,6 +308,20 @@ async function main() {
   async function clickRow(key) {
     const r = await waitRect(key);
     await harness.clickAt(h, null, harness.center(r));
+  }
+
+  /** The keys of app.rects under directory `dir`. */
+  function rectsUnder(dir) {
+    return [...app.rects.keys()].filter((k) => k.startsWith(dir + '/'));
+  }
+
+  /** The total of __test.bindCalls() across one frame. */
+  async function callsInOneFrame() {
+    const total = () => Object.values(imgui.__test.bindCalls())
+                            .reduce((a, b) => a + b, 0);
+    const before = total();
+    await h.run();
+    return total() - before;
   }
 
   /** `null` if every panel is active and docked, else what is wrong. */
@@ -238,7 +352,7 @@ async function main() {
   console.log('PANELS ok');
 
   if (mode === 'throw')
-    return runThrow(app, h, checkPanels);
+    return runThrow(app, h, checkPanels, waitRect);
 
   // --- OPEN -------------------------------------------------------------
   {
@@ -253,10 +367,11 @@ async function main() {
   }
 
   // --- DIR --------------------------------------------------------------
+  const dir1 = path.join(tree, 'dir1');
   {
-    await clickRow(path.join(tree, 'dir1'));
+    await clickRow(dir1);
     await settle('DIR');
-    await waitRect(path.join(tree, 'dir1', 'b.js'));
+    await waitRect(path.join(dir1, 'b.js'));
     console.log('DIR ok');
   }
 
@@ -287,6 +402,65 @@ async function main() {
     if (isRoot)
       console.log('SKIP locked');
     await edge('locked', () => null);
+  }
+
+  // --- COLLAPSE ---------------------------------------------------------
+  {
+    if (rectsUnder(dir1).length === 0)
+      fail('COLLAPSE setup: nothing under dir1/ drawn');
+    await clickRow(dir1);
+    await h.run();
+    const left = rectsUnder(dir1);
+    if (left.length !== 0)
+      fail('COLLAPSE WRONG still recorded: ' + left.join(' '));
+    console.log('COLLAPSE ok');
+  }
+
+  // --- BIG --------------------------------------------------------------
+  {
+    await clickRow(big);
+    await settle('BIG open');
+    await waitRect(path.join(big, 'f0000'));
+    const bigCalls = await callsInOneFrame();
+    await clickRow(big);
+    await clickRow(small);
+    await settle('BIG small');
+    await waitRect(path.join(small, 's00'));
+    const smallCalls = await callsInOneFrame();
+    if (Math.abs(bigCalls - smallCalls) > BIG_CALL_SLACK ||
+        bigCalls > BIG_CALL_LIMIT)
+      fail('BIG WRONG calls per frame: big ' + bigCalls + ', small ' +
+          smallCalls);
+    console.log('BIG calls per frame: big ' + bigCalls + ', small ' +
+        smallCalls);
+    await clickRow(small);
+    await clickRow(big);
+
+    // To the end of the list: the end of big/ is followed only by the
+    // root's other directories and files, which all fit in the panel.
+    const last = path.join(big, 'f4999');
+    const at = harness.center(await waitRect(big));
+    await harness.moveTo(h, null, at);
+    harness.inject(h, {type: 'MOUSE_SCROLL', scrollY: WHEEL_TO_END,
+                       mouseX: at[0], mouseY: at[1]});
+    await waitRect(last);
+    if (!app.rects.has('more:' + big))
+      fail('BIG WRONG no "... 1 more" row drawn at the end');
+    if (app.rects.has(path.join(big, 'f5000')))
+      fail('BIG WRONG the entry past the cap was drawn');
+    await clickRow(last);
+    await settle('BIG last');
+    if (app.panels.viewer.state.path !== last)
+      fail('BIG WRONG viewer on ' + app.panels.viewer.state.path);
+
+    const top = harness.center(await waitRect(last));
+    harness.inject(h, {type: 'MOUSE_SCROLL', scrollY: -WHEEL_TO_END,
+                       mouseX: top[0], mouseY: top[1]});
+    await clickRow(big);
+    await h.run();
+    if (rectsUnder(big).length !== 0)
+      fail('BIG WRONG rows under big/ after collapsing it');
+    console.log('BIG ok');
   }
 
   // --- CANVAS -----------------------------------------------------------
@@ -352,15 +526,19 @@ async function main() {
 
   // --- RESET ------------------------------------------------------------
   {
-    // Log's window settings without a DockId: what Task 8's UNDOCK case
-    // loaded between frames, for one window.
-    imgui.loadIniSettingsFromMemory(
-        '[Window][Log]\nPos=200,200\nSize=300,200\nCollapsed=0\n');
+    imgui.loadIniSettingsFromMemory(FLOATING);
     await h.run();
-    const log = state().windows.find((w) => w.name === 'Log');
-    if (log === undefined || log.docked)
-      fail('RESET WRONG not floating ' + JSON.stringify(log));
+    const docked = state().windows.filter(
+        (w) => PANEL_NAMES.includes(w.name) && w.docked);
+    if (docked.length !== 0)
+      fail('RESET WRONG still docked: ' + JSON.stringify(docked));
     console.log('RESET floating');
+    app.panels.canvas.open[0] = false;
+    await h.run();
+    const canvasWindow = state().windows.find((w) => w.name === 'Canvas');
+    if (canvasWindow !== undefined && canvasWindow.active)
+      fail('RESET WRONG Canvas still active: ' + JSON.stringify(canvasWindow));
+    console.log('RESET closed');
     app.resetLayout();
     await h.run();
     await h.run();
@@ -376,14 +554,19 @@ async function main() {
   app.quit();
 }
 
-async function runThrow(app, h, checkPanels) {
-  const widgets = app.panels.widgets;
-  widgets.selectTab = 'Table';
-  for (let i = 0; i < 600 && widgets.visibleTab !== 'Table'; ++i)
+async function runThrow(app, h, checkPanels, waitRect) {
+  const {imgui} = app;
+  // The Table tab's child window, active in the last frame: the read-back
+  // that the tab's contents are drawn.
+  const tableShown = () => imgui.__test.state().windows.some(
+      (w) => w.name.startsWith('Widgets/system') && w.active);
+  const tab = await waitRect('tab:Table');
+  await harness.clickAt(h, null, harness.center(tab));
+  for (let i = 0; i < 600 && !tableShown(); ++i)
     await h.run();
-  if (widgets.visibleTab !== 'Table')
+  if (!tableShown())
     fail('TIMEOUT THROW tab');
-  console.log('THROW tab ' + widgets.visibleTab);
+  console.log('THROW tab Table');
 
   const caught = new Promise((resolve) => {
     process.once('uncaughtException', (e) => {
@@ -391,7 +574,7 @@ async function runThrow(app, h, checkPanels) {
       setImmediate(resolve);
     });
   });
-  widgets.throwNextFrame = true;
+  app.panels.widgets.throwNextFrame = true;
   h.ui.requestAnimationFrame(app.frame);
   await caught;
   await harness.resync(h);

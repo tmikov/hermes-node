@@ -59,29 +59,24 @@ const panel = {
   name: 'Widgets',
   open: [true],
 
-  /** A tab name to select (TabItemFlags_SetSelected) until it is shown. */
-  selectTab: null,
-  /** The tab whose contents were drawn in the last frame. */
-  visibleTab: null,
   /**
-   * When set, the Table tab's list clipper callback throws (and clears
-   * it): a throw from inside a clipper callback, a table and a child
-   * window, for test/ui-imgui-app.js.
+   * When set in test mode (`driven`), the Table tab's list clipper
+   * callback throws, and clears it: a throw from inside a clipper
+   * callback, a table and a child window, for test/ui-imgui-app.js. No
+   * read-back or injected input can make application code throw, so this
+   * one control stays; outside test mode it is ignored.
    */
   throwNextFrame: false,
 
   draw(ctx) {
     const {imgui} = ctx;
-    panel.visibleTab = null;
     if (!imgui.beginTabBar('gallery'))
       return;
     for (const tab of TABS) {
-      const flags =
-          panel.selectTab === tab ? imgui.TabItemFlags_SetSelected : 0;
-      if (imgui.beginTabItem(tab, null, flags)) {
-        panel.visibleTab = tab;
-        if (panel.selectTab === tab)
-          panel.selectTab = null;
+      const visible = imgui.beginTabItem(tab);
+      // The tab itself is the last item, contents or not (app.rects).
+      ctx.state.recordRect('tab:' + tab);
+      if (visible) {
         DRAW[tab](ctx);
         imgui.endTabItem();
       }
@@ -161,7 +156,7 @@ function drawTable(ctx) {
             imgui.tableNextColumn();
             imgui.text(cell);
           }
-          if (panel.throwNextFrame) {
+          if (ctx.testMode && panel.throwNextFrame) {
             panel.throwNextFrame = false;
             throw new Error('thrown from the list clipper\'s callback');
           }

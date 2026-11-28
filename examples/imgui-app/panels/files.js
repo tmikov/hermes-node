@@ -4,14 +4,22 @@
 // LICENSE file in the root directory of this source tree.
 
 // Files: a lazily loaded directory tree. A directory's entries are
-// requested with fs.promises.readdir the first time its node is open, and
-// it shows "loading" until the promise settles: the frame callback only
+// requested with fs.promises.readdir the first time it is open, and it
+// shows "loading" until the promise settles: the frame callback only
 // draws the state it finds, and the continuation stores the result. A
 // click on a file asks the viewer to load it.
 //
-// A node is {name, path, kind, children}, kind 'dir', 'file' or 'link',
-// children null (not requested), 'loading', an array of nodes, or
-// {error}. Symbolic links are shown and never followed into.
+// A node is {name, path, kind, children, more, open}: kind 'dir', 'file'
+// or 'link'; children null (not requested), 'loading', an array of nodes,
+// or {error}; `more` the entries past ENTRY_LIMIT; `open` whether a
+// directory is expanded. Symbolic links are shown and never followed into.
+//
+// The visible tree is flattened into one array of rows, rebuilt only when
+// a directory opens, closes or finishes loading, and drawn through the
+// list clipper: a frame costs the rows on screen, not the rows in the
+// tree. That is why the open state is the node's own rather than ImGui's
+// (a row scrolled out of view is not drawn, so ImGui would not know it),
+// handed to ImGui with setNextItemOpen(..., Cond_Always) on every row.
 
 'use strict';
 
@@ -22,9 +30,11 @@ const ENTRY_LIMIT = 5000;
 
 let root = null;
 let selected = null;
+/** The flattened visible tree, or null when it must be rebuilt. */
+let rows = null;
 
 function makeNode(name, nodePath, kind) {
-  return {name, path: nodePath, kind, children: null, more: 0};
+  return {name, path: nodePath, kind, children: null, more: 0, open: false};
 }
 
 function kindOf(dirent) {
@@ -40,9 +50,34 @@ function compareNodes(a, b) {
   return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
 }
 
+/**
+ * Rows: {type, node, depth}, type 'node' for the node itself, or
+ * 'loading', 'empty', 'error' and 'more' for a status row under it.
+ */
+function flatten(node, depth, out) {
+  out.push({type: 'node', node, depth});
+  if (node.kind !== 'dir' || !node.open)
+    return out;
+  const children = node.children;
+  if (children === null || children === 'loading') {
+    out.push({type: 'loading', node, depth: depth + 1});
+  } else if (Array.isArray(children)) {
+    if (children.length === 0)
+      out.push({type: 'empty', node, depth: depth + 1});
+    for (const child of children)
+      flatten(child, depth + 1, out);
+    if (node.more > 0)
+      out.push({type: 'more', node, depth: depth + 1});
+  } else {
+    out.push({type: 'error', node, depth: depth + 1});
+  }
+  return out;
+}
+
 function requestChildren(ctx, node) {
   const {state} = ctx;
   node.children = 'loading';
+  rows = null;
   state.track(state.fs.readdir(node.path, {withFileTypes: true}).then(
       (dirents) => {
         const all = dirents.map(
@@ -50,12 +85,14 @@ function requestChildren(ctx, node) {
         all.sort(compareNodes);
         node.children = all.slice(0, ENTRY_LIMIT);
         node.more = all.length - node.children.length;
+        rows = null;
         if (ctx.testMode)
           console.log('APP dir ' + node.path + ' entries=' + all.length);
       },
       (e) => {
         const code = (e && e.code) || 'EUNKNOWN';
         node.children = {error: code};
+        rows = null;
         ctx.log('cannot list ' + node.path + ': ' + code);
         if (ctx.testMode)
           console.log('APP error ' + node.path + ' ' + code);
@@ -81,50 +118,21 @@ function openFile(ctx, node) {
   }));
 }
 
-/** Remember the row just drawn, without allocating once it is known. */
-function recordRect(ctx, key) {
+function drawNodeRow(ctx, node, isRoot) {
   const {imgui, state} = ctx;
-  let r = state.rects.get(key);
-  if (r === undefined) {
-    r = {min: [0, 0], max: [0, 0]};
-    state.rects.set(key, r);
-  }
-  imgui.getItemRectMin(r.min);
-  imgui.getItemRectMax(r.max);
-}
-
-function drawChildren(ctx, node) {
-  const {imgui} = ctx;
-  const children = node.children;
-  if (children === null)
-    requestChildren(ctx, node);
-  if (children === null || children === 'loading') {
-    imgui.textDisabled('loading...');
-  } else if (Array.isArray(children)) {
-    if (children.length === 0)
-      imgui.textDisabled('(empty)');
-    for (const child of children)
-      drawNode(ctx, child);
-    if (node.more > 0)
-      imgui.textDisabled('... ' + node.more + ' more');
-  } else {
-    imgui.textColored([1, 0.4, 0.4, 1], 'cannot list: ' + children.error);
-  }
-}
-
-function drawNode(ctx, node, isRoot) {
-  const {imgui} = ctx;
   imgui.pushID(node.path);
   if (node.kind === 'dir') {
-    if (isRoot)
-      imgui.setNextItemOpen(true, imgui.Cond_Once);
+    imgui.setNextItemOpen(node.open, imgui.Cond_Always);
     const open = imgui.treeNodeEx(isRoot ? node.path : node.name + '/',
-        imgui.TreeNodeFlags_SpanAvailWidth);
-    recordRect(ctx, node.path);
-    if (open) {
-      drawChildren(ctx, node);
-      imgui.treePop();
+        imgui.TreeNodeFlags_SpanAvailWidth |
+            imgui.TreeNodeFlags_NoTreePushOnOpen);
+    state.recordRect(node.path);
+    if (open !== node.open) {
+      node.open = open;
+      rows = null;
     }
+    if (node.open && node.children === null)
+      requestChildren(ctx, node);
   } else {
     const flags = imgui.TreeNodeFlags_Leaf |
         imgui.TreeNodeFlags_NoTreePushOnOpen |
@@ -132,21 +140,52 @@ function drawNode(ctx, node, isRoot) {
         (selected === node.path ? imgui.TreeNodeFlags_Selected : 0);
     imgui.treeNodeEx(
         node.kind === 'link' ? node.name + ' (link)' : node.name, flags);
-    recordRect(ctx, node.path);
+    state.recordRect(node.path);
     if (imgui.isItemClicked())
       openFile(ctx, node);
   }
   imgui.popID();
 }
 
+function drawRow(ctx, row, indentWidth) {
+  const {imgui} = ctx;
+  const indent = row.depth * indentWidth;
+  if (indent > 0)
+    imgui.indent(indent);
+  switch (row.type) {
+    case 'node':
+      drawNodeRow(ctx, row.node, row.node === root);
+      break;
+    case 'loading':
+      imgui.textDisabled('loading...');
+      break;
+    case 'empty':
+      imgui.textDisabled('(empty)');
+      break;
+    case 'more':
+      imgui.textDisabled('... ' + row.node.more + ' more');
+      ctx.state.recordRect('more:' + row.node.path);
+      break;
+    case 'error':
+      imgui.textColored(
+          [1, 0.4, 0.4, 1], 'cannot list: ' + row.node.children.error);
+      break;
+  }
+  if (indent > 0)
+    imgui.unindent(indent);
+}
+
 module.exports = {
   name: 'Files',
   open: [true],
+  ENTRY_LIMIT,
 
   /** Start over at `dir`: nothing is read until the next frame draws it. */
   setRoot(dir) {
     root = makeNode(dir, dir, 'dir');
+    root.open = true;
     selected = null;
+    rows = null;
   },
 
   get root() {
@@ -154,8 +193,19 @@ module.exports = {
   },
 
   draw(ctx) {
+    const {imgui} = ctx;
     if (root === null)
       module.exports.setRoot(ctx.state.root);
-    drawNode(ctx, root, true);
+    if (rows === null)
+      rows = flatten(root, 0, []);
+    // Every row is one line of text (a tree node without a frame, or a
+    // text item), so the clipper's uniform height is exact.
+    const list = rows;
+    const indentWidth = imgui.getTextLineHeight();
+    imgui.listClipper(list.length, imgui.getTextLineHeightWithSpacing(),
+        (start, end) => {
+          for (let i = start; i < end; ++i)
+            drawRow(ctx, list[i], indentWidth);
+        });
   },
 };

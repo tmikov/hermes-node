@@ -52,14 +52,16 @@ async function open(options) {
 }
 
 /**
- * A handle for an application's own window, `{ui, win, imgui, frame}`
- * from `app`, where `app.frame` is already a whole frame (its own
- * newFrame() and render()) returning what render() returned. Every helper
- * then runs `app.frame` as its frame and ignores its `drawFn` argument
- * (pass `null`).
+ * A handle for an application's own window, `{ui, win, imgui, frame,
+ * frameCount}` from `app`, where `app.frame` is already a whole frame (its
+ * own newFrame() and render()) returning what render() returned, and
+ * `app.frameCount` how many times it has run. Every helper then runs
+ * `app.frame` as its frame and ignores its `drawFn` argument (pass
+ * `null`).
  *
- * Call it before the application has drawn a frame (it was created with
- * `driven: true` and nothing has run `app.frame` yet): `h.published`
+ * Only before the application has drawn a frame (it was created with
+ * `driven: true` and nothing has run `app.frame` yet), which is checked:
+ * otherwise this prints `ADOPT refused ...` and exits 1. `h.published`
  * starts at 0, as `open()`'s does, and is not read from the host. It
  * cannot be: `resync()` learns the count from a capture request that gives
  * up, and the host counts a request's frames only as it presents them, so
@@ -67,6 +69,12 @@ async function open(options) {
  * never settles.
  */
 async function adopt(app) {
+  if (app.frameCount !== 0) {
+    console.log(
+        'ADOPT refused: app.frameCount is ' + app.frameCount +
+        ', and adopt() needs an application that has drawn nothing');
+    process.exit(1);
+  }
   const h = {
     ui: app.ui,
     win: app.win,

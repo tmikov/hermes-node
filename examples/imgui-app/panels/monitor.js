@@ -3,11 +3,12 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the root directory of this source tree.
 
-// Monitor: process.memoryUsage(), os.loadavg(), ImGui's frame rate and the
-// JavaScript time per frame, sampled four times a second by an unref'd
-// setInterval timer into Float32Array rings and drawn with plotLines and
-// plotHistogram. The timer only writes numbers into the rings; drawing
-// reads whatever is there.
+// Monitor: process.memoryUsage() (rss; the heap figures only when the
+// runtime reports them, which this one does not), os.loadavg(), ImGui's
+// frame rate and the JavaScript time per frame, sampled four times a
+// second by an unref'd setInterval timer into Float32Array rings and drawn
+// with plotLines and plotHistogram. The timer only writes numbers into
+// the rings; drawing reads whatever is there.
 
 'use strict';
 
@@ -82,10 +83,16 @@ module.exports = {
     };
     imgui.separatorText('Memory');
     plot('##rss', rings.rss, 'rss ' + mib(rings.rss.last * MiB));
-    plot('##heapUsed', rings.heapUsed,
-        'heap used ' + mib(rings.heapUsed.last * MiB));
-    plot('##heapTotal', rings.heapTotal,
-        'heap total ' + mib(rings.heapTotal.last * MiB));
+    // This runtime reports heapUsed and heapTotal as 0; plot them only
+    // once they are real, rather than draw two flat lines.
+    if (rings.heapTotal.max > 0) {
+      plot('##heapUsed', rings.heapUsed,
+          'heap used ' + mib(rings.heapUsed.last * MiB));
+      plot('##heapTotal', rings.heapTotal,
+          'heap total ' + mib(rings.heapTotal.last * MiB));
+    } else {
+      imgui.textDisabled('heap: not reported by this runtime');
+    }
     imgui.separatorText('Load');
     imgui.text(
         'load average ' + loadAverage.map((v) => v.toFixed(2)).join(' '));

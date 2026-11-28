@@ -27,9 +27,14 @@
 //            for its draw function runs app.frame and ImGui reads the
 //            position back.
 //
-// THE MUTATION THIS MUST BREAK (recorded in progress-imgui-binding.md):
+// A second run, `late`: the application runs one frame before adopt(),
+// which refuses it (`ADOPT refused ...`, exit 1) instead of starting a
+// count that is already wrong.
+//
+// THE MUTATIONS THIS MUST BREAK (recorded in progress-imgui-binding.md):
 //  resync(h) called by adopt() again: ADOPT never prints and the run
-//  ends at its time limit (status 124).
+//  ends at its time limit (status 124);
+//  adopt()'s frameCount check removed: `late` prints ADOPT ok and exits 0.
 //
 // REQUIRES: ui, ui-gpu, ui-imgui
 // REQUIRES: display
@@ -45,12 +50,20 @@
 // CHECK-NEXT: RESYNC ok
 // CHECK-NEXT: MOVE ok
 // TRACE: imgui: context created
+//
+// RUN: %with-display 120 sh -c 'HERMES_NODE_UI_TEST_HOOKS=1 %hermes-node-ui %s %t late > %t.late.out 2> %t.late.err'; echo "EXITCODE $?" | %FileCheck --check-prefix=LATE-CODE %s
+// RUN: %FileCheck --implicit-check-not='ADOPT ok' --check-prefix=LATE %s < %t.late.out
+// RUN: %FileCheck --implicit-check-not='[sapp:error' --implicit-check-not='[sokol-' --check-prefix=LATE-TRACE %s < %t.late.err
+// LATE-CODE: EXITCODE 1
+// LATE: ADOPT refused: app.frameCount is 1
+// LATE-TRACE: {{^}}
 
 'use strict';
 
 const harness = require('./fixtures/imgui/harness.js');
 
 const capturePrefix = process.argv[2];
+const mode = process.argv[3] || 'main';
 
 function fail(line) {
   console.log(line);
@@ -66,13 +79,20 @@ async function main() {
     ui,
     win,
     imgui,
+    frameCount: 0,
     frame() {
+      ++app.frameCount;
       imgui.newFrame();
       imgui.__test.scene('fill');
       return imgui.render();
     },
   };
 
+  if (mode === 'late')
+    await new Promise((resolve) => ui.requestAnimationFrame(() => {
+      app.frame();
+      setImmediate(resolve);
+    }));
   const h = await harness.adopt(app);
   if (h.published !== 0)
     fail('ADOPT WRONG published=' + h.published);

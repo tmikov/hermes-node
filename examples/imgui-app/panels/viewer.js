@@ -34,9 +34,11 @@ const CUT_MARKER = ' [... line cut at ' + LINE_LIMIT + ' characters]';
 const HEX_ROW = 16;
 
 /**
- * The length of `bytes` without a trailing incomplete UTF-8 sequence: up
- * to three continuation-or-lead bytes at the end that a cut at the cap
- * left without the rest of their character.
+ * The length of `bytes` without a trailing incomplete UTF-8 sequence: a
+ * lead byte at most three bytes from the end, followed only by
+ * continuation bytes, fewer than its sequence needs. Only real lead bytes
+ * count (0xC2..0xF4); anything else is left for isUtf8() to reject, so a
+ * cut file whose last byte is invalid is a hex dump, not text.
  */
 function completeLength(bytes) {
   const end = bytes.length;
@@ -44,7 +46,7 @@ function completeLength(bytes) {
     const b = bytes[end - k];
     if ((b & 0xc0) === 0x80)
       continue; // a continuation byte: look further back for its lead
-    if (b >= 0xc0) {
+    if (b >= 0xc2 && b <= 0xf4) {
       const need = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : 2;
       if (k < need)
         return end - k;
@@ -104,6 +106,11 @@ function toHexRows(bytes) {
  * Read at most CAP bytes of `path` through `fs`. Resolves with
  * `{bytes, stat, truncated}`; rejects with the filesystem's error. The
  * handle is closed whether or not the reads succeed.
+ *
+ * Whether the file goes on past the cap is decided by reading, not by
+ * stat.size: procfs files and devices report 0, and a file being appended
+ * to grows after the stat. Once CAP bytes are in, one more read of one
+ * byte at position CAP says whether there is more.
  */
 async function readCapped(fs, path) {
   const fh = await fs.open(path, 'r');
@@ -121,8 +128,13 @@ async function readCapped(fs, path) {
                                          buffer.subarray(0, bytesRead));
       position += bytesRead;
     }
+    let truncated = false;
+    if (position === CAP) {
+      const probe = Buffer.alloc(1);
+      truncated = (await fh.read(probe, 0, 1, CAP)).bytesRead > 0;
+    }
     const bytes = Buffer.concat(chunks, position);
-    return {bytes, stat, truncated: position === CAP && stat.size > CAP};
+    return {bytes, stat, truncated};
   } finally {
     await fh.close();
   }
@@ -225,7 +237,7 @@ function createViewer({fs, log}) {
       }
       if (s.truncated)
         imgui.textColored([1, 0.8, 0.3, 1],
-            'Truncated: showing the first 1 MiB of ' + s.size + ' bytes.');
+            'Truncated: showing the first 1 MiB (the file is larger).');
       const items = s.status === 'text' ? s.lines : s.rows;
       imgui.textDisabled(s.status === 'text' ?
           items.length + ' lines' : 'not UTF-8 text: hex dump, ' +

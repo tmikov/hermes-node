@@ -70,11 +70,30 @@ async function createApp(options = {}) {
   const panels = {files, viewer, widgets, monitor, canvas, log: logPanel};
   const panelList = [files, viewer, widgets, monitor, canvas, logPanel];
 
+  const rects = new Map();
+  /**
+   * Remember the item just drawn under `key`, for app.rects: a test's
+   * read-back, so only when `driven` (in normal use it would cost two
+   * binding calls per row for nothing). The map is emptied at the start of
+   * every frame, so it holds exactly what the last frame drew.
+   */
+  function recordRect(key) {
+    if (!driven)
+      return;
+    let r = rects.get(key);
+    if (r === undefined) {
+      r = {min: [0, 0], max: [0, 0]};
+      rects.set(key, r);
+    }
+    imgui.getItemRectMin(r.min);
+    imgui.getItemRectMax(r.max);
+  }
+
   const state = {
     root: nodePath.resolve(root),
     fs,
     viewer,
-    rects: new Map(),
+    recordRect,
     track,
   };
   const ctx = {imgui, ui, win, log, state, time: 0, testMode: driven};
@@ -82,6 +101,7 @@ async function createApp(options = {}) {
   let fixedTime = clock === 'fixed' ? 0 : null;
   let pendingLayout = null;
   let lastFrameMs = 0;
+  let frameCount = 0;
   let styleName = 'dark';
   const showDemo = [false];
   const showMetrics = [false];
@@ -103,26 +123,18 @@ async function createApp(options = {}) {
     log('folder ' + state.root);
   }
 
+  /** The default view again: every panel open, in the default layout. */
   function resetLayout() {
-    // Applied by the next frame() before its newFrame(): this is called
-    // from the View menu, inside a frame.
+    for (const p of panelList)
+      p.open[0] = true;
+    // The layout is applied by the next frame() before its newFrame():
+    // this is called from the View menu, inside a frame.
     pendingLayout = layout.DEFAULT;
     log('layout reset');
   }
 
   function quit() {
     win.close();
-  }
-
-  /** Remember the item just drawn under `key` (app.rects). */
-  function recordRect(key) {
-    let r = state.rects.get(key);
-    if (r === undefined) {
-      r = {min: [0, 0], max: [0, 0]};
-      state.rects.set(key, r);
-    }
-    imgui.getItemRectMin(r.min);
-    imgui.getItemRectMax(r.max);
   }
 
   function menu(label) {
@@ -232,6 +244,8 @@ async function createApp(options = {}) {
    */
   function frame(timestamp) {
     const start = process.hrtime.bigint();
+    ++frameCount;
+    rects.clear();
     if (pendingLayout !== null) {
       imgui.loadIniSettingsFromMemory(pendingLayout);
       pendingLayout = null;
@@ -267,7 +281,7 @@ async function createApp(options = {}) {
     win,
     imgui,
     frame,
-    rects: state.rects,
+    rects,
     panels,
     scale: win.dpiScale,
     setTime(seconds) {
@@ -280,6 +294,10 @@ async function createApp(options = {}) {
     async idle() {
       while (inFlight.size > 0)
         await Promise.allSettled([...inFlight]);
+    },
+    /** How many times frame() has been called (harness.adopt checks it). */
+    get frameCount() {
+      return frameCount;
     },
     /** The JavaScript time the last whole frame took, in milliseconds. */
     get lastFrameMs() {

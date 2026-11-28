@@ -40,14 +40,20 @@ install: no npm dependencies, and so no `package.json`.
 - **Shell** (`app.js`). A main menu bar and a dock space over the window.
   *File*: Open Folder (a modal with a text field), Quit. *View*: a toggle
   per panel (the window's close button clears the same toggle), Reset
-  Layout, Dark / Light, ImGui Demo, ImGui Metrics. *Help*: About (a modal
+  Layout (the default view again: every panel reopened, in the default
+  layout), Dark / Light, ImGui Demo, ImGui Metrics. *Help*: About (a modal
   showing `imgui.version` and `process.versions`).
 - **Files** (`panels/files.js`). A directory tree read lazily: a directory
   is listed with `fs.promises.readdir` the first time it is opened, and
   shows "loading" until the promise settles. Directories first, then by
   name; at most 5000 entries per directory, then a "... N more" row.
   Symbolic links are shown and not followed into. A directory that cannot
-  be read shows its error code in the tree and in the log.
+  be read shows its error code in the tree and in the log. The visible
+  tree is one flat list of rows, rebuilt only when a directory opens,
+  closes or finishes loading, and drawn through the list clipper, so a
+  frame costs the rows on screen whatever the tree holds (a directory of
+  5000 entries open costs about 150 more binding calls a frame than the
+  default view; see "Tested").
 - **Viewer** (`panels/viewer.js`). The selected file's first 1 MiB, read
   with `fs.promises.open` and 64 KiB `FileHandle.read` calls at explicit
   positions, never `readFile`; the handle is closed in a `finally`. Valid
@@ -66,9 +72,10 @@ install: no npm dependencies, and so no `package.json`.
 - **Monitor** (`panels/monitor.js`). `process.memoryUsage()`,
   `os.loadavg()`, ImGui's frame rate and the JavaScript time per frame,
   sampled four times a second by an unref'd `setInterval` timer into
-  `Float32Array` rings, drawn with `plotLines` and `plotHistogram`. (This
-  runtime reports `heapUsed` and `heapTotal` as 0, so those two plots are
-  flat.)
+  `Float32Array` rings, drawn with `plotLines` and `plotHistogram`. The
+  heap figures are plotted only when the runtime reports them: this one
+  reports `heapUsed` and `heapTotal` as 0, so the panel says so in a line
+  instead of drawing two flat plots.
 - **Canvas** (`panels/canvas.js`). An animation drawn with
   `imgui.drawList` into a child window, which is what clips it: an orbiting
   circle with a trail, an inner circle orbiting the other way, a rotating
@@ -145,19 +152,26 @@ a malformed string can hang it or abort the process. To regenerate it:
 
 `test/ui-imgui-app.js` drives the application in its window through
 `createApp({root, clock: 'fixed', driven: true})`: with `driven` it
-registers no frame callback and prints an `APP opened`, `APP dir` or
-`APP error` line per file or directory request; with the fixed clock the
-canvas is drawn at times the test sets. The test clicks fixture files at
-the rectangles the application records (`app.rects`), reads pixels of the
-canvas, shrinks the window to 1x1 and back, makes a panel throw from
-inside a list clipper callback, and resets the layout.
+registers no frame callback, prints an `APP opened`, `APP dir` or
+`APP error` line per file or directory request, and records in
+`app.rects` the rectangle of everything the last frame drew that a test
+clicks (Files rows, menu items, Widgets tabs; nothing is recorded in
+normal use). With the fixed clock the canvas is drawn at times the test
+sets. The test clicks fixture files, opens a directory of 5001 entries and
+compares one frame's binding calls with a 50-entry one, scrolls to the end
+of the list and opens the last entry, reads pixels of the canvas, shrinks
+the window to 1x1 and back, makes a panel throw from inside a list
+clipper callback, and resets the layout with a panel closed.
 `test/imgui-app-viewer.js` tests the viewer's reading and classification
 without a window, under plain `hermes-node`; `panels/viewer.js` therefore
 requires neither `hermes-node:ui` nor `hermes-node:imgui`.
 
 `test/fixtures/imgui/app-measure.js` measures the application's
-JavaScript time and binding calls per frame; the numbers are recorded in
-`docs/superpowers/plans/progress-imgui-binding.md`.
+JavaScript time and binding calls per frame, driven, in two states: the
+default view, and with a directory of 5000 entries open in Files. The
+numbers, Debug and Release, are recorded in
+`docs/superpowers/plans/progress-imgui-binding.md`. They include the two
+calls per drawn row that recording `app.rects` costs in driven mode.
 
 It has been run on Linux (GL, under Xvfb, framebuffer scale 1).
 

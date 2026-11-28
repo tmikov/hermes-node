@@ -16,16 +16,24 @@
 //                every method called on fs.promises and on the FileHandle,
 //                and each read's length, position and returned byte count:
 //                no readFile anywhere; every read stays inside the first
-//                1 MiB (position + length <= 1 << 20); each read's
-//                position is the sum of what the earlier reads RETURNED;
-//                the bytes kept total exactly 1 << 20; close() once;
+//                1 MiB and one byte (position + length <= CAP + 1), and
+//                exactly one, the truncation probe, touches position CAP
+//                (position CAP, length 1); each read's position is the sum
+//                of what the earlier reads RETURNED; the bytes kept (the
+//                reads below CAP) total exactly CAP; close() once;
 //                state.truncated true.
 //  SHORT_READ    the same file through a handle whose read() returns at
 //                most 1000 bytes whatever was asked: the same assertions,
 //                and the text kept equals the file's first 1 MiB.
-//  EXACT         a file of exactly 1 MiB: truncated false.
-//  CLOSE_ON_ERROR a read() that rejects with EIO: status 'error', code
-//                EIO, close() still called once.
+//  EXACT         a file of exactly 1 MiB: the probe returns nothing, and
+//                truncated is false.
+//  GROWING       a handle whose stat() says size 0 (procfs, a device, a
+//                file being appended to) and whose reads yield 2 MiB:
+//                text, truncated true; truncation comes from the reads,
+//                not from stat.size.
+//  CLOSE_ON_ERROR a read() that rejects with EIO, and separately a stat()
+//                that rejects with EIO: status 'error', code EIO, close()
+//                still called once, each.
 //  SUPERSEDE     a fake fs whose open() promises the test settles by hand:
 //                load('first'), load('second'); the second's chain settled
 //                first, then the first's: state is 'second' with its
@@ -33,9 +41,12 @@
 //  CLASSIFY      a.txt text, 3 lines; empty.txt text, 0 lines; binary.bin
 //                hex, 16 rows; fffd.txt text (a literal U+FFFD is valid
 //                UTF-8); an invalid byte sequence: hex; one U+0000: hex;
-//                1 MiB + 3 bytes of valid UTF-8 with a three-byte
-//                character across the cap: text, truncated, the cut
-//                character dropped (no U+FFFD, no partial character);
+//                files of valid UTF-8 longer than the cap with a character
+//                cut by it (two bytes cut after 1; three after 1 and 2;
+//                four after 1, 2 and 3): text, truncated, the cut
+//                character dropped (no U+FFFD, no partial character); a
+//                cut file whose last byte is an invalid lead (0xF8), and
+//                one whose last two are stray continuation bytes: hex;
 //                one 1 MiB line: text, 1 line, cut for display at
 //                LINE_LIMIT characters with the marker.
 //  MISSING       a path that does not exist: 'error', ENOENT.
@@ -50,12 +61,16 @@
 //  returned one: SHORT_READ fails;
 //  classification by searching the decoded text for U+FFFD: CLASSIFY
 //  fails on fffd.txt;
-//  the trailing-byte trim removed: CLASSIFY fails on the straddling file.
+//  the trailing-byte trim removed: CLASSIFY fails on the straddling files;
+//  truncation decided by stat.size again: GROWING fails;
+//  the lead-byte test widened back to 0xC0..0xFF: CLASSIFY fails on the
+//  0xF8 file.
 //
 // RUN: rm -rf %t && mkdir -p %t && %hermes-node %s %S/fixtures/imgui/app-tree %t | %FileCheck %s
 // CHECK: CAP ok
 // CHECK-NEXT: SHORT_READ ok
 // CHECK-NEXT: EXACT ok
+// CHECK-NEXT: GROWING ok
 // CHECK-NEXT: CLOSE_ON_ERROR ok
 // CHECK-NEXT: SUPERSEDE ok
 // CHECK-NEXT: CLASSIFY ok
@@ -90,7 +105,8 @@ function checkNoWindowModules() {
  * records the length and position asked for and the bytes it returned.
  * `readLimit` caps what one read returns, as a short read would.
  */
-function recordingFs(real, {readLimit = Infinity, readError = null} = {}) {
+function recordingFs(
+    real, {readLimit = Infinity, readError = null, statError = null} = {}) {
   const rec = {methods: [], reads: [], closes: 0};
   const wrapped = {};
   for (const name of Object.keys(real)) {
@@ -128,6 +144,15 @@ function recordingFs(real, {readLimit = Infinity, readError = null} = {}) {
       asked.returned = r.bytesRead;
       return r;
     };
+    handle.stat = (...args) => {
+      rec.methods.push('handle.stat');
+      if (statError !== null) {
+        const e = new Error(statError + ': injected stat failure');
+        e.code = statError;
+        return Promise.reject(e);
+      }
+      return fh.stat(...args);
+    };
     handle.close = () => {
       rec.methods.push('handle.close');
       ++rec.closes;
@@ -151,17 +176,27 @@ function checkCappedReads(rec, viewer) {
   if (rec.reads.length === 0)
     return 'no read';
   let sum = 0;
+  let kept = 0;
+  let probes = 0;
   for (const r of rec.reads) {
     if (typeof r.position !== 'number')
       return 'a read without an explicit position: ' + JSON.stringify(r);
-    if (r.position + r.length > CAP)
+    if (r.position + r.length > CAP + 1)
       return 'a read past the cap: ' + JSON.stringify(r);
+    if (r.position + r.length > CAP) {
+      if (r.position !== CAP || r.length !== 1 || ++probes > 1)
+        return 'a read across the cap: ' + JSON.stringify(r);
+    } else {
+      kept += r.returned;
+    }
     if (r.position !== sum)
       return 'position ' + r.position + ' after ' + sum + ' bytes returned';
     sum += r.returned;
   }
-  if (sum !== CAP)
-    return 'kept ' + sum + ' bytes, want ' + CAP;
+  if (kept !== CAP)
+    return 'kept ' + kept + ' bytes, want ' + CAP;
+  if (probes !== 1)
+    return probes + ' truncation probes, want 1';
   if (rec.closes !== 1)
     return 'close() called ' + rec.closes + ' times';
   if (viewer.state.truncated !== true)
@@ -214,23 +249,51 @@ async function caseShortRead() {
 async function caseExact() {
   const file = path.join(out, 'exact.txt');
   fs.writeFileSync(file, textOfLength(CAP));
-  const {viewer} = newViewer(fs.promises);
+  const {fs: wrapped, rec} = recordingFs(fs.promises);
+  const {viewer} = newViewer(wrapped);
   await viewer.load(file);
-  if (viewer.state.status !== 'text' || viewer.state.truncated !== false)
-    fail('EXACT WRONG ' + JSON.stringify(
-        {status: viewer.state.status, truncated: viewer.state.truncated}));
+  const probe = rec.reads.filter((r) => r.position === CAP);
+  if (viewer.state.status !== 'text' || viewer.state.truncated !== false ||
+      probe.length !== 1 || probe[0].returned !== 0)
+    fail('EXACT WRONG ' + JSON.stringify({
+      status: viewer.state.status,
+      truncated: viewer.state.truncated,
+      probe,
+    }));
   console.log('EXACT ok');
 }
 
-async function caseCloseOnError() {
-  const {fs: wrapped, rec} = recordingFs(fs.promises, {readError: 'EIO'});
-  const {viewer, logged} = newViewer(wrapped);
-  await viewer.load(path.join(tree, 'a.txt'));
+async function caseGrowing() {
+  const bytes = Buffer.from(textOfLength(2 * CAP));
+  const handle = {
+    stat: async () => ({size: 0}),
+    read: async (buffer, offset, length, position) => {
+      const n = Math.max(0, Math.min(length, bytes.length - position));
+      bytes.copy(buffer, offset, position, position + n);
+      return {bytesRead: n, buffer};
+    },
+    close: async () => {},
+  };
+  const {viewer} = newViewer({open: async () => handle});
+  await viewer.load('growing');
   const s = viewer.state;
-  if (s.status !== 'error' || s.code !== 'EIO' || rec.closes !== 1 ||
-      !logged.some((l) => l.includes('EIO')))
-    fail('CLOSE_ON_ERROR WRONG ' + JSON.stringify(
-        {status: s.status, code: s.code, closes: rec.closes, logged}));
+  if (s.status !== 'text' || s.truncated !== true)
+    fail('GROWING WRONG ' +
+        JSON.stringify({status: s.status, truncated: s.truncated}));
+  console.log('GROWING ok');
+}
+
+async function caseCloseOnError() {
+  for (const which of ['readError', 'statError']) {
+    const {fs: wrapped, rec} = recordingFs(fs.promises, {[which]: 'EIO'});
+    const {viewer, logged} = newViewer(wrapped);
+    await viewer.load(path.join(tree, 'a.txt'));
+    const s = viewer.state;
+    if (s.status !== 'error' || s.code !== 'EIO' || rec.closes !== 1 ||
+        !logged.some((l) => l.includes('EIO')))
+      fail('CLOSE_ON_ERROR WRONG ' + which + ' ' + JSON.stringify(
+          {status: s.status, code: s.code, closes: rec.closes, logged}));
+  }
   console.log('CLOSE_ON_ERROR ok');
 }
 
@@ -323,29 +386,40 @@ async function caseClassify() {
       (s) => s.status === 'hex' && s.rows.length === 16);
   await expect('fffd.txt', path.join(tree, 'fffd.txt'),
       (s) => s.status === 'text' && s.lines.length === 1 &&
-          s.lines[0].includes('�'));
+          s.lines[0].includes('\ufffd'));
   await expect('invalid',
       write('invalid.txt', Buffer.from([0x61, 0x62, 0xff, 0xfe, 0x63, 0x0a])),
       (s) => s.status === 'hex' && s.rows.length === 1);
   await expect('nul', write('nul.txt', Buffer.from('abc\u0000def\n')),
       (s) => s.status === 'hex');
 
-  // A three-byte character (U+20AC, E2 82 AC) starting at the cap's last
-  // byte: only its first byte is read, and it must be dropped.
-  const straddle = Buffer.concat([
-    Buffer.from(textOfLength(CAP - 1)),
-    Buffer.from('€'),
-    Buffer.from('b'),
-  ]);
-  if (straddle.length !== CAP + 3 || straddle[CAP - 1] !== 0xe2)
-    fail('CLASSIFY setup ' + straddle.length);
-  await expect('straddle', write('straddle.txt', straddle), (s) => {
-    if (s.status !== 'text' || s.truncated !== true)
-      return false;
-    const kept = Buffer.from(s.lines.join('\n'));
-    const want = Buffer.from(textOfLength(CAP - 1).replace(/\n$/, ''));
-    return kept.equals(want);
-  });
+  // A character of `ch`'s length cut by the cap after `before` of its
+  // bytes: only those are read, and they must be dropped.
+  for (const [ch, before] of [['\u00e9', 1], ['\u20ac', 1], ['\u20ac', 2],
+           ['\u{1f600}', 1], ['\u{1f600}', 2], ['\u{1f600}', 3]]) {
+    const enc = Buffer.from(ch);
+    const filler = textOfLength(CAP - before);
+    const bytes = Buffer.concat([Buffer.from(filler), enc, Buffer.from('b')]);
+    const label = 'straddle-' + enc.length + '-' + before;
+    await expect(label, write(label + '.txt', bytes), (s) => {
+      if (s.status !== 'text' || s.truncated !== true)
+        return false;
+      const kept = Buffer.from(s.lines.join('\n'));
+      return kept.equals(Buffer.from(filler.replace(/\n$/, '')));
+    });
+  }
+  // Cut files whose end is not the start of a character: an invalid lead
+  // byte, and two stray continuation bytes. Not text.
+  for (const [label, tail] of [['invalid-lead', [0xf8]],
+           ['stray-continuation', [0x80, 0x80]]]) {
+    const bytes = Buffer.concat([
+      Buffer.from(textOfLength(CAP - tail.length)),
+      Buffer.from(tail),
+      Buffer.from('more'),
+    ]);
+    await expect(label, write(label + '.txt', bytes),
+        (s) => s.status === 'hex' && s.truncated === true);
+  }
 
   await expect('longline', write('longline.txt', 'x'.repeat(CAP)),
       (s) => s.status === 'text' && s.lines.length === 1 &&
@@ -373,6 +447,7 @@ async function main() {
   await caseCap();
   await caseShortRead();
   await caseExact();
+  await caseGrowing();
   await caseCloseOnError();
   await caseSupersede();
   await caseClassify();

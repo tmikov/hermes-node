@@ -279,6 +279,14 @@ Every mutation was restored, and the addon rebuilt, afterwards.
 | 8 (review) | `ui-imgui-bind-windows.js` | `Call::inIntRange`'s lower end exclusive (`v > -2^31`) | `RangeError: imgui.setNextWindowPos(): pos[0] must be at least -2147483648 and less than 2147483648; got -2.14748e+09`, uncaught (the accepted -2^31 refused); test failed |
 | 8 (review) | `ui-imgui-bind-widgets.js` | `beginListBox`'s size bound removed | `NOTHROW ERR_OUT_OF_RANGE`; test failed |
 | 8 (review) | `ui-imgui-bind-docking.js` | NOWINDOW's script ending in `process.exit(1)` after its output | the new CODE check of the NOWINDOW run: `CODE: expected string not found in input`; test failed (before the fix that run checked no status) |
+| 9 (review) | `ui-imgui-app.js` | the Files list clipper removed (every row drawn) | `BIG WRONG calls per frame: big 40242, small 636`; test failed |
+| 9 (review) | `ui-imgui-app.js` | `app.rects` not emptied at the start of each frame | `COLLAPSE WRONG still recorded: .../dir1/deep .../dir1/b.js`; test failed |
+| 9 (review) | `ui-imgui-app.js` | `resetLayout()` not reopening the panels | `RESET WRONG Canvas={"name":"Canvas","active":false,"docked":false}`; test failed |
+| 9 (review) | `ui-imgui-adopt.js` (`late`) | `adopt()`'s `frameCount` check removed | the late run printed `ADOPT ok`, `RUN ok`, `CAPTURE ok`, then `RESYNC WRONG 3 want 2` (the count it started from was already wrong); LATE's check failed |
+| 9 (review) | `imgui-app-viewer.js` | truncation decided by `stat.size > CAP`, the probe removed | `CAP WRONG 0 truncation probes, want 1`; test failed |
+| 9 (review) | `imgui-app-viewer.js` | the probe kept but `&& stat.size > CAP` added | `GROWING WRONG {"status":"text","truncated":false}`; test failed |
+| 9 (review) | `imgui-app-viewer.js` | the lead-byte test widened back to `b >= 0xc0` | `CLASSIFY WRONG invalid-lead={"status":"text","lines":23549,"truncated":true}`; test failed |
+| 9 (review) | `test-process-emit-return.js` | the emit fix reverted (`if (!list) return false;`) | `exception`: `EMIT true true true true false`, `STILL ALIVE`, `EXITCODE 0`; `rejection` (run by hand): only `LISTENER first`, no report of the second rejection; test failed |
 
 ## Behaviours no test detects
 
@@ -1307,8 +1315,9 @@ automated test would notice losing. Each task appends its own.
   - RESET's floating layout is a window-only section for `Log` without a
     `DockId` (the shape Task 8's UNDOCK loaded safely), hand-written in
     the test, not a string `saveIniSettingsToMemory()` produced; the
-    application itself loads only its saved `DEFAULT`. Measured: in the
-    next frame `Log` is floating and the other five stay docked.
+    application itself loads only its saved `DEFAULT`. (Superseded by
+    the review fixes below: that section clears the dock data, so all six
+    panels float, and RESET now loads ImGui's own saved text.)
   - The literal `CallbackScope` mutation fails earlier than THROW (every
     frame's clipper leaves the depth raised), so a second mutation
     confined to the throw path shows THROW itself failing (Mutations).
@@ -1375,3 +1384,82 @@ automated test would notice losing. Each task appends its own.
   (`ui-imgui-bind-widgets.js`) rejects 2^31 and draws a list box
   2147483520 wide.
 
+
+### Task 9, review fixes
+
+- **Files clips** (Important). The visible tree is one array of rows
+  (`flatten()` in `panels/files.js`), rebuilt only when a directory opens,
+  closes or finishes loading, and drawn through `listClipper` with the
+  row height `getTextLineHeightWithSpacing()` (every row is one line of
+  text: a frameless tree node or a text item) and `indent()` per depth.
+  The open state moved from ImGui's storage to the node (`node.open`,
+  passed with `setNextItemOpen(..., Cond_Always)` on every drawn row),
+  because a row the clipper skips is not drawn and ImGui would not keep
+  its state. IDs, the click behaviour and the `APP` lines are unchanged.
+  Checked by a temporary counter (reverted): 3 rebuilds in a whole
+  measurement run, none during the 600 measured frames of either state.
+  BIG in `ui-imgui-app.js`: one frame's binding calls with big/ (5001
+  entries) open and with small/ (50) open differ by at most 60 and stay
+  under 1500 (measured 2026-11-28 under ASAN, the test's `BIG calls per
+  frame` line: big 331, small 327); with the clipper removed they were
+  40242 against 636.
+- **`app.rects` only when driven, and exactly what the last frame drew**:
+  `recordRect` is a no-op unless `driven`, and the map is emptied at the
+  start of every frame (COLLAPSE). Widgets records each tab under
+  `tab:<name>`, a directory's "... N more" row under `more:<path>`.
+- **Viewer**: truncation is decided by a 1-byte read at position CAP
+  (GROWING, a handle whose `stat()` says 0); the lead-byte test is exactly
+  0xC2..0xF4; new cases for every cut position of 2-, 3- and 4-byte
+  characters, an invalid last byte, stray continuation bytes and a failed
+  `stat()` (which still closes).
+- **Reset Layout reopens every panel**, and RESET closes Canvas first.
+  RESET's floating layout is now ImGui's own saved text (the test's header
+  says how it was produced). Loading Task 8's window-only section for one
+  window clears the dock data, so all six were floating in that save, not
+  only Log as the first version of this note said: the first RESET
+  checked only Log.
+- **`harness.adopt()` refuses** an application whose `frameCount` is not 0
+  (`ADOPT refused: ...`, exit 1); `app.frameCount` is new.
+- **No test controls in Widgets but one**: `selectTab`/`visibleTab` are
+  gone (THROW clicks the Table tab's recorded rectangle and waits for the
+  tab's child window, `Widgets/system...`, to be active in
+  `state().windows`); `throwNextFrame` stays, honoured only in test mode,
+  since nothing a test can inject makes application code throw.
+- **Monitor**: rss is plotted; the heap figures only once the runtime
+  reports them, with a one-line note otherwise.
+- **For Task 10 to file in the tracker** (runtime limitations, not fixed
+  here): (1) `process.memoryUsage()` returns `heapUsed`, `heapTotal`,
+  `external` and `arrayBuffers` as 0 (Node returns V8's figures; only `rss`
+  is real here). (2) An unhandled rejection whose reason is an `Error` is
+  reported wrapped in `UnhandledPromiseRejection`, where Node reports the
+  Error itself: the vendored `isErrorLike()`
+  (`libjs-node/internal/process/promises.js`) requires an own `stack`
+  property, and Hermes defines `stack` as an accessor on
+  `Error.prototype`. (3) Unhandled rejections are processed late: with a
+  `process.once('unhandledRejection')` listener, `Promise.reject()` at
+  start-up and a 200 ms timer, the timer ran before the listener; Node
+  runs the listener first. Both are recorded in
+  `test/test-process-emit-return.js`'s header and not asserted there.
+- **Measurement again** (2026-11-28, same machine: Intel(R) Xeon(R)
+  E-2288G CPU @ 3.70GHz, 16 threads, Xvfb, scale 1). The script now builds
+  its own root (`b.js`, shown in the viewer, and `big/` with 5000 files)
+  and measures two states, 600 frames each after 10 warm-up: `default`
+  (big/ collapsed) and `big` (big/ opened by a click on its row, listing
+  loaded, the panel at its top). The numbers include the two calls per
+  drawn row that recording `app.rects` costs in driven mode. Two runs
+  each:
+
+  | Build | State | JS time per frame, mean | max | binding calls per frame |
+  |---|---|---|---|---|
+  | `cmake-build-asan` | default | 12.454, 12.552 ms | 207.2, 225.1 ms | 250.1 |
+  | `cmake-build-asan` | big | 23.358, 24.058 ms | 429.6, 463.3 ms | 402.1 |
+  | `cmake-build-noasan` | default | 1.173, 1.383 ms | 2.01, 2.10 ms | 250.0 |
+  | `cmake-build-noasan` | big | 1.534, 1.528 ms | 2.63, 2.20 ms | 402.0 |
+
+  The extra 152 calls are the panel filling with file rows (about 20
+  visible rows of 8 calls) where the default view has 2. Under ASAN the
+  mean nearly doubles with big/ open and the occasional slow frame
+  doubles too; the row list is not rebuilt (above), so this has the shape
+  of garbage collection over a larger live heap (5000 more nodes and
+  their strings), not of per-frame work. The Release cost of the open
+  directory is about 0.2-0.4 ms a frame.
